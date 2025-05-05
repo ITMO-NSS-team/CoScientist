@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 from chromadb.api.models import Collection
+from chromadb.api.types import EmbeddingFunction, Documents
 from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -12,8 +13,9 @@ import pandas as pd
 from protollm.connectors import create_llm_connector
 
 from answer_question import query_llm, summarisation_prompt
-from chroma_db_operations import (get_or_create_chroma_collection, store_mm_embeddings_in_chromadb, query_chromadb,
-                                  store_txt_embeddings_in_chromadb)
+from chroma_db_operations import (get_or_create_chroma_collection, store_text_chunks_in_chromadb,
+                                  store_images_in_chromadb_txt_format, store_images_in_chromadb_mm_format,
+                                  query_chromadb)
 from parse_and_split import loader, parse_and_clean, simple_conversion
 
 
@@ -23,20 +25,26 @@ load_dotenv('../config.env')
 
 def process_questions(questions_path: str,
                       answers_path: str,
-                      chroma_collection: Collection,
-                      llm_url: str) -> None:
+                      llm_url: str,
+                      sum_collection: Collection,
+                      txt_collection: Collection,
+                      img_collection: Collection,
+                      sum_chunk_num: int,
+                      txt_chunk_num: int,
+                      img_chunk_num: int) -> None:
     df = pd.read_csv(questions_path)
     for index, row in df.iterrows():
         question = row.question
-        context = query_chromadb(chroma_collection, question)
+        txt_data, img_data = retrieve_context(sum_collection, txt_collection, img_collection,
+                                              sum_chunk_num, txt_chunk_num, img_chunk_num, question,
+                                              [row.paper_name])
         txt_context = ''
         img_paths = []
 
-        for ind, chunk in enumerate(context['metadatas'][0]):
-            if chunk['type'] == 'image':
-                img_paths.append(chunk['image_path'])
-            if chunk['type'] == 'text':
-                txt_context += '\n\n' + context['documents'][0][ind]
+        for chunk in txt_data['documents'][0]:
+            txt_context += '\n\n' + chunk
+        for img in img_data['metadatas'][0]:
+            img_paths.append(img['image_path'])
 
         ans, metadata = query_llm(llm_url, question, txt_context, img_paths)
 
@@ -90,42 +98,127 @@ def load_summary_to_chroma(model_url: str,
         )
 
 
+def add_paper_summary_to_db(model_url: str,
+                            paper_path: str,
+                            chroma_collection: Collection) -> None:
+    llm = create_llm_connector(model_url)
+    paper = os.path.basename(paper_path)
+    conv_res = simple_conversion(paper_path)
+    summary = llm.invoke([HumanMessage(content=summarisation_prompt + conv_res)]).content
+    doc = Document(
+        page_content=summary,
+        metadata={"source": paper}
+    )
+    chroma_collection.add(
+        ids=[str(uuid.uuid4())],
+        documents=[doc.page_content],
+        metadatas=[{"type": "text", "source": paper}]
+    )
+
+
+def prepare_db(sum_collection_name: str,
+               txt_collection_name: str,
+               img_collection_name: str,
+               sum_ef: EmbeddingFunction[Documents],
+               txt_ef: EmbeddingFunction[Documents],
+               img_ef: EmbeddingFunction[Documents],
+               process_img_func: Callable,
+               papers_path: str,
+               sum_model_url: str) -> tuple[Collection, Collection, Collection]:
+    # Create collections
+    summaries_collection = get_or_create_chroma_collection(sum_collection_name, sum_ef)
+    text_collection = get_or_create_chroma_collection(txt_collection_name, txt_ef)
+    image_collection = get_or_create_chroma_collection(img_collection_name, img_ef)
+
+    for paper in os.listdir(papers_path):
+        paper_path = os.path.join(papers_path, paper)
+
+        # Load summary for the paper
+        # add_paper_summary_to_db(sum_model_url, paper_path, summaries_collection)
+
+        # Load text chunks
+        documents = loader(parse_and_clean(paper_path))
+        store_text_chunks_in_chromadb(text_collection, documents, paper)
+
+        # Load images
+        parsed_images_path = os.path.join(IMAGES_PATH, Path(paper).stem)
+        process_img_func(image_collection, parsed_images_path, paper)
+
+        return summaries_collection, text_collection, image_collection
+
+
+def retrieve_context(sum_collection: Collection,
+                     txt_collection: Collection,
+                     img_collection: Collection,
+                     sum_chunk_num: int,
+                     txt_chunk_num: int,
+                     img_chunk_num: int,
+                     query: str,
+                     relevant_papers: list = None) -> tuple[dict, dict]:
+    # docs = query_chromadb(sum_collection, query, chunk_num=sum_chunk_num)
+    # relevant_papers = [doc['source'] for doc in docs['metadatas'][0]]
+
+    text_context = query_chromadb(txt_collection, query, {"source": {"$in": relevant_papers}}, txt_chunk_num)
+    image_context = query_chromadb(img_collection, query, {"source": {"$in": relevant_papers}}, img_chunk_num)
+    return text_context, image_context
+
+
+
 def run_mm_rag():
-    collection_name = 'mm_data'
-    embedding_function = embedding_functions.OpenCLIPEmbeddingFunction()
+    sum_collection_name = 'paper_summaries'
+    txt_collection_name = 'text_context'
+    img_collection_name = 'mm_image_context'
+    sum_chunk_num = 1
+    txt_chunk_num = 3
+    img_chunk_num = 2
 
-    llm_url = 'https://api.vsegpt.ru/v1;vis-google/gemini-2.0-flash-001'
-
-    papers_path = './papers'
-    questions_path = './questions/simple_questions.csv'
-    answers_path = './questions/simple_mm_answers.csv'
-
-    chroma_collection = get_or_create_chroma_collection(collection_name, embedding_function)
-
-    load_data_to_chroma(papers_path, chroma_collection, store_mm_embeddings_in_chromadb)
-
-    process_questions(questions_path, answers_path, chroma_collection, llm_url)
-
-
-def run_img2txt_rag():
-    collection_name = "text_data"
-
-    embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+    mm_embedding_function = embedding_functions.OpenCLIPEmbeddingFunction()
+    reg_embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="intfloat/multilingual-e5-large",
         normalize_embeddings=True
     )
 
-    chroma_collection = get_or_create_chroma_collection(collection_name, embedding_function)
+    llm_url = 'https://api.vsegpt.ru/v1;vis-google/gemini-2.0-flash-001'
+
+    papers_path = './papers'
+    questions_path = './questions/complex_questions.csv'
+    answers_path = './questions/complex_mm_answers2.csv'
+
+    sum_col, txt_col, img_col = prepare_db(sum_collection_name, txt_collection_name, img_collection_name,
+                                           reg_embedding_function, reg_embedding_function, mm_embedding_function,
+                                           store_images_in_chromadb_mm_format, papers_path, llm_url)
+
+    process_questions(questions_path, answers_path, llm_url,
+                      sum_col, txt_col, img_col,
+                      sum_chunk_num, txt_chunk_num, img_chunk_num)
+
+
+def run_img2txt_rag():
+    sum_collection_name = 'paper_summaries'
+    txt_collection_name = 'text_context'
+    img_collection_name = 'image_context'
+    sum_chunk_num = 1
+    txt_chunk_num = 3
+    img_chunk_num = 2
+
+    reg_embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="intfloat/multilingual-e5-large",
+        normalize_embeddings=True
+    )
 
     llm_url = 'https://api.vsegpt.ru/v1;vis-google/gemini-2.0-flash-001'
 
     papers_path = './papers'
-    questions_path = './questions/simple_questions.csv'
-    answers_path = './questions/simple_text_answers.csv'
+    questions_path = './questions/complex_questions.csv'
+    answers_path = './questions/complex_text_answers2.csv'
 
-    load_data_to_chroma(papers_path, chroma_collection, store_txt_embeddings_in_chromadb)
+    sum_col, txt_col, img_col = prepare_db(sum_collection_name, txt_collection_name, img_collection_name,
+                                           reg_embedding_function, reg_embedding_function, reg_embedding_function,
+                                           store_images_in_chromadb_txt_format, papers_path, llm_url)
 
-    process_questions(questions_path, answers_path, chroma_collection, llm_url)
+    process_questions(questions_path, answers_path, llm_url,
+                      sum_col, txt_col, img_col,
+                      sum_chunk_num, txt_chunk_num, img_chunk_num)
 
     
 def run_summary_rag():
@@ -146,5 +239,5 @@ def run_summary_rag():
 
 if __name__ == "__main__":
     # run_mm_rag()
-    # run_img2txt_rag()
-    run_summary_rag()
+    run_img2txt_rag()
+    # run_summary_rag()

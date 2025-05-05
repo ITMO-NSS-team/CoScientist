@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage
 from protollm.connectors import create_llm_connector
 
 client = chromadb.Client()
+client = chromadb.PersistentClient(path='./chromadb')
 DATA_LOADER = ImageLoader()
 
 
@@ -49,10 +50,9 @@ def get_or_create_chroma_collection(collection: str,
     )
 
 
-def store_mm_embeddings_in_chromadb(collection: Collection,
-                                    content: list,
-                                    image_dir: str,
-                                    paper_name: str) -> None:
+def store_text_chunks_in_chromadb(collection: Collection,
+                                  content: list,
+                                  paper_name: str):
     # Upload text
     for text_chunk in content:
         collection.add(
@@ -60,6 +60,28 @@ def store_mm_embeddings_in_chromadb(collection: Collection,
             documents=[text_chunk.page_content],
             metadatas=[{"type": "text", "source": paper_name}]
         )
+
+
+def store_images_in_chromadb_txt_format(collection: Collection,
+                                        image_dir: str,
+                                        paper_name: str) -> None:
+
+    # Upload images
+    for filename in os.listdir(image_dir):
+        img_path = os.path.join(image_dir, filename)
+
+        collection.add(
+            ids=[str(uuid.uuid4())],
+            documents=[image_to_text(img_path)],
+            metadatas=[{"type": "image", "source": paper_name, "image_path": img_path}]
+        )
+
+
+
+def store_images_in_chromadb_mm_format(collection: Collection,
+                                       image_dir: str,
+                                       paper_name: str) -> None:
+
     # Upload images and tables
     for filename in os.listdir(image_dir):
         if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -72,31 +94,13 @@ def store_mm_embeddings_in_chromadb(collection: Collection,
             )
 
 
-def query_chromadb(collection: Collection, query_text: str, chunk_num: int = 3) -> dict:
+def query_chromadb(collection: Collection,
+                   query_text: str,
+                   metadata_filter: dict = None,
+                   chunk_num: int = 3) -> dict:
     return collection.query(
         query_texts=[query_text],
-        n_results=chunk_num
+        n_results=chunk_num,
+        where=metadata_filter,
+        include=["documents", "metadatas", "distances"]
     )
-
-
-def store_txt_embeddings_in_chromadb(collection: Collection,
-                                     content: list[Document],
-                                     image_dir: str,
-                                     paper_name: str) -> None:
-    # Upload text
-    for text_chunk in content:
-        collection.add(
-            ids=[str(uuid.uuid4())],
-            documents=[text_chunk.page_content],
-            metadatas=[{"type": "text", "source": paper_name}]
-        )
-
-    # Upload images
-    for filename in os.listdir(image_dir):
-        img_path = os.path.join(image_dir, filename)
-
-        collection.add(
-            ids=[str(uuid.uuid4())],
-            documents=[image_to_text(img_path)],
-            metadatas=[{"type": "image", "source": paper_name, "image_path": img_path}]
-        )
