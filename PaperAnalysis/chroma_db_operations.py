@@ -10,7 +10,7 @@ from langchain_core.documents.base import Document
 from langchain_core.messages import HumanMessage
 from protollm.connectors import create_llm_connector
 
-client = chromadb.Client()
+# client = chromadb.Client()
 client = chromadb.PersistentClient(path='./chromadb')
 DATA_LOADER = ImageLoader()
 

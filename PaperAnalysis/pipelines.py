@@ -182,7 +182,7 @@ def run_mm_rag():
 
     papers_path = './papers'
     questions_path = './questions/complex_questions.csv'
-    answers_path = './questions/complex_mm_answers2.csv'
+    answers_path = './questions/complex_mm_answers.csv'
 
     sum_col, txt_col, img_col = prepare_db(sum_collection_name, txt_collection_name, img_collection_name,
                                            reg_embedding_function, reg_embedding_function, mm_embedding_function,
@@ -210,7 +210,7 @@ def run_img2txt_rag():
 
     papers_path = './papers'
     questions_path = './questions/complex_questions.csv'
-    answers_path = './questions/complex_text_answers2.csv'
+    answers_path = './questions/complex_text_answers.csv'
 
     sum_col, txt_col, img_col = prepare_db(sum_collection_name, txt_collection_name, img_collection_name,
                                            reg_embedding_function, reg_embedding_function, reg_embedding_function,
