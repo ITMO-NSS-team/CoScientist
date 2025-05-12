@@ -8,7 +8,7 @@ pandas == 2.2.3
 pillow == 11.1.0
 ProtoLLM == 0.1.2
 pydantic == 2.9.2
-dotenv == 0.9.9
+python-dotenv == 0.9.9
 open-clip-torch == 2.32.0
 sentence_transformers == 4.1.0
 chromadb == 1.0.6

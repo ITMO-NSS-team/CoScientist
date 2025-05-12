@@ -36,13 +36,13 @@ def process_questions(questions_path: str,
     for index, row in df.iterrows():
         question = row.question
         txt_data, img_data = retrieve_context(sum_collection, txt_collection, img_collection,
-                                              sum_chunk_num, txt_chunk_num, img_chunk_num, question,
+                                              sum_chunk_num, txt_chunk_num, img_chunk_num, "query: " + question,
                                               [row.paper_name])
         txt_context = ''
         img_paths = []
 
         for chunk in txt_data['documents'][0]:
-            txt_context += '\n\n' + chunk
+            txt_context += '\n\n' + chunk.replace("passage: ", "")
         for img in img_data['metadatas'][0]:
             img_paths.append(img['image_path'])
 
@@ -144,7 +144,7 @@ def prepare_db(sum_collection_name: str,
         parsed_images_path = os.path.join(IMAGES_PATH, Path(paper).stem)
         process_img_func(image_collection, parsed_images_path, paper)
 
-        return summaries_collection, text_collection, image_collection
+    return summaries_collection, text_collection, image_collection
 
 
 def retrieve_context(sum_collection: Collection,
@@ -165,8 +165,8 @@ def retrieve_context(sum_collection: Collection,
 
 
 def run_mm_rag():
-    sum_collection_name = 'paper_summaries'
-    txt_collection_name = 'text_context'
+    sum_collection_name = 'paper_summaries_mm'
+    txt_collection_name = 'text_context_mm'
     img_collection_name = 'mm_image_context'
     sum_chunk_num = 1
     txt_chunk_num = 3
@@ -174,7 +174,8 @@ def run_mm_rag():
 
     mm_embedding_function = embedding_functions.OpenCLIPEmbeddingFunction()
     reg_embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="intfloat/multilingual-e5-large",
+        # model_name="intfloat/multilingual-e5-large",
+        model_name="intfloat/multilingual-e5-small",
         normalize_embeddings=True
     )
 
@@ -194,15 +195,16 @@ def run_mm_rag():
 
 
 def run_img2txt_rag():
-    sum_collection_name = 'paper_summaries'
-    txt_collection_name = 'text_context'
+    sum_collection_name = 'paper_summaries_img2txt'
+    txt_collection_name = 'text_context_img2txt'
     img_collection_name = 'image_context'
     sum_chunk_num = 1
     txt_chunk_num = 3
     img_chunk_num = 2
 
     reg_embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="intfloat/multilingual-e5-large",
+        # model_name="intfloat/multilingual-e5-large",
+        model_name="intfloat/multilingual-e5-small",
         normalize_embeddings=True
     )
 

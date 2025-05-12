@@ -102,7 +102,7 @@ def loader(
             continue
         docs.append(
             Document(
-                page_content=chunker.contextualize(chunk=chunk),
+                page_content="passage: " + chunker.contextualize(chunk=chunk),
                 metadata={
                     "source": dl_doc.origin.filename,
                     "dl_meta": chunk.meta.export_json_dict(),

@@ -14,6 +14,20 @@ from protollm.connectors import create_llm_connector
 client = chromadb.PersistentClient(path='./chromadb')
 DATA_LOADER = ImageLoader()
 
+image_decs_prompt = """Describe an image from a chemistry research paper by following these guidelines:
+1. Image Type : Specify what is depicted (e.g., reaction scheme, data graphs, microscopy image, spectrum, 3D molecular model, etc.).
+2. Chemical Components : List ALL substances, compounds, catalysts, or solvents, including chemical formulas and
+concentrations, shown in the image (if available).
+3. Experimental Conditions : Note temperature, pressure, pH, reaction time, or other relevant parameters (if available).
+4. Image Data :
+    - For graphs: Axes labels, value ranges, trends (e.g., linear correlation, peaks).
+    - For spectra: Spectrum type (IR, UV-Vis, mass spectrometry), key signals, and their interpretation.
+    - For reaction schemes: Reaction steps, intermediates, yields, or side products.
+5. Key Terms : Extract 5–10 keywords/terminology for semantic search (e.g., oxidative fluorination , microporous materials , thermogravimetric analysis ) if possible.
+
+Use precise scientific language. Focus on objective details visible in the image to maximize searchability in a
+vector database. Do not add Markdown elements to the result."""
+
 
 def image_to_base64(image_path: str) -> str:
     with open(image_path, "rb") as image_file:
