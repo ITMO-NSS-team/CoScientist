@@ -1,31 +1,100 @@
 import logging
 import os
-import time
 from pathlib import Path
 import re
+import time
 from typing import List, Any, Optional
 
+from bs4 import BeautifulSoup, Tag
 from docling.chunking import HybridChunker
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, PictureDescriptionApiOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling_core.types import DoclingDocument
-from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
-from dotenv import load_dotenv
-from langchain_core.documents import Document
-from pydantic import AnyUrl
-
 from docling_core.experimental.serializer.base import BaseDocSerializer, SerializationResult
 from docling_core.experimental.serializer.common import create_ser_result
 from docling_core.experimental.serializer.markdown import MarkdownPictureSerializer
-from docling_core.transforms.chunker.hierarchical_chunker import ChunkingSerializerProvider, ChunkingDocSerializer
+from docling_core.types import DoclingDocument
+from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 from docling_core.types.doc.document import PictureDescriptionData
+from docling_core.transforms.chunker.hierarchical_chunker import ChunkingSerializerProvider, ChunkingDocSerializer
+from dotenv import load_dotenv
+from langchain_core.documents import Document
+from langchain_text_splitters import HTMLSemanticPreservingSplitter
+from marker.config.parser import ConfigParser
+from marker.converters.pdf import PdfConverter
+from marker.models import create_model_dict
+from marker.output import text_from_rendered, save_output
+from protollm.connectors import create_llm_connector
+from pydantic import AnyUrl
 from typing_extensions import override
+
+from answer_question import prompt_func, convert_to_base64
 
 _log = logging.getLogger(__name__)
 load_dotenv("../config.env")
 
 IMAGE_RESOLUTION_SCALE = 2.0
+
+cls_prompt = """
+Act as a scientific image classifier. Analyze the input image from an academic paper and determine if it contains meaningful scientific information relevant to the article's content.
+
+**Meaningful images (True):**
+- Research diagrams, charts, or graphs
+- Experimental photographs or microscopy images
+- Data tables with substantive content
+- Mathematical formulas/equations
+- Technical schematics or flowcharts
+- Biological/chemical structures
+- Statistical visualizations
+
+**Non-meaningful images (False):**
+- Journal/publisher logos
+- Decorative icons (social media, print, download etc.)
+- Banner advertisements
+- Author photos or institutional emblems
+- Pure decorative elements
+- Copyright watermarks
+- Navigation buttons
+
+**Output Rules:**
+1. Return only single-word verdict: 'True' for meaningful images, 'False' for non-meaningful
+2. Prioritize false negatives over false positives
+3. Assume small size (<150px) suggests non-meaningful content
+4. Ignore textual content within logos/icons
+
+**Classification standard:**
+An image is only 'True' if it conveys scientific data/results/methods essential for understanding the paper's research.
+
+Now classify this image:"""
+
+table_extraction_prompt = """
+You are a scientific document analysis expert. Strictly follow these steps when processing the chemistry paper image:
+
+1. Detect all table-like structures in the image:
+   - If exactly ONE complete table exists (fully visible borders, headers, and data cells with no cropping/obscuring)
+     → Extract tabular data and convert to HTML using <table>, <tr>, <th>, <td> tags
+     → Return ONLY the HTML code
+
+2. In ALL other cases return EXACTLY:
+   'No table'
+   This includes when:
+   - No table is detected
+   - Multiple tables exist
+   - Table is incomplete/cropped/obscured
+   - Table headers are missing
+   - Part of table extends beyond image boundaries
+
+3. Formatting rules:
+   - Never add explanations, comments or markdown
+   - Don't process non-tabular content
+   - Skip text recognition outside tables
+   - Omit confidence indicators
+   - Output either pure HTML or exact string 'No table'
+
+Critical: Your response must contain ONLY one of two options:
+Option A: <table>...</table> (for single valid table)
+Option B: No table (all other cases)
+"""
 
 
 def parse_and_clean(path, annotate_pic: bool = False):
@@ -326,18 +395,138 @@ class ImgAnnotationSerializerProvider(ChunkingSerializerProvider):
             doc=doc,
             picture_serializer=AnnotationPictureSerializer(),
         )
+    
+
+def parse_with_marker(paper_name: str, use_llm: bool=False) -> (str, Path):
+    config = {
+        "output_format": "html",
+        "use_llm": use_llm,
+        "openai_api_key": os.getenv("VSE_GPT_KEY"),
+        "openai_model": "google/gemini-2.0-flash-lite-001",
+        "openai_base_url": "https://api.vsegpt.ru/v1"
+    }
+    config_parser = ConfigParser(config)
+    
+    file_name = Path(paper_name)
+    
+    converter = PdfConverter(
+        artifact_dict=create_model_dict(),
+        config=config_parser.generate_config_dict(),
+        renderer=config_parser.get_renderer(),
+        llm_service="marker.services.openai.OpenAIService"
+    )
+    rendered = converter(paper_name)
+    text, _, images = text_from_rendered(rendered)
+    
+    output_dir = Path("./parse_results", str(file_name.stem) + "_marker")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_output(rendered, output_dir=str(output_dir), fname_base=f"{file_name.stem}")
+    return file_name.stem, output_dir
+
+
+def clean_up_html(paper_name: str, doc_dir: Path) -> str:
+    
+    file_name = Path(paper_name + ".html")
+    parsed_file_path = Path(doc_dir, file_name)
+    with open(parsed_file_path, 'r', encoding='utf-8') as f:
+        html = f.read()
+    
+    soup = BeautifulSoup(html, "lxml")
+    
+    blacklist = [
+        "author information", "associated content", "acknowledgments", "acknowledgements", "references",
+        "data availability", "declaration of competing interest", "credit authorship contribution statement", "funding",
+        "ethical statements", "supplementary materials", "conflict of interest", "conflicts of interest",
+        "author contributions", "data availability statement", "ethics approval", "supplementary information"
+    ]
+    for header in soup.find_all(["h1", "h2", "h3"]):
+        header_text = header.get_text(strip=True).lower()
+        
+        if any(exclude in header_text for exclude in blacklist):
+            next_node = header.next_sibling
+            
+            elements_to_remove = []
+            while next_node and next_node.name not in ["h1", "h2"]:
+                elements_to_remove.append(next_node)
+                next_node = next_node.next_sibling
+            
+            header.decompose()
+            for element in elements_to_remove:
+                if isinstance(element, Tag):
+                    element.decompose()
+    
+    llm = create_llm_connector("https://api.vsegpt.ru/v1;vis-google/gemini-2.0-flash-001")
+    for img in soup.find_all('img'):
+        img_path = str(doc_dir) + "/" + img.get("src")
+        images = list(map(convert_to_base64, [img_path]))
+        query = [prompt_func({"text": cls_prompt, "image": images})]
+        res_1 = llm.invoke(query).content
+        if res_1.strip() == "False":
+            parent_p = img.find_parent('p')
+            if parent_p:
+                parent_p.decompose()
+                os.remove(img_path)
+        else:
+            table_query = [prompt_func({"text": table_extraction_prompt, "image": images})]
+            res_2 = llm.invoke(table_query).content
+            if res_2 != "No table":
+                pattern = r'<table\b[^>]*>.*?</table>'
+                match = re.search(pattern, res_2, re.DOTALL)
+                if match:
+                    html_table = match.group(0)
+                    table_soup = BeautifulSoup(html_table, 'html.parser')
+                    parent_p = img.find_parent('p')
+                    if parent_p:
+                        parent_p.replace_with(table_soup)
+
+    with open(Path(doc_dir, f"{file_name.stem}_processed.html"), "w", encoding='utf-8') as file:
+        file.write(str(soup.prettify()))
+
+    return soup.prettify()
+    
+
+def html_chunking(html_string: str, paper_name: str) -> list:
+    
+    def custom_table_extractor(table_tag):
+        return str(table_tag).replace("\n", "")
+    
+    headers_to_split_on = [("h1", "Header 1"), ("h2", "Header 2")]
+    
+    splitter = HTMLSemanticPreservingSplitter(
+        headers_to_split_on=headers_to_split_on,
+        max_chunk_size=2500,
+        chunk_overlap=200,
+        separators=["\n\n", "\n", ". "],
+        elements_to_preserve=["ul", "table", "ol"],
+        preserve_images=True,
+        custom_handlers={"table": custom_table_extractor}
+    )
+    
+    documents = splitter.split_text(html_string)
+    for doc in documents:
+        doc.page_content = "passage: " + doc.page_content
+        doc.metadata["imgs_in_chunk"] = str(extract_img_url(doc.page_content, paper_name))
+        doc.metadata["source"] = paper_name + ".pdf"
+        
+    return documents
+
+
+def extract_img_url(doc_text: str, p_name: str):
+    pattern = r'!\[image:([^\]]+\.jpeg)\]\(([^)]+\.jpeg)\)'
+    matches = re.findall(pattern, doc_text)
+    return ["./parse_results/" + p_name + "_marker/" + entry[0] for entry in matches]
 
 
 if __name__ == "__main__":
-    # parsed_doc = parsing_playground("/home/kamilfatkhiev/work_data/papers/10_1021_acs_joc_0c02350.pdf")
-    # paper_doc_chunk(parsed_doc)
-    # paper_doc_chunk(
-    #     "10_1021_acs_joc_0c02350/"
-    #     "10_1021_acs_joc_0c02350-with-images.json"
-    # )
+    # documents = loader(parse_and_clean(
+    #     "papers/10_1021_acs_joc_0c02350.pdf"))
+    # for document in documents:
+    #     print(document)
     
-    documents = loader(parse_and_clean(
-        "questions/jirát_et_al_2025_surface_defects_and_crystal_growth_of_apremilast.pdf"))
-    for document in documents:
-        print(document)
-        
+    p_path = './papers'
+    paper = "kowalska-et-al-2023-visible-light-promoted-3-2-cycloaddition-for-the-synthesis-of-cyclopenta-b-chromenocarbonitrile.pdf"
+    paper_path = os.path.join(p_path, paper)
+    f_name, dir_name = parse_with_marker(paper_name=paper_path)
+    parsed_paper = clean_up_html(paper_name=f_name, doc_dir=dir_name)
+    chunks = html_chunking(html_string=parsed_paper, paper_name=f_name)
+    print(chunks)

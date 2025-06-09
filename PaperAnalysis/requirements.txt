@@ -12,3 +12,5 @@ python-dotenv == 0.9.9
 open-clip-torch == 2.32.0
 sentence_transformers == 4.1.0
 chromadb == 1.0.6
+marker-pdf == 1.6.2
+beautifulsoup4 == 4.13.3

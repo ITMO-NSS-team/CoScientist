@@ -16,7 +16,7 @@ from answer_question import query_llm, summarisation_prompt
 from chroma_db_operations import (get_or_create_chroma_collection, store_text_chunks_in_chromadb,
                                   store_images_in_chromadb_txt_format, store_images_in_chromadb_mm_format,
                                   query_chromadb)
-from parse_and_split import loader, parse_and_clean, simple_conversion
+from parse_and_split import html_chunking, clean_up_html, parse_with_marker, parse_and_clean, simple_conversion, loader
 
 
 IMAGES_PATH = './parse_results'
@@ -39,14 +39,16 @@ def process_questions(questions_path: str,
                                               sum_chunk_num, txt_chunk_num, img_chunk_num, "query: " + question,
                                               [row.paper_name])
         txt_context = ''
-        img_paths = []
+        img_paths = set()
 
         for chunk in txt_data['documents'][0]:
             txt_context += '\n\n' + chunk.replace("passage: ", "")
+        for chunk_meta in txt_data['metadatas'][0]:
+            img_paths.update(eval(chunk_meta["imgs_in_chunk"]))
         for img in img_data['metadatas'][0]:
-            img_paths.append(img['image_path'])
+            img_paths.add(img['image_path'])
 
-        ans, metadata = query_llm(llm_url, question, txt_context, img_paths)
+        ans, metadata = query_llm(llm_url, question, txt_context, list(img_paths))
 
         df.at[index, 'chroma_text_context'] = txt_context
         df.at[index, 'chroma_images_context'] = str(img_paths)
@@ -137,11 +139,13 @@ def prepare_db(sum_collection_name: str,
         # add_paper_summary_to_db(sum_model_url, paper_path, summaries_collection)
 
         # Load text chunks
-        documents = loader(parse_and_clean(paper_path))
+        f_name, dir_name = parse_with_marker(paper_name=paper_path)
+        parsed_paper = clean_up_html(paper_name=f_name, doc_dir=dir_name)
+        documents = html_chunking(html_string=parsed_paper, paper_name=f_name)
         store_text_chunks_in_chromadb(text_collection, documents, paper)
 
         # Load images
-        parsed_images_path = os.path.join(IMAGES_PATH, Path(paper).stem)
+        parsed_images_path = os.path.join(IMAGES_PATH, Path(paper).stem + "_marker")
         process_img_func(image_collection, parsed_images_path, paper)
 
     return summaries_collection, text_collection, image_collection
@@ -203,8 +207,7 @@ def run_img2txt_rag():
     img_chunk_num = 2
 
     reg_embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        # model_name="intfloat/multilingual-e5-large",
-        model_name="intfloat/multilingual-e5-small",
+        model_name="intfloat/multilingual-e5-large",
         normalize_embeddings=True
     )
 

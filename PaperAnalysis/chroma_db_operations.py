@@ -72,7 +72,7 @@ def store_text_chunks_in_chromadb(collection: Collection,
         collection.add(
             ids=[str(uuid.uuid4())],
             documents=[text_chunk.page_content],
-            metadatas=[{"type": "text", "source": paper_name}]
+            metadatas=[{"type": "text", **text_chunk.metadata}]
         )
 
 
@@ -82,13 +82,14 @@ def store_images_in_chromadb_txt_format(collection: Collection,
 
     # Upload images
     for filename in os.listdir(image_dir):
-        img_path = os.path.join(image_dir, filename)
-
-        collection.add(
-            ids=[str(uuid.uuid4())],
-            documents=[image_to_text(img_path)],
-            metadatas=[{"type": "image", "source": paper_name, "image_path": img_path}]
-        )
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            img_path = os.path.join(image_dir, filename)
+            
+            collection.add(
+                ids=[str(uuid.uuid4())],
+                documents=[image_to_text(img_path)],
+                metadatas=[{"type": "image", "source": paper_name, "image_path": img_path}]
+            )
 
 
 
