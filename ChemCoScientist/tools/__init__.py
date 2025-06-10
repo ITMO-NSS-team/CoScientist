@@ -13,7 +13,7 @@ from ChemCoScientist.dataset_handler.chembl.chembl_utils import get_filtered_dat
 if web_tools:
     tools_rendered = render_text_description(
         web_tools + chem_tools + nanoparticle_tools + [get_filtered_data]
-    )
+    ).replace('duckduckgo_results_json', 'DuckDuckGoSearchResults')
 else:
     tools_rendered = render_text_description(chem_tools + nanoparticle_tools + [get_filtered_data])
-dataset_handler_rendered = render_text_description([get_filtered_data])
+dataset_handler_rendered = render_text_description([get_filtered_data]).replace('duckduckgo_results_json', 'DuckDuckGoSearchResults')

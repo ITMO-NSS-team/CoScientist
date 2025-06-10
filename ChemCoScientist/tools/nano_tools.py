@@ -13,7 +13,7 @@ from ChemCoScientist.agents.tools_prompts import (entr_eff_prompt,
                                                   properties_prediction_prompt,
                                                   shape_detection_prompt,
                                                   synt_prompt)
-from ChemCoScientist.tools.models.generative_inference import inference
+# from ChemCoScientist.tools.models.generative_inference import inference
 
 
 def call_for_generation(
@@ -123,23 +123,23 @@ def predict_nanoparticle_shape(description: str, config: RunnableConfig) -> str:
         return f"I couldn't predict shapes"
 
 
-@tool
-def generate_nanoparticle_images(shape: str) -> str:
-    """Generates the image of nanoparticle based on it's shape. Use it when you are asked to generate nanoparticles image
+# @tool
+# def generate_nanoparticle_images(shape: str) -> str:
+#     """Generates the image of nanoparticle based on it's shape. Use it when you are asked to generate nanoparticles image
 
-    Args:
-        shape (str): shape of nanomaterial: 'cube', 'sphere', 'stick', 'flat', 'amorphous'
+#     Args:
+#         shape (str): shape of nanomaterial: 'cube', 'sphere', 'stick', 'flat', 'amorphous'
 
-    Returns:
-        predicted_shapes (str): predicted shapes of nanomaterial
-    """
-    try:
-        inference(shape)
-        shape = f"I've successfully generated images of {shape} nanoparticles"
-        return shape
-    except Exception as e:
-        # logger.exception(f"'generate_nanoparticle_images' failed with error: {e}")
-        return f"I've couldn't generate images because of: {str(e)}, I should move to the next task if any"
+#     Returns:
+#         predicted_shapes (str): predicted shapes of nanomaterial
+#     """
+#     try:
+#         inference(shape)
+#         shape = f"I've successfully generated images of {shape} nanoparticles"
+#         return shape
+#     except Exception as e:
+#         # logger.exception(f"'generate_nanoparticle_images' failed with error: {e}")
+#         return f"I've couldn't generate images because of: {str(e)}, I should move to the next task if any"
 
 
 @tool
@@ -185,7 +185,7 @@ def analyse_nanoparticle_images(config: RunnableConfig) -> str:
 nanoparticle_tools = [
     synthesis_generation,
     predict_nanoparticle_shape,
-    generate_nanoparticle_images,
+    # generate_nanoparticle_images,
     analyse_nanoparticle_images,
     predict_nanoparticle_entrapment_eff,
 ]
