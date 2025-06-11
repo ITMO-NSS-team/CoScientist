@@ -136,7 +136,7 @@ def prepare_db(sum_collection_name: str,
         paper_path = os.path.join(papers_path, paper)
 
         # Load summary for the paper
-        # add_paper_summary_to_db(sum_model_url, paper_path, summaries_collection)
+        add_paper_summary_to_db(sum_model_url, paper_path, summaries_collection)
 
         # Load text chunks
         f_name, dir_name = parse_with_marker(paper_name=paper_path)
@@ -159,8 +159,8 @@ def retrieve_context(sum_collection: Collection,
                      img_chunk_num: int,
                      query: str,
                      relevant_papers: list = None) -> tuple[dict, dict]:
-    # docs = query_chromadb(sum_collection, query, chunk_num=sum_chunk_num)
-    # relevant_papers = [doc['source'] for doc in docs['metadatas'][0]]
+    docs = query_chromadb(sum_collection, query, chunk_num=sum_chunk_num)
+    relevant_papers = [doc['source'] for doc in docs['metadatas'][0]]
 
     text_context = query_chromadb(txt_collection, query, {"source": {"$in": relevant_papers}}, txt_chunk_num)
     image_context = query_chromadb(img_collection, query, {"source": {"$in": relevant_papers}}, img_chunk_num)
