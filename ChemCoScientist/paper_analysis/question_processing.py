@@ -16,14 +16,21 @@ VISION_LLM_URL = os.environ["VISION_LLM_URL"]
 PAPER_STORE = ChromaDBPaperStore()
 
 
-def query_llm(model_url: str, question: str, txt_context: str, img_paths: list[str]) -> tuple:
+def query_llm(
+    model_url: str, question: str, txt_context: str, img_paths: list[str]
+) -> tuple:
     llm = create_llm_connector(model_url)
 
     img_context = list(map(convert_to_base64, img_paths))
 
     messages = [
         SystemMessage(content=sys_prompt),
-        prompt_func({"text": f"USER QUESTION: {question}\n\nCONTEXT: {txt_context}", "image": img_context})
+        prompt_func(
+            {
+                "text": f"USER QUESTION: {question}\n\nCONTEXT: {txt_context}",
+                "image": img_context,
+            }
+        ),
     ]
 
     res = llm.invoke(messages)
@@ -31,30 +38,35 @@ def query_llm(model_url: str, question: str, txt_context: str, img_paths: list[s
 
 
 def process_question(question: str) -> dict:
-    
+
     txt_data, img_data = PAPER_STORE.retrieve_context(question)
-    
-    txt_context = ''
+
+    txt_context = ""
     img_paths = set()
-    
+
     for idx, chunk in enumerate(txt_data, start=1):
-        txt_context += f"{idx}. Metadata: " \
-                       + str(chunk[2]) + "\nChunk: " \
-                       + chunk[1].replace("passage: ", "") + '\n\n'
+        txt_context += (
+            f"{idx}. Metadata: "
+            + str(chunk[2])
+            + "\nChunk: "
+            + chunk[1].replace("passage: ", "")
+            + "\n\n"
+        )
     for chunk_meta in [chunk[2] for chunk in txt_data]:
         img_paths.update(eval(chunk_meta["imgs_in_chunk"]))
-    for img in img_data['metadatas'][0]:
-        img_paths.add(img['image_path'])
+    for img in img_data["metadatas"][0]:
+        img_paths.add(img["image_path"])
 
     ans, metadata = query_llm(VISION_LLM_URL, question, txt_context, list(img_paths))
 
-    return {'answer': ans,
-            'metadata': {
-                'text_context': txt_context,
-                'image_context': img_paths,
-                'metadata': metadata
-             }
-            }
+    return {
+        "answer": ans,
+        "metadata": {
+            "text_context": txt_context,
+            "image_context": img_paths,
+            "metadata": metadata,
+        },
+    }
 
 
 if __name__ == "__main__":
@@ -95,6 +107,6 @@ if __name__ == "__main__":
     # print(res.content)
     # print(res.response_metadata)
 
-    question = 'how does the synthesis of Glionitrin A/B happen?'
+    question = "how does the synthesis of Glionitrin A/B happen?"
     res = process_question(question)
     print(res)

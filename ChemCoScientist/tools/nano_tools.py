@@ -114,7 +114,7 @@ def predict_nanoparticle_shape(description: str, config: RunnableConfig) -> str:
         predicted_shapes (str): predicted shapes of nanomaterial
     """
     try:
-        llm: BaseChatModel = config["configurable"]["model"]
+        llm: BaseChatModel = config["configurable"]["llm"]
         prompt = properties_prediction_prompt + description
         res = llm.invoke(prompt)
         predicted_shapes = res.content

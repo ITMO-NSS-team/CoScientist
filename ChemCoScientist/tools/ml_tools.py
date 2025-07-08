@@ -27,11 +27,11 @@ def get_state_from_server(url: str = "pred") -> Union[dict, str]:
     Args:
         url (str): Flag for server, for predictive is 'pred', for generative is 'gen'
     """
-    if url == 'pred':
-        url = conf['url_pred']
+    if url == "pred":
+        url = conf["url_pred"]
     else:
-        url = conf['url_gen']
-        
+        url = conf["url_gen"]
+
     url_ = url.split("http://")[1]
     resp = requests.get("http://" + url_.split("/")[0] + "/check_state")
     if resp.status_code == 500:
@@ -42,9 +42,7 @@ def get_state_from_server(url: str = "pred") -> Union[dict, str]:
 
 
 @tool
-def get_case_state_from_server(
-    case: str, url: str = 'pred'
-) -> Union[dict, str]:
+def get_case_state_from_server(case: str, url: str = "pred") -> Union[dict, str]:
     """Get information about a specific case/model (if found),
     its status (in training, trained), metrics, etc.
 
@@ -55,11 +53,11 @@ def get_case_state_from_server(
         case (str): Name of case
         url (str): Flag for server, for predictive is 'pred', for generative is 'gen'
     """
-    if url == 'pred':
-        url = conf['url_pred']
+    if url == "pred":
+        url = conf["url_pred"]
     else:
-        url = conf['url_gen']
-        
+        url = conf["url_gen"]
+
     url_ = url.split("http://")[1]
     resp = requests.get("http://" + url_.split("/")[0] + "/check_state")
     if resp.status_code == 500:
@@ -252,7 +250,7 @@ def ml_dl_training(
     print("Start training ml model for case: ", case)
     while not ml_ready:
         print("Training ml-model in progress for case: ", case)
-        st = get_case_state_from_server(case, 'pred')
+        st = get_case_state_from_server(case, "pred")
         if isinstance(st, dict):
             if st["ml_models"]["status"] == "Trained":
                 ml_ready = True
@@ -291,7 +289,7 @@ def ml_dl_training(
     print("Start training ml model for case: ", case)
     while not ml_ready:
         print("Training ml-model in progress for case: ", case)
-        st = get_case_state_from_server(case, 'pred')
+        st = get_case_state_from_server(case, "pred")
         if isinstance(st, dict):
             if st["ml_models"]["status"] == "Trained":
                 ml_ready = True
@@ -330,7 +328,7 @@ def ml_dl_training(
     print("Start training ml model for case: ", case)
     while not ml_ready:
         print("Training ml-model in progress for case: ", case)
-        st = get_case_state_from_server(case, 'pred')
+        st = get_case_state_from_server(case, "pred")
         if isinstance(st, dict):
             if st["ml_models"]["status"] == "Trained":
                 ml_ready = True
@@ -437,8 +435,8 @@ def generate_mol_by_case(
         case (str, optional): Name of model (model names can be obtained by calling 'get_state_from_server').
         n_samples (int, optional): Number of molecules to generate. Default is 1
     """
-    url = conf['url_gen'] + "/generate_gen_models_by_case"
-    
+    url = conf["url_gen"] + "/generate_gen_models_by_case"
+
     params = {
         "case": case,
         "n_samples": n_samples,
@@ -462,7 +460,7 @@ def run_ml_dl_training_by_daemon(
     classification_props: list = [],
 ) -> Union[bool, str]:
     """
-    Simultaneously starts training the predictive and generative models (this is normal 
+    Simultaneously starts training the predictive and generative models (this is normal
     if the user asks for only one thing).
     The status can be checked with "get_state_case_from_server".
 

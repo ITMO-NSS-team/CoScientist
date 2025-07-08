@@ -1,11 +1,11 @@
+import os
 import time
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
-from smolagents import CodeAgent, DuckDuckGoSearchTool, OpenAIServerModel
-from smolagents import LiteLLMModel
+from smolagents import CodeAgent, DuckDuckGoSearchTool, LiteLLMModel, OpenAIServerModel
 
 from ChemCoScientist.agents.agents_prompts import (
     additional_ds_builder_prompt,
@@ -13,11 +13,19 @@ from ChemCoScientist.agents.agents_prompts import (
     ds_builder_prompt,
     worker_prompt,
 )
+from ChemCoScientist.paper_analysis.question_processing import process_question
 from ChemCoScientist.tools import chem_tools, nanoparticle_tools
 from ChemCoScientist.tools.chemist_tools import fetch_BindingDB_data, fetch_chembl_data
 from ChemCoScientist.tools.ml_tools import agents_tools as automl_tools
 
-from ChemCoScientist.paper_analysis.question_processing import process_question
+
+def get_all_files(directory):
+    file_paths = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            full_path = os.path.join(root, file)
+            file_paths.append(full_path)
+    return file_paths
 
 
 def dataset_builder_agent(state: dict, config: dict):
@@ -26,14 +34,15 @@ def dataset_builder_agent(state: dict, config: dict):
     ]
     plan = state["plan"]
     task = plan[0]
-
-    if 'groq.com' in config_cur_agent["url"]:
+    print(config_cur_agent)
+    if "groq.com" in config_cur_agent["url"]:
         model = LiteLLMModel(
             config_cur_agent["model_name"],
             api_base=config_cur_agent["url"],
-            api_key=config_cur_agent["api_key"]
+            api_key=config_cur_agent["api_key"],
         )
     else:
+
         model = OpenAIServerModel(
             api_base=config_cur_agent["url"],
             model_id=config_cur_agent["model_name"],
@@ -50,10 +59,14 @@ def dataset_builder_agent(state: dict, config: dict):
         ds_builder_prompt + config_cur_agent["ds_dir"] + "\n"
         "So, user ask: \n" + task + additional_ds_builder_prompt
     )
+    state["metadata"]["dataset_builder_agent"] = get_all_files(
+        os.environ["DS_STORAGE_PATH"]
+    )
 
     return Command(
         goto="replan_node",
         update={
+            "metadata": state["metadata"],
             "past_steps": [(task, str(response))],
             "nodes_calls": [("dataset_builder_agent", str(response))],
         },
@@ -64,12 +77,12 @@ def ml_dl_agent(state: dict, config: dict):
     config_cur_agent = config["configurable"]["additional_agents_info"]["ml_dl_agent"]
     plan = state["plan"]
     task = plan[0]
-    
-    if 'groq.com' in config_cur_agent["url"]:
+
+    if "groq.com" in config_cur_agent["url"]:
         model = LiteLLMModel(
             config_cur_agent["model_name"],
             api_base=config_cur_agent["url"],
-            api_key=config_cur_agent["api_key"]
+            api_key=config_cur_agent["api_key"],
         )
     else:
         model = OpenAIServerModel(
@@ -77,7 +90,7 @@ def ml_dl_agent(state: dict, config: dict):
             model_id=config_cur_agent["model_name"],
             api_key=config_cur_agent["api_key"],
         )
-    
+
     agent = CodeAgent(
         tools=[DuckDuckGoSearchTool()] + automl_tools,
         model=model,
@@ -243,15 +256,15 @@ def paper_analysis_node(state: dict) -> Command:
 
     # Add metadata from response to state
     state_metadata = state.get("metadata", {})
-    pa_metadata = {"paper_analysis": response.get('metadata')}
+    pa_metadata = {"paper_analysis": response.get("metadata")}
     updated_metadata = state_metadata.copy()
     updated_metadata.update(pa_metadata)
 
     return Command(
         goto="replan_node",
         update={
-            "past_steps": [(task, response.get('answer'))],
-            "nodes_calls": [("paper_analysis_node", response.get('answer'))],
+            "past_steps": [(task, response.get("answer"))],
+            "nodes_calls": [("paper_analysis_node", response.get("answer"))],
             "metadata": updated_metadata,
         },
     )

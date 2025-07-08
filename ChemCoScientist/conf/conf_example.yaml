@@ -1,3 +1,0 @@
-api_key: API_KEY
-base_url: https://api.vsegpt.ru/v1
-chembl_csv_path: ./ChemCoScientist/dataset_handler/chembl/p1_short.csv

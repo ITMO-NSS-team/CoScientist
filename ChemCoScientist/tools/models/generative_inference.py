@@ -3,7 +3,6 @@ import zipfile
 
 import gdown
 import torch
-import torch.utils.data
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms
@@ -196,3 +195,14 @@ def inference(target_shape="Cube"):
                 sample.view(5, 1, crop_size, crop_size),
                 os.path.join(path_to_results, "sample_" + str(f"{i:02}") + ".png"),
             )
+
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+
+    from definitions import CONFIG_PATH
+
+    load_dotenv(CONFIG_PATH)
+
+    inference()
+    print()

@@ -8,6 +8,6 @@ from ChemCoScientist.tools.nano_tools import nano_tools_rendered, nanoparticle_t
 if web_tools:
     tools_rendered = render_text_description(
         web_tools + chem_tools + nanoparticle_tools
-    )
+    ).replace("duckduckgo_results_json", "duckduckgo")
 else:
     tools_rendered = render_text_description(chem_tools + nanoparticle_tools)

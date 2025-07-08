@@ -1,12 +1,5 @@
 import os
 
-from dotenv import load_dotenv
-
-from definitions import CONFIG_PATH
-
-load_dotenv(CONFIG_PATH)
-
-from protollm.agents.builder import GraphBuilder
 from protollm.connectors import create_llm_connector
 
 from ChemCoScientist.agents.agents import (
@@ -105,27 +98,25 @@ conf = {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                #  Change on your dir if another!
-                "ds_dir": "/Users/alina/Desktop/ИТМО/ChemCoScientist/ChemCoScientist/data_store/datasets",
+                "ds_dir": os.environ["DS_STORAGE_PATH"],
             },
             "coder_agent": {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                #  Change on your dir if another!
-                "ds_dir": "/Users/alina/Desktop/ИТМО/ChemCoScientist/ChemCoScientist/data_store/datasets",
+                "ds_dir": os.environ["ANOTHER_STORAGE_PATH"],
             },
             "ml_dl_agent": {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                #  Change on your dir if another!
-                "ds_dir": "/Users/alina/Desktop/ИТМО/ChemCoScientist/ChemCoScientist/data_store/datasets",
+                "ds_dir": os.environ["DS_STORAGE_PATH"],
             },
         },
         # These prompts will be added as hints in ProtoLLM
         "prompts": {
             "planner": "Before you start training models, plan to check your data for garbage using a dataset_builder_agent.\n \
+                If the user provides his dataset - immediately start training using ml_dl_agent (never call dataset_builder_agent)!\
                         To find an answer, use the paper search first! NOT the web search!",
             "chat": """You are a chemical agent system. You can do the following:
                     - train generative models (generate SMILES molecules), train predictive models (predict properties)
@@ -137,43 +128,7 @@ conf = {
                     
                     If user ask something like "What can you do" - make answer yourself!
                     """,
-            "summary": "Never write full paths! Only file names.",
+            # "summary": "Never write full paths! Only file names."
         },
     },
 }
-
-
-# UNCOMMENT the one you need
-
-# inputs = {"input": "Посчитай qed, tpsa, logp, hbd, hba свойства ацетона"}
-# inputs = {"input": "Поищи с помощью веб-поиска свежие статьи на тему новых наноматериалов"}
-# inputs = {"input": "Generate an image for nanoparticles most optimal for catalysis."}
-# inputs = {"input": "Что ты можешь?"}
-# inputs = {"input": "Узнай есть ли обученные модели, напиши какие именно доступны."}
-# inputs = {"input": "Запусти предсказание с помощью мл-модели на значение IC50 для молекулы Fc1cc(F)c2ccc(Oc3cncc4nnc(-c5ccc(OC(F)F)cc5)n34)cc2c1."}
-# inputs = {"input": "Запусти обучение на данных из /Users/alina/Desktop/ИТМО/ChemCoScientist/ChemCoScientist/dataset_handler/chembl/docking.csv. В качестве таргета возьми Docking score. Обязательно назови кейс DOCKING_SCORE"}
-# inputs = {"input": "Предскажи Docking score для Fc1cc(F)c2ccc(Oc3cncc4nnc(-c5ccc(OC(F)F)cc5)n34)cc2c1 с помощью мл-модели."}
-# inputs = {"input": "Модель с названием DOCKING_SCORE еще обучается?"}
-# inputs = {"input": "Найди информацию о последних открытиях в области лечения Рака."}
-inputs = {"input": "Получи данные Ki по Q9BPZ7 из BindingDB."}
-# inputs = {"input": "Получи данные по KRAS G12C из доступных химических баз данных."}
-# inputs = {"input": "Сгенерируй мне какие-нибудь молекулы."}
-# inputs = {"input": "Сгенерируй молекулы для лечения Alzheimer."}
-
-# inputs = {
-#     "input": "Посчитай sin(5) + 5837 / 544 + 55 * 453 + 77^4 с помощью агента-кодера"
-# }
-
-# inputs = {"input": "Запусти обучение генеративной модели на данных '/Users/alina/Desktop/ИТМО/ChemCoScientist/data_dir_for_coder/chembl_ic50_data.xlsx', назови кейс IC50_chembl."}
-# inputs = {"input": "What can you do?"}
-# inputs = {"input": "Запусти предсказание с помощью мл-модели на значение IC50 для молекулы Fc1cc(F)c2ccc(Oc3cncc4nnc(-c5ccc(OC(F)F)cc5)n34)cc2c1."}
-# inputs = {"input": "How does the synthesis of Glionitrin A/B happen based on research?"}
-graph = GraphBuilder(conf)
-
-if __name__ == "__main__":
-    # inputs = {"input": input()}
-    # while True:
-    #     task = input()
-    #     res_1 = graph.run({"input": task}, debug=True, user_id="1")
-    for step in graph.stream(inputs, user_id="1"):
-        print(step)
