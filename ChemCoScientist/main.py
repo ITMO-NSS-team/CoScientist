@@ -57,7 +57,7 @@ conf = {
         "visual_model": create_llm_connector(os.environ["VISION_LLM_URL"]),
         "img_path": "image.png",
         "llm": create_llm_connector(
-            f"{os.environ['MAIN_LLM_URL']};{os.environ['MAIN_LLM_MODEL']}"
+            os.environ['MAIN_LLM_URL']+';'+os.environ['MAIN_LLM_MODEL']
         ),
         "max_retries": 1,
         # list of scenario agents
