@@ -53,7 +53,7 @@ def init_models():
                     if submit:
                         init_backend()
                 else:
-                    st.write(f"Name: {st.session_state.main_model_input}")
+                    st.write(f"Система успешно инициализированна!")
 
             case "English":
                 st.header("Models")
@@ -81,7 +81,7 @@ def init_models():
                     if submit:
                         init_backend()
                 else:
-                    st.write(f"Name: {st.session_state.main_model_input}")
+                    st.write(f"The system has been initialized successfully!")
 
 
 def on_provider_selected_eng(grid: GridDeltaGenerator):
@@ -472,7 +472,6 @@ def side_bar():
         init_dataset()
         init_images()
         init_papers()
-        st.write(st.session_state.uploaded_files)
 
     match st.session_state.language:
         case "English":
