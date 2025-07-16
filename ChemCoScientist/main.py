@@ -155,7 +155,6 @@ conf = {
 # inputs = {"input": "Предскажи Docking score для Fc1cc(F)c2ccc(Oc3cncc4nnc(-c5ccc(OC(F)F)cc5)n34)cc2c1 с помощью мл-модели."}
 # inputs = {"input": "Модель с названием DOCKING_SCORE еще обучается?"}
 # inputs = {"input": "Найди информацию о последних открытиях в области лечения Рака."}
-inputs = {"input": "Получи данные Ki по Q9BPZ7 из BindingDB."}
 # inputs = {"input": "Получи данные по KRAS G12C из доступных химических баз данных."}
 # inputs = {"input": "Сгенерируй мне какие-нибудь молекулы."}
 # inputs = {"input": "Сгенерируй молекулы для лечения Alzheimer."}
@@ -168,6 +167,11 @@ inputs = {"input": "Получи данные Ki по Q9BPZ7 из BindingDB."}
 # inputs = {"input": "What can you do?"}
 # inputs = {"input": "Запусти предсказание с помощью мл-модели на значение IC50 для молекулы Fc1cc(F)c2ccc(Oc3cncc4nnc(-c5ccc(OC(F)F)cc5)n34)cc2c1."}
 # inputs = {"input": "How does the synthesis of Glionitrin A/B happen based on research?"}
+
+# parallel examples
+# inputs = {"input": "Получи данные по KRAS G12C из ChemBL для Ki. Получи данные по MEK1 из ChemBL по Ki"}
+inputs = {"input": "Получи данные по KRAS G12C из ChemBL для IC50. Получи данные по MEK1 из ChemBL по IC50. Поставь обучение на том датасете, где данных больше, назови кейс в зависимости от белка."}
+
 graph = GraphBuilder(conf)
 
 if __name__ == "__main__":

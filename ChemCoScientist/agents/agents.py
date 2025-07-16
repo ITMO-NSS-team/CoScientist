@@ -1,10 +1,11 @@
 import os
 import time
+from typing import Annotated
+from langgraph.types import Command
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END
 from langgraph.prebuilt import create_react_agent
-from langgraph.types import Command
 from smolagents import CodeAgent, DuckDuckGoSearchTool, LiteLLMModel, OpenAIServerModel
 
 from ChemCoScientist.agents.agents_prompts import (
@@ -21,19 +22,25 @@ from ChemCoScientist.tools.ml_tools import agents_tools as automl_tools
 
 def get_all_files(directory):
     file_paths = []
-    for root, dirs, files in os.walk(directory):
+    for root, _, files in os.walk(directory):
         for file in files:
             full_path = os.path.join(root, file)
             file_paths.append(full_path)
     return file_paths
 
 
-def dataset_builder_agent(state: dict, config: dict):
+from typing import Annotated
+
+def dataset_builder_agent(state: dict, config: dict) -> Command:
+    print("--------------------------------")
+    print("Dataset builder agent called")
+    print(state["task"])
+    print("--------------------------------")
+    task = state["task"]
+
     config_cur_agent = config["configurable"]["additional_agents_info"][
         "dataset_builder_agent"
     ]
-    plan = state["plan"]
-    task = plan[0]
     print(config_cur_agent)
     if "groq.com" in config_cur_agent["url"]:
         model = LiteLLMModel(
@@ -63,20 +70,22 @@ def dataset_builder_agent(state: dict, config: dict):
         os.environ["DS_STORAGE_PATH"]
     )
 
-    return Command(
-        goto="replan_node",
-        update={
-            "metadata": state["metadata"],
-            "past_steps": [(task, str(response))],
-            "nodes_calls": [("dataset_builder_agent", str(response))],
-        },
-    )
+    return Command(update={
+        "dataset_builder_outputs": Annotated[list, "accumulate"]([(task, str(response))]),
+        "metadata": {"dataset_builder_agent": get_all_files(os.environ["DS_STORAGE_PATH"])},
+        "nodes_calls": Annotated[list, "accumulate"]([("dataset_builder_agent", str(response))]),
+        "past_steps": Annotated[list, "accumulate"]([(task, str(response))]),
+    })
 
 
-def ml_dl_agent(state: dict, config: dict):
+def ml_dl_agent(state: dict, config: dict) -> Command:
+    print("--------------------------------")
+    print("ml_dl agent called")
+    print(state["task"])
+    print("--------------------------------")
+
     config_cur_agent = config["configurable"]["additional_agents_info"]["ml_dl_agent"]
-    plan = state["plan"]
-    task = plan[0]
+    task = state["task"]
 
     if "groq.com" in config_cur_agent["url"]:
         model = LiteLLMModel(
@@ -100,171 +109,127 @@ def ml_dl_agent(state: dict, config: dict):
     response = agent.run(automl_prompt + task)
 
     return Command(
-        goto="replan_node",
         update={
-            "past_steps": [(task, str(response))],
-            "nodes_calls": [("ml_dl_agent", str(response))],
-        },
+            "past_steps": Annotated[list, "accumulate"]([(task, str(response))]),
+            "nodes_calls": Annotated[list, "accumulate"]([("ml_dl_agent", str(response))]),
+        }
     )
 
 
-def chemist_node(state, config: dict):
-    """
-    Executes a chemistry-related task using a ReAct-based agent.
+def chemist_node(state, config: dict) -> Command:
+    print("--------------------------------")
+    print("Chemist agent called")
+    print("Current task:")
+    print(state["task"])
+    print("--------------------------------")
 
-    Parameters
-    ----------
-    state : dict | TypedDict
-        The current execution state containing the task plan.
-    config : dict
-        Configuration dictionary containing the LLM model and related settings.
-
-    Returns
-    -------
-    Command
-        An object specifying the next execution step and updates to the state.
-    """
-    llm: BaseChatModel = config["configurable"]["llm"]
+    task = state["task"]
+    plan: list = state["plan"]
+    
+    llm = config["configurable"]["llm"]
     chem_agent = create_react_agent(
         llm, chem_tools, state_modifier=worker_prompt + "admet = qed"
     )
 
-    plan: list = state["plan"]
-    plan_str: str = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
-
-    task: str = plan[0]
-
     task_formatted = f"""For the following plan:
-    {plan_str}\n\nYou are tasked with executing: {task}."""
+    {str(plan)}\n\nYou are tasked with executing: {task}."""
 
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            config["configurable"][
-                "state"
-            ] = state  # to get tool_call_id, but this shouldn't be implemented like that
+            config["configurable"]["state"] = state
             agent_response = chem_agent.invoke({"messages": [("user", task_formatted)]})
 
             return Command(
-                goto="replan_node",
                 update={
-                    "past_steps": [(task, agent_response["messages"][-1].content)],
-                    "nodes_calls": [("chemist_node", agent_response["messages"])],
+                    "past_steps": Annotated[list, "accumulate"](
+                        [(task, agent_response["messages"][-1].content)]
+                    ),
+                    "nodes_calls": Annotated[list, "accumulate"](
+                        [("chemist_node", agent_response["messages"])]
+                    ),
                 },
+                goto="replan_node"
             )
 
         except Exception as e:
-            print(
-                f"Chemist failed with error: {str(e)}. Retrying... ({attempt+1}/{max_retries})"
-            )
-            time.sleep(1.2**attempt)  # Exponential backoff
+            print(f"Chemist failed: {str(e)}. Retrying ({attempt+1}/{max_retries})")
+            time.sleep(1.2**attempt)
 
     return Command(
         goto=END,
         update={
-            "response": "I can't answer to your question right now. Perhaps there is something else that I can help?"
+            "response": "I can't answer your question right now. Perhaps I can help with something else?"
         },
     )
 
+def nanoparticle_node(state, config: dict) -> Command:
+    print("--------------------------------")
+    print("Nano-p agent called")
+    print("Current task:")
+    print(state["task"])
+    print("--------------------------------")
 
-def nanoparticle_node(state, config: dict):
-    """
-    Executes a task related to nanoparticle analysis using a large language model (LLM)
-    and associated tools, retrying up to a maximum number of times in case of failure.
-
-    Parameters
-    ----------
-    state : dict | TypedDict
-        The current execution state, which includes the planned steps and other contextual
-        information for processing.
-    config : dict
-        A dictionary containing configurable parameters, including the LLM model
-        and any relevant tools required for task execution.
-
-    Returns
-    -------
-    Command
-        An object containing the next node to transition to ('replan' or `END`) and
-        an update to the execution state with recorded steps and responses.
-
-    Notes
-    -----
-    - The function constructs a task prompt based on the execution plan and invokes
-      an LLM-based agent to process the task.
-    - If an exception occurs, it retries the operation with exponential backoff.
-    - If all retries fail, it returns a response indicating failure.
-    """
-    llm: BaseChatModel = config["configurable"]["llm"]
-    add_prompt = "You have to respond with results of tool call, do not repharse it"
+    task = state["task"]
+    plan = state["plan"]
+    llm = config["configurable"]["llm"]
+    
     nanoparticle_agent = create_react_agent(
-        llm, nanoparticle_tools, state_modifier=worker_prompt + add_prompt
+        llm, nanoparticle_tools, state_modifier=worker_prompt + "You have to respond with results of tool call, do not rephrase it"
     )
 
-    plan: list = state["plan"]
-    plan_str: str = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
-
-    task: str = plan[0]
     task_formatted = f"""For the following plan:
-    {plan_str}\n\nYou are tasked with executing: {task}."""
+    {str(plan)}\n\nYou are tasked with executing: {task}."""
 
-    max_retries = 3
-    for attempt in range(max_retries):
+    for attempt in range(3):
         try:
             agent_response = nanoparticle_agent.invoke(
                 {"messages": [("user", task_formatted)]}
             )
 
             return Command(
-                goto="replan_node",
                 update={
-                    "past_steps": [(task, agent_response["messages"][-1].content)],
-                    "nodes_calls": [("nanoparticle_node", agent_response["messages"])],
+                    "past_steps": Annotated[list, "accumulate"](
+                        [(task, agent_response["messages"][-1].content)]
+                    ),
+                    "nodes_calls": Annotated[list, "accumulate"](
+                        [("nanoparticle_node", agent_response["messages"])]
+                    ),
                 },
+                goto="replan_node"
             )
 
         except Exception as e:
-            print(
-                f"Nanoparticle failed with error: {str(e)}. Retrying... ({attempt+1}/{max_retries})"
-            )
-            time.sleep(1.2**attempt)  # Exponential backoff
+            print(f"Nanoparticle error: {str(e)}. Retrying ({attempt+1}/3)")
+            time.sleep(1.2**attempt)
 
     return Command(
         goto=END,
         update={
-            "response": "I can't answer to your question right now. Perhaps there is something else that I can help?"
+            "response": "I can't answer your question right now. Perhaps I can help with something else?"
         },
     )
 
 
+
 def paper_analysis_node(state: dict) -> Command:
-    """
-    Answers the user's question using a DB with chemical scientific papers and a vision LLM.
-    Takes into account text, images and tables.
-
-    Args:
-        state: The current execution.
-
-    Returns:
-        An object containing the next node to transition to ('replan' or `END`) and
-        an update to the execution state with recorded steps and responses.
-    """
-    plan = state["plan"]
-    task = plan[0]
-
-    # Process question
+    print("--------------------------------")
+    print("Paper agent called")
+    print("Current task:")
+    print(state["task"])
+    print("--------------------------------")
+    
+    task = state["task"]
     response = process_question(task)
 
-    # Add metadata from response to state
-    state_metadata = state.get("metadata", {})
-    pa_metadata = {"paper_analysis": response.get("metadata")}
-    updated_metadata = state_metadata.copy()
-    updated_metadata.update(pa_metadata)
+    updated_metadata = state.get("metadata", {}).copy()
+    updated_metadata["paper_analysis"] = response.get("metadata")
 
     return Command(
-        goto="replan_node",
         update={
-            "past_steps": [(task, response.get("answer"))],
-            "nodes_calls": [("paper_analysis_node", response.get("answer"))],
+            "past_steps": Annotated[list, "accumulate"]([(task, response.get("answer"))]),
+            "nodes_calls": Annotated[list, "accumulate"]([("paper_analysis_node", response.get("answer"))]),
             "metadata": updated_metadata,
         },
+        goto="replan_node"
     )

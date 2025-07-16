@@ -474,6 +474,8 @@ def run_ml_dl_training_by_daemon(
 
     note: Either regression_props or classification_props must be filled in.
     """
+    if isinstance(feature_column, str):
+        feature_column = [feature_column]
 
     if regression_props == [] and classification_props == []:
         regression_props = target_column
