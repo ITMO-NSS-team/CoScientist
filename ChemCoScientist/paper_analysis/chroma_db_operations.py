@@ -28,7 +28,7 @@ DATA_LOADER = ImageLoader()
 IMAGES_PATH = os.path.join(ROOT_DIR, os.environ["PARSE_RESULTS_PATH"])
 CHROMA_DB_PATH = os.path.join(ROOT_DIR, os.environ["CHROMA_STORAGE_PATH"])
 VISION_LLM_URL = os.environ["VISION_LLM_URL"]
-SUMMARY_LLM_URL = "https://api.vsegpt.ru/v1;meta-llama/llama-3.1-70b-instruct"
+SUMMARY_LLM_URL = os.environ["SUMMARY_LLM_URL"]
 PAPERS_PATH = os.path.join(ROOT_DIR, os.environ["PAPERS_STORAGE_PATH"])
 
 
