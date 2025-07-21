@@ -52,7 +52,7 @@ conf = {
         "llm": create_llm_connector(
             f"{os.environ['MAIN_LLM_URL']};{os.environ['MAIN_LLM_MODEL']}"
         ),
-        "max_retries": 1,
+        "max_retries": 3,
         # list of scenario agents
         "scenario_agents": [
             "chemist_node",
@@ -128,7 +128,7 @@ conf = {
                     
                     If user ask something like "What can you do" - make answer yourself!
                     """,
-            # "summary": "Never write full paths! Only file names."
+            "summary": "Never write full paths! Only file names."
         },
     },
 }

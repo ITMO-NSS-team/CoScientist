@@ -4,6 +4,7 @@ import streamlit as st
 from protollm.agents.builder import GraphBuilder
 from streamlit_extras.grid import GridDeltaGenerator, grid
 from tools.utils import convert_to_base64
+from frontend.utils import clean_folder
 
 from .utils import file_uploader, papers_uploader
 
@@ -36,7 +37,7 @@ def init_models():
                         placeholder="base url",
                         key="api_base_url",
                         options=[
-                            "https://api.vsegpt.ru/v1",
+                            "https://openrouter.ai/api/v1",
                             "https://api.groq.com/openai/v1",
                         ],
                     )
@@ -64,7 +65,7 @@ def init_models():
                         placeholder="base url",
                         key="api_base_url",
                         options=[
-                            "https://api.vsegpt.ru/v1",
+                            "https://openrouter.ai/api/v1",
                             "https://api.groq.com/openai/v1",
                         ],
                     )
@@ -117,9 +118,9 @@ def on_provider_selected_eng(grid: GridDeltaGenerator):
             )
             grid.selectbox(
                 "Select visual model",
-                options=["llama-3.2-90b-vision-preview"],
+                options=["google/gemini-2.5-pro"],
                 key="visual_model_input",
-                placeholder="llama-3.2-90b-vision-preview",
+                placeholder="google/gemini-2.5-pro",
             )
 
             grid.selectbox(
@@ -132,27 +133,27 @@ def on_provider_selected_eng(grid: GridDeltaGenerator):
                 placeholder="groq/deepseek-r1-distill-llama-70b",
             )
 
-        case "https://api.vsegpt.ru/v1":
+        case "https://openrouter.ai/api/v1":
             grid.selectbox(
                 "Select main model",
                 options=[
+                    "deepseek/deepseek-r1-distill-llama-70b",
                     "meta-llama/llama-3.3-70b-instruct",
-                    "meta-llama/llama-3.1-405b-instruct",
                 ],
                 key="main_model_input",
             )
 
             grid.selectbox(
                 "Select visual model",
-                options=["vis-meta-llama/llama-3.2-90b-vision-instruct"],
+                options=["google/gemini-2.5-pro"],
                 key="visual_model_input",
-                placeholder="vis-meta-llama/llama-3.2-90b-vision-instruct",
+                placeholder="google/gemini-2.5-pro",
             )
             grid.selectbox(
                 "Select model for scenarion agent",
                 options=[
+                    "deepseek/deepseek-r1-distill-llama-70b",
                     "meta-llama/llama-3.3-70b-instruct",
-                    "meta-llama/llama-3.1-405b-instruct",
                 ],
                 key="sc_model_input",
             )
@@ -204,15 +205,15 @@ def on_provider_selected_rus(grid: GridDeltaGenerator):
                 placeholder="groq/deepseek-r1-distill-llama-70b",
             )
 
-        case "https://api.vsegpt.ru/v1":
+        case "https://openrouter.ai/api/v1":
             grid.selectbox(
                 "Выберите главную модель",
                 options=[
+                    "deepseek/deepseek-r1-distill-llama-70b",
                     "meta-llama/llama-3.3-70b-instruct",
-                    "meta-llama/llama-3.1-405b-instruct",
                 ],
                 key="main_model_input",
-                placeholder="meta-llama/llama-3.3-70b-instruct",
+                placeholder="deepseek/deepseek-r1-distill-llama-70b",
             )
 
             grid.selectbox(
@@ -224,8 +225,8 @@ def on_provider_selected_rus(grid: GridDeltaGenerator):
             grid.selectbox(
                 "Выберите модель для сценарных агентов",
                 options=[
+                    "deepseek/deepseek-r1-distill-llama-70b",
                     "meta-llama/llama-3.3-70b-instruct",
-                    "meta-llama/llama-3.1-405b-instruct",
                 ],
                 key="sc_model_input",
             )
@@ -265,7 +266,10 @@ def init_backend():
 
     print(conf)
     st.session_state.backend = GraphBuilder(conf)
-
+    # clean folder for new job here
+    clean_folder(os.environ['DS_STORAGE_PATH'])
+    clean_folder(os.environ['IMG_STORAGE_PATH'])
+    clean_folder(os.environ['ANOTHER_STORAGE_PATH'])
 
 def init_dataset():
     """
@@ -460,12 +464,6 @@ def load_images():
 
 
 def side_bar():
-    # Display static examples at the top
-    # st.session_state.language = 'Русский'
-
-    # uncomment for start without pass model, key, etc (from gui)
-    # init_backend()
-
     with st.sidebar:
         init_language()
         init_models()
@@ -475,42 +473,51 @@ def side_bar():
 
     match st.session_state.language:
         case "English":
-            with st.expander(label="Query examples:", expanded=True):
-                expander_placeholder = st.empty()
-            examples = [
-                "What are the main methods of nanoparticle synthesis? What methods are most suitable for drug delivery systems?",
-                "For coprecipitation synthesis of drug delivery nanoparticles what nanoparticle shape is optimal?"
-                "Generate a synthesis for sphere nanoparticles without toxic solvents and with numeric values for each reagent",
-                "Predict shape of nanoparticles obtained by such synthesis: ...",
-                "Generate an image of sphere nanoparticles",
-                "What is the shape of nanoparticles in the submitted image?",
-                "Generate SMILES of drug molecule of JAK1 that can be delivered by nanoparticles obtained below and predict its QED and molecular weight",
-                "Calculate entrapment efficiency for such nanomaterial",
-                "Write smiles of acetone and calculate its QED and molecular mass",
-                "What is the IUPAC name of hexanal? Visualize it.",
-            ]
-            with expander_placeholder.container(height=400):
+            # Показываем описание отдельно
+            st.markdown(
+                "**Be sure to fill in the fields (on the left) for your model selection before starting work!**\n\n"
+                "**You can ask questions or make requests in the chat.**\n\n"
+                "If you want to attach an image, figure, or article and ask to process it:\n"
+                "1. Upload it using the windows on the left\n"
+                "2. Then ask your question or make a request in the chat"
+            )
+
+            with st.expander("Query examples:", expanded=True):
+                examples = [
+                    "What can you do?",
+                    "Create a dataset for NRAS from BindingDB with IC50.",
+                    "Run the ML model training on the attached data to predict Ki. Name the case 'MEK4_Ki'.",
+                    "Generate an image of spherical nanoparticles.",
+                    "What trained generative models do you have available?",
+                    "Obtain Ki data for HRAS and NRAS proteins from all available databases.",
+                    "What is the IUPAC name of hexanal? Visualize it.",
+                    "Generate a drug molecule for the Alzheimer case.",
+                    "Find the most interesting articles on leukemia treatment on the Internet and provide links.",
+                ]
                 for example in examples:
-                    st.write(f"- {example}")
+                    st.markdown(f"- {example}")
 
         case "Русский":
-            with st.expander(label="Примеры запросов:", expanded=True):
-                expander_placeholder = st.empty()
+            st.markdown(
+                "**Обязательно заполни поля (слева) по настройке модели перед началом работы!**\n\n"
+                "**Ты можешь задавать вопросы и писать просьбы в чат.**\n\n"
+                "Если хочешь прикрепить изображение, картинку или статью и попросить что-то сделать:\n"
+                "1. Загрузи файл с помощью окон слева\n"
+                "2. После загрузки задай вопрос или напиши просьбу в чат"
+            )
 
-            examples = [
-                "Какие существуют основные методы синтеза наноматериалов? Какой из них является наиболее подходящим для синтеза частиц, используемых для создания систем доставки лекарств?",
-                "Если мы выберем синтез методом соосаждения то какая наиболее предпочтительная форма наноматериалов если мы хотим создать системы доставки лекарств на их основе?",
-                "Сгенерируй синтез наноматериалов сферической формы методом соосаждения без использования токсичных растворителей с численными значениями каждого реагента.",
-                "Предскажи форму наноматериала получаемого с помощью данного синтеза",
-                "Сгенерируй изображение сферических наночастиц",
-                "Какая форма у наночастиц на загруженном изображении?",
-                "Сгенерируй SMILES лекарственной молекулы являющейся ингибитором JAK1 которую можно было бы доставлять наночастицами с приведенным ниже синтезом и предскажи ее QED и молекулярную массу.",
-                "Посчитай entrapment efficiency для наноматериала с таким синтезом",
-                "Напиши smiles ацетона и посчитай его QED и молекулярную массу",
-                "Какой IUPAC у гексеналя? Визуализируй его.",
-                "Пример синтеза: Синтез золотых наночастиц диаметром примерно 10 нанометров можно осуществить следующим образом: смешайте 0,01М хлорид золота(III) тригидрат (HAuCl4·3H2O) с 0,01М цитратом натрия (C6H5Na3O7) в воде, затем нагрейте смесь до 100°C в течение 30 минут в условиях обратного хода.",
-                "Необходимо построить модель, способную предсказывать форму наноматериалов по условиям их синтеза. Форма наноматериалов закодирована в формате one hot в файле labeled_dataset.csv в колонках от cube до amorphous. При этом при одном синтезе могут получаться наноматериалы разных форм. В качестве параметров на которых нужно строить предсказания нужно использовать параметры от 'Ca ion, mM' до 'PVP' включительно.",
-            ]
-            with expander_placeholder.container(height=400):
+            with st.expander("Примеры запросов:", expanded=True):
+                examples = [
+                    "Что ты умеешь?",
+                    "Создай датасет для NRAS из BindingDB с IC50.",
+                    "Запусти обучение ML-модели на прикрепленных мною данных для предсказания Ki. Назови кейс 'MEK4_Ki'.",
+                    "Предскажи форму наноматериала, получаемого с помощью данного синтеза.",
+                    "Сгенерируй изображение сферических наночастиц.",
+                    "Какие обученные генеративные модели у тебя есть в наличии?",
+                    "Получи данные по Ki для белков HRAS и NRAS из всех доступных баз данных.",
+                    "Какой IUPAC у гексеналя? Визуализируй его.",
+                    "Сгенерируй лекарственную молекулу по кейсу Альцгеймер.",
+                    "Найди в интернете самые интересные статьи по лечению лейкемии и предоставь ссылки."
+                ]
                 for example in examples:
-                    st.write(f"- {example}")
+                    st.markdown(f"- {example}")

@@ -57,9 +57,9 @@ conf = {
         "visual_model": create_llm_connector(os.environ["VISION_LLM_URL"]),
         "img_path": "image.png",
         "llm": create_llm_connector(
-            os.environ['MAIN_LLM_URL']+';'+os.environ['MAIN_LLM_MODEL']
+            f"{os.environ['MAIN_LLM_URL']};{os.environ['MAIN_LLM_MODEL']}"
         ),
-        "max_retries": 1,
+        "max_retries": 3,
         # list of scenario agents
         "scenario_agents": [
             "chemist_node",
@@ -105,27 +105,25 @@ conf = {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                #  Change on your dir if another!
-                "ds_dir": "/Users/alina/Desktop/ИТМО/ChemCoScientist/ChemCoScientist/data_store/datasets",
+                "ds_dir": os.environ["DS_STORAGE_PATH"],
             },
             "coder_agent": {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                #  Change on your dir if another!
-                "ds_dir": "/Users/alina/Desktop/ИТМО/ChemCoScientist/ChemCoScientist/data_store/datasets",
+                "ds_dir": os.environ["ANOTHER_STORAGE_PATH"],
             },
             "ml_dl_agent": {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                #  Change on your dir if another!
-                "ds_dir": "/Users/alina/Desktop/ИТМО/ChemCoScientist/ChemCoScientist/data_store/datasets",
+                "ds_dir": os.environ["DS_STORAGE_PATH"],
             },
         },
         # These prompts will be added as hints in ProtoLLM
         "prompts": {
             "planner": "Before you start training models, plan to check your data for garbage using a dataset_builder_agent.\n \
+                If the user provides his dataset - immediately start training using ml_dl_agent (never call dataset_builder_agent)!\
                         To find an answer, use the paper search first! NOT the web search!",
             "chat": """You are a chemical agent system. You can do the following:
                     - train generative models (generate SMILES molecules), train predictive models (predict properties)
@@ -137,7 +135,7 @@ conf = {
                     
                     If user ask something like "What can you do" - make answer yourself!
                     """,
-            "summary": "Never write full paths! Only file names.",
+            "summary": "Never write full paths! Only file names."
         },
     },
 }
