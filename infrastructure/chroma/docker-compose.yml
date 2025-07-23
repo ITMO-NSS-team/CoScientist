@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 networks:
   net:
@@ -20,7 +20,7 @@ services:
     build:
       context: ./embedding_service
     ports:
-      - "5000:5000"
+      - "5002:5002"
     networks:
       - net
 

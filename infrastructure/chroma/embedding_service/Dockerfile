@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir fastapi uvicorn[standard] sentence-transformers
 
 COPY app.py .
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "2"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5002", "--workers", "2"]
