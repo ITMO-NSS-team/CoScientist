@@ -4,13 +4,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sentence_transformers import SentenceTransformer
 
-model = None
+model: SentenceTransformer = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model
-    model = SentenceTransformer("BAAI/bge-m3")
+    model = SentenceTransformer("BAAI/bge-m3", trust_remote_code=True)
     model.encode(["warmup"])
     logging.info("Embedding model loaded")
     yield

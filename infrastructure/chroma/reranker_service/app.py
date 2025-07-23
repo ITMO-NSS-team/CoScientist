@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sentence_transformers import CrossEncoder
 
-model = None
+model: CrossEncoder = None
 
 
 @asynccontextmanager
@@ -13,6 +13,7 @@ async def lifespan(app: FastAPI):
     model = CrossEncoder(
         "Alibaba-NLP/gte-multilingual-reranker-base",
         max_length=2048,
+        trust_remote_code=True
     )
     model.predict([["warmup", "query"]])  # Прогрев модели
     logging.info("Reranker model loaded")
@@ -23,7 +24,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/rerank")
-async def rerank(pairs: list[tuple]):
+async def rerank(pairs: list[tuple[str, str]]):
     scores = model.predict(pairs).tolist()
     return {"scores": scores}
 
