@@ -10,7 +10,7 @@ services:
     environment:
       - IS_PERSISTENT=TRUE
     volumes:
-      - /var/essdata/llm/chromadb/:/chroma/chroma/
+      - /var/essdata/llm/chemcoscientist/chromadb/:/chroma/chroma/
     ports:
       - 9941:8000
     networks:
