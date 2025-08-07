@@ -1,8 +1,11 @@
+import os
 import streamlit as st
 
 from dotenv import load_dotenv
 from ChemCoScientist.frontend.streamlit_endpoints import SELECTED_PAPERS
 from ChemCoScientist.frontend.utils import get_user_data_dir, get_user_session_id
+
+from definitions import ROOT_DIR
 
 load_dotenv()
 
@@ -13,7 +16,7 @@ def init_page():
     )
     st.title("🧪 Chemistry Chatbot")
     st.sidebar.image(
-        "frontend/logo_na_plashke_russkiy_belyy.png", width=150
+        os.path.join(ROOT_DIR, "ChemCoScientist/frontend/logo_na_plashke_russkiy_belyy.png"), width=150
     )
 
     init_session_state()
