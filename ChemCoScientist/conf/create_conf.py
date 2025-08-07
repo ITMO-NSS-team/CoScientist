@@ -17,6 +17,7 @@ from ChemCoScientist.agents.agents import (
 )
 from CoScientist.scientific_agents.agents import coder_agent
 from ChemCoScientist.tools import chem_tools_rendered, nano_tools_rendered, tools_rendered, paper_analysis_tools_rendered
+from definitions import ROOT_DIR
 
 
 # description for agent WITHOUT langchain-tools
@@ -101,19 +102,19 @@ conf = {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                "ds_dir": os.environ["DS_STORAGE_PATH"],
+                "ds_dir": os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]),
             },
             "coder_agent": {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                "ds_dir": os.environ["ANOTHER_STORAGE_PATH"],
+                "ds_dir": os.path.join(ROOT_DIR, os.environ["ANOTHER_STORAGE_PATH"]),
             },
             "ml_dl_agent": {
                 "model_name": os.environ["SCENARIO_LLM_MODEL"],
                 "url": os.environ["SCENARIO_LLM_URL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
-                "ds_dir": os.environ["DS_STORAGE_PATH"],
+                "ds_dir": os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]),
             },
         },
         # These prompts will be added in ProtoLLM

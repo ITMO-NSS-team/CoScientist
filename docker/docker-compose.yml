@@ -1,0 +1,16 @@
+services:
+  streamlit-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: chem-assistant
+    container_name: chem-assistant
+    ports:
+      - "8505:8501"
+    volumes:
+      - /Users/lizzy/Documents/WORK/projects/CoScientist/PaperAnalysis/papers:/app/PaperAnalysis/papers
+      - /Users/lizzy/Documents/WORK/projects/CoScientist/PaperAnalysis/parse_results:/app/PaperAnalysis/parse_results/
+      - /Users/lizzy/Documents/WORK/projects/CoScientist/PaperAnalysis/chromadb:/app/PaperAnalysis/chromadb
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped

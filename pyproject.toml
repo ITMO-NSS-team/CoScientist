@@ -34,9 +34,15 @@ dependencies = [
     "langchain-ollama (==0.3.0)",
     "langchain-openai (==0.3.3)",
     "marker-pdf (==1.6.2)",
+    "streamlit_pills (==0.3.0)",
+    "langgraph (==0.3.34)",
+    "streamlit_extras (==0.7.5)",
 ]
 
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false

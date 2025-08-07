@@ -130,12 +130,12 @@ def file_uploader(uploaded_files):
     for file in uploaded_files:
         suffix = file.name.lower().split(".")[-1]
         df = None
-        clean_folder(os.environ['DS_STORAGE_PATH'])
+        clean_folder(os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]))
         if suffix == "csv":
             df = pd.read_csv(file)
 
             df.to_csv(
-                os.environ["DS_STORAGE_PATH"] + "/" + "users_dataset.csv",
+                os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"], "users_dataset.csv"),
                 index=False,
             )
 
@@ -143,7 +143,7 @@ def file_uploader(uploaded_files):
             df = pd.read_excel(file)
             print(df)
             df.to_csv(
-                os.environ["DS_STORAGE_PATH"] + "/" + "users_dataset.csv",
+                os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"], "users_dataset.csv"),
                 index=False,
             )
 

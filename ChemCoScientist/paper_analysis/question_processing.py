@@ -10,7 +10,7 @@ from ChemCoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers
 from CoScientist.paper_parser.utils import convert_to_base64, prompt_func
 from definitions import CONFIG_PATH
 
-from ChemCoScientist.streamlit_app_old.utils import update_activity
+from ChemCoScientist.frontend.utils import update_activity
 
 load_dotenv(CONFIG_PATH)
 

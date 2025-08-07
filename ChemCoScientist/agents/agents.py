@@ -1,5 +1,4 @@
 import ast
-import logging
 import os
 import time
 from typing import Annotated
@@ -18,14 +17,11 @@ from ChemCoScientist.agents.agents_prompts import (
     worker_prompt,
 )
 from ChemCoScientist.tools import chem_tools, nanoparticle_tools, paper_analysis_tools
-from ChemCoScientist.paper_analysis.question_processing import process_question
 from ChemCoScientist.tools import chem_tools, nanoparticle_tools
 from ChemCoScientist.tools.chemist_tools import fetch_BindingDB_data, fetch_chembl_data
 from ChemCoScientist.tools.ml_tools import agents_tools as automl_tools
 
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from definitions import ROOT_DIR
 
 
 def get_all_files(directory):
@@ -62,7 +58,7 @@ def dataset_builder_agent(state: dict, config: dict) -> Command:
         ds_builder_prompt + config_cur_agent["ds_dir"] + "\nSo, user ask: \n" + task + additional_ds_builder_prompt
     )
 
-    files = get_all_files(os.environ["DS_STORAGE_PATH"])
+    files = get_all_files(os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]))
 
     return Command(update={
         "past_steps": Annotated[set, operator.or_](set([(task, str(response))])),

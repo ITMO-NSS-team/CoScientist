@@ -8,6 +8,7 @@ from ChemCoScientist.frontend.utils import get_user_data_dir, get_user_session_i
 from langgraph.errors import GraphRecursionError
 from ChemCoScientist.tools.utils import convert_to_base64, convert_to_html
 from ChemCoScientist.frontend.streamlit_endpoints import explore_my_papers
+from definitions import ROOT_DIR
 
 # Create a separate logger for chat.py
 logger = logging.getLogger("chat_logger")
@@ -202,8 +203,8 @@ def message_handler():
                         "Something went wrong. Please reload the page, initialize models and try again. If this happens again, check your base url and api key"
                     )
 
-            # st.session_state.messages.append({'role': 'assistant', "content": result['response']})
-            st.session_state.messages[-1]["content"] = result["response"]
+                # st.session_state.messages.append({'role': 'assistant', "content": result['response']})
+                st.session_state.messages[-1]["content"] = result["response"]
 
             if st.session_state.images_b64:  # get user's submitted images
                 st.session_state.messages[-1][
@@ -305,7 +306,7 @@ def message_handler():
                     for img in gen_imgs:
                         st.components.v1.html(convert_to_html(img), height=200)
 
-                storage_path = os.environ.get("DS_STORAGE_PATH")
+                storage_path = os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"])
 
                 # search all files with 'users_dataset_'
                 pattern = os.path.join(storage_path, "users_dataset_*")
