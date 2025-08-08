@@ -38,17 +38,17 @@ coder_agent_description = (
     "chemical libraries. Can perform calculations.\n "
 )
 
-paper_analysis_node_description = (
-    "'paper_analysis_node' - answers questions by retrieving and analyzing information "
-    "from a database of chemical scientific papers. Using this agent takes precedence over web search."
-)
+# paper_analysis_node_description = (
+#     "'paper_analysis_node' - answers questions by retrieving and analyzing information "
+#     "from a database of chemical scientific papers. Using this agent takes precedence over web search."
+# )
 web_search_description = "You can use web search to find information on the internet. "
 
 additional_agents_description = (
     automl_agent_description
     + dataset_builder_agent_description
     + coder_agent_description
-    + paper_analysis_node_description
+    # + paper_analysis_node_description
     + web_search_description
 )
 
@@ -70,7 +70,7 @@ conf = {
             "ml_dl_agent",
             "dataset_builder_agent",
             "coder_agent",
-            "paper_analysis_node",
+            "paper_analysis_agent",
             "web_search"
         ],
         # nodes for scenario agents
@@ -80,7 +80,7 @@ conf = {
             "ml_dl_agent": ml_dl_agent,
             "dataset_builder_agent": dataset_builder_agent,
             "coder_agent": coder_agent,
-            "paper_analysis_node": paper_analysis_agent,
+            "paper_analysis_agent": paper_analysis_agent,
             "web_search": web_search_node
         },
         # descripton for agents tools - if using langchain @tool
@@ -91,7 +91,7 @@ conf = {
             "dataset_builder_agent": [dataset_builder_agent_description],
             "coder_agent": [coder_agent_description],
             "ml_dl_agent": [automl_agent_description],
-            "paper_analysis_node": [paper_analysis_tools_rendered],
+            "paper_analysis_agent": [paper_analysis_tools_rendered],
             "web_search": [web_search_description],
         },
         # full descripton for agents tools

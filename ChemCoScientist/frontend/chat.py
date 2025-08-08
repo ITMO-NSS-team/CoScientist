@@ -123,18 +123,20 @@ def message_handler():
                 steps_container = st.container()
 
             if st.session_state.explore_mode:
+                print('In explore_mode section')
                 # Use explore_my_papers function instead of general AI assistant
                 result = explore_my_papers(inputs)
 
-                st.markdown(result["answer"])
+                # st.markdown(result["answer"])
 
                 st.session_state.messages[-1]["content"] = (result["answer"])
             else:
+                print('In main graph section')
                 # result = st.session_state.backend.invoke(input=inputs, config=config)
                 try:
                     for result in st.session_state.backend.stream(inputs, "1"):
                         print("=================new step=================")
-                        print(result)
+                        # print(result)
 
                         if result.get("plan"):
                             plan = result["plan"]
