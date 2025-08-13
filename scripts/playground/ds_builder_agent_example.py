@@ -2,6 +2,15 @@ from ChemCoScientist.agents.agents import dataset_builder_agent
 
 
 def main():
+    """
+    Iterates through a list of chemical property queries, uses an agent to search for molecules matching those properties, and saves the resulting molecular data to a CSV file.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     querys = [
         """
         Find molecules that contain all following properties:

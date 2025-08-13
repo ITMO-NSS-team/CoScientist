@@ -26,6 +26,18 @@ logger.addHandler(file_handler)
 
 
 def chat():
+    """
+    Displays the chat interface and handles user interactions for querying scientific papers.
+    
+    This method manages the display of chat messages, handles user input, and interacts with other functions to process and display responses.
+    It allows users to interact with the assistant, optionally choosing to analyze uploaded papers directly instead of relying on a pre-existing database.  The interface also supports displaying intermediate reasoning steps, AutoML results, and visualizations of generated images and molecules.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     st.session_state.explore_mode = st.checkbox(
         "🔍 Explore My Papers",
         help="When checked, assistant will search through your uploaded papers instead of using the database",
@@ -81,6 +93,20 @@ def chat():
 
 
 def message_handler():
+    """
+    Processes a user's message through the backend and displays the response.
+    
+    This method handles the complete flow of a user interaction: it adds the user's message 
+    to the chat history, presents it in the interface, sends it to the backend for processing, 
+    manages potential errors, and displays the backend's reply. This includes intermediate reasoning steps,
+    generated visualizations (like molecule structures or images), and handles file uploads. 
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     user_query = st.session_state.chat_input
     st.session_state.messages.append({"role": "user", "content": user_query})
 
@@ -329,7 +355,16 @@ def message_handler():
 
 
 def display_paper_analysis_metadata(message, message_index):
-    """Display paper analysis metadata with persistent checkboxes"""
+    """
+    Display analysis details extracted from scientific papers, allowing users to selectively view text, images, and metadata.
+    
+    Args:
+        message (dict): A dictionary containing the paper analysis data.  It is expected to have a "paper_analysis" key.
+        message_index (int): A unique index for the message, used to create unique keys for the checkboxes to maintain state.
+    
+    Returns:
+        None: This function displays content using Streamlit and does not return a value.  It updates the Streamlit session state with the checkbox values.
+    """
     if "paper_analysis" not in message:
         return
 

@@ -16,6 +16,22 @@ import itertools
 def input_data_preparing(case:str,
                          problem:str = 'regression',
                          split:bool = True):
+    """
+    Prepares molecular data for machine learning tasks.
+    
+    Reads data from a CSV file, converts SMILES strings into numerical molecular representations
+    (Morgan fingerprints), and formats the data into a standardized structure suitable for model training
+    or prediction. This process ensures consistent and effective inputs for downstream analysis.
+    
+    Args:
+        case (str): Specifies the dataset case to use, determining the data source and features.
+        problem (str, optional): The machine learning problem type (e.g., 'regression'). Defaults to 'regression'.
+        split (bool, optional):  Indicates whether to split the data into training and testing sets. Defaults to True.
+    
+    Returns:
+        tuple[InputData, InputData] | InputData: If `split` is True, returns a tuple containing the training and testing `InputData` objects.
+                                                 Otherwise, returns a single `InputData` object containing the entire dataset.
+    """
     state = TrainState()
     df = pd.read_csv(state(case,'ml')['data_path']).iloc[:1000,:]
     if type(state(case,'ml')['feature_column'])==str:
@@ -43,6 +59,28 @@ def input_data_preparing_from_list(case:str,
                                    data:List[str],
                                     split:bool = True,
                                     problem:str='regression'):
+    """
+    Prepares molecular data from a list of SMILES strings for machine learning.
+    
+    This method transforms SMILES strings into a numerical representation 
+    suitable for model training and prediction. It converts these strings 
+    into molecular fingerprints, which capture essential structural information,
+    and organizes the data into an `InputData` object for streamlined processing. 
+    
+    Args:
+        case (str): Specifies the configuration or context for data handling,
+            influencing potential data selection or feature engineering.
+        data (List[str]): A list of SMILES strings representing chemical structures.
+        split (bool, optional):  If True, the data is split into training and 
+            testing sets. Defaults to True.
+        problem (str, optional): Specifies the type of machine learning problem 
+            (e.g., 'regression', 'classification'). Defaults to 'regression'.
+    
+    Returns:
+        tuple or InputData: If `split` is True, returns a tuple containing the 
+            training and testing `InputData` objects. Otherwise, returns the 
+            combined `InputData` object.
+    """
     state = TrainState()
     data = {"Smiles":data}
     df = pd.DataFrame(data=data)
@@ -67,6 +105,21 @@ def input_data_preparing_from_list(case:str,
 def run_train_automl(case:str,
                      timeout:int = 5,
                      path_to_save = r'generative_models_data/generative_models/transformer_auto'):
+    """
+    Runs automated machine learning training for a given case and its predictable properties.
+    
+    This method prepares data, trains a Fedot model for each predictable property 
+    (regression or classification), saves the resulting pipeline, and calculates performance metrics. 
+    This process helps establish a baseline model for each property within the specified case.
+    
+    Args:
+        case (str): The identifier for the case being processed.  This links the training process to specific data and configuration.
+        timeout (int, optional): The maximum time in minutes allowed for model optimization. Defaults to 5.
+        path_to_save (str, optional): The base path to save the trained models. Defaults to r'generative_models_data/generative_models/transformer_auto'.
+    
+    Returns:
+        None
+    """
     state = TrainState()
     metrics = {'regression':None,'classification':None}
     state.ml_model_upd_status(case=case,status=1)
@@ -112,6 +165,21 @@ def run_train_automl(case:str,
 
 def run_predict_automl_from_list(case:str,
                      data:List[str]):
+    """
+    Runs AutoML prediction on a list of data points for specified properties.
+    
+    This method prepares data, loads pre-trained machine learning pipelines tailored to a given case,
+    and generates predictions for both calculable and predictable properties. It orchestrates the
+    prediction process by utilizing pre-defined target columns and identifying appropriate models.
+    
+    Args:
+        case (str): A key identifying the specific modeling context or experimental setup.
+        data (List[str]): A list of data points (represented as strings) for which predictions are needed.
+    
+    Returns:
+        dict: A dictionary where keys are property names (e.g., 'docking_score', 'QED') and
+              values are lists of corresponding predictions for each input data point.
+    """
     state = TrainState()
     properties = {}
     state.ml_model_upd_data(case=case,

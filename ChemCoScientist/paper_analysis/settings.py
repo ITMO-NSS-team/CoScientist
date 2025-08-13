@@ -11,6 +11,24 @@ allowed_providers = ["google-vertex"]
 
 
 class ChromaSettings(BaseSettings):
+    """
+    Manages settings for Chroma database and related components.
+    
+        This class encapsulates configuration details for connecting to and interacting with
+        Chroma, an embedding database, as well as related embedding and reranking services.
+    
+        Class Attributes:
+        - chroma_host
+        - chroma_port
+        - allow_reset
+        - embedding_host
+        - embedding_port
+        - embedding_endpoint
+        - reranker_host
+        - reranker_port
+        - reranker_endpoint
+    """
+
     # Chroma DB settings
     chroma_host: str = os.getenv("CHROMA_HOST")
     chroma_port: int = os.getenv("CHROMA_PORT")

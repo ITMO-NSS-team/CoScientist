@@ -8,6 +8,15 @@ load_dotenv()
 
 
 def init_page():
+    """
+    Displays a set of pre-defined example prompts for users to quickly input common chemistry-related queries.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     st.set_page_config(
         page_title="🧪 Chemistry Chatbot", initial_sidebar_state="expanded"
     )
@@ -44,13 +53,49 @@ def init_page():
 
 def reset_selection():
     """
-    util funcion for custom pills
+    Resets the currently selected option and triggers a re-render of components 
+    that depend on it. This ensures the UI reflects a clean, unselected state.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     st.session_state.selected_option = None
     st.session_state.reset_key += 1  # Increment the key to force update
 
 
 def init_session_state():
+    """
+    Initializes the session state with default values.
+    
+    This method sets up the initial state for the Streamlit session, ensuring that all necessary variables are present for a consistent user experience. It prepares the environment for interacting with the application, handling user preferences, data, and API keys.
+    
+    Args:
+        None
+    
+    Initializes the following session state variables:
+        language: The current language setting (default: "English").
+        main_model_input: The input for the main model (default: None).
+        messages: A list of messages representing the conversation history, starting with an initial assistant message (default: a list containing an initial assistant message).
+        backend: The specified backend being used (default: None).
+        base_url: The base URL for API calls (default: None).
+        api_key: The API key for accessing external services (default: None).
+        tavily_api_key: The Tavily API key (default: None).
+        images: Stores generated images (default: None).
+        images_b64: Stores base64 encoded images (default: None).
+        selected_option: The currently selected option (default: None).
+        reset_key: A key used to trigger a reset (default: 0).
+        uploaded_files: A dictionary containing uploaded files (default: {}).
+        uploaded_papers: A list of uploaded papers (default: []).
+        user_data_dir: The directory for storing user-specific data (default: None).
+        session_id: A unique identifier for the user's session, obtained using `get_user_session_id()` (default: generated session ID).
+        explore_mode: Indicates if the exploration mode is used (default: False).
+    
+    Returns:
+        None
+    """
     if "language" not in st.session_state:
         st.session_state.language = "English"
 

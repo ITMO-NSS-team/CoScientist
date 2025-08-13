@@ -24,6 +24,16 @@ import os
 import shutil
 
 def clean_folder(folder_path):
+    """
+    Deletes all files and subdirectories within a specified folder to ensure a clean environment for processing new data or experiments.
+    
+    Args:
+        folder_path (str): The path to the folder to be cleaned.
+    
+    Returns:
+        None. Prints messages indicating which files/folders were deleted
+        or if deletion failed.
+    """
     if not os.path.exists(folder_path):
         print(f"Folder not found: {folder_path}")
         return
@@ -44,8 +54,11 @@ def clean_folder(folder_path):
 
 def get_user_data_dir(id):
     """
-    Get or create a unique directory for the current user session.
-
+    Get the directory associated with a user ID. If the directory doesn't exist, it will be created.
+    
+    Args:
+        id (str): The unique identifier for the user.
+    
     Returns:
         str: The path to the user's data directory.
     """
@@ -57,10 +70,15 @@ def get_user_data_dir(id):
 
 def get_user_session_id():
     """
-    Get or generate a unique user session ID.
-
-    Returns:
-        str: A unique identifier for the current user session.
+    Get a unique identifier for the current user's interaction.
+    
+        This ID helps to track and manage the context of a user's requests 
+        across multiple interactions, allowing the system to maintain continuity 
+        and provide more relevant responses.
+    
+        Returns:
+            str: A universally unique identifier (UUID) as a string, representing
+                 the user's session.
     """
 
     id = str(uuid.uuid4())
@@ -69,10 +87,17 @@ def get_user_session_id():
 
 def clear_directory(directory: Path):
     """
-    Clear the contents of a directory.
-
+    Recursively removes all files and subdirectories within a given directory. 
+    
+    This ensures that the directory is empty before new content is added or processed, 
+    which is crucial for maintaining data integrity during updates and analyses.
+    It handles potential errors during deletion and reports them to the console.
+    
     Args:
-        directory (Path): The directory to clear.
+        directory (Path): The path to the directory to be cleared.
+    
+    Returns:
+        None
     """
     if os.path.exists(directory):
         for item in os.listdir(directory):
@@ -91,11 +116,14 @@ def clear_directory(directory: Path):
 
 def save_uploaded_file(file: UploadedFile, directory: Path):
     """
-    Save an uploaded file to the specified directory.
-
+    Save an uploaded file to a specified directory. This ensures that user-provided documents are stored for potential analysis and integration with existing scientific literature.
+    
     Args:
         file (UploadedFile): The file uploaded by the user.
-        directory (str): The directory to save the file in.
+        directory (Path): The directory to save the file in.
+    
+    Returns:
+        None
     """
     file_path = os.path.join(directory, file.name)
     if not os.path.exists(file_path):
@@ -105,10 +133,13 @@ def save_uploaded_file(file: UploadedFile, directory: Path):
 
 def save_all_files(user_data_dir: Path):
     """
-    When the task starts to run, save all the user's uploaded files to user's directory
-
+    Clears the user's directory and saves all uploaded files to it, ensuring only the current task's files are present.
+    
     Args:
         user_data_dir (str): The directory path where user's files will be saved.
+    
+    Returns:
+        None
     """
     clear_directory(user_data_dir)
     for _, file_data in st.session_state.uploaded_files.items():
@@ -117,13 +148,18 @@ def save_all_files(user_data_dir: Path):
 
 def file_uploader(uploaded_files):
     """
-    Process uploaded files and store them in session state.
-
-    This function takes uploaded files, reads CSV and Excel files into pandas DataFrames,
-    and stores both the original file and DataFrame in the session state dictionary.
-
+    Process uploaded files, convert supported formats to DataFrames, and store them for further analysis.
+    
+    This function handles file uploads, specifically CSV and Excel files, converting them into pandas DataFrames.
+    The DataFrames and original files are stored in session state for subsequent use, enabling users to 
+    work with their data within the application. The converted data are also saved to the backend storage.
+    
     Args:
-        uploaded_files: List of uploaded file objects from Streamlit's file_uploader widget
+        uploaded_files: A list of uploaded file objects from Streamlit's file_uploader widget.
+    
+    Returns:
+        dict: A dictionary where keys are file names and values are dictionaries containing the original file object and its corresponding DataFrame. 
+              Returns an empty dictionary if no files were successfully processed.
     """
     st.session_state.uploaded_files = {}
 
@@ -167,21 +203,21 @@ def custom_pills(
     reset_key: str = None,
 ):
     """
-    Displays clickable pills with an option to reset the selection.
-
+    Displays clickable pills for selecting an option from a predefined list.
+    
     Args:
-        label (str): The label shown above the pills.
-        options (iterable of str): The texts shown inside the pills.
-        icons (iterable of str, optional): The emoji icons shown on the left side of the pills. Each item must be a single emoji. Default is None.
-        index (int or None, optional): The index of the pill that is selected by default. If None, no pill is selected. Defaults to 0.
-        format_func (callable, optional): A function applied to the pill text before rendering. Defaults to None.
-        label_visibility ("visible" or "hidden" or "collapsed", optional): The visibility of the label. Use this instead of `label=""` for accessibility. Defaults to "visible".
-        clearable (bool, optional): Whether the user can unselect the selected pill by clicking on it. Default is None.
-        key (str, optional): The key of the component. Defaults to None.
-        reset_key (str, optional): The key used to reset the selection. Defaults to None.
-
+        label (str): The label displayed above the pills.
+        options (iterable of str): The text options for each pill.
+        icons (iterable of str, optional): Optional emoji icons to display alongside each pill. Defaults to None.
+        index (int or None, optional): The index of the pill to be initially selected. Defaults to 0.
+        format_func (callable, optional): A function to format the pill text before display. Defaults to None.
+        label_visibility (str, optional): Controls the visibility of the label ("visible", "hidden", "collapsed"). Defaults to "visible".
+        clearable (bool, optional): Enables or disables the ability to deselect the chosen pill. Defaults to None.
+        key (str, optional): A unique key for the component. Defaults to None.
+        reset_key (str, optional): A key used to trigger a reset of the pill selection. Defaults to None.
+    
     Returns:
-        (any): The text of the pill selected by the user (same value as in `options`).
+        str: The text of the selected pill from the `options` list.
     """
 
     # Create a unique key for the component to force update when necessary
@@ -203,13 +239,34 @@ def custom_pills(
 
 
 def update_activity(session_folder: str) -> None:
+    """
+    Updates the last activity timestamp for a session.
+    
+    This method records the time of the latest interaction with a session,
+    allowing the system to track session usage and potentially manage resources
+    or provide context-aware features. It writes the current timestamp to a 
+    hidden file within the session directory.
+    
+    Args:
+        session_folder: The path to the session folder.
+    
+    Returns:
+        None
+    """
     with open(os.path.join(session_folder, ".last_activity"), "w") as f:
         f.write(str(time.time()))
 
 
 def cleanup_expired_sessions(base_dir: str = None) -> None:
     """
-    Deletes session folders that have been inactive for more than the inactivity window.
+    Deletes expired session folders to manage storage and maintain a clean environment.
+    
+    Args:
+        base_dir (str, optional): The base directory where session folders are stored. 
+                                  Defaults to the project's temporary files directory.
+    
+    Returns:
+        None
     """
     if base_dir is None:
         base_dir = os.path.join(ROOT_DIR, PATH_TO_TEMP_FILES)
@@ -228,7 +285,16 @@ def cleanup_expired_sessions(base_dir: str = None) -> None:
 
 def start_cleanup_thread(interval: int = 60 * 60) -> threading.Thread:
     """
-    Starts a background thread that runs cleanup_expired_sessions every `interval` seconds.
+    Starts a background thread to periodically remove outdated or unused session data.
+    
+    Args:
+        interval (int, optional): The time in seconds between cleanup cycles. Defaults to 3600 (1 hour).
+    
+    Returns:
+        threading.Thread: The thread object that was started.
+    
+    This method ensures that the system remains efficient by regularly removing inactive sessions, 
+    preventing the accumulation of unnecessary data and optimizing resource usage.
     """
     def cleanup_loop():
         while True:

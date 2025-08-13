@@ -6,6 +6,17 @@ logger = st.logger.get_logger(__name__)
 
 
 def paper_management():
+    """
+    Manages the display, selection, and deletion of uploaded scientific papers.
+    
+    This method provides a user interface for managing uploaded papers, allowing users to select papers for analysis and remove unwanted files. It leverages Streamlit's session state to maintain UI state and track user interactions.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     st.header("📁 File Management")
 
     # Initialize session state for showing papers

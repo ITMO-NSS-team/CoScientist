@@ -10,6 +10,21 @@ from ChemCoScientist.frontend.streamlit_endpoints import process_uploaded_paper
 
 
 def init_language():
+    """
+    Initializes the language selection interface.
+    
+    This method creates a Streamlit container with a header and a selectbox
+    allowing the user to choose a language. This enables the application to 
+    present information and interact with the user in their preferred language.
+    The selected language is stored using a Streamlit session state key
+    called "language".
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     with st.container(border=True):
         st.header("Select language")
 
@@ -23,7 +38,17 @@ def init_language():
 
 def init_models():
     """
-    accepts data from user and initializes llm models
+    Initializes Large Language Models (LLMs) based on user preferences and selected backend.
+    
+    This method presents a user interface to select a base URL for the LLM provider (e.g., OpenRouter, Groq). 
+    Once a provider is chosen and submitted, the backend is initialized using the `init_backend()` function. 
+    If the backend is already initialized, it displays a success message. 
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     with st.container(border=True):
         match st.session_state.language:
@@ -87,7 +112,13 @@ def init_models():
 
 def on_provider_selected_eng(grid: GridDeltaGenerator):
     """
-    accepts provider parameters from expander
+    Presents a form to configure the large language model (LLM) provider and model options based on the selected provider.
+    
+    Args:
+        grid (GridDeltaGenerator): A Streamlit grid object used to layout the form elements.
+    
+    Returns:
+        None
     """
     provider = st.session_state.api_base_url
 
@@ -163,7 +194,13 @@ def on_provider_selected_eng(grid: GridDeltaGenerator):
 
 def on_provider_selected_rus(grid: GridDeltaGenerator):
     """
-    accepts provider parameters from expander
+    Accepts provider parameters from the expander to configure the language model settings.
+    
+    Args:
+        grid (GridDeltaGenerator): A Streamlit grid object used for layout and input elements.
+    
+    Returns:
+        None
     """
     provider = st.session_state.api_base_url
 
@@ -237,6 +274,23 @@ def on_provider_selected_rus(grid: GridDeltaGenerator):
 
 
 def init_backend():
+    """
+    Initializes the backend for the application, configuring it with API keys and models from session state.
+    
+    This method retrieves API keys, base URLs, and model inputs from the session state and sets them as environment variables,
+    allowing the application to connect to and leverage Large Language Models (LLMs) and vision models. It then initializes the 
+    GraphBuilder with a configuration object for processing scientific information and prepares storage locations 
+    for new analyses.
+    
+    Args:
+        None
+    
+    Initializes the following class fields:
+        backend: An instance of GraphBuilder, initialized with the application configuration.
+    
+    Returns:
+        None
+    """
     # by deafault in ChemCoSc duckduckgo without key
 
     # tavily_api_key = st.session_state.get('tavily_api_key')
@@ -276,7 +330,13 @@ def init_backend():
 
 def init_dataset():
     """
-    Initializes dataset
+    Initializes the dataset section of the application, displaying a header and file uploader.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     dataset_files_container = st.container(border=True)
     with dataset_files_container:
@@ -289,6 +349,21 @@ def init_dataset():
 
 
 def _render_paper_uploader():
+    """
+    Renders a file uploader for PDF papers.
+    
+    This method displays a Streamlit expander containing a form with a file uploader
+    specifically for PDF files, allowing multiple files to be selected. 
+    The labels and help text dynamically adjust based on the user's selected language 
+    (English or Russian) to provide a localized user experience.
+    Submitting the form triggers the `load_papers` function to process the uploaded files.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     match st.session_state.language:
 
         case "English":
@@ -324,7 +399,15 @@ def _render_paper_uploader():
 
 def _render_file_uploader():
     """
-    Renders file uploader
+    Renders a file uploader component in the Streamlit application, allowing users to upload dataset files. 
+    
+    The uploader adapts to the user's selected language (English or Russian), presenting the interface in the corresponding language.  Upon file selection and submission, the `load_dataset` function is triggered to process the uploaded data. This enables users to provide their own data for analysis alongside existing resources.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     match st.session_state.language:
         case "English":
@@ -356,7 +439,13 @@ def _render_file_uploader():
 
 def load_dataset():
     """
-    loads submited datasets to the session state on button click
+    Loads datasets uploaded by the user into the session state.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     files = st.session_state.file_uploader
     uploaded_files = file_uploader(files)
@@ -372,6 +461,15 @@ def load_papers():  # TODO: add russian version
     """
     uploaded_papers = st.session_state.papers_file_uploader
     if uploaded_papers is not None:
+    """
+    Loads and processes uploaded scientific papers, storing their metadata in the session state.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
         # Process file here
         st.write("File uploaded and processed")
 
@@ -401,7 +499,15 @@ def load_papers():  # TODO: add russian version
 
 def init_images():
     """
-    initializes images
+    Initializes the image upload section of the application.
+    
+    This section provides a user interface for uploading images relevant to the analysis. The header displayed adapts to the user's selected language.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     images_files_container = st.container(border=True)
     with images_files_container:
@@ -414,7 +520,15 @@ def init_images():
 
 def init_papers():
     """
-    initializes papers
+    Initializes the paper file uploader interface.
+    
+    This method creates a container to display a header and render a file uploader for scientific papers. The header text adapts to the user's selected language (English or Russian).
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     images_files_container = st.container(border=True)
     with images_files_container:
@@ -427,7 +541,13 @@ def init_papers():
 
 def _render_image_uploader():
     """
-    renders images uploader
+    Renders an interface for uploading images of nanomaterials for analysis.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     match st.session_state.language:
         case "English":
@@ -463,7 +583,13 @@ def _render_image_uploader():
 
 def load_images():
     """
-    loads submitted images to the session state on button click
+    Loads images uploaded by the user and stores them for further processing.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     files = st.session_state.images_file_uploader
     # assert max number of images, e.g. 7
@@ -490,6 +616,21 @@ def load_images():
 
 
 def side_bar():
+    """
+    Initializes the Streamlit sidebar with options for configuring the analysis environment 
+    and provides example queries to guide user interaction.
+    
+    This method sets up the sidebar with controls for selecting the language, model, dataset,
+    uploading images, and specifying research papers. It then displays tailored instructions 
+    and example queries based on the chosen language to facilitate effective interaction
+    with the application.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     # Display static examples at the top
     # st.session_state.language = 'Русский'
 

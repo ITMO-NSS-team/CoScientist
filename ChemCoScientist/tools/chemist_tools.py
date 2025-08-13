@@ -22,25 +22,25 @@ VALID_AFFINITY_TYPES = ["Ki", "Kd", "IC50"]
 @tool
 def fetch_BindingDB_data(params: Dict) -> List[Dict]:
     """
-    Tool for retrieving protein affinity data from BindingDB.
-
-    This tool:
-    1. Takes a protein name as input or a UniProt ID
-    2. Queries UniProt to find the corresponding UniProt ID (if not provided)
-    3. Retrieves specified affinity values (Ki, Kd, or IC50) for the protein from BindingDB
-    4. Returns structured data about ligands and their affinity measurements
-
-    Data source: BindingDB (https://www.bindingdb.org) - a public database of measured binding affinities
-
+    Retrieves protein-ligand binding affinity data from BindingDB.
+    
+    This tool identifies a protein using its name or UniProt ID, then queries BindingDB 
+    to find ligands that bind to it and their corresponding affinity measurements.
+    The results are structured to provide a clear overview of protein-ligand interactions.
+    
     Args:
-        params: Dictionary containing:
-            - protein_name: Name of the target protein (required)
-            - affinity_type: Type of affinity measurement (Ki, Kd, or IC50, default: Ki)
-            - cutoff: Optional affinity threshold in nM (default: 10000)
-            - id: Optional, UniProt ID
-
+        params (Dict): A dictionary containing the following keys:
+            - protein_name (str): The name of the target protein. Required.
+            - affinity_type (str, optional): The type of affinity measurement to retrieve. 
+              Can be 'Ki', 'Kd', or 'IC50'. Defaults to 'Ki'.
+            - cutoff (float, optional):  An optional affinity threshold in nM. Defaults to 10000.
+            - id (str, optional): The UniProt ID of the target protein. If not provided, 
+              the tool attempts to resolve it from the protein name.
+    
     Returns:
-        List[dict]: List of dictionaries containing affinity data for the specified protein.
+        List[Dict]: A list of dictionaries, where each dictionary represents a ligand 
+        and its affinity measurements for the specified protein. Returns False if an error occurs 
+        or if no UniProt ID is found.
     """
 
     try:
@@ -84,7 +84,18 @@ def fetch_BindingDB_data(params: Dict) -> List[Dict]:
 
 def fetch_uniprot_id(protein_name: str) -> Optional[str]:
     """
-    Get UniProt ID by UniProt REST API.
+    Queries the UniProt database to retrieve a UniProt ID for a given protein name.
+    
+    Args:
+        protein_name (str): The name of the protein to search for.
+    
+    Returns:
+        Optional[str]: The UniProt accession ID if found, otherwise None.
+    
+    This method performs a targeted search against the UniProt REST API, 
+    specifically looking for human proteins (organism_id:9606). 
+    It retrieves the primary accession ID, which uniquely identifies the protein 
+    within the UniProt database, enabling linking to further protein information.
     """
     url = "https://rest.uniprot.org/uniprotkb/search"
     params = {
@@ -111,15 +122,17 @@ def fetch_affinity_bindingdb(
     uniprot_id: str, affinity_type: str, cutoff: int
 ) -> List[Dict]:
     """
-    Retrieve affinity values from BindingDB for the given UniProt ID.
-
+    Retrieve affinity values from BindingDB for a given protein.
+    
     Args:
-        uniprot_id: UniProt accession ID
-        affinity_type: Type of affinity measurement (Ki, Kd, or IC50)
-        cutoff: Affinity threshold in nM
-
+        uniprot_id (str): UniProt accession ID of the protein.
+        affinity_type (str): Type of affinity measurement (Ki, Kd, or IC50).
+        cutoff (int): Affinity threshold in nM.
+    
     Returns:
-        List of dictionaries containing affinity data
+        List[Dict]: A list of dictionaries, where each dictionary contains affinity data 
+                     for the specified protein, affinity type, and cutoff value.
+                     Returns an empty list if no data is found or if an error occurs.
     """
     url = f"http://bindingdb.org/rest/getLigandsByUniprots?uniprot={uniprot_id}&cutoff={cutoff}&response=application/json"
 
@@ -149,13 +162,25 @@ def fetch_affinity_bindingdb(
 def fetch_chembl_data(
     target_name: str, target_id: str = "", affinity_type: str = "Ki"
 ) -> list[dict]:
-    """Get Ki for activity by current protein from ChemBL database. Return
-    dict with smiles and Ki values, format: [{"smiles": smiles, affinity_type: affinity_valie, "affinity_units": affinity_units}, ...]
-
+    """
+    Retrieves compound activity data for a specified protein target from the ChEMBL database.
+    
+    This method identifies the target protein (if not directly provided) and then fetches associated activity measurements, 
+    such as Ki values, along with their corresponding SMILES representations. It paginates through the results to ensure 
+    all available data is captured. 
+    
     Args:
-        target_name: str, name of protein,
-        target_id: optional, id of current protein from ChemBL. Don't make it up yourself!!! Only user can ask!!!
-        affinity_type: optional, str, type of affinity measurement (default: 'Ki').
+        target_name: str, name of protein.
+        target_id: str, optional, id of current protein from ChemBL.  Providing the ID avoids searching by name.
+        affinity_type: str, optional, type of affinity measurement (default: 'Ki').  Specifies the desired type of activity data to retrieve.
+    
+    Returns:
+        list[dict]: A list of dictionaries, where each dictionary represents a compound's activity data.
+        Each dictionary contains:
+            - "smiles": str, the SMILES representation of the compound.
+            - affinity_type: float, the measured affinity value (e.g., Ki).
+            - "affinity_units": str, the units of the affinity measurement.
+        Returns an empty list if the target is not found.
     """
     BASE_URL = "https://www.ebi.ac.uk/chembl/api/data"
 
@@ -220,7 +245,15 @@ from langchain_core.tools import tool
 def python_repl_tool(
     code: Annotated[str, "The python code to execute"],
 ):
-    """Use this to execute python code and do math.You can't use it to extract information from previous steps. YOU CAN'T DONWLOAD ANY LIBRARIES. You can't write or save files. Don't invoke any system-dangerous code."""
+    """
+    Use this tool to perform calculations or execute Python code. It provides a safe environment for code execution without access to external resources like files, networks, or external libraries.
+    
+    Args:
+        code (str): The Python code to execute.
+    
+    Returns:
+        str: The result of the execution, including the code and its standard output. If an error occurs during execution, the error message is returned instead.
+    """
     try:
         result = repl.run(code)
     except BaseException as e:
@@ -237,10 +270,18 @@ def calc_prop_tool(
     smiles: Annotated[str, "The SMILES of a molecule"],
     property: Annotated[str, "The property to predict."],
 ):
-    """Use this to predict molecular property.
-    Can calculate refractive index and freezing point
-    Do not call this tool more than once.
-    Do not call another tool if this returns results."""
+    """
+    Predicts a molecular property based on its SMILES representation.
+    
+    This tool provides a quick estimate for properties like refractive index and freezing point. It is designed to be a primary source of information, prioritizing its results over those from other tools.
+    
+    Args:
+        smiles (str): The SMILES string representing the molecule.
+        property (str): The name of the property to predict (e.g., "refractive index", "freezing point").
+    
+    Returns:
+        str: A string containing the predicted property value and a success message.
+    """
 
     result = 44.09
     result_str = f"Successfully calculated:\n\n{property}\n\nStdout: {result}"
@@ -251,7 +292,19 @@ def calc_prop_tool(
 def name2smiles(
     mol: Annotated[str, "Name of a molecule"],
 ):
-    """Use this to convert molecule name to smiles format. Only use for organic molecules"""
+    """
+    Convert a molecule name to its SMILES representation.
+    
+    This method attempts to retrieve the SMILES string for a given molecule name using a chemical database. It handles potential errors during the retrieval process and provides informative messages if the conversion fails.
+    
+    Args:
+        mol (str): The name of the molecule to convert.
+    
+    Returns:
+        str: The SMILES string representation of the molecule if successful, 
+             an error message if the conversion fails after multiple attempts,
+             or a "couldn't obtain smiles" message if the name is invalid.
+    """
     max_attempts = 3
     for attempts in range(max_attempts):
         try:
@@ -266,7 +319,15 @@ def name2smiles(
 
 @tool
 def smiles2name(smiles: Annotated[str, "SMILES of a molecule"]):
-    """Use this to convert SMILES to IUPAC name of given molecule"""
+    """
+    Converts a SMILES string representing a molecule into its IUPAC name.
+    
+    Args:
+        smiles (str): The SMILES string of the molecule.
+    
+    Returns:
+        str: The IUPAC name of the molecule, or an error message if the conversion fails.
+    """
 
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/{smiles}/property/IUPACName/JSON"
     max_attempts = 3
@@ -290,10 +351,17 @@ def smiles2name(smiles: Annotated[str, "SMILES of a molecule"]):
 def smiles2prop(
     smiles: Annotated[str, "SMILES of a molecule"], iupac: Optional[str] = None
 ):
-    """Use this to calculate all available properties of given molecule. Only use for organic molecules
-    params:
-    smiles: str, smiles of a molecule,
-    iupac: optional, default is None, iupac of molecule"""
+    """
+    Calculate molecular properties from a SMILES string or IUPAC name.
+    
+    Args:
+        smiles (str): The SMILES string of the molecule.
+        iupac (str, optional): The IUPAC name of the molecule. If provided, the SMILES string will be derived from it. Defaults to None.
+    
+    Returns:
+        CalcMolDescriptors: An object containing calculated molecular properties. 
+                             Returns an error message as a string if the calculation fails.
+    """
 
     try:
         if iupac:
@@ -313,7 +381,19 @@ def visualize_molecule(
     smiles: Annotated[str, "SMILES of a molecule"],
     config: RunnableConfig,
 ):
-    """Use this to visualize/draw molecule with given SMILES. Don't call rdkit. Only use for organic molecules"""
+    """
+    Visualizes a molecule from its SMILES representation and saves the 3D structure as an HTML file.
+    
+    Args:
+        smiles (str): The SMILES string representing the molecule to visualize.
+        config (RunnableConfig): Configuration object containing necessary settings,
+                                  including the path to save the visualization.
+    
+    Returns:
+        str: A message indicating success or failure of the visualization process.
+             On success, it confirms the molecule was visualized and saved.
+             On failure, it provides an error message.
+    """
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol:

@@ -23,6 +23,21 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 def chat():
+    """
+    Displays the chat history and handles new user input.
+    
+    This method renders the conversation history within the Streamlit chat interface,
+    presenting messages from both the user and the assistant. It supports displaying
+    intermediate reasoning steps, content, and results from automated machine learning
+    processes, as well as visualizing images and molecular structures.  It then
+    captures new user input and triggers the message handling process.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             if message['role'] == 'assistant' and message.get('steps'):
@@ -62,6 +77,23 @@ def chat():
 
 
 def message_handler():
+    """
+    Processes user input, interacts with a backend to generate responses, and displays the results within the chat interface.
+    
+    This method manages the conversation flow by adding user messages to the chat history, sending queries to a backend for processing (potentially involving scientific paper analysis or task execution), and presenting the backend's responses – including intermediate steps and generated visuals – to the user. It also handles uploaded files, saving them for use by the backend.
+    
+    Args:
+        None
+    
+    Initialized fields:
+        user_session_id: A unique identifier for the user's session, used to manage associated data.
+        user_data_dir: The directory where user-uploaded files are stored, specific to the user's session.
+        messages: A list containing the conversation history, with each entry representing a user message or assistant response.
+        images_b64: A list of base64 encoded images provided by the user as input.
+    
+    Returns:
+        None
+    """
     user_query = st.session_state.chat_input
     st.session_state.messages.append({'role': 'user', "content": user_query})
 
