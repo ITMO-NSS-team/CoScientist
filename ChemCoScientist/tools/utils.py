@@ -1,5 +1,6 @@
 import base64
 import os
+import pandas as pd
 
 from PIL import Image
 
@@ -44,9 +45,6 @@ def convert_to_html(img_base64):
         f'<img src="data:image/jpeg;base64,{img_base64}" style="max-width: 100%;"/>'
     )
     return image_html
-
-
-import pandas as pd
 
 
 def filter_valid_strings(

@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_all_files(directory):
+def get_all_files(directory: str):
     """
     Traverses a directory and its subdirectories to locate all files.
     
@@ -36,9 +36,12 @@ def get_all_files(directory):
         directory (str): The path to the directory to search.
     
     Returns:
-        list: A list of strings, where each string represents the absolute path to a file within the directory and its subdirectories.
+        list: A list of strings, where each string represents the absolute path to a 
+        file within the directory and its subdirectories.
     
-    This method is used to identify all relevant data files within a specified location, ensuring that all potential information sources are included for further processing and analysis.
+    This method is used to identify all relevant data files within a specified 
+    location, ensuring that all potential information sources are included for 
+    further processing and analysis.
     """
     file_paths = []
     for root, _, files in os.walk(directory):
@@ -49,7 +52,8 @@ def get_all_files(directory):
 
 def dataset_builder_agent(state: dict, config: dict) -> Command:
     """
-    Constructs a command to generate a dataset tailored to a given scientific task, leveraging external data sources and a code agent.
+    Constructs a command to generate a dataset tailored to a given chmical task, leveraging external 
+    data sources and a code agent. Can receive data from ChemBL and BindingDB.
     
     Args:
         state (dict): A dictionary containing the current state, including the user's scientific task description.
@@ -57,14 +61,7 @@ def dataset_builder_agent(state: dict, config: dict) -> Command:
                        as well as the directory for storing the generated dataset.
     
     Returns:
-        Command: A command object representing the dataset creation process. It includes the updated history of steps taken,
-                 records of the agent's interactions (nodes calls), and metadata detailing the files generated
-                 or modified during dataset construction.
-    
-    The method orchestrates the creation of a dataset by instructing a code agent to execute a predefined prompt.
-    This prompt incorporates the user's task and configuration settings to guide the agent in fetching and
-    processing relevant data from sources like BindingDB and ChEMBL. The resulting dataset is then documented
-    in the command's metadata, listing the created files.
+        Command
     """
     print("--------------------------------")
     print("Dataset builder agent called")
@@ -112,6 +109,8 @@ def ml_dl_agent(state: dict, config: dict) -> Command:
     It then utilizes this agent to process the task described in the input state and generates a response. The method is designed to automate 
     complex tasks requiring intelligent reasoning and code execution to arrive at a solution.
     
+    All tools are client functions that can launch training of models (ML-models or transformer model) or call inference.
+    
     Args:
         state (dict): A dictionary containing the task to be performed, accessible via the "task" key.
         config (dict): A dictionary containing configuration details, including LLM credentials (api_key, url) and agent-specific 
@@ -154,7 +153,10 @@ def chemist_node(state: dict, config: dict) -> Command:
     """
     Executes a chemistry-related task using a language model and specialized tools.
     
-    This method takes a task and a plan as input, and uses a Chemist agent—configured with a language model and chemistry tools—to attempt to complete the task. It handles potential errors during execution by retrying the task up to three times with increasing delays. The agent's reasoning and results are recorded for tracking progress.
+    This method takes a task and a plan as input, and uses a Chemist agent—configured 
+    with a language model and chemistry tools—to attempt to complete the task. It handles potential errors during execution 
+    by retrying the task up to three times with increasing delays. 
+    The agent's reasoning and results are recorded for tracking progress.
     
     Args:
         state (dict): A dictionary containing the current task (key: "task") and plan (key: "plan").

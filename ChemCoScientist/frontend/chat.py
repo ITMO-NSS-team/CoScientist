@@ -1,7 +1,6 @@
 import glob
 import logging
 import os
-import time
 
 import streamlit as st
 from ChemCoScientist.frontend.utils import get_user_data_dir, get_user_session_id, save_all_files

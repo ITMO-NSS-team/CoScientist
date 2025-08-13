@@ -648,4 +648,4 @@ agents_tools = [
     predict_prop_by_smiles,
 ]
 if __name__ == "__main__":
-    run_ml_dl_training_by_daemon('sars_cov', '/Users/alina/Desktop/ITMO/ChemCoScientist/ChemCoScientist/data_store/datasets/users_dataset.csv', 'smiles', 'IC50', ['IC50'])
+    run_ml_dl_training_by_daemon('sars_cov', './data_store/datasets/users_dataset.csv', 'smiles', 'IC50', ['IC50'])
