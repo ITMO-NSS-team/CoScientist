@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 import time
+
 from typing import List
 
 import pandas as pd
@@ -120,7 +121,7 @@ def test_pipeline(
                 with open(path_to_df, 'a', newline='', encoding='utf-8') as f:
                     row_df.to_csv(f, header=f.tell() == 0, index=False)
             raise
-    
+
     results = pd.read_csv(path_to_df)
     print(f"Pipeline finished!\nAverage GEval score: {results['Correctness (GEval)_score'].mean()}\nAverage answer generation time: {results.answer_generation_time.mean()}")
          
