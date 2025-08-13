@@ -1,21 +1,5 @@
 # CoScientist
 
----
-
-[![PyPi](https://badge.fury.io/py/coscientist.svg)](https://badge.fury.io/py/coscientist)
-[![Downloads](https://static.pepy.tech/badge/coscientist)](https://pepy.tech/project/coscientist)
-[![OSA-improved](https://img.shields.io/badge/improved%20by-OSA-yellow)](https://github.com/aimclub/OSA)
-
-Built with:
-
-![fastapi](https://img.shields.io/badge/FastAPI-009688.svg?style={0}&logo=FastAPI&logoColor=white)
-![numpy](https://img.shields.io/badge/NumPy-013243.svg?style={0}&logo=NumPy&logoColor=white)
-![pandas](https://img.shields.io/badge/pandas-150458.svg?style={0}&logo=pandas&logoColor=white)
-![pydantic](https://img.shields.io/badge/Pydantic-E92063.svg?style={0}&logo=Pydantic&logoColor=white)
-![streamlit](https://img.shields.io/badge/Streamlit-FF4B4B.svg?style={0}&logo=Streamlit&logoColor=white)
-
----
-
 ## Overview
 
 CoScientist is a research effort focused on accelerating scientific discovery in chemistry and materials science through an innovative, multi-agent AI system. Recognizing that traditional approaches struggle to keep pace with the growing complexity of scientific data and workflows, this system moves beyond single large language models to leverage a team of specialized agents. These agents automate tasks such as data preparation, machine learning model training, and molecular property prediction, ultimately freeing up scientists to focus on hypothesis generation and creative problem-solving. Developed at ITMO University, the project aims to demonstrate the effectiveness of AI-assisted techniques for tackling bottlenecks in chemical research, particularly those related to routine data handling and analysis.
@@ -48,13 +32,6 @@ The project leverages a multi-agent system, combining Large Language Models (LLM
 **Prerequisites:** requires Python >=3.11,<3.12
 
 Install CoScientist using one of the following methods:
-
-**Using PyPi:**
-
-```sh
-pip install coscientist
-```
-
 --- 
 
 Before you begin, make sure you have set up the environment with the following commands:
