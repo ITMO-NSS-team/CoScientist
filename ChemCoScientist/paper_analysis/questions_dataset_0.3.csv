@@ -1,0 +1,111 @@
+pdf,question,answer
+03067319.2019.1599875.pdf,"Based on Figure 1(a), what is the approximate absorbance value at 420 nm after 3 minutes of reaction in the presence of nano-MnO2?", Approximately 0.16
+03067319.2019.1599875.pdf,"According to Figure 2(d), what is the approximate oxidase-like activity of nano-MnO2 for TMB reaction when the nano-MnO2 concentration is 0.02 mg·mL−1?",Approximately 0.15 U·mL−1
+03067319.2019.1599875.pdf,"Based on Figure 4(a), at what pH does the nano-MnO2 show the highest oxidase-like activity for catalysing the oxidation of ABTS?",pH 2.0
+03067319.2019.1599875.pdf,"According to Figure 4(d), what is the approximate oxidase-like activity of nano-MnO2 for catalysing the oxidation of TMB at 50°C?",Approximately 0.07 U·mL−1
+03067319.2019.1599875.pdf,"Based on Figure 5, which metal ion, besides Fe2+ and Pb2+, shows the most significant inhibition effect on the activity of nano-MnO2-ABTS compared to the blank control?",None of the other listed metal ions show a significant inhibition effect compared to the blank control (as indicated by the error bars and the text stating only Fe2+ and Pb2+ significantly inhibited)
+03067319.2019.1599875.pdf,"According to Figure 6(b), what is the approximate oxidase-like activity of nano-MnO2 for catalysing the oxidation of ABTS when the Pb2+ ion concentration is 0.4 mmol·L−1?",Approximately 0.02 U·mL−1
+03067319.2019.1599875.pdf,"Based on Figure 7(c), at what two wavelengths do the UV-Vis differential absorbance spectra (DAS) show intensive positive peaks in the MnO2 nanozyme-TMB systems with Fe2+ ion present?",370 nm and 652 nm
+acsami.0c10981.pdf,"Based on the TEM image in Figure 2a and the DLS data in Figure 2c, what is the approximate transverse diameter of the IrNPs and how does this compare to their hydrodynamic diameter in 1x PBS?","The TEM image (Figure 2a) shows a transverse diameter of approximately 90 nm. The DLS data (Figure 2c) indicates a hydrodynamic diameter of 98.3 ± 2.2 nm. The hydrodynamic diameter is slightly larger than the transverse diameter observed in TEM, which is expected due to the hydration shell around the nanoparticles in solution."
+acsami.0c10981.pdf,"According to the XPS data in Figure 2d and 2e, what are the primary elemental compositions and their oxidation states present in the synthesized IrNPs?","The XPS data reveals the presence of metallic Ir (Ir0) and Ag (Ag0), along with a small quantity of surface-oxidized IrO2 (Ir4+)."
+acsami.0c10981.pdf,"Using the information from Figure 3g and 3i, at what pH range does the peroxidase-like activity of IrNPs, considering both one-electron (TMB ox) and two-electron (TMB di) oxidation products of TMB, show more than ~70% of its maximum efficiency?","Based on Figure 3i, the peroxidase-like activity of IrNPs, considering both TMB ox and TMB di species, shows more than ~70% efficiency between pH 2 and 5."
+acsami.0c10981.pdf,"Figure 4c demonstrates the synergistic antibacterial effect of IrNPs and H2O2 against E. coli. What was the calculated synergistic factor for this combinatorial treatment at 160 minutes of incubation, based on the OD600 of the control condition at that time point?","The synergistic factor of the combinatorial treatment of IrNPs and H2O2 was calculated to be 106.37. (This requires comparing the OD600 values at 160 minutes for the control and the dual-treatment condition, as stated in the text)."
+acsami.0c10981.pdf,"According to the MTT assay results presented in Figure 5a, what is the approximate concentration of IrNPs at which no significant cytotoxicity is observed against HeLa cells?",No significant cytotoxicity was observed at concentrations below 0.250 mg Ir/mL.
+acsami.0c10981.pdf,"Figure 3e and 3f show the Michaelis-Menten kinetics for the peroxidase-like activity of IrNPs with different substrates. What are the calculated Michaelis constants (KM) for H2O2 and TMB, respectively?","The Michaelis constant (KM) for H2O2 was calculated to be 0.3193 ± 0.0517 M, and for TMB, it was 131.7368 ± 11.7658 microM."
+acsami.0c10981.pdf,The SEM images in Figure 4d-f illustrate the effect of IrNPs and H2O2 treatment on E. coli. What specific morphological changes are observed in the bacteria after this treatment compared to the untreated control?,The SEM images show bacterial membrane adsorption of IrNPs and membrane bursting after treatment with IrNPs and H2O2.
+acsami.0c10981.pdf,"The article describes the synthesis of IrNPs using sacrificial Ag nanoplates. What were the distinctive LSPR peaks of the Ag nanotemplate before the galvanic replacement reaction, as shown in Figure 2b?",The distinctive LSPR peaks of the Ag nanotemplate were at 338 nm and 765 nm.
+acs.analchem.5b02728.pdf,"Based on Figure 1A and the accompanying text, what is the primary reason for the observed red shift in the absorption threshold of TiO2 NPs after the addition of catechol (CA)?",The formation of a charge transfer (CT) complex on the surface of TiO2 NPs due to the coordination of CA. 
+acs.analchem.5b02728.pdf,"Figure 3A shows the effect of different scavengers on the oxidation of TMB by illuminated TiO2−CA. Which two scavengers, according to the text, indicate that photogenerated holes (h+) are one of the oxidative species?",Ethylene diamine tetraacetic acid (EDTA) and KI. 
+acs.analchem.5b02728.pdf,"Based on Figure 3B and the text, what does the rapid rise of the photocurrent of TiO2−CA upon illumination indicate about the charge dynamics in the modified TiO2 NPs?","It indicates fast charge generation, separation, and transfer in the CT complex modified TiO2 NPs that correlates with the surface chelating. "
+10_1021_acs_joc_0c02350.pdf,I need all the compounds that were used in the experiments. Obligatorily I need all results to be in the form of a table of 2 columns where in the first column were the names by IUPAC nomenclature and in the second column in SMILES notation. Don't add it to this list of reaction products for me. Would you be able to do that?,"Lithium bromide
+[Li+].[Br-]  
+N,N-dimethylacetamide  
+CC(=O)N(C)C  
+2-[2-[bis(carboxylatomethyl)azaniumyl]ethyl-(carboxylatomethyl)azaniumyl]acetate  disodium
+C(C[NH+](CC(=O)[O-])CC(=O)[O-])[NH+](CC(=O)[O-])CC(=O)[O-].[Na+].[Na+]  
+carbonate  dipotassium
+C(=O)([O-])[O-].[K+].[K+] 
+pentane
+CCCCC 
+ethoxyethane 
+CCOCC  
+sulfate disodium
+[O-]S(=O)(=O)[O-].[Na+].[Na+]  
+sodium;chloride 
+ [Na+].[Cl-]  
+oxidane 
+O  
+2-pyridin-2-ylpyridine  
+C1=CC=NC(=C1)C2=CC=CC=N2
+argon
+[Ar]  
+potassium;dihydrogen phosphate  
+OP(=O)(O)[O-].[K+]  
+hexane
+CCCCCC 
+dichloromethane
+C(Cl)Cl  
+N,N-dimethylformamide 
+CN(C)C=O  
+1-azabicyclo[2.2.2]octane 
+C1CN2CCC1CC2  
+morpholine
+C1COCCN1  
+1-bromo-4-(trifluoromethyl)benzene  
+C1=CC(=CC=C1C(F)(F)F)Br  
+trichloro(deuterio)methane  
+[2H]C(Cl)(Cl)Cl  
+cyclohexanamine  
+C1CCC(CC1)N  
+hexan-1-amine 
+CCCCCCN  
+ N-methylmethanamine;hydrochloride  
+CNC.Cl  
+methyl 2-aminoacetate;hydrochloride  
+ COC(=O)CN.Cl  
+bromobenzene
+C1=CC=C(C=C1)Br 
+4-bromobenzonitrile
+C1=CC(=CC=C1C#N)Br  
+4-bromobenzoate
+ C1=CC(=CC=C1C(=O)[O-])Br 
+2-bromonaphthalene
+ C1=CC=C2C=C(C=CC2=C1)Br  
+1-bromo-2-methylbenzene  
+CC1=CC=CC=C1Br  
+3-bromopyridine  
+C1=CC(=CN=C1)Br  
+ethyl acetate  
+CCOC(=O)C  
+ethoxyethane  
+CCOCC  
+1-bromo-3-methoxybenzene  
+COC1=CC(=CC=C1)Br 
+benzoic acid
+C1=CC=C(C=C1)C(=O)O  
+(2S)-5-[(2-methylpropan-2-yl)oxy]-2-[(2-methylpropan-2-yl)oxycarbonylamino]-5-oxopentanoic acid 
+CC(C)(C)OC(=O)CC[C@@H](C(=O)O)NC(=O)OC(C)(C)C
+dimethyl butanedioate 
+COC(=O)CCC(=O)OC  
+sodium;acetate  
+CC(=O)[O-].[Na+]  
+(2S)-1-[(2-methylpropan-2-yl)oxycarbonyl]pyrrolidine-2-carboxylic acid  
+CC(C)(C)OC(=O)N1CCC[C@H]1C(=O)O 
+phenylmethanol
+C1=CC=C(C=C1)CO  
+cyclohexanol
+ C1CCC(CC1)O  
+propan-2-ol  
+CC(C)O  
+hexan-1-ol  
+CCCCCCO  
+methyl 4-bromobenzoate  
+COC(=O)C1=CC=C(C=C1)Br  
+3-bromopyridine
+C1=CC(=CN=C1)Br  
+Acetonitrile
+CC#N  
+4-tert-butyl-2-(4-tert-butylpyridin-2-yl)pyridine  
+CC(C)(C)C1=CC(=NC=C1)C2=NC=CC(=C2)C(C)(C)C 
+tetrabutylazanium;hexafluorophosphate  
+CCCC[N+](CCCC)(CCCC)CCCC.F[P-](F)(F)(F)(F)F"
