@@ -91,7 +91,7 @@ def clean_up_html(
                 if isinstance(element, Tag):
                     element.decompose()
     
-    llm = create_llm_connector(VISION_LLM_URL, extra_body={"provider": {"only": allowed_providers}})
+    llm = create_llm_connector(VISION_LLM_URL)#, extra_body={"provider": {"only": allowed_providers}})
     
     image_url_mapping = {}
     

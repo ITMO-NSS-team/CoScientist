@@ -13,8 +13,8 @@ dependencies = [
     "rdkit (==2024.9.6)",
     "langchain-experimental (==0.3.4)",
     "gdown (==5.2.0)",
-    "torch (==2.6.0)",
-    "torchvision (==0.21.0)",
+    "torch (==2.8.0)",
+    "torchvision (==0.23.0)",
     "duckduckgo-search (==8.0.3)",
     "smolagents (==1.18.0)",
     "deepeval (==2.3.3)",
@@ -33,7 +33,12 @@ dependencies = [
     "langchain-gigachat (==0.3.3)",
     "langchain-ollama (==0.3.0)",
     "langchain-openai (==0.3.3)",
-    "marker-pdf (==1.6.2)",
+    "marker-pdf (==1.8.2)",
+    "psutil (==7.0.0)",
+    "boto3 (>=1.40.17,<2.0.0)",
+    "streamlit-pills (>=0.3.0,<0.4.0)",
+    "langgraph (<0.6.6)",
+    "streamlit-extras (>=0.7.6,<0.8.0)",
 ]
 
 
