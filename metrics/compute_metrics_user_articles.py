@@ -128,7 +128,7 @@ def test_pipeline(
 if __name__ == "__main__":
     args = parse_arguments()
 
-    data = pd.read_csv(args.data_path)
+    data = pd.read_csv(args.data_path, sep=',' if args.data_path.endswith('.csv') else '\t')
     papers_dir = Path(args.papers_path)
     out_dir = Path(args.out_path)
 
