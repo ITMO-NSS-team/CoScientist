@@ -142,8 +142,8 @@ if __name__ == "__main__":
 
     #######################################################
 
-    question = 'What is the title of an article?'
-
+    question = "What IC50 values do weakly active and highly active Bruton's tyrosine kinase inhibitors have?"
+    # paper = 'C:/Users/computer/Documents/GitHub/CoScientist/ChemCoScientist/paper_analysis/papers/acsami.0c10981.pdf'
     # res = simple_query_llm(VISION_LLM_URL, question, [paper])
     res = process_question(question)
     from pprint import pprint
