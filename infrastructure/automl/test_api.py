@@ -26,7 +26,7 @@ def get_state_from_server(case:str,url:str):
     if resp.status_code ==500:
         print(f"Server error:{resp.status_code}")
         return
-    if case in json.loads(resp.content)['ml_state']:
+    if case in json.loads(resp.content)['state']:
         print("Case already trained!")
     state = json.loads(resp.content)
     return state
@@ -40,7 +40,7 @@ def train_ml_with_data(
     classification_props = ['IC50'], #Column name with data for classification tasks (That not include in calculcateble propreties)
     description = 'Case for Brain canser',
     timeout = 5, # min
-    url: str = "http://10.64.4.243:81/train_ml",
+    url: str = "http://10.64.4.247:81/train_ml",
     **kwargs,
 ):
     """
@@ -78,10 +78,7 @@ def train_ml_with_data(
     }
 
     #Get state from server
-    state = get_state_from_server(case=case,url=url)
 
-    print(state['ml_state'])
-    print(state['calc_propreties']) 
     #Get state from server
     #resp = requests.post(url,json.dumps(params))
     p = Process(target=requests.post,args=[url,json.dumps(params)])
@@ -124,9 +121,18 @@ def predict_smiles(smiles_list : List[str],
 
 
 if __name__=='__main__':
+    #print(get_state_from_server(case="egfiction",url='http://10.64.4.247:81'))
 ###############
 #Test train with default params
-    train_ml_with_data(case="test_api2")
+    train_ml_with_data(case="Alzheimer", feature_column=['canonical_smiles'],
+    target_column=['docking_score','QED','Synthetic Accessibility','PAINS','SureChEMBL','Glaxo','Brenk','IC50'], #All propreties from dataframe you want to calculate in the end
+    regression_props = ['docking_score'], #Column name with data for regression tasks (That not include in calculcateble propreties)
+    classification_props = ['IC50'],
+    data_path=r'D:\Projects\CoScientist\automl\data\base_cases\alz.csv',
+    save_trained_data_to_sync_server = True,
+    description = 'Case for Alzheimer with trained FEDOT pipelines for predict "docking_score", and "IC50"',
+    timeout=60*20
+    )
     print('Process created')
 
 ################

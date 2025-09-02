@@ -1,3 +1,4 @@
+from typing import List 
 from fastapi import Body
 from pydantic import BaseModel
 from infrastructure.automl.utils.base_state import TrainState
@@ -30,10 +31,11 @@ class MLData(BaseModel):
         smiles_list: list = None
         timeout:int = 30 #30 min
         feature_column:list = ['Smiles']
-        path_to_save:str = 'automl/trained_data'
+        path_to_save:str = 'automl/train_model_data/trained_data'
         description:str = 'Unknown case.'
         regression_props:list= None
         classification_props:list = None
+        save_trained_data_to_sync_server:bool = False
 
 
 def train_ml_with_data(data:MLData=Body()):
@@ -62,6 +64,8 @@ def train_ml_with_data(data:MLData=Body()):
                 if not os.path.isdir(data.data_path):
                     os.mkdir(data.data_path)
                 data.data_path = data.data_path + '/data.csv'
+                df = df.dropna()
+                df = df[df[data.feature_column[0]].str.len()<200]
                 df.to_csv(data.data_path) 
                       
         state.ml_model_upd_data(case=data.case,
@@ -71,7 +75,8 @@ def train_ml_with_data(data:MLData=Body()):
                                  predictable_properties={"regression":data.regression_props, "classification":data.classification_props})
         run_train_automl(case=data.case,
                          path_to_save=data.path_to_save,
-                         timeout=data.timeout)
+                         timeout=data.timeout,
+                         save_trained_data_to_sync_server=data.save_trained_data_to_sync_server)
 
 def inference_ml(data:MLData=Body()):
     """

@@ -20,9 +20,11 @@ import requests
 from ChemCoScientist.paper_analysis.prompts import summarisation_prompt
 from ChemCoScientist.paper_analysis.settings import allowed_providers
 from ChemCoScientist.paper_analysis.settings import settings as default_settings
+from CoScientist.paper_parser.s3_connection import s3_service
 from CoScientist.paper_parser.parse_and_split import (
     clean_up_html,
     html_chunking,
+    clean_up_after_processing
 )
 from definitions import CONFIG_PATH, ROOT_DIR
 
@@ -33,6 +35,7 @@ CHROMA_DB_PATH = os.path.join(ROOT_DIR, os.environ["CHROMA_STORAGE_PATH"])
 VISION_LLM_URL = os.environ["VISION_LLM_URL"]
 SUMMARY_LLM_URL = os.environ["SUMMARY_LLM_URL"]
 PAPERS_PATH = os.path.join(ROOT_DIR, os.environ["PAPERS_STORAGE_PATH"])
+USE_S3 = os.getenv("USE_S3") == "True"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -343,6 +346,7 @@ class ChromaDBPaperStore:
             metadatas=[{"type": "text", **text_chunk.metadata} for text_chunk in content]
         )
 
+
     def store_images_in_chromadb_txt_format(self, image_dir: str, paper_name: str) -> None:
         """
         Stores images from a directory in ChromaDB in text format.
@@ -358,16 +362,19 @@ class ChromaDBPaperStore:
         Returns:
             None
         """
+
         image_descriptions = []
         image_paths = []
         image_counter = 0
+        valid_paths = list(url_mapping.keys())
 
         for filename in os.listdir(image_dir):
             if filename.lower().endswith((".png", ".jpg", ".jpeg")):
                 img_path = os.path.join(image_dir, filename)
-                image_descriptions.append(self._image_to_text(img_path))
-                image_paths.append(img_path)
-                image_counter += 1
+                if img_path in valid_paths:
+                    image_descriptions.append(self._image_to_text(img_path))
+                    image_paths.append(url_mapping[img_path])
+                    image_counter += 1
 
         embeddings = self.get_embeddings(image_descriptions)
         self.img_collection.add(
@@ -646,14 +653,16 @@ def process_single_document(folder_path: Path):
         None
     """
     paper_name = folder_path.name.replace("_marker", "")
-    file_name = Path(paper_name + ".html")
     paper_name_to_load = Path(paper_name + ".pdf")
-    parsed_file_path = Path(folder_path, file_name)
+    parsed_file_path = Path(folder_path, paper_name + ".html")
     with open(parsed_file_path, 'r', encoding='utf-8') as f:
         text = f.read()
     try:
         print(f"Starting post-processing paper: {paper_name}")
-        parsed_paper = clean_up_html(folder_path, folder_path, text)
+        if USE_S3:
+            parsed_paper, mapping = clean_up_html(folder_path, paper_name, text, s3_service, paper_name)
+        else:
+            parsed_paper, mapping = clean_up_html(folder_path, paper_name, text)
         print(f"Finished post-processing paper: {paper_name}")
         documents = html_chunking(parsed_paper, paper_name)
         
@@ -663,8 +672,10 @@ def process_single_document(folder_path: Path):
         print(f"Starting loading paper: {paper_name}")
         process_local_store.add_paper_summary_to_db(str(paper_name_to_load), parsed_paper, struct_llm)
         process_local_store.store_text_chunks_in_chromadb(documents)
-        process_local_store.store_images_in_chromadb_txt_format(str(folder_path), str(paper_name_to_load))
+        process_local_store.store_images_in_chromadb_txt_format(str(folder_path), str(paper_name_to_load), mapping)
         print(f"Finished loading paper: {paper_name}")
+        if USE_S3:
+            clean_up_after_processing(folder_path)
     except Exception as e:
         print(f"Error in {paper_name}: {str(e)}")
 

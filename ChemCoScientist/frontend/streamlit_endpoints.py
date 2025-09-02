@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ChemCoScientist.paper_analysis.question_processing import simple_query_llm
 from ChemCoScientist.frontend.memory import SELECTED_PAPERS
-from ChemCoScientist.streamlit_app_old.utils import update_activity
+from ChemCoScientist.frontend.utils import update_activity
 from definitions import CONFIG_PATH, ROOT_DIR
 
 load_dotenv(CONFIG_PATH)

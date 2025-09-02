@@ -2,6 +2,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 
 from bs4 import BeautifulSoup, Tag
 from dotenv import load_dotenv
@@ -16,6 +17,7 @@ from definitions import CONFIG_PATH, ROOT_DIR
 from CoScientist.paper_parser.parser_prompts import cls_prompt, table_extraction_prompt
 from CoScientist.paper_parser.utils import prompt_func, convert_to_base64
 from ChemCoScientist.paper_analysis.settings import allowed_providers
+from CoScientist.paper_parser.s3_connection import S3BucketService
 
 _log = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ LLM_SERVICE_KEY = os.getenv("LLM_SERVICE_KEY")
 MARKER_LLM = os.getenv("MARKER_LLM")
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL")
 IMAGE_RESOLUTION_SCALE = 2.0
+USE_S3 = os.getenv("USE_S3") == "True"
 
 
 def parse_with_marker(paper_name: str, use_llm: bool=False) -> (str, Path):
@@ -73,6 +76,7 @@ def parse_with_marker(paper_name: str, use_llm: bool=False) -> (str, Path):
     return file_name.stem, output_dir
 
 
+
 def clean_up_html(doc_dir: Path, file_name: Path, html: str) -> str:
     """
     Cleans up HTML content by removing irrelevant sections like acknowledgements and references, and processes images to either remove them or replace them with extracted tables.
@@ -85,6 +89,7 @@ def clean_up_html(doc_dir: Path, file_name: Path, html: str) -> str:
     Returns:
         str: The cleaned HTML content as a string, potentially with images replaced by tables.
     """
+
     
     soup = BeautifulSoup(html, "lxml")
     
@@ -112,20 +117,35 @@ def clean_up_html(doc_dir: Path, file_name: Path, html: str) -> str:
                     element.decompose()
     
     llm = create_llm_connector(VISION_LLM_URL, extra_body={"provider": {"only": allowed_providers}})
+    
+    image_url_mapping = {}
+    
     for img in soup.find_all('img'):
-        img_path = str(doc_dir) + "/" + img.get("src")
-        images = list(map(convert_to_base64, [img_path]))
+        img_src = img.get("src")
+        if not img_src:
+            continue
+        
+        local_img_path = str(Path(doc_dir) / img_src)
+        try:
+            images = list(map(convert_to_base64, [local_img_path]))
+        except OSError as e:
+            if e.errno == 2:
+                print(f"File not found: {e}")
+                continue
+            else:
+                print(f"Error from OS: {e}")
+                continue
         query = [prompt_func({"text": cls_prompt, "image": images})]
         res_1 = llm.invoke(query).content
         if res_1.strip() == "False":
             parent_p = img.find_parent('p')
             if parent_p:
                 parent_p.decompose()
-                os.remove(img_path)
+                os.remove(local_img_path)
         else:
             table_query = [prompt_func({"text": table_extraction_prompt, "image": images})]
             res_2 = llm.invoke(table_query).content
-            if res_2 != "No table":
+            if res_2.strip() != "No table":
                 pattern = r'<table\b[^>]*>.*?</table>'
                 match = re.search(pattern, res_2, re.DOTALL)
                 if match:
@@ -134,11 +154,25 @@ def clean_up_html(doc_dir: Path, file_name: Path, html: str) -> str:
                     parent_p = img.find_parent('p')
                     if parent_p:
                         parent_p.replace_with(table_soup)
-
-    with open(Path(doc_dir, f"{file_name.stem}_processed.html"), "w", encoding='utf-8') as file:
+                        os.remove(local_img_path)
+            elif s3_service and paper_s3_prefix:
+                s3_key = f"{paper_s3_prefix}/{img_src}"
+                s3_service.upload_file_object(paper_s3_prefix, img_src, local_img_path)
+                s3_url = f"{s3_service.endpoint.rstrip('/')}/{s3_service.bucket_name}/{s3_key}"
+                img['src'] = s3_url
+                image_url_mapping[local_img_path] = s3_url
+            else:
+                image_url_mapping[local_img_path] = local_img_path
+    
+    new_file_name = f"{file_name}_processed.html"
+    new_path = str(Path(doc_dir, new_file_name))
+    with open(new_path, "w", encoding='utf-8') as file:
         file.write(str(soup.prettify()))
+    
+    if s3_service and paper_s3_prefix:
+        s3_service.upload_file_object(paper_s3_prefix, new_file_name, new_path)
 
-    return soup.prettify()
+    return soup.prettify(), image_url_mapping
     
 
 def html_chunking(html_string: str, paper_name: str) -> list:
@@ -202,7 +236,21 @@ def extract_img_url(doc_text: str, p_name: str):
     """
     pattern = r'!\[image:([^\]]+\.jpeg)\]\(([^)]+\.jpeg)\)'
     matches = re.findall(pattern, doc_text)
-    return [os.path.join(PARSE_RESULTS_PATH, p_name, entry[0]) for entry in matches]
+    if USE_S3:
+        return [entry[0] for entry in matches]
+    else:
+        return [os.path.join(PARSE_RESULTS_PATH, p_name, entry[0]) for entry in matches]
+
+
+def clean_up_after_processing(doc_dir: str | Path):
+    if os.path.exists(doc_dir):
+        try:
+            shutil.rmtree(doc_dir)
+            print(f"Directory '{doc_dir}' and its contents removed successfully.")
+        except OSError as e:
+            print(f"Error: {e}")
+    else:
+        print(f"Directory '{doc_dir}' does not exist.")
 
 
 if __name__ == "__main__":
