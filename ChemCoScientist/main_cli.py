@@ -38,11 +38,15 @@ coder_agent_description = (
     "chemical libraries. Can perform calculations.\n "
 )
 
-paper_analysis_node_description = (
-    "'paper_analysis_node' - answers questions by retrieving and analyzing information "
-    "from a database of chemical scientific papers. Using this agent takes precedence over web search."
-)
-web_search_description = "You can use web search to find information on the internet. "
+paper_analysis_node_description = """
+'paper_analysis_node' - retrieves and analyzes information from a database of chemical scientific papers. 
+Activate this agent when the user asks about articles or research findings. For such questions, first plan this 
+agent, then follow with 'web_search' for additional internet information. Do not involve other agents unless the 
+user explicitly requires them.
+"""
+
+web_search_description = ("You can use web search to find information on the internet. In case when user asks find "
+                          "information in web you should call web_search_node separately from other agents.")
 
 additional_agents_description = (
     automl_agent_description
@@ -132,27 +136,35 @@ conf = {
                 "rules": None,
                 "desc_restrictions": None,
                 "examples": None,
-                "additional_hints": "Before you start training models, plan to check your data for garbage using a dataset_builder_agent.\n \
-                If the user provides his dataset - immediately start training using ml_dl_agent (never call dataset_builder_agent)!\
-                        To find an answer, use the paper search first! NOT the web search!",
+                "additional_hints": """
+                Before starting model training, check data for garbage with 'dataset_builder_agent'. 
+                If the user already provides a dataset, go straight to 'ml_dl_agent' and skip 'dataset_builder_agent' 
+                For questions about papers, articles, or research findings, plan exactly two steps: 
+                first 'paper_analysis_node', then 'web_search'. 
+                Do not schedule any other agents for such research tasks.
+                Always choose the minimal set of agents necessary for the user's request.
+                """,
             },
             "chat": {
                 "problem_statement": None,
                 "additional_hints": """You are a chemical agent system. You can do the following:
-                    - train generative models (generate SMILES molecules), train predictive models (predict properties)
-                    - prepare a dataset for training
-                    - download data from chemical databases: ChemBL, BindingDB
-                    - perform calculations with chemical python libraries
-                    - solve problems of nanomaterial synthesis
-                    - analyze chemical articles
-                    
-                    If user ask something like "What can you do" - make answer yourself!
+                - train generative models (generate SMILES molecules), train predictive models (predict properties)
+                - prepare a dataset for training
+                - download data from chemical databases: ChemBL, BindingDB
+                - perform calculations with chemical python libraries
+                - solve problems of nanomaterial synthesis
+                - analyze chemical articles
+                Choose only the agents relevant to the user's question. For literature queries, use 'paper_analysis_node'
+                followed by 'web_search' and avoid calling other agents. If user ask something like "What can you do" - make answer yourself!
                     """,
             },
             "summary": {
                 "problem_statement": None,
                 "rules": None,
-                "additional_hints": "Never write full paths! Only file names.",
+                "additional_hints": """
+                Never write full paths! Only file names. If 'paper_analysis_node' and 'web_search' were used,  
+                present the final answer as: paper_analysis: <paper_analysis_agent result>   web_search: <web_search_node result>.
+                """,
             },
             "replanner": {
                 "problem_statement": None,
@@ -192,7 +204,9 @@ conf = {
 # inputs = {"input": "Запусти обучение генеративной модели на данных '/Users/alina/Desktop/ИТМО/ChemCoScientist/data_dir_for_coder/chembl_ic50_data.xlsx', назови кейс IC50_chembl."}
 # inputs = {"input": "What can you do?"}
 # inputs = {"input": "Запусти предсказание с помощью мл-модели на значение IC50 для молекулы Fc1cc(F)c2ccc(Oc3cncc4nnc(-c5ccc(OC(F)F)cc5)n34)cc2c1."}
-inputs = {"input": "How does the synthesis of Glionitrin A/B happen based on research?"}
+# inputs = {"input": "Describe the three-component reaction used to synthesise BASHY dyes and indicate how the structure of the dye is related to its fluorescent properties."}
+inputs = {"input": "Find in internet how does the synthesis of Glionitrin A/B happen based on research?"}
+
 # inputs = {"input": "what papers have info on the Synthesis of Glionitrin A/B?"}
 # inputs = {"input": "what is the name of figure 1?"}
 # inputs = {"input": "How does the synthesis of Glionitrin A/B happen based on research?"}
