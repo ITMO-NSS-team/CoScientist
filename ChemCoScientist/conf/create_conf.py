@@ -43,8 +43,8 @@ paper_analysis_node_description = (
     " agent, then follow with 'web_search' for additional internet information. Do not involve other agents unless the"
     " user explicitly requires them."
 )
-web_search_description = ("'web_search' - searches the internet to complement results from 'paper_analysis_node'. Use it right after"
-    " 'paper_analysis_node' and avoid calling it alone or with unrelated agents.")
+web_search_description = ("You can use web search to find information on the internet. In case when user asks find "
+                          "information in web you should call web_search_node separately from other agents.")
 
 additional_agents_description = (
     automl_agent_description
