@@ -5,6 +5,7 @@ import time
 from typing import Annotated
 import operator
 import streamlit as st
+from langchain_core.language_models import BaseChatModel
 
 from langgraph.types import Command
 from langgraph.graph import END
