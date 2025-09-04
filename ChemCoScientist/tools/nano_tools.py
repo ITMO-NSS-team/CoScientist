@@ -25,6 +25,28 @@ def call_for_generation(
     max_attemps=3,
     **kwargs,
 ):
+    """
+    Sends a request to a synthesis service with scientific context to generate data.
+    
+    This method constructs a request containing a system prompt, input properties, 
+    and an Alpaca prompt and sends it to a specified service endpoint. It handles
+    potential connection errors by retrying the request a certain number of times. 
+    The service is expected to process the input and return generated data.
+    
+    Args:
+        synthesis_generator_system_prompt (str): The system-level instructions for the generation service.
+        properties_input (dict): The input data or properties to be used in the generation process.
+        synthesis_generator_alpaca_prompt (str): A prompt designed to guide the generation service.
+        url (str, optional): The URL of the synthesis service. Defaults to "http://10.32.2.5:82/call".
+        max_attemps (int, optional): The maximum number of times to retry the request. Defaults to 3.
+        **kwargs: Additional parameters to be sent to the synthesis service.
+    
+    Returns:
+        dict or str or None: A dictionary containing the generated data if the request 
+            is successful and the response is valid JSON. Returns an error message string 
+            if the response status code is not 200 or if JSON parsing fails. 
+            Returns None if all retry attempts fail.
+    """
 
     params = {
         "synthesis_generator_system_prompt": synthesis_generator_system_prompt,
@@ -62,13 +84,15 @@ def call_for_generation(
 
 @tool
 def synthesis_generation(description: str, config: RunnableConfig) -> str:
-    """Generates the text of the synthesis of nanoparticles. Use it ONLY when you are asked to generate synthesis next
-
+    """
+    Generates a detailed synthesis procedure based on a given description of the nanoparticles. This allows users to quickly obtain potential methods for creating specific nanomaterials.
+    
     Args:
-        description (int): Description of nanoparticles: any string description is suitable
-
+        description (str): A textual description of the desired nanoparticles, including composition, size, and any specific properties.
+        config (RunnableConfig): Configuration object containing the language model to be used.
+    
     Returns:
-        synthesis_text (str): Text of the synthesis of nanoparticles
+        synthesis_text (str): A text string detailing a possible synthesis procedure for the described nanoparticles.  Returns an error message if synthesis generation fails.
     """
     try:
         llm: BaseChatModel = config["configurable"]["model"]
@@ -84,13 +108,17 @@ def synthesis_generation(description: str, config: RunnableConfig) -> str:
 def predict_nanoparticle_entrapment_eff(
     description: str, config: RunnableConfig
 ) -> str:
-    """Predicts the entrapment efficiency of nanomaterial based on it's description.
-
+    """
+    Predicts the entrapment efficiency of a nanomaterial based on its descriptive text.
+    
+    This method utilizes a language model to interpret the provided nanomaterial description and estimate its entrapment efficiency.  It translates textual information about the material's properties and creation process into a quantifiable prediction.
+    
     Args:
-        description (str): description of nanomaterial, for example: nanoparticles obtained from the dissolution of calcium carbonate in HCl
-
+        description (str): A textual description of the nanomaterial, e.g., "nanoparticles obtained from the dissolution of calcium carbonate in HCl".
+        config (RunnableConfig): Configuration object containing the language model to be used for prediction.
+    
     Returns:
-        ent_eff (str): predicted entrapment efficiency of nanomaterial
+        ent_eff (str): The predicted entrapment efficiency of the nanomaterial, as a string.  May return an error message if prediction fails.
     """
     try:
         llm: BaseChatModel = config["configurable"]["model"]
@@ -105,13 +133,15 @@ def predict_nanoparticle_entrapment_eff(
 
 @tool
 def predict_nanoparticle_shape(description: str, config: RunnableConfig) -> str:
-    """Predicts the shape of nanomaterial based on it's description.
-
+    """
+    Predicts the shape of a nanomaterial from its descriptive text.
+    
     Args:
-        description (str): description of nanomaterial, for example: nanoparticles obtained from the dissolution of calcium carbonate in HCl
-
+        description (str): A text describing the nanomaterial, e.g., "nanoparticles obtained from the dissolution of calcium carbonate in HCl".
+        config (RunnableConfig): Configuration object containing the language model to use.
+    
     Returns:
-        predicted_shapes (str): predicted shapes of nanomaterial
+        str: The predicted shape(s) of the nanomaterial, as determined by the language model. Returns "I couldn't predict shapes" if prediction fails.
     """
     try:
         llm: BaseChatModel = config["configurable"]["llm"]
@@ -126,13 +156,14 @@ def predict_nanoparticle_shape(description: str, config: RunnableConfig) -> str:
 
 @tool
 def generate_nanoparticle_images(shape: str) -> str:
-    """Generates the image of nanoparticle based on it's shape. Use it when you are asked to generate nanoparticles image
-
+    """
+    Generates an image representation of a nanoparticle based on its specified shape. This helps visualize nanomaterials for research and analysis.
+    
     Args:
-        shape (str): shape of nanomaterial: 'cube', 'sphere', 'stick', 'flat', 'amorphous'
-
+        shape (str): The desired shape of the nanoparticle. Valid options are: 'cube', 'sphere', 'stick', 'flat', 'amorphous'.
+    
     Returns:
-        predicted_shapes (str): predicted shapes of nanomaterial
+        str: A message indicating success or failure of the image generation process, including the nanoparticle shape or the error encountered.
     """
     try:
         inference(shape)
@@ -145,10 +176,18 @@ def generate_nanoparticle_images(shape: str) -> str:
 
 @tool
 def analyse_nanoparticle_images(config: RunnableConfig) -> str:
-    """Predicts shape of nanoparticles based on their image. Use it when you need to process submitted image.
-
+    """
+    Analyzes images to determine the shape of nanoparticles present. This method processes image data to provide insights into nanomaterial characteristics.
+    
+    Args:
+        config (RunnableConfig): Configuration object containing the visual model and image paths.
+            - `configurable` (dict): A dictionary within the config containing:
+                - `visual_model` (BaseChatModel): The language model used for image analysis.
+                - `img_path` (list): A list of base64 encoded image strings.
+    
     Returns:
-        predicted_shapes (str): predicted shapes of nanomaterial
+        str: A string describing the predicted shape of the nanoparticles in each image, or an error message if no image is provided. 
+             The output includes the image number and corresponding shape prediction for each image processed.
     """
     llm: BaseChatModel = config["configurable"].get("visual_model")
 

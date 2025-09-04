@@ -7,6 +7,20 @@ import time
 load_dotenv()
 
 def init_page():
+    '''
+    Displays a set of pre-defined example prompts as interactive pills, allowing users to quickly copy them to the input field.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    
+    This section provides users with convenient starting points for interacting with the chatbot, 
+    covering both chemical compound analysis and nanoparticle-related queries. 
+    Selecting an example copies it to the clipboard and displays a brief confirmation message, 
+    streamlining the process of formulating questions.
+    '''
 
     st.set_page_config(
         page_title="🧪 Chemistry Chatbot",
@@ -41,12 +55,48 @@ def init_page():
     '''
 def reset_selection():
     """
-    util funcion for custom pills
+    Resets the selected option and triggers a state update in the Streamlit application.
+    
+    This ensures that changes to available options are reflected in the user interface 
+    by forcing a re-render when the selection needs to be cleared.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     st.session_state.selected_option = None
     st.session_state.reset_key += 1  # Increment the key to force update
 
 def init_session_state():
+    """
+    Initializes the session state with default values, ensuring a consistent starting point for user interactions.
+    
+    This method populates the Streamlit session state with essential variables used throughout the application. It checks if each necessary key exists; if not, it initializes the key with a predefined default value. This setup guarantees that the application functions correctly regardless of whether the session is new or has been refreshed.
+    
+    Args:
+        None
+    
+    Initializes the following session state variables:
+        language (str): The user's preferred language, defaulting to 'English'.
+        main_model_input (Any): The primary input for the main model, initialized to None.
+        messages (list): Conversation history, starting with an initial assistant message.
+        backend (Any): The selected backend, defaulting to None.
+        base_url (str): The base URL for API requests, defaulting to None.
+        api_key (str): The API key for accessing external services, defaulting to None.
+        tavily_api_key (str): The Tavily API key for accessing external services, defaulting to None.
+        images (Any): Generated images, initialized to None.
+        images_b64 (Any): Base64 encoded images, initialized to None.
+        selected_option (Any): The currently selected option, defaulting to None.
+        reset_key (int): A key to trigger resets, initialized to 0.
+        user_session (Any): Data about the current user session, defaulting to None.
+        uploaded_files (dict): A dictionary to store uploaded files, initialized as empty.
+        user_data_dir (str): The path to the user's data directory, defaulting to None.
+    
+    Returns:
+        None
+    """
     if 'language' not in st.session_state:
         st.session_state.language = 'English'
         

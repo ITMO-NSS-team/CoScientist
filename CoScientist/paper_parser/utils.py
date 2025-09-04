@@ -10,10 +10,15 @@ from CoScientist.paper_parser.s3_connection import s3_service
 
 def convert_to_base64(file_path):
     """
-    Convert PIL images to Base64 encoded strings
-
-    :param file_path: path to image
-    :return: Re-sized Base64 string
+    Convert an image file to a Base64 encoded string.
+    
+    This method reads an image from the specified file path, encodes it as a JPEG image in memory, then converts it into a Base64 string representation. 
+    
+    Args:
+        file_path (str): The path to the image file.
+    
+    Returns:
+        str: A Base64 encoded string representing the JPEG image.
     """
     if file_path.startswith("http://"):
         s3_key, bucket_name = extract_s3_bucket_and_key(file_path)
@@ -27,6 +32,23 @@ def convert_to_base64(file_path):
 
 
 def prompt_func(data):
+    """
+    Creates a structured message containing text and images for use in a conversational context.
+    
+    Args:
+        data (dict): A dictionary containing the message content.
+            - "text" (str): The text content of the message.
+            - "image" (list): A list of base64 encoded JPEG images to include in the message.
+    
+    Returns:
+        HumanMessage: A HumanMessage object with a structured 'content' list.
+            The 'content' list contains dictionaries representing each part of the message,
+            with "type" keys indicating whether it's "text" or "image_url".  Image URLs
+            are formatted as data URIs.
+    
+    This method prepares the input data into a format suitable for presenting information in a multi-modal interface,
+    by converting images to data URIs that can be directly embedded in a message and combining them with the provided text.
+    """
     text = data["text"]
     imgs = data["image"]
     content_parts = []

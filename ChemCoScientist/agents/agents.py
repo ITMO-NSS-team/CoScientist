@@ -1,5 +1,4 @@
 import ast
-import logging
 import os
 import time
 from typing import Annotated
@@ -19,17 +18,28 @@ from ChemCoScientist.agents.agents_prompts import (
     worker_prompt,
 )
 from ChemCoScientist.tools import chem_tools, nanoparticle_tools, paper_analysis_tools
-from ChemCoScientist.paper_analysis.question_processing import process_question
 from ChemCoScientist.tools import chem_tools, nanoparticle_tools
 from ChemCoScientist.tools.chemist_tools import fetch_BindingDB_data, fetch_chembl_data
 from ChemCoScientist.tools.ml_tools import agents_tools as automl_tools
 
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from definitions import ROOT_DIR
 
 
-def get_all_files(directory):
+def get_all_files(directory: str):
+    """
+    Traverses a directory and its subdirectories to locate all files.
+    
+    Args:
+        directory (str): The path to the directory to search.
+    
+    Returns:
+        list: A list of strings, where each string represents the absolute path to a 
+        file within the directory and its subdirectories.
+    
+    This method is used to identify all relevant data files within a specified 
+    location, ensuring that all potential information sources are included for 
+    further processing and analysis.
+    """
     file_paths = []
     for root, _, files in os.walk(directory):
         for file in files:
@@ -38,6 +48,18 @@ def get_all_files(directory):
 
 
 def dataset_builder_agent(state: dict, config: dict) -> Command:
+    """
+    Constructs a command to generate a dataset tailored to a given chmical task, leveraging external 
+    data sources and a code agent. Can receive data from ChemBL and BindingDB.
+    
+    Args:
+        state (dict): A dictionary containing the current state, including the user's scientific task description.
+        config (dict): A dictionary containing configuration details, such as model information and API keys,
+                       as well as the directory for storing the generated dataset.
+    
+    Returns:
+        Command
+    """
     print("--------------------------------")
     print("Dataset builder agent called")
     print(state["task"])
@@ -63,7 +85,7 @@ def dataset_builder_agent(state: dict, config: dict) -> Command:
         ds_builder_prompt + config_cur_agent["ds_dir"] + "\nSo, user ask: \n" + task + additional_ds_builder_prompt
     )
 
-    files = get_all_files(os.environ["DS_STORAGE_PATH"])
+    files = get_all_files(os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]))
 
     return Command(update={
         "past_steps": Annotated[set, operator.or_](set([(task, str(response))])),
@@ -77,6 +99,24 @@ def dataset_builder_agent(state: dict, config: dict) -> Command:
 
 
 def ml_dl_agent(state: dict, config: dict) -> Command:
+    """
+    Executes a machine learning/deep learning agent to address a given task, leveraging a large language model.
+    
+    This method instantiates an agent using a specified LLM, configured with credentials and settings from the provided configuration. 
+    It then utilizes this agent to process the task described in the input state and generates a response. The method is designed to automate 
+    complex tasks requiring intelligent reasoning and code execution to arrive at a solution.
+    
+    All tools are client functions that can launch training of models (ML-models or transformer model) or call inference.
+    
+    Args:
+        state (dict): A dictionary containing the task to be performed, accessible via the "task" key.
+        config (dict): A dictionary containing configuration details, including LLM credentials (api_key, url) and agent-specific 
+            settings found under `config["configurable"]["additional_agents_info"]["ml_dl_agent"]`.
+    
+    Returns:
+        Command: A command object containing the agent's textual response, the updated task history (`past_steps`) including the current task and response,
+            and a record of the agent call (`nodes_calls`) detailing the agent used and its input/output.
+    """
     print("--------------------------------")
     print("ml_dl agent called")
     print(state["task"])
@@ -107,6 +147,21 @@ def ml_dl_agent(state: dict, config: dict) -> Command:
 
 
 def chemist_node(state: dict, config: dict) -> Command:
+    """
+    Executes a chemistry-related task using a language model and specialized tools.
+    
+    This method takes a task and a plan as input, and uses a Chemist agent—configured 
+    with a language model and chemistry tools—to attempt to complete the task. It handles potential errors during execution 
+    by retrying the task up to three times with increasing delays. 
+    The agent's reasoning and results are recorded for tracking progress.
+    
+    Args:
+        state (dict): A dictionary containing the current task (key: "task") and plan (key: "plan").
+        config (dict): A dictionary containing configuration details, including access to the language model (LLM) and other settings (accessible under 'configurable').
+    
+    Returns:
+        Command: A `Command` object.  If successful, it contains the executed task and associated details (`past_steps`, `nodes_calls`). If the task fails after multiple attempts, it returns a `Command` object with a failure message in the `response` field.
+    """
     print("--------------------------------")
     print("Chemist agent called")
     print("Current task:")
@@ -150,6 +205,23 @@ def chemist_node(state: dict, config: dict) -> Command:
 
 
 def nanoparticle_node(state: dict, config: dict) -> Command:
+    """
+    Executes a task using a nanoparticle agent and returns a Command object.
+    
+    This method leverages a ReAct agent to process a given task and plan, providing a structured response
+    for integration into a larger workflow. It includes error handling with retries to ensure robustness.
+    
+    Args:
+        state (dict): A dictionary containing the current task and plan.  The 'task' key holds the
+                      description of the work to be done, and 'plan' outlines the steps to achieve it.
+        config (dict): A dictionary containing configuration details, including the LLM to be used
+                       within the ReAct agent ('configurable' -> 'llm').
+    
+    Returns:
+        Command: A Command object containing the results of the agent's execution.  On success,
+                 'past_steps' and 'nodes_calls' are updated to reflect the completed task and agent interactions.
+                 If the task fails after multiple retries, a 'response' message indicating failure is returned.
+    """
     print("--------------------------------")
     print("Nano-p agent called")
     print("Current task:")
@@ -194,18 +266,18 @@ def nanoparticle_node(state: dict, config: dict) -> Command:
 
 def paper_analysis_agent(state: dict, config: dict) -> Command:
     """
-    The agent assists users by analyzing information from scientific papers.
-    It can do several things:
-    - answers the user's question using a DB with chemical scientific papers
-    - answers the user's question using papers that were uploaded by the user
-    - selects papers relevant to the user's question
-
+    Analyzes scientific papers to answer user questions.
+    
+    This agent utilizes a combination of a vector database of chemical papers and user-uploaded documents
+    to provide informed responses. It attempts to extract relevant information and synthesize answers.
+    
     Args:
-        state: The current execution.
-
+        state (dict): The current state of the interaction, including the user's task.
+        config (dict): Configuration settings, including the language model to use.
+    
     Returns:
-        An object containing the next node to transition to ('replan' or `END`) and
-        an update to the execution state with recorded steps and responses.
+        Command: An object containing the next step in the process ('replan' or `END`) and
+        updates to the state, including recorded steps, responses, and extracted metadata.
     """
     print("--------------------------------")
     print("Paper agent called")

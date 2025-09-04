@@ -11,6 +11,19 @@ RERANKER_SERVICE_HOST = "localhost"
 RERANKER_SERVICE_PORT = 5001
 
 def test_chroma():
+    """
+    Tests the Chroma database interaction for document storage and retrieval.
+    
+    This method verifies the end-to-end functionality of storing documents with associated metadata in ChromaDB 
+    and then querying for those documents based on textual content. It ensures data can be reliably added, searched,
+    and that the expected results are returned.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     client = chromadb.HttpClient(host=CHROMADB_HOST, port=CHROMADB_PORT)
     client.delete_collection(name="test_collection")
     collection = client.create_collection(name="test_collection")
@@ -37,6 +50,20 @@ def test_chroma():
     client.delete()
 
 def test_embedding_service():
+    """
+    Tests the embedding service by sending a request with sample texts and validating the response.
+    
+    This method verifies the embedding service's functionality by sending a POST request containing a list of texts.
+    It checks if the service returns a successful status code, contains the expected data structure ("embeddings"),
+    and returns embeddings with the correct dimensions and data types. This ensures that the service is correctly 
+    transforming text into numerical representations suitable for semantic search and analysis.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     response = requests.post(
         f"http://{EMBEDDING_SERVICE_HOST}:{EMBEDDING_SERVICE_PORT}/embed",
         json=[
@@ -59,6 +86,19 @@ def test_embedding_service():
     assert all(isinstance(element, float) for item in embeddings for element in item)
 
 def test_reranker_service():
+    """
+    Tests the reranker service by sending a request with sample text pairs and validating the response.
+    
+    This method verifies the service's ability to process text pairs and return relevance scores,
+    ensuring the response is correctly formatted and contains expected data types. This helps
+    confirm the reranker is functioning as intended before integration with the larger system.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     response = requests.post(
         f"http://{RERANKER_SERVICE_HOST}:{RERANKER_SERVICE_PORT}/rerank",
         json=[

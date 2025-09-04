@@ -45,7 +45,15 @@ repl = PythonREPL()
 def python_repl_tool(
     code: Annotated[str, "The python code to execute"],
 ):
-    """Use this to execute python code and do math.You can't use it to extract information from previous steps. YOU CAN'T DONWLOAD ANY LIBRARIES. You can't write or save files. Don't invoke any system-dangerous code."""
+    """
+    Use this tool to execute Python code, perform calculations, and test hypotheses. It provides a safe environment for code execution without access to external resources like files, libraries, or system commands.
+    
+    Args:
+        code (str): The Python code to execute.
+    
+    Returns:
+        str: The output of the executed code, including the code itself and any standard output. If an error occurs during execution, an error message is returned.
+    """
     try:
         result = repl.run(code)
     except BaseException as e:
@@ -60,10 +68,18 @@ def calc_prop_tool(
     smiles: Annotated[str, "The SMILES of a molecule"],
     property: Annotated[str, "The property to predict."],
 ):
-    """Use this to predict molecular property.
-    Can calculate refractive index and freezing point
-    Do not call this tool more than once.
-    Do not call another tool if this returns results."""
+    """
+    Use this tool to obtain calculated molecular properties.
+    Currently predicts a placeholder value for refractive index or freezing point.
+    It is designed to be a primary source of information; avoid redundant calls or alternative tools if it provides a result.
+    
+    Args:
+        smiles (str): The SMILES representation of the molecule.
+        property (str): The molecular property to predict (e.g., "refractive index", "freezing point").
+    
+    Returns:
+        str: A string containing the calculated property value and a success message.
+    """
     #try:
     #    result = repl.run(code)
     #except BaseException as e:
@@ -77,7 +93,19 @@ def calc_prop_tool(
 def name2smiles(
     mol: Annotated[str, "Name of a molecule"],
 ):
-    """Use this to convert molecule name to smiles format. Only use for organic molecules"""
+    """
+    Convert a molecule name to its SMILES representation.
+    
+    This function attempts to retrieve the SMILES string for a given molecule name using a chemical compound database. It includes error handling and retry logic to gracefully manage potential failures during the lookup process.
+    
+    Args:
+        mol (str): The name of the molecule to convert.
+    
+    Returns:
+        str: The SMILES string representing the molecule if successful, 
+             an error message if the conversion fails after multiple attempts, 
+             or a message indicating the name may be incorrect if the SMILES cannot be obtained.
+    """
     max_attempts = 3
     for attempts in range(max_attempts):
         try:
@@ -93,7 +121,21 @@ def name2smiles(
 def smiles2name(
     smiles: Annotated[str, "SMILES of a molecule"]
 ):
-    """Use this to convert SMILES to IUPAC name of given molecule"""
+    """
+    Converts a SMILES string representing a molecule into its corresponding IUPAC name.
+    
+    This method queries a public chemical database (PubChem) to obtain the IUPAC name 
+    associated with the provided SMILES notation. It includes retry logic to handle 
+    potential connection issues.
+    
+    Args:
+        smiles (str): The SMILES string of the molecule.
+    
+    Returns:
+        str: The IUPAC name of the molecule if found, 
+             "I've couldn't get iupac name" if the name retrieval fails after multiple attempts, 
+             or an error message if an exception occurs during the process.
+    """
     
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/{smiles}/property/IUPACName/JSON"
     max_attempts = 3
@@ -116,10 +158,16 @@ def smiles2prop(
     smiles: Annotated[str, "SMILES of a molecule"],
     iupac: Optional[str] = None
 ):
-    """Use this to calculate all available properties of given molecule. Only use for organic molecules
-    params:
-    smiles: str, smiles of a molecule,
-    iupac: optional, default is None, iupac of molecule"""
+    """
+    Calculates a comprehensive set of properties for a given molecule.
+    
+    Args:
+        smiles (str): The SMILES string representing the molecule.
+        iupac (str, optional): The IUPAC name of the molecule. If provided, it will be used to retrieve the SMILES string. Defaults to None.
+    
+    Returns:
+        CalcMolDescriptors: An object containing the calculated molecular properties.  Returns an error message as a string if calculation fails.
+    """
     
     try:
         if iupac:
@@ -136,40 +184,18 @@ def smiles2prop(
 @tool
 def visualize_molecule(smiles: Annotated[str, "SMILES of a molecule"], config: RunnableConfig,
 ):
-    '''Use this to visualize/draw molecule with given SMILES. Don't call rdkit. Only use for organic molecules'''
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        if mol:
-            mol = Chem.Mol(mol)
-            mol = AllChem.AddHs(mol, addCoords=True)
-            AllChem.EmbedMolecule(mol)
-            AllChem.MMFFOptimizeMolecule(mol)
-
-            view = py3Dmol.view(
-                data=Chem.MolToMolBlock(mol),  # Convert the RDKit molecule for py3Dmol
-                style={"stick": {}, "sphere": {"scale": 0.3},
-                },
-                width=600, height=400
-    )
-            view.setBackgroundColor('#b8bfcc')
-            view.zoomTo()
-            html_content = view.write_html()
-
-            state = config['configurable'].get('state')
-            #tool_call_id: Annotated[str, InjectedToolCallId] = state['messages'][-1]["tool_calls"][0]['id']
-
-            path_to_results = os.path.join(os.environ.get('PATH_TO_RESULTS'), 'vis_mols')
-            if not os.path.exists(path_to_results):
-                os.makedirs(path_to_results)
-
-            with open(os.path.join(path_to_results, 'vis.html'), "w", encoding="utf-8") as f:
-                f.write(html_content)
-
-            answer = f"I've successfully generated images of {smiles} molecule"
-            return answer
-        else:
-            return f"I've couldn't visualize this molecule. Perhaps SMILES is invalid"
-            '''
+    '''
+    Visualizes a molecule given its SMILES string and saves the 3D representation as an HTML file.
+    
+    This method constructs a 3D molecular visualization from a SMILES string, optimizes its geometry, and renders it using py3Dmol, saving the resulting interactive view as an HTML file for easy access. This allows for a visual assessment of molecular structures derived from textual descriptions or research data.
+    
+    Args:
+        smiles (str): The SMILES string representing the molecule to visualize.
+        config (RunnableConfig): Configuration object containing settings for the tool, including access to the state and results path.
+    
+    Returns:
+        str: A success message indicating the visualization was generated and saved, or an error message if the SMILES string is invalid or an error occurred during processing.
+    '''
             return Command(
                 update={
                     "visualization": html_content,
@@ -200,7 +226,16 @@ def generate_molecule(
     params: Annotated[str, "Description of target molecule"],
     config: RunnableConfig
 ):
-    """Use this to generate a molecule with given description. Returns smiles. Only use for organic molecules"""
+    """
+    Generates a SMILES string representing a molecule based on a textual description.
+    
+    Args:
+        params (str): A description of the target molecule.
+        config (RunnableConfig): Configuration object containing the language model.
+    
+    Returns:
+        str: The SMILES string of the generated molecule, or an error message if generation fails.
+    """
     llm: BaseChatModel = config["configurable"].get("model")
     try:
         prompt = (

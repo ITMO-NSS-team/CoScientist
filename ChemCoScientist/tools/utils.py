@@ -1,15 +1,21 @@
 import base64
 import os
+import pandas as pd
 
 from PIL import Image
 
 
 def convert_to_base64(image_file_path):
     """
-    Convert PIL images to Base64 encoded strings
-
-    :param pil_image: PIL image
-    :return: Re-sized Base64 string
+    Convert an image file to a Base64 encoded string.
+    
+        :param image_file_path: Path to the image file.
+        :return: Base64 encoded string of the image.
+    
+        This method facilitates image processing by converting them into a string representation 
+        suitable for storage or transmission, ensuring compatibility across different systems 
+        and avoiding potential data loss during transfer. It achieves this by temporarily 
+        saving the image to a file, encoding it, and then removing the temporary file.
     """
     pil_image = Image.open(image_file_path)
     pil_image.save("tmp.png", format="png")
@@ -22,9 +28,17 @@ def convert_to_base64(image_file_path):
 
 def convert_to_html(img_base64):
     """
-    Disply base64 encoded string as image
-
-    :param img_base64:  Base64 string
+    Converts a base64 encoded string into an HTML image tag for display.
+    
+    This allows embedding images directly within a web page or rich text environment 
+    without requiring separate image files. The method constructs an `<img>` tag 
+    with the base64 string embedded as the image source.
+    
+    Args:
+        img_base64 (str): The base64 encoded string representing the image data.
+    
+    Returns:
+        str: An HTML string representing the image tag with the base64 data as the source.
     """
     # Create an HTML img tag with the base64 string as the source
     image_html = (
@@ -33,15 +47,26 @@ def convert_to_html(img_base64):
     return image_html
 
 
-import pandas as pd
-
-
 def filter_valid_strings(
     df: pd.DataFrame, column_name: str, max_length: int = 200
 ) -> pd.DataFrame:
     """
-    Removes molecules longer than 200 characters.
-
+    Filters a DataFrame to include only rows where the specified column contains strings of valid length.
+    
+    This function ensures data quality by removing entries that do not conform to length requirements,
+    preventing potential issues during downstream analysis or processing. It checks if the column exists,
+    verifies that the values are strings, and then filters based on a maximum length.
+    
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        column_name (str): The name of the column to filter.
+        max_length (int, optional): The maximum allowed length for strings in the column. Defaults to 200.
+    
+    Returns:
+        pd.DataFrame: A new DataFrame containing only the rows where the specified column 
+                      contains strings with a length less than or equal to `max_length`.
+                      Returns a copy of the filtered dataframe.
+    
     Example:
     -------
     >>> df = pd.DataFrame({'text': ['abc', 'def'*100, 123]})

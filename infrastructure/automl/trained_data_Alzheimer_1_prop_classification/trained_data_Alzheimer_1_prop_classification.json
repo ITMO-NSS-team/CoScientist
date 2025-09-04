@@ -1,0 +1,172 @@
+{
+    "total_pipeline_operations": [
+        "scaling",
+        "catboost",
+        "xgboost",
+        "lgbm",
+        "logit"
+    ],
+    "depth": 3,
+    "nodes": [
+        {
+            "operation_id": 2,
+            "operation_type": "scaling",
+            "operation_name": "ScalingImplementation",
+            "custom_params": {},
+            "params": {},
+            "nodes_from": [],
+            "fitted_operation_path": [
+                "fitted_operations",
+                "operation_2.pkl"
+            ],
+            "rating": null
+        },
+        {
+            "operation_id": 1,
+            "operation_type": "catboost",
+            "operation_name": "FedotCatBoostClassificationImplementation",
+            "custom_params": {
+                "n_jobs": 28,
+                "num_trees": 3000,
+                "learning_rate": 0.03,
+                "l2_leaf_reg": 0.01,
+                "bootstrap_type": "Bernoulli",
+                "grow_policy": "SymmetricTree",
+                "max_depth": 5,
+                "min_data_in_leaf": 1,
+                "one_hot_max_size": 10,
+                "fold_permutation_block": 1,
+                "boosting_type": "Plain",
+                "od_type": "Iter",
+                "od_wait": 100,
+                "max_bin": 32,
+                "feature_border_type": "GreedyLogSum",
+                "nan_mode": "Min",
+                "verbose": false,
+                "allow_writing_files": false,
+                "use_eval_set": true,
+                "use_best_model": true,
+                "enable_categorical": true
+            },
+            "params": {
+                "n_jobs": 28,
+                "num_trees": 3000,
+                "learning_rate": 0.03,
+                "l2_leaf_reg": 0.01,
+                "bootstrap_type": "Bernoulli",
+                "grow_policy": "SymmetricTree",
+                "max_depth": 5,
+                "min_data_in_leaf": 1,
+                "one_hot_max_size": 10,
+                "fold_permutation_block": 1,
+                "boosting_type": "Plain",
+                "od_type": "Iter",
+                "od_wait": 100,
+                "max_bin": 32,
+                "feature_border_type": "GreedyLogSum",
+                "nan_mode": "Min",
+                "verbose": false,
+                "allow_writing_files": false,
+                "use_eval_set": true,
+                "use_best_model": true,
+                "enable_categorical": true
+            },
+            "nodes_from": [
+                2
+            ],
+            "fitted_operation_path": [
+                "fitted_operations",
+                "operation_1.pkl"
+            ],
+            "rating": null
+        },
+        {
+            "operation_id": 3,
+            "operation_type": "xgboost",
+            "operation_name": "FedotXGBoostClassificationImplementation",
+            "custom_params": {
+                "n_jobs": 28,
+                "verbosity": 0,
+                "booster": "gbtree",
+                "tree_method": "auto",
+                "enable_categorical": true,
+                "use_eval_set": true,
+                "early_stopping_rounds": 30
+            },
+            "params": {
+                "n_jobs": 28,
+                "verbosity": 0,
+                "booster": "gbtree",
+                "tree_method": "auto",
+                "enable_categorical": true,
+                "use_eval_set": true,
+                "early_stopping_rounds": 30
+            },
+            "nodes_from": [
+                2
+            ],
+            "fitted_operation_path": [
+                "fitted_operations",
+                "operation_3.pkl"
+            ],
+            "rating": null
+        },
+        {
+            "operation_id": 4,
+            "operation_type": "lgbm",
+            "operation_name": "FedotLightGBMClassificationImplementation",
+            "custom_params": {
+                "boosting_type": "gbdt",
+                "max_depth": -1,
+                "bagging_fraction": 0.85,
+                "extra_trees": false,
+                "enable_categorical": true,
+                "use_eval_set": true,
+                "early_stopping_rounds": 30,
+                "n_jobs": 28,
+                "verbose": -1
+            },
+            "params": {
+                "boosting_type": "gbdt",
+                "max_depth": -1,
+                "bagging_fraction": 0.85,
+                "extra_trees": false,
+                "enable_categorical": true,
+                "use_eval_set": true,
+                "early_stopping_rounds": 30,
+                "n_jobs": 28,
+                "verbose": -1
+            },
+            "nodes_from": [
+                2
+            ],
+            "fitted_operation_path": [
+                "fitted_operations",
+                "operation_4.pkl"
+            ],
+            "rating": null
+        },
+        {
+            "operation_id": 0,
+            "operation_type": "logit",
+            "operation_name": "LogisticRegression",
+            "custom_params": {},
+            "params": {},
+            "nodes_from": [
+                1,
+                3,
+                4
+            ],
+            "fitted_operation_path": [
+                "fitted_operations",
+                "operation_0.pkl"
+            ],
+            "rating": null
+        }
+    ],
+    "preprocessing": [
+        "preprocessing",
+        "data_preprocessor.pkl"
+    ],
+    "descriptive_id": "((/n_scaling;)/n_catboost_{'n_jobs': 28, 'num_trees': 3000, 'learning_rate': 0.03, 'l2_leaf_reg': 0.01, 'bootstrap_type': 'Bernoulli', 'grow_policy': 'SymmetricTree', 'max_depth': 5, 'min_data_in_leaf': 1, 'one_hot_max_size': 10, 'fold_permutation_block': 1, 'boosting_type': 'Plain', 'od_type': 'Iter', 'od_wait': 100, 'max_bin': 32, 'feature_border_type': 'GreedyLogSum', 'nan_mode': 'Min', 'verbose': False, 'allow_writing_files': False, 'use_eval_set': True, 'use_best_model': True, 'enable_categorical': True};;(/n_scaling;)/n_lgbm_{'boosting_type': 'gbdt', 'max_depth': -1, 'bagging_fraction': 0.85, 'extra_trees': False, 'enable_categorical': True, 'use_eval_set': True, 'early_stopping_rounds': 30, 'n_jobs': 28, 'verbose': -1};;(/n_scaling;)/n_xgboost_{'n_jobs': 28, 'verbosity': 0, 'booster': 'gbtree', 'tree_method': 'auto', 'enable_categorical': True, 'use_eval_set': True, 'early_stopping_rounds': 30};)/n_logit"
+}

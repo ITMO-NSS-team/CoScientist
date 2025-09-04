@@ -1,0 +1,14 @@
+services:
+  streamlit-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: chem-assistant-4
+    container_name: chem-assistant-4
+    ports:
+      - "8505:8501"
+    volumes:
+      - /var/essdata/llm/chemcoscientist/pubchemcoscientist/:/app/PaperAnalysis/
+    environment:
+      - PYTHONPATH=/app
+    restart: unless-stopped

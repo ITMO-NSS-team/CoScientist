@@ -36,6 +36,20 @@ USE_S3 = os.getenv("USE_S3") == "True"
 
 
 def parse_with_marker(paper_name: str, use_llm: bool=False) -> (str, Path):
+    """
+    Parses a paper to extract structured information using a marker-based approach.
+    
+    This method converts a PDF paper to HTML, optionally enhances parsing with an LLM, and saves the results.
+    It facilitates the extraction of text and images for further analysis and querying.
+    
+    Args:
+        paper_name (str): The name of the paper file (PDF).
+        use_llm (bool, optional): A boolean flag indicating whether to utilize the LLM service during parsing. Defaults to False.
+    
+    Returns:
+        tuple: A tuple containing the stem of the paper name (without extension) and the path to the output directory 
+               where the rendered HTML and associated images are saved.
+    """
     config = {
         "output_format": "html",
         "use_llm": use_llm,
@@ -62,9 +76,20 @@ def parse_with_marker(paper_name: str, use_llm: bool=False) -> (str, Path):
     return file_name.stem, output_dir
 
 
-def clean_up_html(
-        doc_dir: Path, file_name: str, html: str, s3_service: S3BucketService = None, paper_s3_prefix: str = None
-) -> (str, dict):
+
+def clean_up_html(doc_dir: Path, file_name: Path, html: str) -> str:
+    """
+    Cleans up HTML content by removing irrelevant sections like acknowledgements and references, and processes images to either remove them or replace them with extracted tables.
+    
+    Args:
+        doc_dir (Path): The directory containing the document.
+        file_name (Path): The name of the HTML file.
+        html (str): The HTML content as a string.
+    
+    Returns:
+        str: The cleaned HTML content as a string, potentially with images replaced by tables.
+    """
+
     
     soup = BeautifulSoup(html, "lxml")
     
@@ -151,6 +176,26 @@ def clean_up_html(
     
 
 def html_chunking(html_string: str, paper_name: str) -> list:
+    """
+    Chunks an HTML string into semantic passages for efficient information retrieval.
+    
+    This method splits an HTML string into smaller, meaningful chunks based on the
+    structure of the document, preserving semantic elements like headers, lists, and
+    tables. This allows for targeted analysis and answering of questions related to
+    the content.  Each chunk is enriched with metadata about images present and its
+    source document.
+    
+    Args:
+        html_string (str): The HTML string representing the paper content.
+        paper_name (str): The name of the paper associated with the HTML string.
+    
+    Returns:
+        list: A list of Document objects, where each object represents a chunk of the
+              HTML. Each Document has a 'page_content' (string) attribute holding
+              the text of the chunk and a 'metadata' (dictionary) attribute
+              containing 'imgs_in_chunk' (string) with image URLs found in the chunk,
+              and 'source' (string) indicating the paper name with ".pdf" extension.
+    """
     
     def custom_table_extractor(table_tag):
         return str(table_tag).replace("\n", "")
@@ -177,6 +222,18 @@ def html_chunking(html_string: str, paper_name: str) -> list:
 
 
 def extract_img_url(doc_text: str, p_name: str):
+    """
+    Extracts image URLs from a document text related to scientific papers.
+    
+    This method identifies image references within the text and constructs their full paths for access. It focuses on JPEG images specifically referenced using a specific markdown-like syntax.
+    
+    Args:
+        doc_text: The text of the scientific document to analyze.
+        p_name: The name of the project or paper, used to organize image paths.
+    
+    Returns:
+        list: A list of strings, where each string is a full path to an image extracted from the document, constructed using the project path and the image filename.
+    """
     pattern = r'!\[image:([^\]]+\.jpeg)\]\(([^)]+\.jpeg)\)'
     matches = re.findall(pattern, doc_text)
     if USE_S3:

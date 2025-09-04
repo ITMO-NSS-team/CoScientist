@@ -18,14 +18,16 @@ conf = {"url_pred": "http://10.64.4.247:81", "url_gen": "http://10.32.2.2:94"}
 
 @tool
 def get_state_from_server(url: str = "pred") -> Union[dict, str]:
-    """Get information about all available models (cases),
-    their status (training, trained), description, metrics.
-
-    Important note: if the returned dictionary has the status key not Training, Trained, None, but text content.
-    Then an error occurred. And this is its description. Notify the user about it.
-
+    """
+    Retrieves the current status and information about available models from the server.
+    
+    This method checks the status of models – whether they are in a training state, have been trained, or are pending – and provides details about their descriptions and associated metrics. It facilitates monitoring the readiness and state of different model deployments. In case of a server error, it returns an appropriate error message.
+    
     Args:
-        url (str): Flag for server, for predictive is 'pred', for generative is 'gen'
+        url (str, optional): Specifies the server endpoint. Use 'pred' for predictive models or 'gen' for generative models. Defaults to "pred".
+    
+    Returns:
+        dict or str: A dictionary containing model state information (status, description, metrics) if successful.  Returns a string "Server error" if a server-side error (status code 500) occurs.
     """
     if url == "pred":
         url = conf["url_pred"]
@@ -43,15 +45,18 @@ def get_state_from_server(url: str = "pred") -> Union[dict, str]:
 
 @tool
 def get_case_state_from_server(case: str, url: str = "pred") -> Union[dict, str]:
-    """Get information about a specific case/model (if found),
-    its status (in training, trained), metrics, etc.
-
-    Important note: if the returned dictionary has the status key not Training, Trained, None, but text content.
-    Then an error occurred. And this is its description. Notify the user about it.
-
+    """
+    Retrieve the current status and metrics for a specific case/model from the server.
+    
+    This method queries the server to determine the state of a given case (e.g., 'Training', 'Trained', or details of an error if one occurred). It allows checking the progress or result of a model training or prediction process.
+    
     Args:
-        case (str): Name of case
-        url (str): Flag for server, for predictive is 'pred', for generative is 'gen'
+        case (str): The name of the case/model to query.
+        url (str, optional):  Specifies the server endpoint. Use 'pred' for predictive models and 'gen' for generative models. Defaults to "pred".
+    
+    Returns:
+        dict: A dictionary containing the case's state and metrics if found.
+        str: An error message if the case is not found or if the server returns an error.  If the 'status' key in the dictionary contains text instead of 'Training', 'Trained', or None, it indicates an error condition.
     """
     if url == "pred":
         url = conf["url_pred"]
@@ -75,20 +80,15 @@ def predict_prop_by_smiles(
     smiles_list: List[str], case: str = "no_name_case", timeout: int = 20
 ) -> Tuple[requests.Response, dict]:
     """
-    Runs property prediction using inference-ready (previously trained) ML models. And RDKIT funcs
-    (They need to be calculated using this function, passing feature_column (if the user asks!)is:
-    'Validity', 'Brenk', 'QED', 'Synthetic Accessibility', 'LogP', 'Polar Surface Area',
-    'H-bond Donors', 'H-bond Acceptors', 'Rotatable Bonds', 'Aromatic Rings',
-    'Glaxo', 'SureChEMBL', 'PAINS'.
-    They are calculated automatically (by simply func) if they fall into arg: 'feature_column'.
-
+    Predicts molecular properties using pre-trained machine learning models. This function facilitates rapid assessment of molecule characteristics by sending SMILES representations to a prediction server.
+    
     Args:
-        smiles_list (List[str]): A list of molecules in SMILES format.
-        case (str, optional): Name of model (model names can be obtained by calling 'get_state_from_server').
-        timeout (int, optional): The timeout duration (in minutes).
-
+        smiles_list (List[str]): A list of molecules represented in SMILES format for property prediction.
+        case (str, optional): Specifies the model to use for prediction. Defaults to "no_name_case".  Available models can be retrieved using 'get_state_from_server'.
+        timeout (int, optional): Sets a time limit (in minutes) for the prediction request. Defaults to 20.
+    
     Returns:
-        Tuple[requests.Response, dict]: A tuple containing the HTTP response object and the parsed JSON response.
+        Tuple[requests.Response, dict]: A tuple containing the HTTP response from the prediction server and the parsed JSON data representing the predicted properties.
     """
     url = conf["url_pred"] + "/predict_ml"
     params = {"case": case, "smiles_list": smiles_list, "timeout": timeout}
@@ -122,20 +122,27 @@ def train_gen_with_data(
     **kwargs,
 ):
     """
-    Trains a generative deep learning model using user-provided or prepared by a special agent dataset.
-
+    Trains a generative deep learning model to learn relationships between molecular structures and their properties from a provided dataset.
+    
+    This method prepares data from a CSV or Excel file, containing SMILES strings and associated properties, and sends it to a server for model training.
+    The trained model can then be used to generate new molecules with desired characteristics.
+    
     Args:
-        case (str): A name of case.
-        data_path (str): Path to data for training (in csv or excel format). Must consist SMILES!
-        feature_column (list): Names of columns with features (input data) for training. Default is ['smiles'].
-        target_column (list): Names of columns (properties) with target data for training. All propreties from dataframe you want to calculate in the end
-        regression_props (list): Names of columns with data for regression tasks. Skip if you dont need regression!
-        classification_props (list): Names of columns with data for classification tasks. Skip if you dont need classification!
-        description (str): Description of model/case.
-        timeout (int): Timeout for training in minutes.
-        url (str): URL of the server to send the training request to.
-        fine_tune (bool): Set alvays to False.
-        samples (int): Number of samples for validation. Default is 10.
+        case (str): A name for the training case, used for identification.
+        data_path (str): Path to the data file (CSV or Excel) containing molecular data. The file must include SMILES strings.
+        feature_column (list): List of column names representing the molecular features (inputs). Defaults to ['smiles'].
+        target_column (list): List of column names representing the properties to be predicted (targets).
+        regression_props (list): List of column names representing properties to be predicted using regression.
+        classification_props (list): List of column names representing properties to be predicted using classification.
+        description (str): A description of the model or training case.
+        timeout (int): Training timeout in minutes.
+        url (str): URL of the server endpoint for training the model. Defaults to a configured URL.
+        fine_tune (bool):  A flag indicating whether to fine-tune an existing model. Defaults to True.
+        n_samples (int): Number of samples to use for validation during training. Defaults to 10.
+        **kwargs: Additional keyword arguments to be passed to the training process.
+    
+    Returns:
+        None
     """
     start_time = time.time()
     try:
@@ -179,24 +186,30 @@ def train_ml_with_data(
     timeout=5,
 ) -> Union[bool, str]:
     """
-    Trains a predictive machine learning model using user-provided or prepared by a special agent dataset.
-
-    This function reads a dataset from a specified file, processes it into a dictionary,
-    and sends it to a remote server for training. The training process runs asynchronously
-    using a separate process.
-
+    Trains a machine learning model using a provided dataset to enable chemical property prediction.
+    
+    This function prepares data from a CSV or Excel file and sends it to a remote server 
+    for model training. The process runs asynchronously to avoid blocking the main application. 
+    The trained model can then be used to predict properties of new chemical compounds.
+    
     Args:
-        case (str, optional): Name of model.
-        data_path (str, optional): Path to the CSV file containing the dataset.
-        feature_column (list, optional): The name of the column containing the input features. Default is "Smiles".
-        target_column (list, optional): All propreties from dataframe you want to calculate in the end.
-        regression_props (list, optional): Column names with data for regression tasks. Skip if you dont need regression!
-        classification_props (list, optional): Column name with data for classification tasks. Skip if you dont need classification!
-        timeout (int, optional): The timeout duration (in minutes) for the request.
-        description (str): Description of model/case
-
+        case (str, optional): Name of the model being trained. Defaults to "No_name".
+        data_path (str, optional): Path to the CSV or Excel file containing the dataset. 
+                                    Defaults to "automl/data/data_4j1r.csv".
+        feature_column (list, optional): The name of the column containing the input features (e.g., SMILES strings). 
+                                          Defaults to ["Smiles"].
+        target_column (list, optional):  List of column names representing the properties to be predicted. 
+                                          Defaults to ["Docking score"].
+        regression_props (list, optional): Column names containing data for regression tasks.  
+                                            Skip if no regression is needed. Defaults to ["Docking score"].
+        classification_props (list, optional): Column names containing data for classification tasks.
+                                              Skip if no classification is needed. Defaults to [].
+        timeout (int, optional): The timeout duration (in minutes) for the request. Defaults to 5.
+        description (str): A description of the model or training case. Defaults to "".
+    
     Returns:
-        bool (succces or not)"""
+        bool: True if the training process was initiated successfully, False otherwise.
+    """
     start_time = time.time()
     try:
         df = pd.read_csv(
@@ -238,6 +251,25 @@ def ml_dl_training(
     regression_props=["docking_score"],
     classification_props=[],
 ):
+    """
+    Trains machine learning and deep learning models for a given case.
+    
+    This method initiates the training of machine learning (ML) and generative (Gen) models
+    using provided data, and actively monitors their progress by polling a server for completion status.
+    This ensures models are fully trained before proceeding, enabling tasks such as property prediction
+    and molecule generation based on the data.
+    
+    Args:
+        case (str): The identifier for the case to train the models for.
+        path (str): The path to the data used for training.
+        feature_column (list[str], optional): The name(s) of the column(s) to use as features. Defaults to ["canonical_smiles"].
+        target_column (list[str], optional): The name(s) of the column(s) to use as targets. Defaults to ["docking_score"].
+        regression_props (list[str], optional): The name(s) of the regression properties. Defaults to ["docking_score"].
+        classification_props (list[str], optional): The name(s) of the classification properties. Defaults to [].
+    
+    Returns:
+        None
+    """
     ml_ready = False
     train_ml_with_data(
         case=case,
@@ -277,6 +309,26 @@ def ml_dl_training(
     regression_props=["docking_score"],
     classification_props=[],
 ):
+    """
+    Trains machine learning and deep learning models for a given case.
+    
+    This method trains both machine learning and generative models on provided data.
+    It first trains a machine learning model, monitors its progress until completion,
+    and then proceeds to train a generative model using the same data.
+    This sequential training allows leveraging the initial model to inform and improve
+    the generative process for downstream tasks.
+    
+    Args:
+        case (str): The identifier for the training case.
+        path (str): The path to the data used for training.
+        feature_column (list, optional): The name of the column containing features. Defaults to ["canonical_smiles"].
+        target_column (list, optional): The name of the column containing target variables. Defaults to ["docking_score"].
+        regression_props (list, optional): List of properties to use for regression. Defaults to ["docking_score"].
+        classification_props (list, optional): List of properties to use for classification. Defaults to [].
+    
+    Returns:
+        None
+    """
     ml_ready = False
     train_ml_with_data(
         case=case,
@@ -316,6 +368,24 @@ def ml_dl_training(
     regression_props=["docking_score"],
     classification_props=[],
 ):
+    """
+    Trains machine learning and deep learning models for a given case.
+    
+    This method trains both machine learning and generative models based on the provided data, 
+    with the generative model building upon the insights gained from the initial machine learning phase.
+    It continuously checks the status of the ML model training and then proceeds to train the generative model once the ML model is ready.
+    
+    Args:
+        case (str): The identifier for the case to train models for.
+        path (str): The path to the data used for training.
+        feature_column (list, optional): The column(s) to use as features for the models. Defaults to ["canonical_smiles"].
+        target_column (list, optional): The column(s) to use as targets for the models. Defaults to ["docking_score"].
+        regression_props (list, optional): The properties to use for regression modeling. Defaults to ["docking_score"].
+        classification_props (list, optional): The properties to use for classification modeling. Defaults to [].
+    
+    Returns:
+        None
+    """
     ml_ready = False
     train_ml_with_data(
         case=case,
@@ -357,17 +427,20 @@ def just_ml_training(
     classification_props: list = [],
 ) -> bool:
     """
-    Launch training of ONLY ML-model (predictive).
-
-    Use only as a last resort!
-
+    Trains a machine learning model for predicting molecular properties.
+    
+    This method prepares data, validates its integrity, and initiates the training process using the provided dataset and specified properties.
+    
     Args:
-        case (str): Name of model.
-        path (str): Path to the CSV file containing the dataset.
-        feature_column (list): The name of the column containing the input features. You must be sure that such a column exists!
-        target_column (list): All propreties from dataframe you want to calculate in the end. This field cannot be left blank (no empty list)!
-        regression_props (list, optional): Column names with data for regression tasks. Fill in the list! It should duplicate feature_column.
-        classification_props (list, optional): Column name with data for classification tasks. Set '[]' if you dont need classification!
+        case (str): A unique identifier for the model being trained.
+        path (str): The file path to the dataset (CSV or Excel).
+        feature_column (list, optional):  The name(s) of the column(s) containing the molecular features. Defaults to ["canonical_smiles"].
+        target_column (list): The name(s) of the column(s) representing the properties to be predicted.  Must contain at least one element.
+        regression_props (list, optional): The name(s) of the column(s) used for regression tasks. Defaults to ["docking_score"].  Should duplicate `feature_column` if used.
+        classification_props (list, optional): The name(s) of the column(s) used for classification tasks. Defaults to [].  Set to an empty list if classification is not required.
+    
+    Returns:
+        bool: True upon successful initiation of the training process.  Raises exceptions if data validation fails.
     """
 
     if regression_props == [] and classification_props == []:
@@ -429,11 +502,17 @@ def generate_mol_by_case(
     case: str = "Alzheimer",
     n_samples: int = 10,
 ) -> dict:
-    """Runs molecules generation using inference-ready (previously trained) generative models.
-
+    """
+    Generates molecules based on a specified model and quantity.
+    
+    This method facilitates the creation of new molecular structures using pre-trained generative models. It sends a request to a remote server to perform the generation and returns the results.
+    
     Args:
-        case (str, optional): Name of model (model names can be obtained by calling 'get_state_from_server').
-        n_samples (int, optional): Number of molecules to generate. Default is 1
+        case (str, optional): The name of the generative model to use.  Available model names can be retrieved using `get_state_from_server`. Defaults to "Alzheimer".
+        n_samples (int, optional): The number of molecules to generate. Defaults to 10.
+    
+    Returns:
+        dict: A dictionary containing the generated molecules.
     """
     url = conf["url_gen"] + "/generate_gen_models_by_case"
 
@@ -460,19 +539,27 @@ def run_ml_dl_training_by_daemon(
     classification_props: list = [],
 ) -> Union[bool, str]:
     """
-    Simultaneously starts training the predictive and generative models (this is normal
-    if the user asks for only one thing).
-    The status can be checked with "get_state_case_from_server".
-
+    Initiates a machine learning and deep learning training process in the background, utilizing the provided dataset and configuration. 
+    This process prepares models for predicting chemical properties or classifying molecules based on input features. 
+    The training status can be monitored separately using the "get_state_case_from_server" function.
+    
     Args:
-        case (str): Name of model.
-        path (str): Path to the CSV file containing the dataset.
-        feature_column (list): The name of the column containing the input features. You must be sure that such a column exists!
-        target_column (list): All propreties from dataframe you want to calculate in the end. This field cannot be left blank (no empty list)!
-        regression_props (list, optional): Column names with data for regression tasks. Fill in the list! It should duplicate feature_column.
-        classification_props (list, optional): Column name with data for classification tasks. Set '[]' if you dont need classification!
-
-    note: Either regression_props or classification_props must be filled in.
+        case (str): A unique identifier for the training case, used to track the process.
+        path (str): The file path to the dataset, which should be a CSV or Excel file.
+        feature_column (list, optional):  A list of column names representing the input features for the model. Defaults to ["smiles"].
+        target_column (list, optional): A list of column names specifying the properties to be predicted or classified. This list must not be empty. Defaults to ["docking_score"].
+        regression_props (list, optional): A list of column names used for regression tasks. This list should generally align with the feature columns. Defaults to ["docking_score"].
+        classification_props (list, optional): A list of column names used for classification tasks. Use an empty list if classification is not required. Defaults to [].
+    
+    Returns:
+        bool: True if the training process was successfully initiated, False otherwise.
+        str:  If the process fails, returns a string describing the error.
+    
+    Raises:
+        ValueError: If target_column or feature_column are empty, or if specified columns are not found in the dataset, or if the dataset is too small (less than 300 samples).
+        FileNotFoundError: If the specified data file does not exist.
+    
+    Note: At least one of regression_props or classification_props must be specified for the training to proceed.
     """
     if isinstance(feature_column, str):
         feature_column = [feature_column]
@@ -561,4 +648,4 @@ agents_tools = [
     predict_prop_by_smiles,
 ]
 if __name__ == "__main__":
-    run_ml_dl_training_by_daemon('sars_cov', '/Users/alina/Desktop/ITMO/ChemCoScientist/ChemCoScientist/data_store/datasets/users_dataset.csv', 'smiles', 'IC50', ['IC50'])
+    run_ml_dl_training_by_daemon('sars_cov', './data_store/datasets/users_dataset.csv', 'smiles', 'IC50', ['IC50'])

@@ -5,6 +5,13 @@ import operator
 
 
 class PlanExecute(TypedDict):
+    """
+    Plan and execute a sequence of steps.
+    
+        This class manages the planning and execution of tasks, maintaining a history of past steps
+        and handling responses, visualizations, and potential language translation.
+    """
+
     input: str
     plan: List[str]
     past_steps: Annotated[List[Tuple], operator.add]

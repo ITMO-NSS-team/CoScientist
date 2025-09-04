@@ -9,6 +9,19 @@ import uuid
 
 
 def init_language():
+    """
+    Initializes the language selection interface.
+    
+    This method creates a Streamlit container with a header and a selectbox
+    allowing the user to choose the application's language for interacting with the application.
+    The selected language is stored using the 'language' key for later use.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     with st.container(border=True):
         st.header("Select language")
 
@@ -19,7 +32,17 @@ def init_language():
 
 def init_models():
     """
-    accepts data from user and initializes llm models
+    Initializes Large Language Models (LLMs) based on user preferences and selected backend.
+    
+    This method presents a user interface to select a base URL for the LLM provider (e.g., Vsegpt, Groq). 
+    Upon selection and submission, it configures the chosen backend and prepares it for use. 
+    If a backend is already initialized, it displays the name of the currently active model.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     with st.container(border=True):
         match st.session_state.language: 
@@ -69,7 +92,13 @@ def init_models():
 
 def on_provider_selected_eng(grid: GridDeltaGenerator):
     """
-    accepts provider parameters from expander
+    Presents a form to collect API keys and model selections based on the selected provider.
+    
+    Args:
+        grid (GridDeltaGenerator): A Streamlit grid object used for layout.
+    
+    Returns:
+        None
     """
     provider = st.session_state.api_base_url
 
@@ -112,7 +141,17 @@ def on_provider_selected_eng(grid: GridDeltaGenerator):
 
 def on_provider_selected_rus(grid: GridDeltaGenerator):
     """
-    accepts provider parameters from expander
+    Collects provider-specific parameters from the user via input fields.
+    
+    Args:
+        grid (GridDeltaGenerator): A Streamlit grid object used to layout the input fields.
+    
+    Returns:
+        None
+    
+    The method dynamically displays input fields for API keys (main and Tavily) and model selection
+    based on the selected provider. This allows the user to configure the connection to a specific
+    LLM provider and choose the desired models for text and image processing.
     """
     provider = st.session_state.api_base_url
 
@@ -154,6 +193,20 @@ def on_provider_selected_rus(grid: GridDeltaGenerator):
                                         placeholder="vis-meta-llama/llama-3.2-90b-vision-instruct")
 
 def init_backend():
+    """
+    Initializes the backend for the application, configuring it with necessary API keys, base URLs, and model names.
+    
+    This method retrieves configuration values from Streamlit's session state and environment variables, ensuring the application has the necessary credentials and settings to interact with various AI models and APIs. It dynamically sets default model inputs based on the selected base URL, providing a sensible starting point for users.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    
+    Initializes the following object properties:
+        backend: An instance of the App class, configured with the retrieved API keys, base URL, and model names.
+    """
     tavily_api_key = st.session_state.get('tavily_api_key')
     if tavily_api_key:
         os.environ['TAVILY_API_KEY'] = tavily_api_key
@@ -192,7 +245,13 @@ def init_backend():
 
 def init_dataset():
     """
-    Initializes dataset
+    Initializes the dataset section of the application, displaying a header and file uploader.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     dataset_files_container = st.container(border=True)
     with dataset_files_container:
@@ -205,7 +264,13 @@ def init_dataset():
 
 def _render_file_uploader():
     """
-    Renders file uploader
+    Renders a file uploader component allowing users to submit dataset files for processing.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     match st.session_state.language:
 
@@ -233,7 +298,13 @@ def _render_file_uploader():
 
 def load_dataset():
     """
-    loads submited datasets to the session state on button click
+    Loads datasets uploaded by the user into the session state.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     files = st.session_state.file_uploader
     uploaded_files = file_uploader(files)
@@ -244,7 +315,15 @@ def load_dataset():
 
 def init_images():
     """
-    initializes images
+    Initializes the image upload section within the Streamlit application.
+    
+    This section provides a header and a file uploader for users to submit image files, which are then processed as part of the document analysis workflow. The header text adapts to the user's selected language.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     images_files_container = st.container(border=True)
     with images_files_container:
@@ -257,7 +336,13 @@ def init_images():
 
 def _render_image_uploader():
     """
-    renders images uploader
+    Presents a file uploader interface to the user, allowing them to select image files for analysis.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     match st.session_state.language:
         case 'English':
@@ -288,7 +373,13 @@ def _render_image_uploader():
 
 def load_images():
     """
-    loads submitted images to the session state on button click
+    Loads images uploaded by the user into the session state for processing.
+    
+    Args:
+        None
+    
+    Returns:
+        None
     """
     files = st.session_state.images_file_uploader
     # assert max number of images, e.g. 7
@@ -306,6 +397,20 @@ def load_images():
         st.toast(f"Successfully loaded images", icon="✅")
 
 def side_bar():
+    """
+    Displays example queries in the sidebar to guide user interaction.
+    
+    This method initializes the backend and presents a sidebar containing example 
+    queries tailored to the current language setting. These examples demonstrate 
+    the types of questions the application can handle, aiding users in formulating 
+    their own inquiries.
+    
+    Args:
+        None
+    
+    Returns:
+        None
+    """
     # Display static examples at the top
     st.session_state.language = 'Русский'
     init_backend()

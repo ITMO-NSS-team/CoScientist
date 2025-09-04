@@ -1,0 +1,82 @@
+{
+    "total_pipeline_operations": [
+        "scaling",
+        "lgbmreg"
+    ],
+    "depth": 2,
+    "nodes": [
+        {
+            "operation_id": 1,
+            "operation_type": "scaling",
+            "operation_name": "ScalingImplementation",
+            "custom_params": {},
+            "params": {},
+            "nodes_from": [],
+            "fitted_operation_path": [
+                "fitted_operations",
+                "operation_1.pkl"
+            ],
+            "rating": null
+        },
+        {
+            "operation_id": 0,
+            "operation_type": "lgbmreg",
+            "operation_name": "FedotLightGBMRegressionImplementation",
+            "custom_params": {
+                "boosting_type": "gbdt",
+                "max_depth": -1,
+                "bagging_fraction": 0.8122700150265307,
+                "extra_trees": true,
+                "enable_categorical": true,
+                "use_eval_set": true,
+                "early_stopping_rounds": 7,
+                "n_jobs": 28,
+                "verbose": -1,
+                "colsample_bytree": 0.5778314187349549,
+                "force_col_wise": false,
+                "force_row_wise ": true,
+                "learning_rate": 0.15689908753536155,
+                "min_data_in_leaf": 100,
+                "num_leaves": 226,
+                "objective": "poisson",
+                "reg_alpha": 3.013502871334008e-05,
+                "reg_lambda": 0.0005369494594065792,
+                "subsample": 0.5115937659049363
+            },
+            "params": {
+                "boosting_type": "gbdt",
+                "max_depth": -1,
+                "bagging_fraction": 0.8122700150265307,
+                "extra_trees": true,
+                "enable_categorical": true,
+                "use_eval_set": true,
+                "early_stopping_rounds": 7,
+                "n_jobs": 28,
+                "verbose": -1,
+                "colsample_bytree": 0.5778314187349549,
+                "force_col_wise": false,
+                "force_row_wise ": true,
+                "learning_rate": 0.15689908753536155,
+                "min_data_in_leaf": 100,
+                "num_leaves": 226,
+                "objective": "poisson",
+                "reg_alpha": 3.013502871334008e-05,
+                "reg_lambda": 0.0005369494594065792,
+                "subsample": 0.5115937659049363
+            },
+            "nodes_from": [
+                1
+            ],
+            "fitted_operation_path": [
+                "fitted_operations",
+                "operation_0.pkl"
+            ],
+            "rating": null
+        }
+    ],
+    "preprocessing": [
+        "preprocessing",
+        "data_preprocessor.pkl"
+    ],
+    "descriptive_id": "(/n_scaling;)/n_lgbmreg_{'boosting_type': 'gbdt', 'max_depth': -1, 'bagging_fraction': 0.8122700150265307, 'extra_trees': True, 'enable_categorical': True, 'use_eval_set': True, 'early_stopping_rounds': 7, 'n_jobs': 28, 'verbose': -1, 'colsample_bytree': 0.5778314187349549, 'force_col_wise': False, 'force_row_wise ': True, 'learning_rate': 0.15689908753536155, 'min_data_in_leaf': 100, 'num_leaves': 226, 'objective': 'poisson', 'reg_alpha': 3.013502871334008e-05, 'reg_lambda': 0.0005369494594065792, 'subsample': 0.5115937659049363}"
+}

@@ -1,0 +1,7 @@
+
+# Infrastructure
+## Overview
+This module provides a collection of functions and classes designed to support automated machine learning (AutoML) workflows and the calculation of molecular properties. It focuses on data preparation, model training & prediction execution, and state management. It also provides services for converting text into numerical vector representations (embeddings) and ranking the relevance of text pairs, along with integration tests to ensure the correct operation with Chroma database interactions.
+
+## Purpose
+The primary purpose of this module is to encapsulate the core functionalities required for running AutoML pipelines, specifically tailored for molecular data. This includes preparing data from various sources, executing training and prediction processes, managing the state of these processes, interacting with a remote server for model training and prediction, analyzing scientific papers by predicting properties related to molecules, and facilitating information retrieval across a vector database. The module delivers an API endpoint for embedding texts and provides functionality for ranking strings based on their relevance, improving the quality of search results and recommendations. Furthermore, it validates the ability to store and retrieve data from the Chroma vector database and the functionality of embedding and reranking services.

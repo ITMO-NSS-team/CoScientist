@@ -8,6 +8,15 @@ from fedotllm.agents.automl import AutoMLAgent
 
 
 def main():
+    """
+    Loads configuration and state from command line arguments, prepares the environment, and generates a report using an AutoML agent.
+    
+    Args:
+      None
+    
+    Returns:
+      str: The generated report from the AutoML agent.
+    """
     config = json.loads(sys.argv[1])
     state = json.loads(sys.argv[2])
 
