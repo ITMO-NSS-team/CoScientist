@@ -8,7 +8,15 @@ from definitions import CONFIG_PATH
 
 load_dotenv(CONFIG_PATH)
 
+import os
+
 if __name__ == "__main__":
+
+    path = '/app/ChemCoScientist/data_store'
+    os.makedirs(os.path.join(path, 'datasets'), exist_ok=True)
+    os.makedirs(os.path.join(path, 'imgs'), exist_ok=True)
+    os.makedirs(os.path.join(path, 'another'), exist_ok=True)
+
     start_cleanup_thread()
     init_page()
     side_bar()

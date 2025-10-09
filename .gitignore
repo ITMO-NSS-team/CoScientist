@@ -175,3 +175,9 @@ config.env
 PaperAnalysis/
 
 .DS_Store
+
+
+tools/models
+
+*.tif
+*.pt
