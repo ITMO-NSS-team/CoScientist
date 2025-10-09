@@ -168,7 +168,7 @@ def message_handler(user_query: str, placeholder: st.delta_generator.DeltaGenera
                     print('In main graph section')
                     # result = st.session_state.backend.invoke(input=inputs, config=config)
                     try:
-                        answers = [{'plan': [['find info'], ['calculate_data', 'get_result']]}, {'response': 'hahaha'}]
+                        #answers = [{'plan': [['find info'], ['calculate_data', 'get_result']]}, {'response': 'hahaha'}]
                         #for result in answers:
                         for result in st.session_state.backend.stream(inputs, "1"):
                             print("=================new step=================")

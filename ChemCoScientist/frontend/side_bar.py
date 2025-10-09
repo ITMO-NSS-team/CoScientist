@@ -5,6 +5,7 @@ import streamlit as st
 from protollm.agents.builder import GraphBuilder
 from streamlit_extras.grid import GridDeltaGenerator, grid
 from ChemCoScientist.tools.utils import convert_to_base64
+from ChemCoScientist.logger import logger
 from ChemCoScientist.frontend.utils import file_uploader, clean_folder
 from ChemCoScientist.frontend.streamlit_endpoints import process_uploaded_paper
 from definitions import ROOT_DIR
@@ -322,7 +323,7 @@ def init_backend():
 
     # it must be here !!!
     from ChemCoScientist.conf.create_conf import conf
-
+    conf['configurable']['logger'] = logger
     st.session_state.backend = GraphBuilder(conf)
 
 
