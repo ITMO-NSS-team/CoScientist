@@ -24,14 +24,14 @@ poetry run pip install --no-deps git+https://github.com/aimclub/ProtoLLM.git@mai
 4. Turn on ITMO VPN to get access to all necessary services (ChromaDB, embedding and reranker services, MinIO (S3), AutoML, and generative models)
 
 ## Run the Project 
-*Run in CLI:*
+**Run in CLI:**
 1. Add a new query in [main_cli.py](../ChemCoScientist/main_cli.py), e.g.:
 ```
 inputs = {"input": "Generate an image of spherical nanoparticles."}
 ```
 2. Run [main_cli.py](../ChemCoScientist/main_cli.py) (it will execute the new query)
 
-*Run the GUI (Streamlit app):*
+**Run the GUI (Streamlit app):**
 1. Run `streamlit run ChemCoScientist/streamlit_app.py`
 2. The app will be available at http://localhost:8501
 
