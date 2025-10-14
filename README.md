@@ -11,7 +11,7 @@ CoScientist is a research effort focused on accelerating scientific discovery in
 - [Content](#content)
 - [Algorithms](#algorithms)
 - [Getting Started](#getting-started)
-- [Documentation](#Documentation)
+- [Documentation](#documentation)
 - [Citation](#citation)
 
 ---

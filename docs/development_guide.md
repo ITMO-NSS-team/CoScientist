@@ -1,7 +1,7 @@
 # Welcome to Contributing
 
 ## Table of Contents
-- [Development Setup](#Development Setup)
+- [Development Setup](#development-setup)
 - [Run the Project](#Run the Project)
 - [Branching Rules](#Branching Rules)
 - [Code Review](#Code Review and Pull Request Guidelines)
