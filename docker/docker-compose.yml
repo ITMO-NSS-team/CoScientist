@@ -3,8 +3,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: chem-assistant-4
-    container_name: chem-assistant-4
+    image: chem-assistant
+    container_name: chem-assistant
     ports:
       - "8505:8501"
     volumes:

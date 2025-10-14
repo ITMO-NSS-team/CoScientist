@@ -14,14 +14,14 @@ Run ChemCoScientist locally:
 
 **Prerequisites:** requires Python >=3.12,<3.13, Poetry >=2
 
-1. Clone the repository to a local directory of your choice
+1. Clone the repository to a local directory of your choice.
 2. Create a new environment and install dependencies:
 ```commandline
 poetry install
 poetry run pip install --no-deps git+https://github.com/aimclub/ProtoLLM.git@main
 ```
-3. Create a `config.env` file in the root of the project based on [example_config.env](../example_config.env)
-4. Turn on ITMO VPN to get access to all necessary services (ChromaDB, embedding and reranker services, MinIO (S3), AutoML, and generative models)
+3. Create a `config.env` file in the root of the project based on [example_config.env](../example_config.env).
+4. Turn on ITMO VPN to get access to all necessary services (ChromaDB, embedding and reranker services, MinIO (S3), AutoML, and generative models).
 
 ## Run the Project 
 **Run in CLI:**
@@ -58,7 +58,7 @@ Workflow:
 - PR author merges the PR.
 
 ## Code Style and Standards
-Code formatting is maintained using Black with its standard settings. See [black.yml](../.github/workflows/black.yml)
+Code formatting is maintained using Black with its standard settings. See [black.yml](../.github/workflows/black.yml).
 
 ## How to Run Tests
 The complete suite of tests can be found in the [tests folder](../tests). Please note that the integration tests depend on auxiliary services hosted on the ITMO servers and therefore require VPN access.
