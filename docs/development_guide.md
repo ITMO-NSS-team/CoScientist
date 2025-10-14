@@ -1,13 +1,13 @@
 # Welcome to Contributing
 
 ## Table of Contents
-- [Development Setup](## Development Setup)
-- [Run the Project](## Run the Project)
-- [Branching Rules](## Branching Rules)
-- [Code Review](## Code Review and Pull Request Guidelines)
-- [Code Style](## Code Style and Standards)
-- [Tests](## How to Run Tests)
-- [Reporting Issues](## Reporting Issues)
+- [Development Setup](#Development Setup)
+- [Run the Project](#Run the Project)
+- [Branching Rules](#Branching Rules)
+- [Code Review](#Code Review and Pull Request Guidelines)
+- [Code Style](#Code Style and Standards)
+- [Tests](#How to Run Tests)
+- [Reporting Issues](#Reporting Issues)
 
 ## Development Setup
 Run ChemCoScientist locally:
