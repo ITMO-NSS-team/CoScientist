@@ -10,8 +10,8 @@ CoScientist is a research effort focused on accelerating scientific discovery in
 
 - [Content](#content)
 - [Algorithms](#algorithms)
-- [Installation](#installation)
 - [Getting Started](#getting-started)
+- [Documentation](#Documentation)
 - [Citation](#citation)
 
 ---
@@ -25,21 +25,6 @@ CoScientist is an agent-based system designed to accelerate chemical and materia
 
 The project leverages a multi-agent system, combining Large Language Models (LLMs) with specialized tools to accelerate chemistry research. A core technique is the use of ReAct agents, which iteratively plan, act, and observe to complete complex tasks like data analysis and molecule generation. Code generation is automated using agents capable of writing and executing code, and machine learning agents perform tasks like property prediction. Furthermore, the system employs automated data retrieval from chemical databases (ChEMBL, BindingDB) and incorporates vector databases for efficient scientific literature analysis, facilitating knowledge discovery and research productivity.
 
----
-
-## Installation
-
-**Prerequisites:** requires Python >=3.11,<3.12
-
-Install CoScientist using one of the following methods:
---- 
-
-Before you begin, make sure you have set up the environment with the following commands:
-
-```commandline
-poetry install
-poetry run pip install --no-deps git+https://github.com/aimclub/ProtoLLM.git@main
-```
 ## Getting Started
 
 To start interacting with CoScientist, you can begin by simply asking it what it can do:
@@ -48,7 +33,7 @@ To start interacting with CoScientist, you can begin by simply asking it what it
 "What can you do?"
 ```
 
-Here are a few more examples of how to use CoScientist:
+Here are a few more examples of how to use ChemCoScientist:
 
 **Dataset preparation:**
 ```python
@@ -66,9 +51,12 @@ Here are a few more examples of how to use CoScientist:
 "Find out for which cases there are generative models ready for inference?"
 ```
 
-![Multi-Agent System](./diagram.png)
+## Documentation
+[Development Guide](docs/development_guide.md): Guidelines and workflows for contributing to and maintaining the codebase.
 
----
+[Installation Guide](docs/installation_guide.md): Step-by-step instructions to set up and configure all parts of the project.
+
+[Project Structure](docs/project_structure.md): Overview of the project, directory layout, and key components.
 
 ## Citation
 
