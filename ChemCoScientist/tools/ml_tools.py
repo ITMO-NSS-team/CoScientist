@@ -13,7 +13,8 @@ from smolagents import tool
 from ChemCoScientist.tools.utils import filter_valid_strings
 
 # TODO: get from load_env
-conf = {"url_pred": "http://10.64.4.247:81", "url_gen": "http://10.32.2.2:94"}
+#conf = {"url_pred": "http://10.32.2.2:293", "url_gen": "http://10.32.2.2:293"}
+conf = {"url_pred": f'{os.environ.get("ML_TOOLS_IP")}:{os.environ.get("ML_TOOLS_PORT")}', "url_gen": f'{os.environ.get("ML_TOOLS_IP")}:{os.environ.get("ML_TOOLS_PORT")}'}
 
 
 @tool
