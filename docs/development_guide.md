@@ -2,12 +2,12 @@
 
 ## Table of Contents
 - [Development Setup](#development-setup)
-- [Run the Project](#Run the Project)
-- [Branching Rules](#Branching Rules)
-- [Code Review](#Code Review and Pull Request Guidelines)
-- [Code Style](#Code Style and Standards)
-- [Tests](#How to Run Tests)
-- [Reporting Issues](#Reporting Issues)
+- [Run the Project](#run-the-project)
+- [Branching Rules](#branching-rules)
+- [Code Review](#code-review-and-pull-request-guidelines)
+- [Code Style](#code-style-and-standards)
+- [Tests](#how-to-run-tests)
+- [Reporting Issues](#reporting-issues)
 
 ## Development Setup
 Run ChemCoScientist locally:
