@@ -1,3 +1,5 @@
+from typer.cli import state
+
 from definitions import CONFIG_PATH
 from dotenv import load_dotenv
 
@@ -29,8 +31,14 @@ inputs = {"input": "What is a key advantage of electrodialysis with bipolar memb
 
 # Paper analysis
 graph = GraphBuilder(cc.conf)
-inputs = {"input": "question = 'How does the synthesis of Glionitrin A/B happen?'"}
+# inputs = {"input": "question = 'How does the synthesis of Glionitrin A/B happen?'"}
 
 if __name__ == "__main__":
     for step in graph.stream(inputs, user_id="1"):
-        print(step)
+        print(f"=====\n"
+              f"PLAN: {step['plan']}\n"
+              f"PAST_STEPS: {[f"{i[:30]}..." for i in step['past_steps']]}\n"
+              f"NEXT_STEPS: {step['next']}\n"
+              f"METADATA: {step['metadata']}\n"
+              f"=====")
+

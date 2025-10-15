@@ -40,8 +40,8 @@ coder_agent_description = """
 chemical libraries. Can perform calculations.
 """
 
-paper_analysis_node_description = """
-Agent name: paper_analysis_node
+paper_analysis_agent_description = """
+Agent name: paper_analysis_agent
 
 Purpose: Retrieve and analyze chemical science papers from the internal database.
 When to activate: User asks about chemistry articles, papers, or research findings.
@@ -106,7 +106,7 @@ additional_agents_description = (
     automl_agent_description
     + dataset_builder_agent_description
     + coder_agent_description
-    # + paper_analysis_node_description
+    + paper_analysis_agent_description
     + web_search_description
 )
 
@@ -118,7 +118,8 @@ conf = {
         "visual_model": create_llm_connector(os.environ["VISION_LLM_URL"]),
         "img_path": "image.png",
         "llm": create_llm_connector(
-            f"{os.environ['MAIN_LLM_URL']};{os.environ['MAIN_LLM_MODEL']}"
+            f"{os.environ['MAIN_LLM_URL']};{os.environ['MAIN_LLM_MODEL']}",
+            extra_body={"temperature": 0.0}
         ),
         "max_retries": 3,
         # list of scenario agents
@@ -194,7 +195,7 @@ conf = {
                 Before starting model training, check data for garbage with 'dataset_builder_agent'. 
                 If the user already provides a dataset, go straight to 'ml_dl_agent' and skip 'dataset_builder_agent' 
                 For questions about papers, articles, or research findings, plan exactly two steps: 
-                first 'paper_analysis_node', then 'web_search'. 
+                first 'paper_analysis_agent', then 'web_search'. 
                 Do not schedule any other agents for such research tasks.
                 If user asks find something in internet you have to use 'web_search'.
                 Always choose the minimal set of agents necessary for the user's request.
@@ -217,7 +218,7 @@ conf = {
                 "problem_statement": None,
                 "rules": None,
                 "additional_hints": """                
-                Never write full paths! Only file names. If 'paper_analysis_node' and 'web_search' were used,  
+                Never write full paths! Only file names. If 'paper_analysis_agent' and 'web_search' were used,  
                 present the final answer as: paper_analysis: <paper_analysis_agent result>   web_search: <web_search_node result>.
                 """,
             },

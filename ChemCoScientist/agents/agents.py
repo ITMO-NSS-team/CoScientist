@@ -20,6 +20,7 @@ from ChemCoScientist.agents.agents_prompts import (
 from ChemCoScientist.tools import chem_tools, nanoparticle_tools, paper_analysis_tools, data_tools
 from ChemCoScientist.tools.ml_tools import agents_tools as automl_tools
 
+from ChemCoScientist.agents.agents_prompts import paper_agent_prompt
 from definitions import ROOT_DIR
 
 
@@ -278,9 +279,9 @@ def paper_analysis_agent(state: dict, config: dict) -> Command:
 
     # TODO: update this when proper frontend is added
     try:
-        current_prompt = f'{worker_prompt}/n session_id = {st.session_state.session_id}'
+        current_prompt = f'{paper_agent_prompt}\n session_id = {st.session_state.session_id}'
     except:
-        current_prompt = f'{worker_prompt}/n session_id is not needed in this case, pass None'
+        current_prompt = f'{paper_agent_prompt}\nsession_id is not needed in this case, pass None'
 
     paper_analysis_agent = create_react_agent(
         llm, paper_analysis_tools, state_modifier=current_prompt

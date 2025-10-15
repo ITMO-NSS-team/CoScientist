@@ -40,7 +40,8 @@ def explore_chemistry_database(task: str) -> dict:
     try:
         print('Running explore_chemistry_database tool...')
         print(f'task: {task}')
-        return process_question(task)
+        paper_store = ChromaDBPaperStore()
+        return process_question(task, paper_store)
     except Exception as e:
         logger.error(f'explore_chemistry_database ERROR: {e}')
         return {'answer': 'Could not extract any data from DB.'}

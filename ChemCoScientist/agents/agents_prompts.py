@@ -45,3 +45,10 @@ memory {summary};
 
 worker_prompt = "You are a helpful assistant. You can use provided tools. \
     If there is no appropriate tool, or you can't use one, answer yourself"
+
+paper_agent_prompt = """
+You are a helpful assistant. You can use provided tools. If there is no appropriate tool, or you can't use anyone, 
+answer yourself.
+The most useful tool is 'explore_chemistry_database'. Call to get a lot of domain chemistry data. 
+It is strictly forbidden to call 'explore_my_papers' and 'select_papers' except case when user told you to call it directly.     
+"""

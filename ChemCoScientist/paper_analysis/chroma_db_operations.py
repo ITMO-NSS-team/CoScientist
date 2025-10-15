@@ -20,7 +20,8 @@ import requests
 from ChemCoScientist.paper_analysis.prompts import summarisation_prompt
 from ChemCoScientist.paper_analysis.settings import allowed_providers
 from ChemCoScientist.paper_analysis.settings import settings as default_settings
-from CoScientist.paper_parser.s3_connection import S3BucketService, s3_service
+from CoScientist.paper_parser.s3_connection import S3BucketService
+from CoScientist.paper_parser.s3_connection import s3_service as default_s3_service
 from CoScientist.paper_parser.parse_and_split import (
     clean_up_html,
     html_chunking,
@@ -211,7 +212,10 @@ class ChromaDBPaperStore:
         - reranker: Reranker model for refining search results.
     """
 
-    def __init__(self):
+    def __init__(self,
+                 sum_collection_name: str | None = None,
+                 txt_collection_name: str | None = None,
+                 img_collection_name: str | None = None):
         """
         Initializes the multimodal retriever.
 
@@ -223,9 +227,9 @@ class ChromaDBPaperStore:
         Initializes the following class fields:
             llm_url (str): The URL for the Large Language Model (LLM). Defaults to VISION_LLM_URL.
             client (ChromaClient): An instance of ChromaClient for interacting with the Chroma database.
-            sum_collection_name (str): The name of the Chroma collection for summaries, read from environment variables.
-            txt_collection_name (str): The name of the Chroma collection for texts, read from environment variables.
-            img_collection_name (str): The name of the Chroma collection for images, read from environment variables.
+            sum_collection_name (str): The name of the Chroma collection for summaries.
+            txt_collection_name (str): The name of the Chroma collection for texts.
+            img_collection_name (str): The name of the Chroma collection for images.
             sum_chunk_num (int): The number of chunks for summaries. Defaults to 15.
             final_sum_chunk_num (int): The number of chunks for final summaries. Defaults to 3.
             txt_chunk_num (int): The number of chunks for texts. Defaults to 15.
@@ -242,9 +246,9 @@ class ChromaDBPaperStore:
 
         self.client = ChromaClient()
 
-        self.sum_collection_name = os.getenv("SUMMARIES_COLLECTION_NAME")
-        self.txt_collection_name = os.getenv("TEXTS_COLLECTION_NAME")
-        self.img_collection_name = os.getenv("IMAGES_COLLECTION_NAME")
+        self.sum_collection_name = sum_collection_name or os.getenv("SUMMARIES_COLLECTION_NAME")
+        self.txt_collection_name = txt_collection_name or os.getenv("TEXTS_COLLECTION_NAME")
+        self.img_collection_name = img_collection_name or os.getenv("IMAGES_COLLECTION_NAME")
 
         self.sum_chunk_num = 15
         self.final_sum_chunk_num = 3
@@ -378,7 +382,7 @@ class ChromaDBPaperStore:
 
         for filename in os.listdir(image_dir):
             if filename.lower().endswith((".png", ".jpg", ".jpeg")):
-                img_path = os.path.join(image_dir, filename)
+                img_path = (Path(image_dir) / filename).as_posix()
                 if img_path in valid_paths:
                     image_descriptions.append(self._image_to_text(img_path))
                     image_paths.append(url_mapping[img_path])
@@ -428,7 +432,6 @@ class ChromaDBPaperStore:
         """
         chunks_num = chunks_num if chunks_num else self.sum_chunk_num
         final_chunks_num = final_chunks_num if final_chunks_num else self.final_sum_chunk_num
-
         raw_docs = self.client.query_chromadb(
             self.sum_collection, query, chunk_num=chunks_num, metadata_filter=meta_filter
         )
@@ -644,7 +647,7 @@ class ChromaDBPaperStore:
             None
         """
         for collection in [self.sum_collection, self.txt_collection, self.img_collection]:
-            ids_to_delete = p_store.client.query_chromadb(
+            ids_to_delete = self.client.query_chromadb(
                 collection,
                 "",
                 {"source": {"$in": [f"{paper_name}.pdf"]}},
@@ -660,7 +663,7 @@ class ChromaDBPaperStore:
 process_local_store: ChromaDBPaperStore = None
 
 
-def init_process():
+def init_process(paper_store: ChromaDBPaperStore = None):
     """
     Initializes a process-local storage for papers.
 
@@ -673,7 +676,7 @@ def init_process():
         None
     """
     global process_local_store
-    process_local_store = ChromaDBPaperStore()
+    process_local_store = paper_store or ChromaDBPaperStore()
     
 
 def clean_up_storages(embedding_storage: ChromaDBPaperStore, file_storage: S3BucketService, paper_name: str):
@@ -688,7 +691,7 @@ def clean_up_storages(embedding_storage: ChromaDBPaperStore, file_storage: S3Buc
             print(f"Error during S3 cleanup for {paper_name}: {s3_cleanup_error}")
 
 
-def process_single_document(folder_path: Path):
+def process_single_document(folder_path: Path, s3_service: S3BucketService, s3_prefix: str = None):
     """
     Processes a single document (paper) from a given folder path.
 
@@ -712,7 +715,8 @@ def process_single_document(folder_path: Path):
         clean_up_storages(process_local_store, s3_service, paper_name)
         print(f"Starting post-processing paper: {paper_name}")
         if USE_S3:
-            parsed_paper, mapping = clean_up_html(folder_path, paper_name, text, s3_service, paper_name)
+            s3_paper_name = f"{s3_prefix}/{paper_name}" if s3_prefix else paper_name
+            parsed_paper, mapping = clean_up_html(folder_path, paper_name, text, s3_service, s3_paper_name)
         else:
             parsed_paper, mapping = clean_up_html(folder_path, paper_name, text)
         print(f"Finished post-processing paper: {paper_name}")
@@ -735,7 +739,10 @@ def process_single_document(folder_path: Path):
         print(f"Cleanup completed for {paper_name}")
 
 
-def process_all_documents(base_dir: Path):
+def process_all_documents(base_dir: Path,
+                          s3_service: S3BucketService | None = None,
+                          s3_prefix: str = None,
+                          paper_store: ChromaDBPaperStore | None = None):
     """
     Processes documents within subdirectories of a given base directory in parallel.
 
@@ -748,9 +755,11 @@ def process_all_documents(base_dir: Path):
     Returns:
         None
     """
+    paper_store = paper_store or ChromaDBPaperStore()
+    s3_service = s3_service or default_s3_service
     folders = [d for d in base_dir.iterdir() if d.is_dir()]
-    with ThreadPoolExecutor(max_workers=2, initializer=init_process()) as pool:
-        pool.map(process_single_document, [folder for folder in folders])
+    with ThreadPoolExecutor(max_workers=2, initializer=init_process(paper_store)) as pool:
+        pool.map(lambda folder: process_single_document(folder, s3_service, s3_prefix), folders)
 
 
 if __name__ == "__main__":

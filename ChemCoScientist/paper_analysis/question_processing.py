@@ -15,9 +15,6 @@ load_dotenv(CONFIG_PATH)
 
 VISION_LLM_URL = os.environ["VISION_LLM_URL"]
 
-PAPER_STORE = ChromaDBPaperStore()
-
-
 def query_llm(
     model_url: str, question: str, txt_context: str, img_paths: list[str]
 ) -> tuple:
@@ -100,7 +97,7 @@ def simple_query_llm(model_url: str, question: str, pdfs: list,) -> dict:
     return {'answer': res.content}
 
 
-def process_question(question: str) -> dict:
+def process_question(question: str, store: ChromaDBPaperStore) -> dict:
     """
     Processes a question by retrieving relevant text and image context from scientific papers and querying a Large Language Model (LLM) to generate an answer.
 
@@ -115,7 +112,7 @@ def process_question(question: str) -> dict:
                 'image_context' - the set of image paths identified as relevant to the question;
                 'metadata' - Additional metadata returned by the LLM query.
     """
-    txt_data, img_data, papers = PAPER_STORE.retrieve_context(question)
+    txt_data, img_data, papers = store.retrieve_context(question)
     txt_context = ""
     img_paths = set()
 
@@ -184,12 +181,13 @@ if __name__ == "__main__":
 
     #######################################################
 
-    query = 'What is the title of an article?'
+    paper_store = ChromaDBPaperStore()
+    question = 'What is the title of an article?'
     # question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
     # question = 'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
     # question = 'How does the synthesis of Glionitrin A/B happen?'
 
     # res = simple_query_llm(VISION_LLM_URL, question, [paper])
-    result = process_question(query)
+    result = process_question(question, paper_store)
     from pprint import pprint
     pprint(result)
