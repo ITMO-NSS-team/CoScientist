@@ -1,5 +1,5 @@
 import os
-from typing import Annotated, Optional
+from typing import Annotated, Optional, List, Dict
 from urllib.parse import quote
 
 import pubchempy as pcp
@@ -12,233 +12,384 @@ from langchain_experimental.utilities import PythonREPL
 from rdkit.Chem import AllChem
 from rdkit.Chem.Descriptors import CalcMolDescriptors
 from typing import Dict, List, Optional
-import requests
-from smolagents import tool
+#from smolagents import tool
+from langchain_core.tools import tool
 
+
+import aiohttp
+import asyncio
+import json
+import re
+import pandas as pd
+from io import StringIO
+
+CHEMBL_BASE = "https://www.ebi.ac.uk/chembl/api/data"
+VALID_AFFINITY_TYPES = {"Ki", "Kd", "IC50", "EC50"}
 repl = PythonREPL()
-VALID_AFFINITY_TYPES = ["Ki", "Kd", "IC50"]
 
 
-@tool
-def fetch_BindingDB_data(params: Dict) -> List[Dict]:
-    """
-    Retrieves protein-ligand binding affinity data from BindingDB.
-    
-    This tool identifies a protein using its name or UniProt ID, then queries BindingDB 
-    to find ligands that bind to it and their corresponding affinity measurements.
-    The results are structured to provide a clear overview of protein-ligand interactions.
-    
-    Args:
-        params (Dict): A dictionary containing the following keys:
-            - protein_name (str): The name of the target protein. Required.
-            - affinity_type (str, optional): The type of affinity measurement to retrieve. 
-              Can be 'Ki', 'Kd', or 'IC50'. Defaults to 'Ki'.
-            - cutoff (float, optional):  An optional affinity threshold in nM. Defaults to 10000.
-            - id (str, optional): The UniProt ID of the target protein. If not provided, 
-              the tool attempts to resolve it from the protein name.
-    
-    Returns:
-        List[Dict]: A list of dictionaries, where each dictionary represents a ligand 
-        and its affinity measurements for the specified protein. Returns False if an error occurs 
-        or if no UniProt ID is found.
-    """
-
+def _run_async(coro):
+    """Run async coroutine from both sync and async contexts."""
     try:
-        try:
-            # parameter validation
-            protein_name = params.get("protein_name")
-            if not protein_name:
-                print("Protein name not provided")
-        except:
-            pass
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
 
-        affinity_type = params.get("affinity_type", "Ki")
-        if affinity_type not in VALID_AFFINITY_TYPES:
-            print(
-                f"Invalid affinity type. Must be one of: {', '.join(VALID_AFFINITY_TYPES)}"
-            )
-            return False
+    if loop and loop.is_running():
+        # running in async env (e.g. LangChain)
+        return asyncio.ensure_future(coro)
+    else:
+        # safe to call asyncio.run()
+        return asyncio.run(coro)
 
-        cutoff = params.get("cutoff", 10000)
-
-        # Step 1: Get UniProt ID
-        uniprot_id = params.get("id", False)
-        if not uniprot_id:
-            print("Starting search for ID of protein...")
-            uniprot_id = fetch_uniprot_id(protein_name)
-            if not uniprot_id:
-                print(f"No UniProt ID found for {protein_name}")
-                return False
-            else:
-                print("ID is: ", uniprot_id)
-
-        # Step 2: Retrieve affinity data from BindingDB
-        affinity_entries = fetch_affinity_bindingdb(uniprot_id, affinity_type, cutoff)
-        print(f"Found {len(affinity_entries)} entrys for {protein_name}")
-        return affinity_entries
-
-    except Exception as e:
-        print(f"Processing error: {str(e)}")
-        return False
-
-
-def fetch_uniprot_id(protein_name: str) -> Optional[str]:
+async def fetch_uniprot_id(
+    session: aiohttp.ClientSession,
+    protein_name: str,
+    organism_id: int = 9606,
+    max_retries: int = 5,
+    delay: float = 0.5
+) -> Optional[str]:
     """
-    Queries the UniProt database to retrieve a UniProt ID for a given protein name.
-    
-    Args:
-        protein_name (str): The name of the protein to search for.
-    
-    Returns:
-        Optional[str]: The UniProt accession ID if found, otherwise None.
-    
-    This method performs a targeted search against the UniProt REST API, 
-    specifically looking for human proteins (organism_id:9606). 
-    It retrieves the primary accession ID, which uniquely identifies the protein 
-    within the UniProt database, enabling linking to further protein information.
+    Asynchronously fetch UniProt ID for a given protein name.
+    Retries up to `max_retries` times in case of network or transient API errors.
     """
     url = "https://rest.uniprot.org/uniprotkb/search"
     params = {
-        "query": f"{protein_name} AND organism_id:9606",  # people
+        "query": f"{protein_name} AND organism_id:{organism_id}",
         "format": "json",
         "size": 1,
         "fields": "accession",
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+    for attempt in range(max_retries):
+        try:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status != 200:
+                    await asyncio.sleep(delay * (1 + attempt * 0.5))
+                    continue
+                data = await resp.json()
+                results = data.get("results", [])
+                if results:
+                    return results[0].get("primaryAccession")
+                return None
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[UniProt] Attempt {attempt+1} failed: {str(e)}")
+            await asyncio.sleep(delay * (1 + attempt * 0.5))
+    return None
 
-        if data.get("results"):
-            return data["results"][0].get("primaryAccession")
-        return None
 
-    except requests.exceptions.RequestException:
-        return None
-
-
-def fetch_affinity_bindingdb(
-    uniprot_id: str, affinity_type: str, cutoff: int
+async def fetch_affinity_bindingdb(
+    session: aiohttp.ClientSession,
+    uniprot_id: str,
+    affinity_type: str,
+    cutoff: int,
+    max_retries: int = 5,
+    delay: float = 0.5
 ) -> List[Dict]:
     """
-    Retrieve affinity values from BindingDB for a given protein.
-    
-    Args:
-        uniprot_id (str): UniProt accession ID of the protein.
-        affinity_type (str): Type of affinity measurement (Ki, Kd, or IC50).
-        cutoff (int): Affinity threshold in nM.
-    
-    Returns:
-        List[Dict]: A list of dictionaries, where each dictionary contains affinity data 
-                     for the specified protein, affinity type, and cutoff value.
-                     Returns an empty list if no data is found or if an error occurs.
+    Asynchronously retrieve affinity values from BindingDB for a given UniProt ID.
+    Retries on network errors or incomplete data.
     """
-    url = f"http://bindingdb.org/rest/getLigandsByUniprots?uniprot={uniprot_id}&cutoff={cutoff}&response=application/json"
+    url = (
+        f"http://bindingdb.org/rest/getLigandsByUniprot?"
+        f"uniprot={uniprot_id};{cutoff}&response=application/json"
+    )
 
-    try:
-        response = requests.get(url, timeout=1200)
-        response.raise_for_status()
-        data = response.json()
-        result = [
-            i
-            for i in data["getLindsByUniprotsResponse"]["affinities"]
-            if i["affinity_type"] == affinity_type
-        ]
-        print(
-            f"Found {len(result)} affinities for {uniprot_id} with type {affinity_type}"
-        )
-        return result
+    get_smiles = lambda x: re.sub(r'\s*\|.*\|$', '', x)
 
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 502:
-            print("BindingDB server is temporarily unavailable (502 Bad Gateway)")
-        else:
-            print(f"HTTP error occurred: {e}")
+    for attempt in range(max_retries):
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                if resp.status != 200:
+                    print(f"[BindingDB] HTTP {resp.status} for {uniprot_id}, retrying...")
+                    await asyncio.sleep(delay * (1 + attempt * 0.5))
+                    continue
+                data = json.loads(await resp.text())
+                affinities = (
+                    data.get("getLindsByUniprotResponse", {}).get("bdb.affinities", [])
+                    or data.get("bdb.affinities", [])
+                    or []
+                )
+                
+                result = [{'monomerid': a.get('bdb.monomerid'),
+                          'smiles': get_smiles(a.get('bdb.smile')),
+                           'affinity_type': a.get('bdb.affinity_type'),
+                           'affinity': a.get('bdb.affinity')} for a in affinities if a.get("bdb.affinity_type") == affinity_type]
+                return result
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[BindingDB] Attempt {attempt+1} failed: {str(e)}")
+            await asyncio.sleep(delay * (1 + attempt * 0.5))
+    return []
+
+
+async def _aio_fetch_json(
+    session: aiohttp.ClientSession,
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 4,
+    retry_delay: float = 0.5,
+    semaphore: Optional[asyncio.Semaphore] = None
+) -> dict:
+    for attempt in range(max_retries):
+        try:
+            if semaphore:
+                async with semaphore:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if isinstance(data, dict):
+                                return data
+            else:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if isinstance(data, dict):
+                            return data
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(retry_delay * (1 + 0.5 * attempt))
+    return {}
+
+async def _resolve_chembl_target_id(
+    session: aiohttp.ClientSession,
+    target_name: str,
+    limit: int = 5,
+    max_retries: int = 3
+) -> str:
+    """
+    Search ChEMBL target endpoint and return first target_chembl_id.
+    Retries until valid data is obtained. Returns empty string if none found.
+    """
+    if not target_name:
+        return ""
+
+    for attempt in range(max_retries):
+        url = f"{CHEMBL_BASE}/target/search?q={quote(target_name)}&format=json&limit={limit}"
+        data = await _aio_fetch_json(session, url)
+        targets = data.get("targets", [])
+        if targets and isinstance(targets, list):
+            chembl_ids = [(target.get('target_chembl_id'), target.get('organism')) for target in targets]
+            if chembl_ids:
+                return chembl_ids
+        await asyncio.sleep(0.5 * (1 + attempt * 0.5))
+
+    return ""
+
+def _normalize_activities(activities, target_id, affinity_type):
+    out = []
+    for act in activities:
+        val = act.get("standard_value")
+        out.append({
+            "smiles": act.get("canonical_smiles") or "",
+            "affinity_type": affinity_type,
+            "affinity_value": float(val) if val not in (None, "", "NA") else None,
+            "affinity_units": act.get("standard_units") or "",
+            "source": "ChEMBL",
+            "target_id": target_id
+        })
+    return out
+
+async def _fetch_chembl_activity_async(
+    session: aiohttp.ClientSession,
+    target_id: str,
+    affinity_type: str = "Ki",
+    limit_per_page: int = 1000,
+    max_records: int = 100000,
+    semaphore: Optional[asyncio.Semaphore] = None,
+) -> List[Dict]:
+    """Fetch all ChEMBL activity pages concurrently for a given target.
+    Correct handling of total_count vs max_records (no premature return)."""
+    if affinity_type not in VALID_AFFINITY_TYPES:
         return []
 
+    # First page (offset=0) to determine total_count and collect initial activities
+    base_url = (
+        f"{CHEMBL_BASE}/activity.json?"
+        f"target_chembl_id={quote(target_id)}&"
+        f"standard_type={quote(affinity_type)}&"
+        f"limit={limit_per_page}&offset=0&include=molecule"
+    )
+    first_data = await _aio_fetch_json(session, base_url, semaphore=semaphore)
+    if not first_data:
+        return []
 
-@tool
-def fetch_chembl_data(
-    target_name: str, target_id: str = "", affinity_type: str = "Ki"
-) -> list[dict]:
-    """
-    Retrieves compound activity data for a specified protein target from the ChEMBL database.
-    
-    This method identifies the target protein (if not directly provided) and then fetches associated activity measurements, 
-    such as Ki values, along with their corresponding SMILES representations. It paginates through the results to ensure 
-    all available data is captured. 
-    
-    Args:
-        target_name: str, name of protein.
-        target_id: str, optional, id of current protein from ChemBL.  Providing the ID avoids searching by name.
-        affinity_type: str, optional, type of affinity measurement (default: 'Ki').  Specifies the desired type of activity data to retrieve.
-    
-    Returns:
-        list[dict]: A list of dictionaries, where each dictionary represents a compound's activity data.
-        Each dictionary contains:
-            - "smiles": str, the SMILES representation of the compound.
-            - affinity_type: float, the measured affinity value (e.g., Ki).
-            - "affinity_units": str, the units of the affinity measurement.
-        Returns an empty list if the target is not found.
-    """
-    BASE_URL = "https://www.ebi.ac.uk/chembl/api/data"
+    activities = first_data.get("activities", []) or []
+    results = _normalize_activities(activities, target_id, affinity_type)
 
-    if target_id == "" or target_id == None or target_id == False:
-        # search target_id by protein name
-        target_search = requests.get(
-            f"{BASE_URL}/target/search?q={quote(target_name)}&format=json&limit=1000"
+    page_meta = first_data.get("page_meta", {}) or {}
+    try:
+        total_count = int(page_meta.get("total_count", len(results)))
+    except Exception:
+        total_count = len(results)
+
+    # Determine how many records we should fetch (cap by max_records)
+    desired_total = min(total_count, max_records)
+    already = len(results)
+    remaining = max(0, desired_total - already)
+    if remaining <= 0:
+        return results
+
+    # Build offsets for the remaining pages (start at limit_per_page)
+    offsets = list(range(limit_per_page, limit_per_page + remaining, limit_per_page))
+    # But ensure offsets do not exceed desired_total
+    offsets = [o for o in offsets if o < desired_total]
+
+    async def fetch_page(offset: int) -> List[Dict]:
+        url = (
+            f"{CHEMBL_BASE}/activity.json?"
+            f"target_chembl_id={quote(target_id)}&"
+            f"standard_type={quote(affinity_type)}&"
+            f"limit={limit_per_page}&offset={offset}&include=molecule"
         )
-        targets = target_search.json()["targets"]
+        data = await _aio_fetch_json(session, url, semaphore=semaphore)
+        acts = data.get("activities", []) if data else []
+        return _normalize_activities(acts, target_id, affinity_type)
 
-        if not targets:
-            print(f"Target '{target_name}' not found in ChEMBL")
-            return []
+    # Limit concurrency across all pages + other targets using provided semaphore
+    tasks = [fetch_page(off) for off in offsets]
+    # run and collect (exceptions are returned)
+    page_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # get just first res
-        target_id = targets[0]["target_chembl_id"]
-        print(f"Found target: {targets[0]['pref_name']} ({target_id})")
+    for pr in page_results:
+        if isinstance(pr, list):
+            results.extend(pr)
+        # if pr is Exception or unexpected, skip (we keep previous retry logic in _aio_fetch_json)
 
-    # get activity with Ki
-    activities = []
-    offset = 0
-    while True:
-        response = requests.get(
-            f"{BASE_URL}/activity.json?"
-            f"target_chembl_id={target_id}&"
-            f"standard_type={affinity_type}&"
-            f"offset={offset}&"
-            "include=molecule"
-        )
+    # Trim results to desired_total in case last page(s) overshot
+    if len(results) > desired_total:
+        results = results[:desired_total]
 
-        data = response.json()
-        activities += data["activities"]
+    return results   
 
-        if not data["page_meta"]["next"]:
-            break
-        offset += len(data["activities"])
+async def fetch_chembl_data(
+    target_name: str,
+    target_id: Optional[str] = None,
+    affinity_type: str = "Ki",
+    max_records: int = 10000,
+    concurrency_limit: int = 10,
+) -> List[Dict]:
+    """
+    High-performance concurrent ChEMBL data fetcher.
+    Fetches multiple targets and multiple pages concurrently with controlled concurrency.
+    """
+    semaphore = asyncio.Semaphore(concurrency_limit)
+    results: List[Dict] = []
 
-    # get SMILES and affinity values
-    results = []
-    for act in activities:
-        try:
-            smiles = act["canonical_smiles"]
-            affinity_valie = act["standard_value"]
-            affinity_units = act["standard_units"]
-            results.append(
-                {
-                    "smiles": smiles,
-                    affinity_type: affinity_valie,
-                    "affinity_units": affinity_units,
-                }
+    async with aiohttp.ClientSession() as session:
+        # Resolve targets
+        if not target_id:
+            chembl_targets = await _resolve_chembl_target_id(session, target_name)
+            if not chembl_targets:
+                return []
+        else:
+            chembl_targets = [(target_id, "unknown")]
+
+        # Concurrently fetch all targets
+        tasks = [
+            _fetch_chembl_activity_async(
+                session=session,
+                target_id=tid,
+                affinity_type=affinity_type,
+                max_records=max_records,
+                semaphore=semaphore,
             )
-        except (KeyError, TypeError):
-            continue
+            for tid, _ in chembl_targets
+        ]
+
+        all_data = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for (tid, organism), data in zip(chembl_targets, all_data):
+            if isinstance(data, Exception):
+                continue
+            for rec in data:
+                rec["target_id"] = tid
+                rec["organism"] = organism
+            results.extend(data)
 
     return results
 
 
-from langchain_core.tools import tool
+@tool
+def fetch_activity_data(
+    source: str,
+    protein_name: str,
+    dir_to_save: str,
+    protein_id: Optional[str] = None,
+    affinity_type: str = "IC50",
+    cutoff: int = 10000,
+) -> str:
+    """
+    Unified data retrieval tool for biochemical databases.
+
+    This function fetches protein-ligand interaction or activity data from supported sources
+    such as BindingDB and ChEMBL. It automatically handles protein ID resolution and
+    standardized affinity type filtering.
+
+    Args:
+        source (str): Name of data source ("bindingdb" or "chembl").
+        protein_name (str): Target protein name.
+        dir_to_save (str): directory to save parsed data in csv format
+        protein_id (str, optional): Target protein id. If passed, protein_name is ignored
+        affinity_type (str, optional): Type of affinity (Ki, Kd, IC50). Defaults to "Ki".
+        cutoff (int, optional): Optional threshold (nM) for BindingDB. Defaults to 10000.
+
+    Returns:
+        str: Summary of results with path to file and some statistics
+        Returns error string if data not found or error occurs.
+    """
+    source = source.lower().strip()
+    if affinity_type not in VALID_AFFINITY_TYPES:
+        return f"Invalid affinity type '{affinity_type}'. Must be one of {VALID_AFFINITY_TYPES}"
+
+    async def _main():
+        async with aiohttp.ClientSession() as session:
+            if source == "bindingdb":
+                target_id = protein_id  # avoid shadowing outer var
+                if not target_id:
+                    resolved_id = await fetch_uniprot_id(session, protein_name)
+                    if not resolved_id:
+                        return f"[BindingDB] Could not find UniProt ID for '{protein_name}'"
+                    target_id = resolved_id
+
+                entries = await fetch_affinity_bindingdb(
+                    session, target_id, affinity_type, cutoff
+                )
+                return entries
+
+            elif source == "chembl":
+                entries = await fetch_chembl_data(
+                    target_name=protein_name,
+                    target_id=protein_id,
+                    affinity_type=affinity_type
+                )
+                return entries
+
+            else:
+                return f"Unsupported data source '{source}'. Use 'bindingdb' or 'chembl'."
+
+    try:
+        results = _run_async(_main())
+        file_name = os.path.join(dir_to_save, f'{protein_name}_{affinity_type}_{source}.csv')
+        if isinstance(results, list):
+            os.makedirs(dir_to_save, exist_ok=True)
+            df = pd.DataFrame(results)
+            df.to_csv(file_name)
+            buffer = StringIO()
+            df.info(buf=buffer)
+            info_str = buffer.getvalue()
+            return_str = f"The data was saved to {file_name}. Here is info about dataset: {info_str}"
+            del df
+            return return_str
+        else:
+            return results
+    except Exception as e:
+        return f"[fetch_activity_data] Error: {str(e)}"
 
 
 @tool
@@ -445,7 +596,13 @@ chem_tools = [
     smiles2prop,
     visualize_molecule,
 ]
+
+data_tools = [
+    fetch_activity_data
+]
+
 chem_tools_rendered = render_text_description(chem_tools)
+data_tools_rendered = render_text_description(data_tools)
 
 if __name__ == "__main__":
     import os

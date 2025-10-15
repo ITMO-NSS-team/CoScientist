@@ -17,9 +17,7 @@ from ChemCoScientist.agents.agents_prompts import (
     ds_builder_prompt,
     worker_prompt,
 )
-from ChemCoScientist.tools import chem_tools, nanoparticle_tools, paper_analysis_tools
-from ChemCoScientist.tools import chem_tools, nanoparticle_tools
-from ChemCoScientist.tools.chemist_tools import fetch_BindingDB_data, fetch_chembl_data
+from ChemCoScientist.tools import chem_tools, nanoparticle_tools, paper_analysis_tools, data_tools
 from ChemCoScientist.tools.ml_tools import agents_tools as automl_tools
 
 from definitions import ROOT_DIR
@@ -47,43 +45,22 @@ def get_all_files(directory: str):
     return file_paths
 
 
-def dataset_builder_agent(state: dict, config: dict) -> Command:
-    """
-    Constructs a command to generate a dataset tailored to a given chmical task, leveraging external 
-    data sources and a code agent. Can receive data from ChemBL and BindingDB.
-    
-    Args:
-        state (dict): A dictionary containing the current state, including the user's scientific task description.
-        config (dict): A dictionary containing configuration details, such as model information and API keys,
-                       as well as the directory for storing the generated dataset.
-    
-    Returns:
-        Command
-    """
-    print("--------------------------------")
-    print("Dataset builder agent called")
-    print(state["task"])
-    print("--------------------------------")
+
+def dataset_builder_agent(state: dict, config: dict):
+
     task = state["task"]
+    plan = state["plan"]
+    llm = config["configurable"]["llm"]
 
-    config_cur_agent = config["configurable"]["additional_agents_info"]["dataset_builder_agent"]
-    print(config_cur_agent)
-
-    model = (
-        LiteLLMModel(config_cur_agent["model_name"], api_base=config_cur_agent["url"], api_key=config_cur_agent["api_key"])
-        if "groq.com" in config_cur_agent["url"]
-        else OpenAIServerModel(api_base=config_cur_agent["url"], model_id=config_cur_agent["model_name"], api_key=config_cur_agent["api_key"])
+    worker_prompt = f"Save data to this path: {os.path.join(ROOT_DIR, os.environ['DS_STORAGE_PATH'])}"
+    data_agent = create_react_agent(
+        llm, tools=data_tools, prompt=worker_prompt
     )
 
-    agent = CodeAgent(
-        tools=[fetch_BindingDB_data, fetch_chembl_data],
-        model=model,
-        additional_authorized_imports=["*"],
-    )
+    task_formatted = f"""For the following plan:\n{str(plan)}\n\nYou are tasked with executing: {task}."""
+    inputs = {"messages": [{"role": "user", "content": task_formatted}]}
 
-    response = agent.run(
-        ds_builder_prompt + config_cur_agent["ds_dir"] + "\nSo, user ask: \n" + task + additional_ds_builder_prompt
-    )
+    response = data_agent.invoke({"messages": [("user", task_formatted)]})
 
     files = get_all_files(os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]))
 
@@ -96,6 +73,16 @@ def dataset_builder_agent(state: dict, config: dict) -> Command:
             "dataset_builder_agent": files
         }),
     })
+
+    return {"past_steps": set([(task, response["messages"][-1].content)]),
+            "nodes_calls": set([
+             ("dataset_builder_agent", (("text", response["messages"][-1].content),))
+                ]),
+            "metadata": {
+             "dataset_builder_agent": files
+             }
+         }
+
 
 
 def ml_dl_agent(state: dict, config: dict) -> Command:

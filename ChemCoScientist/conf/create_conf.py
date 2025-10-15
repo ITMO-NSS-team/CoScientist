@@ -32,8 +32,7 @@ It can generate medicinal molecules. You must use this agent for molecules gener
 dataset_builder_agent_description = """
 'dataset_builder_agent' - collects data from two databases - ChemBL and BindingDB.
 To collect data, it needs either the protein name or a specific id from a specific database. 
-It can collect data from one specific database or from both. All data is saved locally. 
-It also processes data: removes junk values, empty cells, and can filter if necessary.
+It can collect data from one specific database or from both. All data is saved locally.
 """
 
 coder_agent_description = """
