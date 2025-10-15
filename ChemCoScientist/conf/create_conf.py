@@ -16,7 +16,7 @@ from ChemCoScientist.agents.agents import (
     paper_analysis_agent,
 )
 from CoScientist.scientific_agents.agents import coder_agent
-from ChemCoScientist.tools import chem_tools_rendered, nano_tools_rendered, tools_rendered, \
+from ChemCoScientist.tools import chem_tools_rendered, nano_tools_rendered, tools_rendered, data_tools_rendered, \
     paper_analysis_tools_rendered
 from definitions import ROOT_DIR
 
@@ -147,7 +147,7 @@ conf = {
         "tools_for_agents": {
             "chemist_node": [chem_tools_rendered],
             "nanoparticle_node": [nano_tools_rendered],
-            "dataset_builder_agent": [dataset_builder_agent_description],
+            "dataset_builder_agent": [data_tools_rendered],
             "coder_agent": [coder_agent_description],
             "ml_dl_agent": [automl_agent_description],
             "paper_analysis_agent": [paper_analysis_tools_rendered],

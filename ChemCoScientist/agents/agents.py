@@ -66,9 +66,9 @@ def dataset_builder_agent(state: dict, config: dict):
     files = get_all_files(os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]))
 
     return Command(update={
-        "past_steps": Annotated[set, operator.or_](set([(task, str(response))])),
+        "past_steps": Annotated[set, operator.or_](set([(task, response["messages"][-1].content)])),
         "nodes_calls": Annotated[set, operator.or_](set([
-            ("dataset_builder_agent", (("text", str(response)),))
+            ("dataset_builder_agent", (("text", response["messages"][-1].content),))
         ])),
         "metadata": Annotated[dict, operator.or_]({
             "dataset_builder_agent": files
