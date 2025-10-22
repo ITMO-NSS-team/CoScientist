@@ -337,7 +337,7 @@ def message_handler(user_query: str, placeholder: st.delta_generator.DeltaGenera
                                     key=f"download_{file_name}",
                                 )
 
-                            os.remove(file)
+                            #os.remove(file)
 
                     # Store metadata in the message for later display
                     if "paper_analysis" in result["metadata"].keys():
