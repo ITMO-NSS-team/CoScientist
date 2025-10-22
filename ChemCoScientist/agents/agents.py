@@ -61,9 +61,27 @@ def dataset_builder_agent(state: dict, config: dict):
     task_formatted = f"""For the following plan:\n{str(plan)}\n\nYou are tasked with executing: {task}."""
     inputs = {"messages": [{"role": "user", "content": task_formatted}]}
 
+    path = os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"])
+
+    old_files = set(get_all_files(path))
     response = data_agent.invoke({"messages": [("user", task_formatted)]})
 
-    files = get_all_files(os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]))
+    new_files = [file for file in get_all_files(path) if file not in old_files]
+
+    files_db = config['configurable'].get('files_db')
+    if files_db:
+        for file_name in new_files:
+            file_path=os.path.join(path, file_name)
+            source = 'chemble' if 'chemble' in file_name else "bindingdb" #TODO IMPLEMENT BETTER
+
+            files_db.add_file(
+                file_path=file_path,
+                original_filename=file_name, 
+                file_size=os.path.getsize(file_path),
+                uploaded_by="user", #TODO IMPLEMENT DIFFERENT USER HANDLING
+                user_context=state["input"],
+                upload_source=source
+            )
 
     return Command(update={
         "past_steps": Annotated[set, operator.or_](set([(task, response["messages"][-1].content)])),
@@ -71,7 +89,7 @@ def dataset_builder_agent(state: dict, config: dict):
             ("dataset_builder_agent", (("text", response["messages"][-1].content),))
         ])),
         "metadata": Annotated[dict, operator.or_]({
-            "dataset_builder_agent": files
+            "dataset_builder_agent": old_files
         }),
     })
 
@@ -97,6 +115,23 @@ def coder_agent(state: dict, config: dict):
 
     agent_input = coder_prompt.format(directory=os.path.join(ROOT_DIR, os.environ['DS_STORAGE_PATH']), task=task)
     response = agent.run(agent_input)
+
+    file_name = response.get('file_name')
+    files_db = config['configurable'].get('files_db')
+
+    if file_name and files_db:
+        path = os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"])
+        file_path=os.path.join(path, file_name)
+        source = 'coder_agent'
+
+        files_db.add_file(
+            file_path=file_path,
+            original_filename=file_name, 
+            file_size=os.path.getsize(file_path),
+            uploaded_by="user", #TODO IMPLEMENT DIFFERENT USER HANDLING
+            user_context=state["input"],
+            upload_source=source
+        )
 
     #TODO manage generated file here
 
