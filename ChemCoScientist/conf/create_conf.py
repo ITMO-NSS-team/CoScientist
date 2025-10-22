@@ -14,8 +14,9 @@ from ChemCoScientist.agents.agents import (
     ml_dl_agent,
     nanoparticle_node,
     paper_analysis_agent,
+    coder_agent
 )
-from CoScientist.scientific_agents.agents import coder_agent
+#from CoScientist.scientific_agents.agents import coder_agent
 from ChemCoScientist.tools import chem_tools_rendered, nano_tools_rendered, tools_rendered, data_tools_rendered, \
     paper_analysis_tools_rendered
 from definitions import ROOT_DIR
@@ -36,8 +37,7 @@ It can collect data from one specific database or from both. All data is saved l
 """
 
 coder_agent_description = """
-'coder_agent' - can write any simple python scientific code. Can use rdkit and other 
-chemical libraries. Can perform calculations.
+'coder_agent' - Is expert in data science. It can write and execute python code. Always use it for data management and EDA.
 """
 
 paper_analysis_agent_description = """
@@ -187,19 +187,62 @@ conf = {
                 "enhancemen_significance": None,
             },
             "planner": {
-                "problem_statement": None,
-                "rules": None,
-                "desc_restrictions": None,
-                "examples": None,
+                "problem_statement": """
+                    Your task is to analyze the user's objective and design a structured plan
+                    consisting of atomic subtasks. Each subtask must be directly executable by one
+                    of the system agents listed below. Subtasks that do not depend on each other
+                    should be grouped together so they can be executed simultaneously.
+                    The output must represent this plan as a list of lists, where each inner list
+                    contains tasks that can be performed in parallel.
+                    """,
+                "rules": """
+                    1. Each subtask must correspond to an action that can be handled by one of the available system agents.
+                    2. Dependent subtasks must be placed in separate sequential steps.
+                    3. Independent subtasks (i.e., that can run in parallel) should appear in the same inner list.
+                    4. Every subtask must be expressed clearly as an action (e.g., 'Generate X, Find Y').
+                    5. Avoid unnecessary decomposition — only split when separate agents are required or there are dependencies.
+                    6. Keep logical order and coherence between subtasks.
+                    """,
+                "desc_restrictions": """
+                    - You cant name agents
+                    - The plan must contain no more than 5 steps.
+                    - Each step must include at least one subtask.
+                    - Each subtask should be short (one concise sentence or phrase).
+                    - All task related coding must be collected in one single task. Don't split it.
+                    """,
+                "examples": """
+                    Example 1:
+                    Request: "Collect spectra for sample A and B, then analyze them"
+                    Response: {
+                        "steps": [
+                            ["Collect spectra for sample A", "Collect spectra for sample B"],
+                            ["Analyze spectra of collected samples"]
+                        ]
+                    }
+
+                    Example 2:
+                    Request: "Generate dataset, train model, and predict for molecule1 and molecule2"
+                    Response: {
+                        "steps": [
+                            ["Generate dataset"],
+                            ["Train model"],
+                            ["Predict for molecule1", "Predict for molecule2"]
+                        ]
+                    }
+
+                    Example 3:
+                    Request: "Generate 5 molecules related to MEK1, make 3 molecules using the GSK model"
+                    Response: {
+                        "steps": [
+                            ["Generate 5 molecules related to MEK1", "Generate 3 molecules using the GSK model"]
+                        ]
+                    }
+                    """,
                 "additional_hints": """
-                Before starting model training, check data for garbage with 'dataset_builder_agent'. 
-                If the user already provides a dataset, go straight to 'ml_dl_agent' and skip 'dataset_builder_agent' 
-                For questions about papers, articles, or research findings, plan exactly two steps: 
-                first 'paper_analysis_agent', then 'web_search'. 
-                Do not schedule any other agents for such research tasks.
-                If user asks find something in internet you have to use 'web_search'.
-                Always choose the minimal set of agents necessary for the user's request.
-                """,
+                    - If multiple molecules, files, or entities are processed in the same way, group those actions together as parallel subtasks.
+                    - When an earlier step produces data required for another (e.g., training before prediction), make sure the dependent step comes later.
+                    - If the user request is ambiguous, infer a reasonable decomposition based on tool capabilities.
+                    """,
             },
             "chat": {
                 "problem_statement": None,
@@ -223,13 +266,72 @@ conf = {
                 """,
             },
             "replanner": {
-                "problem_statement": None,
-                "rules": None,
-                "examples": None,
-                "additional_hints": "Optimize the plan, transfer already existing answers from previous executions! For example, weather values.\
-                Don't forget tasks! Plan the Coder Agent to save files.\
-                    Be more careful about which tasks can be performed in parallel and which ones can be performed sequentially.\
-                        For example, you cannot fill a table and save it in parallel.",
+                "problem_statement": """
+                    You are a replanning expert. Your job is to optimize and adjust an existing
+                    step-by-step plan based on what has already been completed. You must not
+                    invent or introduce new tasks — only update, reorder, or remove steps as
+                    necessary to reach the final goal efficiently. When all tasks are done,
+                    return a final response instead of new steps.
+                    """,
+                "rules": """
+                    1. Each subtask must correspond to an action that can be handled by one of the available system agents.
+                    2. Every subtask must be expressed clearly as an action (e.g., 'Generate X, Find Y').
+                    3. Do not create new tasks beyond the original plan. You can only adjust current tasks.
+                    4. Remove tasks that are already completed.
+                    5. If a step’s outputs are available in past results, skip that step.
+                    6. Preserve the logical order of dependent tasks.
+                    7. Tasks that can be done in parallel should remain grouped in the same list.
+                    8. When all tasks are finished, output the final response (summary or confirmation).
+                    9. You cant name agents
+                    10. All task related coding must be collected in one single task. Don't split it.
+                    11. The plan must contain no more than 5 steps.
+                    12. Always return output strictly in JSON format.
+                    """,
+                "examples": """
+                    Example 1:
+                    Original plan:
+                    [
+                        ["Collect data for BTK with IC50 values from ChEMBL using dataset_builder_agent"],
+                        ["Clean and preprocess the BTK IC50 dataset"],
+                        ["Train model"]
+                    ]
+                    Past steps:
+                    {
+                        ("Collect data for BTK with IC50 values from ChEMBL using dataset_builder_agent", "Dataset saved to /data/BTK_IC50.csv")
+                    }
+
+                    Response:
+                    {
+                        "action": "steps",
+                        "steps": [
+                            ["Clean and preprocess the /data/BTK_IC50.csv dataset"],
+                            ["Train model"]
+                        ]
+                    }
+
+                    Example 2:
+                    Original plan:
+                    [
+                        ["Collect data for BTK with IC50 values from ChEMBL using dataset_builder_agent"]
+                    ]
+                    Past steps:
+                    {
+                        ("Collect data for BTK with IC50 values from ChEMBL using dataset_builder_agent", "Dataset saved successfully to /data/BTK_IC50.csv")
+                    }
+
+                    Response:
+                    {
+                        "action": "response",
+                        "response": "The dataset for BTK with IC50 values has been successfully collected and stored: /data/BTK_IC50.csv. No further actions are required."
+                    }
+                    """,
+                "additional_hints": """
+                    - Optimize the plan using existing completed results.
+                    - You must transfer ready outputs (paths, values) from past steps when possible.
+                    - Do not create new tasks or agents that were not part of the original plan.
+                    - Be careful with task dependencies — never run saving or training before required data is ready.
+                    - Remember: return only JSON, no text before or after it.
+                    """,
             },
         },
     },
