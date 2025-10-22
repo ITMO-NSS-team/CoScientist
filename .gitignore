@@ -186,3 +186,4 @@ tools/models
 logs
 ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
+file_db.json
