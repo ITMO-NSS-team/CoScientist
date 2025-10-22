@@ -75,16 +75,6 @@ def dataset_builder_agent(state: dict, config: dict):
         }),
     })
 
-    return {"past_steps": set([(task, response["messages"][-1].content)]),
-            "nodes_calls": set([
-             ("dataset_builder_agent", (("text", response["messages"][-1].content),))
-                ]),
-            "metadata": {
-             "dataset_builder_agent": files
-             }
-         }
-
-
 
 def ml_dl_agent(state: dict, config: dict) -> Command:
     """

@@ -52,3 +52,31 @@ answer yourself.
 The most useful tool is 'explore_chemistry_database'. Call to get a lot of domain chemistry data. 
 It is strictly forbidden to call 'explore_my_papers' and 'select_papers' except case when user told you to call it directly.     
 """
+
+
+coder_prompt = """
+    TASK: {task}
+    DATA DIRECTORY: {directory}
+
+    CRITICAL REQUIREMENTS:
+    1. You MUST return a structured final answer using the `final_answer()` tool
+    2. The final answer should be a Python dictionary with the exact metrics requested
+    3. Do NOT return generic messages like "analysis completed" - return actual data
+    4. Always begin your code by inspecting the data (e.g., using .head(), .info(), .describe() and .columns) to understand its structure, contents, and potential data quality issues.
+    5. You must use print() to return a value. 
+    6. If your task requires any modification to the original dataset (e.g., cleaning, feature engineering, filtering, transformations), you must save the modified DataFrame.
+    7. Naming Convention: The new file must be saved in the same directory as the original, using the filename pattern: **original_filename**_preprocessed.csv
+        * Example: If the original file is sales_data.csv, the modified version must be saved as sales_data_preprocessed.csv. Else file_name must be None
+    8. Return your filename in your final answer if you created one.
+    8. Your final output should be parseable code that produces the requested structure
+
+    EXAMPLE OF GOOD FINAL ANSWER FORMAT:
+    ```py
+    final_answer({{
+        'columns': ['col1', 'col2', 'col3'],
+        'unique_organisms': ['human', 'mouse'], 
+        'unique_targets': ['targetA', 'targetB'],
+        'file_name': 'data_preprocessed.csv' or None
+        # include other requested metrics as key-value pairs
+    }})
+    """
