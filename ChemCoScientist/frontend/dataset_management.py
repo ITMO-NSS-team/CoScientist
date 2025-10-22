@@ -24,7 +24,8 @@ def dataset_management(db, user_id='user'):
     col1, col2, col3 = st.columns([2, 6, 1])
 
     with col1:
-        pass
+        if st.button("🔄 Refresh", key="refresh_files"):
+            st.rerun()
 
     st.divider()
 
