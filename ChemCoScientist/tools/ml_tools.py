@@ -206,11 +206,7 @@ async def train_ml_with_data_async(
         raise
 
 
-class TrainingStatus(Enum):
-    PENDING = "pending"
-    TRAINING = "training" 
-    TRAINED = "trained"
-    FAILED = "failed"
+
 
 async def ml_dl_training_async(
     case: str,
@@ -797,3 +793,49 @@ agents_tools = [
     # generate_mol_by_case,
     predict_prop_by_smiles,
 ]
+
+if __name__ == "__main__":
+    #run_ml_dl_training_by_daemon('sars_cov', './data_store/datasets/users_dataset.csv', 'smiles', 'IC50', ['IC50'])
+    #run_ml_dl_training_by_daemon('test_case_async', "ChemCoScientist/data_store/datasets/BTK_IC50_bindingdb.csv", target_column=["affinity"])
+    #print(get_state_from_server().keys())
+    #print(generate_mols(10))
+
+    #aiohttp.client_exceptions.ClientResponseError: 500, message='Internal Server Error', url='http://10.32.2.2:293/train_gen_models'
+    # print(asyncio.run(train_gen_with_data_async(case="test_case_async",
+    #                         data_path="ChemCoScientist/data_store/datasets/BTK_IC50_bindingdb.csv",  # path to client data folder
+    #                         feature_column=["smiles"],
+    #                         target_column=[
+    #                             'affinity'
+    #                         ],  # All propreties from dataframe you want to calculate in the end
+    #                         regression_props=[
+    #                             "affinity"
+    #                         ],  # Column name with data for regression tasks (That not include in calculcateble propreties)
+    #                         classification_props=[],  # Column name with data for classification tasks (That not include in calculcateble propreties)
+    #                         description="Descrption not provided",
+    #                         timeout=5,  # min
+    #                         url = conf["url_gen"] + "/train_gen_models",
+    #                         fine_tune = True,
+    #                         n_samples=10,)))
+
+    #aiohttp.client_exceptions.ClientResponseError: 404, message='Not Found', url='http://10.32.2.2:293/train_ml'
+    # print(asyncio.run(train_ml_with_data_async(case="test_case_async",
+    #                         data_path="ChemCoScientist/data_store/datasets/BTK_IC50_bindingdb.csv",  # path to client data folder
+    #                         feature_column=["smiles"],
+    #                         target_column=[
+    #                             'affinity'
+    #                         ],  # All propreties from dataframe you want to calculate in the end
+    #                         regression_props=[
+    #                             "affinity"
+    #                         ],  # Column name with data for regression tasks (That not include in calculcateble propreties)
+    #                         classification_props=[],  # Column name with data for classification tasks (That not include in calculcateble propreties)
+    #                         description="Descrption not provided",
+    #                         timeout=5)
+    # ))
+
+    print(asyncio.run(wait_for_training_completion(
+                        case = 'BTK',
+                        model_type = 'pred',
+                        poll_interval = 5
+                            )
+                    )
+        )
