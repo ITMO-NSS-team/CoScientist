@@ -567,7 +567,7 @@ def get_state_from_server(url: str = "pred", case: Optional[str] = None) -> Unio
         url (str): Specifies the server endpoint. Use 'pred' for predictive models or 'gen' for generative models. Defaults to "pred".
         case (str, optional): The name of the case/model to query. Defaults to None
     Returns:
-        dict or str: A dictionary containing model state information (status, description, metrics) if successful.  Returns a string "Server error" if a server-side error (status code 500) occurs.
+        dict or str: A dictionary containing model state information (status, description, metrics) if successful.  Returns a string  if a server-side error (status code 500) occurs.
     """
     if url == "pred":
         url = conf["url_pred"]
@@ -645,8 +645,7 @@ def generate_mols(
     num_tries: int = 5
 ) -> List[str]:
     """
-    Asynchronously generates a set of molecular SMILES strings using a GAN-based generator,
-    applying cyclic generation and property-based filtering.
+    Generates a set of molecular SMILES strings applying property-based filtering.
 
     Args:
         num (int, optional): The number of valid SMILES strings to return. Defaults to 10.
@@ -681,19 +680,17 @@ def run_ml_dl_training_by_daemon(
     """
     Initiates a machine learning and deep learning training process in the background, utilizing the provided dataset and configuration. 
     This process prepares models for predicting chemical properties or classifying molecules based on input features. 
-    The training status can be monitored separately using the "get_state_from_server" function.
     
     Args:
         case (str): A unique identifier for the training case, used to track the process.
-        path (str): The file path to the dataset, which should be a CSV or Excel file.
+        path (str): The file path to the dataset, which should be a CSV, TSV,  Excel or Parquet file.
         feature_column (list, optional):  A list of column names representing the input features for the model. Defaults to ["smiles"].
         target_column (list, optional): A list of column names specifying the properties to be predicted or classified. This list must not be empty. Defaults to ["docking_score"].
         regression_props (list, optional): A list of column names used for regression tasks. This list should generally align with the feature columns. Defaults to ["docking_score"].
         classification_props (list, optional): A list of column names used for classification tasks. Use an empty list if classification is not required. Defaults to [].
     
     Returns:
-        bool: True if the training process was successfully initiated, False otherwise.
-        str:  If the process fails, returns a string describing the error.
+        None
     
     Raises:
         ValueError: If target_column or feature_column are empty, or if specified columns are not found in the dataset, or if the dataset is too small (less than 300 samples).
