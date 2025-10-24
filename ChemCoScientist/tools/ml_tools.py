@@ -4,13 +4,22 @@ import subprocess
 import sys
 import time
 from multiprocessing import Process
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Literal, Dict, Any, Optional
 
 import pandas as pd
 import requests
 from smolagents import tool
 
 from ChemCoScientist.tools.utils import filter_valid_strings
+
+
+import os
+import json
+import aiohttp
+import asyncio
+from collections import defaultdict
+import operator
+from functools import partial
 
 # TODO: get from load_env
 #conf = {"url_pred": "http://10.32.2.2:293", "url_gen": "http://10.32.2.2:293"}
@@ -535,170 +544,6 @@ def generate_with_gan(num=100):
     resp = requests.post(url, json.dumps(params))
     return resp, resp.json()
 
-@tool
-def generate_with_gan_cyclic(
-    num: int = 10,
-    properties_conditions: dict[str, str] | None = None,
-    num_tries: int = 5,
-    success_rate: float = 0.5,
-    maximum_error: float = 0.1,
-    batch_size: int = 10,
-) -> list[str]:
-    """
-    Generate molecules with a GAN in iterative batches and filter them by property conditions. Use this a main tool for molecule generation.
-
-    This tool repeatedly requests batches of molecules from a GAN-backed generator and
-    selects those that satisfy user-defined property constraints. It stops early once
-    at least `num` molecules pass the filters or reaches the global budget of
-    `num * num_tries` generated candidates. The function returns a list of SMILES and
-    prints a short English summary with basic statistics (matches on the first batch,
-    total matches after retries, unsupported properties, etc.).
-
-    Format of `properties_conditions` (string constraints):
-      - Each property maps to a string: "<op><value>", where <op> is one of {">=", "<=", "==", ">", "<"}
-        and <value> is a float. Examples:
-          {"QED": ">=0.7", "Synthetic Accessibility": "<=3.0", "PAINS": "==0"}
-      - Equality uses a relative tolerance ±`maximum_error`. For example, "==4" with
-        maximum_error=0.05 accepts values in [3.8, 4.2].
-      - For inequalities (>=, <=, >, <), no tolerance is applied.
-
-    Guidance for agent message to conditions mapping (examples):
-      - "high QED"        → {"QED": ">=0.7"} (use 0.7–0.8 as a common threshold)
-      - "very high QED"   → {"QED": ">=0.8"}
-      - "easy to synthesize" → {"Synthetic Accessibility": "<=3.0"}
-      - "no PAINS alerts" → {"PAINS": "==0"}
-      - "strong docking"  → {"docking_score": "<=-7.0"}  (more negative is better)
-      - "low IC50"        → {"IC50": "<=1.0"}  (adjust to the project’s scale/units)
-
-    Args:
-        num (int, optional): Target number of molecules to return (after filtering).
-        properties_conditions (dict[str, str], optional): Mapping from property name to
-            a condition string ("<op><value>"), e.g. {"QED": ">=0.7"}.
-        num_tries (int, optional): Global generation multiplier. At most `num * num_tries`
-            candidates are generated across all batches.
-        success_rate (float, optional): Expected success rate to include in the printed summary
-            (informational only; not enforced).
-        maximum_error (float, optional): Relative tolerance applied only to '==' comparisons.
-        batch_size (int, optional): Batch size for each GAN generation request.
-
-    Returns:
-        list[str]: A list of SMILES strings. If no molecule satisfies the constraints,
-                   returns up to `num` best-effort molecules from all generated batches.
-
-    Behavior:
-        - Filters only by properties present in the predictor output; unknown properties
-          are ignored and reported in the printed summary.
-        - Stops early once `num` passing molecules are found.
-
-    Raises:
-        ValueError: If a condition string has an unsupported format (must be one of
-                    '>=x', '<=x', '==x', '>x', '<x').
-
-    Examples:
-        # Agent prompt → tool call
-        "Generate 10 molecules with high QED and no PAINS alerts"
-          → num=10,
-            properties_conditions={"QED": ">=0.7", "PAINS": "==0"}
-
-        # Strong docking and easy synthesis
-        "Generate 20 easy-to-synthesize molecules with strong docking"
-          → num=20,
-            properties_conditions={"Synthetic Accessibility": "<=3.0",
-                                   "docking_score": "<=-7.0"}
-    """
-    def parse_condition(cond_str):
-        s = str(cond_str).strip()
-        for op in ("<=", ">=", "==", "<", ">"):
-            if op in s:
-                return op, float(s.split(op)[1].strip())
-        raise ValueError(f"Unsupported condition format: {cond_str}")
-
-    def make_check(op, thr):
-        if op == "==":
-            low, high = thr * (1 - maximum_error), thr * (1 + maximum_error)
-            return lambda v: v is not None and low <= v <= high
-        if op == ">=":
-            return lambda v: (v is not None) and (v >= thr)
-        if op == "<=":
-            return lambda v: (v is not None) and (v <= thr)
-        if op == ">":
-            return lambda v: (v is not None) and (v > thr)
-        if op == "<":
-            return lambda v: (v is not None) and (v < thr)
-        raise ValueError(f"Unsupported operator: {op}")
-
-    max_total = int(num) * num_tries
-    all_samples, selected = [], []
-
-    first_batch = generate_with_gan(num=batch_size)[1]
-    first_batch = json.loads(first_batch)
-    props_first = first_batch
-    first_batch = first_batch['Smiles']
-    all_samples.extend(first_batch)
-
-    available = set(props_first.keys())
-    unsupported = [p for p in properties_conditions if p not in available]
-    supported = {p: properties_conditions[p] for p in properties_conditions if p in available}
-
-    checks = {p: make_check(*parse_condition(c)) for p, c in supported.items()}
-    def passes(idx, props_dict):
-        for p, check in checks.items():
-            vals = props_dict.get(p)
-            if vals is None or idx >= len(vals) or not check(vals[idx]):
-                return False
-        return True
-
-    first_ok = []
-    for i, smi in enumerate(first_batch):
-        if passes(i, props_first):
-            first_ok.append(smi)
-    selected.extend(first_ok)
-
-    if len(selected) >= num:
-        result = selected[:num]
-        summary = (
-            f"Initial pass: {len(first_ok)} matched of {len(first_batch)}. "
-            f"After retries: {len(selected)} matched of {len(all_samples)}. "
-            f"Target={num}, generated={len(all_samples)}, "
-            f"success_rate_observed={len(selected)/len(all_samples):.2f}, "
-            f"expected_success_rate={success_rate:.2f}. "
-            + (f"Unsupported properties: {unsupported}. " if unsupported else "")
-            + (f"Equality tolerance ±{int(maximum_error*100)}%." if '==' in ''.join(properties_conditions.values()) else "")
-        )
-        return result, summary
-
-    while len(all_samples) < max_total and len(selected) < num:
-        to_gen = min(num, max_total - len(all_samples))
-        if to_gen <= 0:
-            break
-        batch = generate_with_gan(num=batch_size)[1]
-        batch = json.loads(batch)
-        props_batch = batch
-        batch = batch['Smiles']
-        all_samples.extend(batch)
-
-        for i, smi in enumerate(batch):
-            if passes(i, props_batch):
-                selected.append(smi)
-                if len(selected) >= num:
-                    break
-
-    if len(selected) >= num:
-        result = selected[:num]
-    else:
-        result = all_samples[:min(num, len(all_samples))]
-
-    summary = (
-        f"Initial pass: {len(first_ok)} matched of {len(first_batch)}. "
-        f"After retries: {len(selected)} matched of {num}. "
-        f"Target={num}, generated={len(all_samples)}, "
-        f"success_rate_observed={(len(selected)/num if all_samples else 0):.2f}, "
-        f"expected_success_rate={success_rate:.2f}. "
-        + (f"Unsupported properties: {unsupported}. " if unsupported else "")
-        + (f"Equality tolerance ±{int(maximum_error*100)}%." if '==' in ''.join(properties_conditions.values()) else "")
-    )
-    print(summary)
-    return result
 
 @tool
 def run_ml_dl_training_by_daemon(
@@ -811,11 +656,135 @@ def run_ml_dl_training_by_daemon(
         return False
 
 
+async def agenerate_with_gan(num: int = 100, timeout: int = 30) -> Tuple[aiohttp.ClientResponse, Dict[str, Any]]:
+    params = {'case_': "Alzheimer", 'numb_mol': num}
+    url = conf['url_gen'] + '/gan_case_generator'
+
+    timeout_config = aiohttp.ClientTimeout(total=timeout)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
+            async with session.post(url, json=params) as resp:
+                if resp.status == 200:
+                    json_data = await resp.json()
+                    if isinstance(json_data, dict):
+                        return json_data
+                    else:
+                        return json.loads(json_data)
+                else:
+                    error_text = await resp.text()
+                    raise Exception(f"API returned status {resp.status}: {error_text}")
+    except asyncio.TimeoutError:
+        raise Exception(f"Request timed out after {timeout} seconds")
+    except aiohttp.ClientError as e:
+        raise Exception(f"Network error: {e}")
+    except json.JSONDecodeError as e:
+        raise Exception(f"Invalid JSON response: {e}")
+
+           
+
+async def agenerate_with_gan_cyclic(num: int = 10,
+    properties_conditions: Optional[Dict[str, str]] = None,
+    num_tries: int = 5,
+    maximum_error: float = 0.1) -> List[str]:
+
+    tasks = [agenerate_with_gan(num = num) for _ in range(num_tries)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    available_props = set(results[0].keys()) - {'Smiles'}
+
+    def parse_props(cond_str):
+        s = str(cond_str).strip()
+        for op in ("<=", ">=", "==", "<", ">"):
+            if op in s:
+                return op, float(s.split(op)[1].strip())
+        raise ValueError(f"Unsupported condition format: {cond_str}")
+
+    required_props = {}
+    if properties_conditions is not None:
+        required_props = {key: parse_props(properties_conditions[key]) for key in properties_conditions} #{prop: (op, threshold)}
+
+    all_smiles = []
+    all_props = defaultdict(list)
+
+    def evaluator(value:float, op_str: str, threshold: float, tolearance:float = 0.1):
+        op_map = {
+            '<': operator.lt,
+            '>': operator.gt,
+            '<=': operator.le,
+            '>=': operator.ge,
+            '==': lambda a, b: abs(a - b) < tolerance
+        }
+    
+        if op_str not in op_map:
+            raise ValueError(f"Unsupported operator: {op_str}")
+        
+        return op_map[op_str](value, threshold)
+
+    check_dict = {key: partial(evaluator, op_str=op, threshold=threshold) for key, (op, threshold) in required_props.items()}
+
+    for result in results:  
+        if isinstance(result, Exception):
+            continue
+        all_smiles.extend(result.get('Smiles', []))
+        for prop in available_props:
+            all_props[prop].extend(result.get(prop, []))
+
+    def valid(idx, all_props):
+        for key in check_dict:
+            if key not in available_props:
+                continue
+            elif not check_dict[key](all_props[key][idx]):
+                return False
+        return True
+
+    output = []
+
+    safe_props = defaultdict(lambda: ['N/A'] * len(all_smiles))
+    safe_props.update(all_props)
+
+    for idx, smile in enumerate(all_smiles):
+        if valid(idx, all_props):
+            output.append((smile, {key: safe_props[key][idx] for key in check_dict}))
+    
+    return output[:num] if len(output)>num else output
+
+@tool
+def generate_mols(
+    num: int = 10,
+    properties_conditions: Optional[Dict[str, str]] = None,
+    num_tries: int = 5
+) -> List[str]:
+    """
+    Asynchronously generates a set of molecular SMILES strings using a GAN-based generator,
+    applying cyclic generation and property-based filtering.
+
+    Args:
+        num (int, optional): The number of valid SMILES strings to return. Defaults to 10.
+        properties_conditions (Optional[Dict[str, str]], optional): 
+            A dictionary specifying property-based selection criteria.
+            Each entry should map a property name to a condition string 
+            (e.g., {"logP": ">=2.5", "QED": "<0.8", "Brenk": "==1.0"}).
+            Available properties: 'Brenk', 'QED', 'Synthetic Accessibility', 'LogP', 'Polar Surface Area', 'H-bond Donors', 'H-bond Acceptors', 'Rotatable Bonds', 'Aromatic Rings', 'Glaxo', 'SureChEMBL', 'PAINS', 'Validity', 'Duplicates', 'docking_score', 'IC50'
+        num_tries (int, optional): 
+            The number of independent generation attempts to perform in parallel. Defaults to 5.
+
+    Returns:
+        List[str]: 
+            A list of tuples containing the selected SMILES strings and their corresponding 
+            evaluated properties that satisfy all specified conditions.
+    """
+    return asyncio.run(agenerate_with_gan_cyclic(
+        num, 
+        properties_conditions=properties_conditions, 
+        num_tries=num_tries
+    ))
+
 agents_tools = [
     run_ml_dl_training_by_daemon,
     get_case_state_from_server,
     get_state_from_server,
-    generate_mol_gan,
+    generate_mols,
     # generate_mol_by_case,
     predict_prop_by_smiles,
 ]
