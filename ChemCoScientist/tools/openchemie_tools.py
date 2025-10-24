@@ -1,12 +1,16 @@
 from langchain_core.tools import tool
 import requests
-from typing import BinaryIO
+from typing import BinaryIO, List, Dict
+from dotenv import load_dotenv
+import os
+from definitions import CONFIG_PATH
 
+load_dotenv(CONFIG_PATH)
 
-BASE_URL = "http://localhost:8000"
+OPENCHEMIE_URL = os.environ["OPENCHEMIE_URL"]
 
 @tool
-def extract_reactions_from_pdf(file: BinaryIO):
+def extract_reactions_from_pdf(file: BinaryIO) -> List[Dict]:
     """
     Extract reactions information from a PDF file.
     Response contains list of reactions for each page of the PDF.
@@ -17,12 +21,12 @@ def extract_reactions_from_pdf(file: BinaryIO):
     Returns:
         response (List[Dict]): List of reactions in pdf file for each page.
     """
-    response = requests.post(f"{BASE_URL}/extract_reactions_from_pdf/", files={"file": file})
+    response = requests.post(f"{OPENCHEMIE_URL}/extract_reactions_from_pdf/", files={"file": file})
     return response.json()["response"]
 
 
 @tool
-def extract_reactions_from_figure(image: BinaryIO):
+def extract_reactions_from_figure(image: BinaryIO) -> List[Dict]:
     """
     Extract reactions information from an image.
     
@@ -33,12 +37,12 @@ def extract_reactions_from_figure(image: BinaryIO):
     Returns:
         response (List[Dict]): List of reactions on the image.
     """
-    response = requests.post(f"{BASE_URL}/extract_reactions_from_figure/", files={"image": image})
+    response = requests.post(f"{OPENCHEMIE_URL}/extract_reactions_from_figure/", files={"image": image})
     return response.json()["response"]  
 
 
 @tool
-def extract_molecules_from_pdf(file: BinaryIO):
+def extract_molecules_from_pdf(file: BinaryIO) -> List[Dict]:
     """
     Extract molecules information from a PDF file.
     Response contains list of molecules for each page of the PDF.
@@ -49,12 +53,12 @@ def extract_molecules_from_pdf(file: BinaryIO):
     Returns:
         response (List[Dict]): List of molecules in pdf file for each page.
     """
-    response = requests.post(f"{BASE_URL}/extract_molecules_from_pdf/", files={"file": file})
+    response = requests.post(f"{OPENCHEMIE_URL}/extract_molecules_from_pdf/", files={"file": file})
     return response.json()["response"]
 
 
 @tool
-def extract_molecules_from_figure(image: BinaryIO):
+def extract_molecules_from_figure(image: BinaryIO) -> List[Dict]:
     """
     Extract molecules information from an image.
     Response contains list of molecules on the image.
@@ -65,12 +69,12 @@ def extract_molecules_from_figure(image: BinaryIO):
     Returns:
         response (List[Dict]): List of molecules on the image.
     """
-    response = requests.post(f"{BASE_URL}/extract_molecules_from_figure/", files={"image": image})
+    response = requests.post(f"{OPENCHEMIE_URL}/extract_molecules_from_figure/", files={"image": image})
     return response.json()["response"]
 
 
 @tool
-def convert_image_to_smiles(image: BinaryIO):
+def convert_image_to_smiles(image: BinaryIO) -> str:
     """
     Convert an image to a smiles string.
     Response contains smiles string of the image.
@@ -79,5 +83,5 @@ def convert_image_to_smiles(image: BinaryIO):
     Returns:
         response (str): SMILES string of the image.
     """
-    response = requests.post(f"{BASE_URL}/convert_image_to_smiles/", files={"image": image})
+    response = requests.post(f"{OPENCHEMIE_URL}/convert_image_to_smiles/", files={"image": image})
     return response.json()["response"]
