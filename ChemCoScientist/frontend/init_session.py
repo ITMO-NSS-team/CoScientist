@@ -21,7 +21,9 @@ def init_page():
         None
     """
     st.set_page_config(
-        page_title="🧪 Chemistry Chatbot", initial_sidebar_state="expanded"
+        page_title="🧪 Chemistry Chatbot", 
+        initial_sidebar_state="expanded",
+        layout = 'wide'
     )
     st.title("🧪 Chemistry Chatbot")
     st.sidebar.image(

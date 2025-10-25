@@ -1,6 +1,8 @@
 import streamlit as st
 import os
 import pandas as pd
+import plotly.express as px
+import uuid
 
 
 def dataset_management(db, user_id='user'):
@@ -17,16 +19,22 @@ def dataset_management(db, user_id='user'):
     Returns:
         None
     """
-    st.header("📁 File Management")
+    st.markdown("""
+    <style>
+        .stButton button {
+            margin-top: 20px;
+            float: right;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
-
-    # File management button
-    col1, col2, col3 = st.columns([2, 6, 1])
-
+    col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
+        st.header("📁 File Management")
+    with col3:  # Button in the rightmost column
         if st.button("🔄 Refresh", key="refresh_files"):
             st.rerun()
-
+    
     st.divider()
 
     # Display files when button is clicked
@@ -169,7 +177,36 @@ def display_csv_preview(file_data, file_path):
         if len(numeric_cols) > 0:
             st.write("**Numeric Columns Statistics:**")
             st.dataframe(df[numeric_cols].describe(), use_container_width=True)
-                
+
+        if len(numeric_cols) > 0:
+            st.write("**📈 Distribution Plots:**")
+            
+            # Let user select column for histogram
+            selected_col = st.selectbox("Select column for distribution:", numeric_cols)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                # Histogram
+                fig_hist = px.histogram(df, x=selected_col, title=f"Distribution of {selected_col}")
+                st.plotly_chart(fig_hist, use_container_width=True, key=f"hist_{selected_col}_{uuid.uuid4().hex[:8]}")
+            
+            with col2:
+                # Box plot
+                fig_box = px.box(df, y=selected_col, title=f"Box Plot of {selected_col}")
+                st.plotly_chart(fig_box, use_container_width=True, key=f"box_{selected_col}_{uuid.uuid4().hex[:8]}")
+
+        if len(numeric_cols) > 1:
+            st.write("**🔥 Correlation Matrix:**")
+            corr_matrix = df[numeric_cols].corr()
+            
+            fig_corr = px.imshow(
+                corr_matrix,
+                title="Correlation Heatmap",
+                color_continuous_scale="RdBu",
+                aspect="auto"
+            )
+            st.plotly_chart(fig_corr, use_container_width=True, key=f"heatmap_{uuid.uuid4().hex[:8]}")
+
     except Exception as e:
         st.error(f"❌ Could not read CSV file: {str(e)}")
         # Fallback to metadata if available
