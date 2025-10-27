@@ -19,18 +19,45 @@ additional_ds_builder_prompt = (
     "\n Is there enough data to train the model? Write the path where you saved it."
 )
 
-automl_prompt = f"""So, your options:
-        1) Start training generative or predictive model if user ask
-        2) Call model for inference (predict properties or generate new molecules or both)
+# automl_prompt = f"""So, your options:
+#         1) Start training generative or predictive model if user ask
+#         2) Call model for inference (predict properties or generate new molecules or both)
 
-        First of all you should call get_state_from_sever to check existing cases and status!!!
-        Even if there is a similar case but not absolutely same, still launch training if the user asks.
-        Check feature_column name and format. It should be list.
-        Check if there is a file :\n{os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"], "users_dataset.csv")}\n. 
-        If it is there, then the user has uploaded their own dataset. In this case, use it.
-        Write simple and correct code. DON'T COMPLICATE IT!
+#         First of all you should call get_state_from_sever to check existing cases and status!!!
+#         Even if there is a similar case but not absolutely same, still launch training if the user asks.
+#         Check feature_column name and format. It should be list.
+#         Check if there is a file :\n{os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"], "users_dataset.csv")}\n. 
+#         If it is there, then the user has uploaded their own dataset. In this case, use it.
+#         Write simple and correct code. DON'T COMPLICATE IT!
 
-        So, your task from the user: """
+#         So, your task from the user: """
+
+automl_prompt = """
+    TASK: {task}
+    DATA DIRECTORY: {directory}
+
+    WHAT YOU CAN DO:
+    1. Start training generative or predictive model
+    2. Call model for inference (predict properties or generate new molecules or both)
+
+    CRITICAL REQUIREMENTS:
+    1. Always call get_state_from_sever to check existing cases and statuses.
+    2. If there is a similar case but not absolutely same, still launch training if the user asks.
+    3. Do NOT return generic messages like "analysis completed" - return actual data
+    4. You must use print() to return a value. 
+
+    EXAMPLE OF GOOD run_ml_dl_training_by_daemon call:
+    ```py
+    run_ml_dl_training_by_daemon(                                                                             
+        case="case_name",                                                                                 
+        path=dataset_path,                                                                                    
+        feature_column=["feautre1", "feautre2"],                                                                            
+        target_column=["target1"],                                                                       
+        regression_props=["target1"],                                                                    
+        classification_props=[],                                                                              
+        description="Training predictive model for case_name using dataset_path dataset"                       
+    )    
+    """
 
 
 memory_prompt = ChatPromptTemplate.from_template(
