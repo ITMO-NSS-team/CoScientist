@@ -209,6 +209,7 @@ conf = {
                     - Each step must include at least one subtask.
                     - Each subtask should be short (one concise sentence or phrase).
                     - All task related coding must be collected in one single task. Don't split it.
+                    - When you asked to train models using dataset procceed to training
                     """,
                 "examples": """
                     Example 1:
