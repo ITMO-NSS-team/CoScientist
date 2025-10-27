@@ -66,7 +66,7 @@ def dataset_builder_agent(state: dict, config: dict):
     old_files = set(get_all_files(path))
     response = data_agent.invoke({"messages": [("user", task_formatted)]})
 
-    new_files = [file for file in get_all_files(path) if file not in old_files]
+    new_files = set([file for file in get_all_files(path) if file not in old_files])
 
     files_db = config['configurable'].get('files_db')
     if files_db:

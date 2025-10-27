@@ -43,6 +43,17 @@ class JSONFileDB:
     def add_file(self, file_path: str, original_filename: str, file_size: int, 
                  uploaded_by: str, user_context: str = None, **kwargs) -> str:
         """Add a new file to the database"""
+
+        # Check if file with same name already exists
+        filename = Path(file_path).name
+        existing_file_id = self.db["indices"]["by_filename"].get(filename)
+        
+        if existing_file_id and existing_file_id in self.db["files"]:
+            # Update existing file instead of creating new one
+            return self._update_existing_file(existing_file_id, file_path, original_filename, 
+                                            file_size, uploaded_by, user_context, **kwargs)
+        
+        # Create new file entry
         file_id = f"file_{uuid.uuid4().hex[:8]}"
         
         # Generate CSV metadata if it's a CSV file
@@ -83,7 +94,85 @@ class JSONFileDB:
         self._save_db()
         
         return file_id
-    
+
+    def _update_tags(self, existing_tags: List[Dict], file_path: str, 
+                    user_context: str, csv_metadata: Dict = None) -> List[Dict]:
+        """Update tags while preserving manual tags and updating auto-generated ones"""
+        # Separate manual and auto-generated tags
+        manual_tags = [tag for tag in existing_tags if tag.get("type") != "auto_generated"]
+        auto_tags = self._generate_auto_tags(file_path, user_context, csv_metadata)
+        
+        return manual_tags + auto_tags
+        
+    def _update_existing_file(self, file_id: str, file_path: str, original_filename: str, 
+                            file_size: int, uploaded_by: str, user_context: str = None, 
+                            **kwargs) -> str:
+        """Update an existing file with new data and metadata"""
+        existing_file = self.db["files"][file_id]
+        
+        # Store old file path for potential cleanup
+        old_file_path = existing_file["file_path"]
+        
+        # Generate new CSV metadata if it's a CSV file
+        csv_metadata = None
+        if file_path.endswith('.csv'):
+            csv_metadata = self._generate_csv_metadata(file_path)
+        
+        # Update file data while preserving some existing metadata
+        updated_file_data = {
+            "id": file_id,
+            "filename": Path(file_path).name,
+            "original_filename": original_filename,
+            "file_path": file_path,
+            "file_size": file_size,
+            "file_type": Path(file_path).suffix[1:],
+            "mime_type": self._get_mime_type(file_path),
+            
+            # Update timestamps
+            "upload_date": existing_file["upload_date"],  # Keep original upload date
+            "last_updated": datetime.now().isoformat(),   # Add update timestamp
+            "last_accessed": datetime.now().isoformat(),
+            "upload_source": kwargs.get('upload_source', existing_file.get('upload_source', 'user_upload')),
+            
+            # Update user info
+            "uploaded_by": uploaded_by,
+            "user_context": user_context or existing_file.get('user_context'),
+            
+            "processing_status": "completed",
+            "processing_error": None,
+            
+            # Update metadata
+            "metadata": {
+                "csv_metadata": csv_metadata
+            } if csv_metadata else {},
+            
+            # Generate new tags but preserve manual tags if any
+            "tags": self._update_tags(existing_file.get("tags", []), file_path, user_context, csv_metadata),
+            
+            # Preserve access logs history
+            "access_logs": existing_file.get("access_logs", [])
+        }
+        
+        # Remove old file from indices before updating
+        self._remove_from_indices(file_id, existing_file)
+        
+        # Update the file entry
+        self.db["files"][file_id] = updated_file_data
+        
+        # Update indices with new data
+        self._update_indices(file_id, updated_file_data)
+        
+        # Optionally delete the old physical file if it's different from the new one
+        if old_file_path != file_path and os.path.exists(old_file_path):
+            try:
+                os.remove(old_file_path)
+                print(f"Deleted old physical file: {old_file_path}")
+            except OSError as e:
+                print(f"Warning: Could not delete old physical file {old_file_path}: {e}")
+        
+        self._save_db()
+        return file_id
+
     def _generate_csv_metadata(self, file_path: str) -> Optional[Dict]:
         """Generate CSV metadata using pandas"""
         try:

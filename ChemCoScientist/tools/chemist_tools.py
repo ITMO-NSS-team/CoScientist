@@ -379,12 +379,15 @@ def fetch_activity_data(
         if isinstance(results, list):
             os.makedirs(dir_to_save, exist_ok=True)
             df = pd.DataFrame(results)
-            df.to_csv(file_name, index=False)
-            buffer = StringIO()
-            df.info(buf=buffer)
-            info_str = buffer.getvalue()
-            return_str = f"The data was saved to {file_name}. Here is info about dataset: {info_str}"
-            del df
+            if len(df)>0:
+                df.to_csv(file_name, index=False)
+                buffer = StringIO()
+                df.info(buf=buffer)
+                info_str = buffer.getvalue()
+                return_str = f"The data was saved to {file_name}. Here is info about dataset: {info_str}"
+                del df
+            else:
+                return_str = f"The data was not saved because it is empty"
             return return_str
         else:
             return results
