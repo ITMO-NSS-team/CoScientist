@@ -181,7 +181,9 @@ def ml_dl_agent(state: dict, config: dict) -> Command:
         model=model,
         additional_authorized_imports=["*"],
     )
-    response = agent.run(automl_prompt + task)
+
+    agent_input = automl_prompt.format(directory=os.path.join(ROOT_DIR, os.environ['DS_STORAGE_PATH']), task=task)
+    response = agent.run(agent_input)
 
     return Command(update={
         "past_steps": Annotated[set, operator.or_](set([(task, str(response))])),

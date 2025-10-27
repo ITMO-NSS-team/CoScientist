@@ -17,13 +17,12 @@ import operator
 from functools import partial
 from pathlib import Path
 
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
-load_dotenv('/app/config.env')
+# load_dotenv('/app/config.env')
 
-conf = {"url_pred": f'{os.environ.get("ML_TOOLS_IP")}:{os.environ.get("ML_TOOLS_PORT")}', "url_gen": f'{os.environ.get("ML_TOOLS_IP")}:{os.environ.get("ML_TOOLS_PORT")}'}
+conf = {"url_pred": f'{os.environ.get("ML_TOOLS_IP")}:{os.environ.get("ML_TOOLS_PORT")}', "url_gen": f'{os.environ.get("DL_TOOLS_IP")}:{os.environ.get("DL_TOOLS_PORT")}'}
 
- 
 async def train_gen_with_data_async(
     case: str ="no_name",
     data_path: str ="./data_dir_for_coder/kras_g12c_affinity_data.xlsx",  # path to client data folder
@@ -38,13 +37,11 @@ async def train_gen_with_data_async(
         "Brenk",
         "IC50",
     ],  # All propreties from dataframe you want to calculate in the end
-    regression_props: List[str] =[
-        "docking_score"
-    ],  # Column name with data for regression tasks (That not include in calculcateble propreties)
+    regression_props: List[str] =["docking_score"],  # Column name with data for regression tasks (That not include in calculcateble propreties)
     classification_props: List[str] = [],  # Column name with data for classification tasks (That not include in calculcateble propreties)
-    description: str ="Descrption not provided",
+    description: str = None,
     timeout: int = 5,  # min
-    url: str = conf["url_gen"] + "/train_gen_models",
+    url: str = conf["url_gen"] + "/train_gan",
     fine_tune: bool = True,
     n_samples:int = 10,
     **kwargs,
@@ -103,17 +100,17 @@ async def train_gen_with_data_async(
             async with session.post(
                 url, 
                 json=params,  # aiohttp automatically serializes to JSON
-                timeout=aiohttp.ClientTimeout(total=1500)  # 15 minute timeout for the request
+                timeout=aiohttp.ClientTimeout(total=10800)  # 3 hours timeout for the request
             ) as response:
                 
                 response.raise_for_status()
                 result = await response.json()
 
-                print(f"Training started successfully for case: {case}")
+                print(f"Training completed successfully for case: {case}")
                 print(f"--- {time.time() - start_time:.2f} seconds ---")
 
                 return result
-                
+     
     except aiohttp.ClientError as e:
         print(f"HTTP request failed: {e}")
         raise
@@ -125,10 +122,8 @@ async def train_gen_with_data_async(
 async def train_ml_with_data_async(
     case: str = "No_name",
     data_path: str = "automl/data/data_4j1r.csv",  # path to client data folder
-    feature_column: List[str] = ["Smiles"],
-    target_column: List[str] = [
-        "Docking score"
-    ],  # All propreties from dataframe you want to calculate in the end,
+    feature_column: List[str] = ["smiles"],
+    target_column: List[str] = ["Docking score"],  # All propreties from dataframe you want to calculate in the end,
     regression_props: List[str] = ["Docking score"],
     classification_props: List[str] = [],
     description: str = "",
@@ -188,7 +183,7 @@ async def train_ml_with_data_async(
             async with session.post(
                 f"{conf['url_pred']}/train_ml", 
                 json=params,  # aiohttp automatically serializes to JSON
-                timeout=aiohttp.ClientTimeout(total=1500)  # 15 minute timeout for the request
+                timeout=aiohttp.ClientTimeout(total=10800)  # 15 minute timeout for the request
             ) as response:
                 
                 response.raise_for_status()
@@ -197,6 +192,7 @@ async def train_ml_with_data_async(
                 print(f"Training started successfully for case: {case}")
                 print(f"--- {time.time() - start_time:.2f} seconds ---")
                 return result
+
                 
     except aiohttp.ClientError as e:
         print(f"HTTP request failed: {e}")
@@ -217,6 +213,7 @@ async def ml_dl_training_async(
     classification_props: List[str] = [],
     poll_interval: int = 30,  # seconds
     max_wait_time: int = 18000,  # 5 hour max
+    description: str = None
 ):
     """
     Trains machine learning and deep learning models for a given case.
@@ -250,12 +247,14 @@ async def ml_dl_training_async(
     print(f"Starting ML/DL training pipeline for case: {case}")
 
     try:
+        print(f"Starting ML training...")
         ml_task = asyncio.create_task(train_ml_with_data_async(case=case,
                                                     data_path=path,
                                                     feature_column=feature_column,
                                                     target_column=target_column,
                                                     regression_props=regression_props,
-                                                    classification_props=classification_props))
+                                                    classification_props=classification_props,
+                                                    description=description))
         ml_monitor_task = asyncio.create_task(wait_for_training_completion(
                                                 case=case,
                                                 model_type="pred",
@@ -263,11 +262,13 @@ async def ml_dl_training_async(
                                                 max_wait_time=max_wait_time,
                                                 start_time=start_time
                                             ))
-        
+        print(f"Waiting for ML tasks...")
+
         # Wait for both ML tasks to complete
         ml_result, ml_status = await asyncio.gather(ml_task, ml_monitor_task)
         results["ml_training"] = ml_result
         results["ml_status"] = ml_status
+        print(f"ML tasks completed")
 
         # Then start generative training AND monitoring concurrently  
         gen_task = asyncio.create_task(train_gen_with_data_async(
@@ -277,6 +278,7 @@ async def ml_dl_training_async(
                                         target_column=target_column,
                                         regression_props=regression_props,
                                         classification_props=classification_props,
+                                        description=description
                                     ))
         gen_monitor_task = asyncio.create_task(wait_for_training_completion(
                                             case=case,
@@ -297,13 +299,13 @@ async def ml_dl_training_async(
         print(f"Training completed successfully for case: {case}")
         print(f"Total training time: {results['total_time']:.2f} seconds")
         
-        return results
+        #return results
 
     except Exception as e:
         results["status"] = "failed"
         results["error"] = str(e)
         results["total_time"] = time.time() - start_time
-        print(f"❌ Training failed for case {case}: {e}")
+        print(f"Training failed for case {case}: {e}")
         raise
 
 
@@ -334,7 +336,7 @@ async def wait_for_training_completion(
                         'pred': 'ml_models'}
 
     last_print_time = start_time
-    print_interval = 10  # Print status every 60 seconds
+    print_interval = 60  # Print status every 60 seconds
     while time.time() - start_time < max_wait_time:
         try:
             # Get current status from server
@@ -342,14 +344,14 @@ async def wait_for_training_completion(
 
             if isinstance(status, dict):
                 # Check if training is complete
-                if status.get(model_type_mapper[model_type], {}).get('status') in set(["Trained", "completed", "ready"]):
+                if status.get(model_type_mapper[model_type], {}).get('status') in {"Trained"}:
                     print(f"{model_type.upper()} training completed for case: {case}")
                     return status
                 
-                # Check if training failed
-                if status.get(model_type_mapper[model_type], {}).get('status') in ["Failed", "error"]:
-                    error_msg = status.get("error", "Unknown error")
-                    raise ValueError(f"{model_type.upper()} training failed: {error_msg}")
+                # Check if training in process TODO: on server side implement proper failure mechanism
+                # if status.get(model_type_mapper[model_type], {}).get('status') in {"Not Trained", None}:
+                #     error_msg = status.get("error", "Unknown error")
+                #     raise ValueError(f"{model_type.upper()} training failed: {error_msg}")
 
             # Print progress periodically
             current_time = time.time()
@@ -372,99 +374,8 @@ async def wait_for_training_completion(
     )
 
 
-def ml_training(
-    case: str,
-    path: str,
-    feature_column: list = ["canonical_smiles"],
-    target_column: list = ["docking_score"],
-    regression_props: list = ["docking_score"],
-    classification_props: list = [],
-) -> bool:
-    """
-    Trains a machine learning model for predicting molecular properties.
-    
-    This method prepares data, validates its integrity, and initiates the training process using the provided dataset and specified properties.
-    
-    Args:
-        case (str): A unique identifier for the model being trained.
-        path (str): The file path to the dataset (CSV or Excel).
-        feature_column (list, optional):  The name(s) of the column(s) containing the molecular features. Defaults to ["canonical_smiles"].
-        target_column (list): The name(s) of the column(s) representing the properties to be predicted.  Must contain at least one element.
-        regression_props (list, optional): The name(s) of the column(s) used for regression tasks. Defaults to ["docking_score"].  Should duplicate `feature_column` if used.
-        classification_props (list, optional): The name(s) of the column(s) used for classification tasks. Defaults to [].  Set to an empty list if classification is not required.
-    
-    Returns:
-        bool: True upon successful initiation of the training process.  Raises exceptions if data validation fails.
-    """
-
-    if regression_props == [] and classification_props == []:
-        regression_props = target_column
-    if len(target_column) < 1:
-        raise ValueError(
-            "target_column is empty! You must set value. For example = ['IC50']"
-        )
-    if len(feature_column) < 1:
-        raise ValueError(
-            "feature_column is empty! You must set value. For example = ['smiles']"
-        )
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Data file not found: {path}")
-        
-    data_path_obj = Path(path)
-    ext = data_path_obj.suffix.lower()
-
-    if ext in ('.csv', '.txt', '.tsv'):
-        df = pd.read_csv(data_path_obj)
-    elif ext in ('.xlsx', '.xls', '.xlsm', '.xlsb'):
-        df = pd.read_excel(data_path_obj)
-    elif ext in ('.parquet', '.parq'):
-        df = pd.read_parquet(data_path_obj)
-
-    if len(df) < 300:
-        raise ValueError(
-            "Training on this data is impossible. The dataset is too small!"
-        )
-
-    df_columns = df.columns.tolist()
-    for column in feature_column:
-        if column not in df_columns:
-            raise ValueError(
-                f'No "{column}" column in data! Change argument and run again! Avilable: '
-                + str(df_columns)
-            )
-    for column in target_column:
-        if column not in df_columns:
-            raise ValueError(
-                f'No "{column}" column in data! Change argument and run again! Avilable: '
-                + str(df_columns)
-            )
-
-    # # delete molecules eith len more 200
-    # clear_df = filter_valid_strings(df, feature_column[0])
-    # clear_df.to_csv(path)
-
-    async def _run_training():
-        try:
-            results = await train_ml_with_data_async(
-                    case=case,
-                    data_path=path,
-                    feature_column=feature_column,
-                    target_column=target_column,
-                    regression_props=regression_props,
-                    classification_props=classification_props,
-                )
-            print(f"✅ Background training completed for {case}")
-        except Exception as e:
-            print(f"Background training failed for {case}: {e}")
-
-    asyncio.create_task(_run_training())
-    print("Start training ml model for case: ", case)
-    return 
-
-
-
-async def agenerate_with_gan(num: int = 100, timeout: int = 30) -> Tuple[aiohttp.ClientResponse, Dict[str, Any]]:
-    params = {'case_': "Alzheimer", 'numb_mol': num}
+async def agenerate_with_gan(num: int = 100, timeout: int = 30, case: str = "Alzheimer") -> Tuple[aiohttp.ClientResponse, Dict[str, Any]]:
+    params = {'case_': case, 'numb_mol': num}
     url = conf['url_gen'] + '/gan_case_generator'
 
     timeout_config = aiohttp.ClientTimeout(total=timeout)
@@ -493,9 +404,10 @@ async def agenerate_with_gan(num: int = 100, timeout: int = 30) -> Tuple[aiohttp
 async def agenerate_with_gan_cyclic(num: int = 10,
     properties_conditions: Optional[Dict[str, str]] = None,
     num_tries: int = 5,
-    maximum_error: float = 0.1) -> List[str]:
+    maximum_error: float = 0.1,
+    case: str = 'Alzheimer') -> List[str]:
 
-    tasks = [agenerate_with_gan(num = num) for _ in range(num_tries)]
+    tasks = [agenerate_with_gan(num = num, case=case) for _ in range(num_tries)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     available_props = set(results[0].keys()) - {'Smiles'}
@@ -590,7 +502,7 @@ def get_state_from_server(url: str = "pred", case: Optional[str] = None) -> Unio
 @tool
 def predict_prop_by_smiles(
     smiles_list: List[str], case: str = "no_name_case", timeout: int = 20
-) -> Tuple[requests.Response, dict]:
+) -> dict:
     """
     Predicts molecular properties using pre-trained machine learning models. 
     
@@ -600,12 +512,12 @@ def predict_prop_by_smiles(
         timeout (int, optional): Sets a time limit (in minutes) for the prediction request. Defaults to 20.
     
     Returns:
-        Tuple[requests.Response, dict]: A tuple containing the HTTP response from the prediction server and the parsed JSON data representing the predicted properties.
+        dict: Parsed JSON data representing the predicted properties.
     """
     url = conf["url_pred"] + "/predict_ml"
     params = {"case": case, "smiles_list": smiles_list, "timeout": timeout}
     resp = requests.post(url, json.dumps(params))
-    return resp, resp.json()
+    return resp.json()
 
 @tool
 def generate_mol_by_case(
@@ -642,7 +554,8 @@ def generate_mol_by_case(
 def generate_mols(
     num: int = 10,
     properties_conditions: Optional[Dict[str, str]] = None,
-    num_tries: int = 5
+    num_tries: int = 5,
+    case: str = "Alzheimer"
 ) -> List[str]:
     """
     Generates a set of molecular SMILES strings applying property-based filtering.
@@ -653,9 +566,10 @@ def generate_mols(
             A dictionary specifying property-based selection criteria.
             Each entry should map a property name to a condition string 
             (e.g., {"logP": ">=2.5", "QED": "<0.8", "Brenk": "==1.0"}).
-            Available properties: 'Brenk', 'QED', 'Synthetic Accessibility', 'LogP', 'Polar Surface Area', 'H-bond Donors', 'H-bond Acceptors', 'Rotatable Bonds', 'Aromatic Rings', 'Glaxo', 'SureChEMBL', 'PAINS', 'Validity', 'Duplicates', 'docking_score', 'IC50'
+            Available properties can be retrieved using 'get_state_from_server'
         num_tries (int, optional): 
             The number of independent generation attempts to perform in parallel. Defaults to 5.
+        case (str, optional): The name of the generative model to use.  Available model names can be retrieved using `get_state_from_server`. Defaults to "Alzheimer".
 
     Returns:
         List[str]: 
@@ -664,6 +578,7 @@ def generate_mols(
     """
     return asyncio.run(agenerate_with_gan_cyclic(
         num, 
+        case=case,
         properties_conditions=properties_conditions, 
         num_tries=num_tries
     ))
@@ -676,10 +591,11 @@ def run_ml_dl_training_by_daemon(
     target_column: list[str] = ["docking_score"],
     regression_props: list[str] = ["docking_score"],
     classification_props: list = [],
+    description: str = None
 ) -> Union[bool, str]:
     """
     Initiates a machine learning and deep learning training process in the background, utilizing the provided dataset and configuration. 
-    This process prepares models for predicting chemical properties or classifying molecules based on input features. 
+    This process prepares models for predicting chemical properties or classifying molecules based on input features as well as generating new molecules targeted by this features
     
     Args:
         case (str): A unique identifier for the training case, used to track the process.
@@ -688,7 +604,7 @@ def run_ml_dl_training_by_daemon(
         target_column (list, optional): A list of column names specifying the properties to be predicted or classified. This list must not be empty. Defaults to ["docking_score"].
         regression_props (list, optional): A list of column names used for regression tasks. This list should generally align with the feature columns. Defaults to ["docking_score"].
         classification_props (list, optional): A list of column names used for classification tasks. Use an empty list if classification is not required. Defaults to [].
-    
+        description (str, optional): Description of the data and case
     Returns:
         None
     
@@ -756,31 +672,34 @@ def run_ml_dl_training_by_daemon(
                                 feature_column=feature_column,
                                 target_column=target_column,
                                 regression_props=regression_props,
-                                classification_props=classification_props)
+                                classification_props=classification_props,
+                                description=description)
             print(f"Background training completed for {case}")
+            return results
         except Exception as e:
             print(f"Background training failed for {case}: {e}")
+            return f"Background training completed for {case}"
+
+    def _run_in_background():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_run_training())
+        loop.close()
 
     try:
         # If we're already in an async context, use create_task
         loop = asyncio.get_running_loop()
         task = loop.create_task(_run_training())
         print(f"Async training daemon started for case: {case}")
-        return 
+        return f"Async training daemon started for case: {case}"
     except RuntimeError:
         # If no event loop running, create new one in background thread
-        def _run_in_background():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(_run_training())
-            finally:
-                loop.close()
 
         import threading
-        thread = threading.Thread(target=_run_in_background, daemon=True)
+        thread = threading.Thread(target=_run_in_background, daemon=False)
         thread.start()
-        print(f"Thread-based training daemon started for case: {case}")
+        print(f"🎯 Thread-based training daemon started for case: {case}")
+        return f"Thread-based training daemon started for case: {case}"
     
 
 agents_tools = [
@@ -791,48 +710,3 @@ agents_tools = [
     predict_prop_by_smiles,
 ]
 
-if __name__ == "__main__":
-    #run_ml_dl_training_by_daemon('sars_cov', './data_store/datasets/users_dataset.csv', 'smiles', 'IC50', ['IC50'])
-    #run_ml_dl_training_by_daemon('test_case_async', "ChemCoScientist/data_store/datasets/BTK_IC50_bindingdb.csv", target_column=["affinity"])
-    #print(get_state_from_server().keys())
-    #print(generate_mols(10))
-
-    #aiohttp.client_exceptions.ClientResponseError: 500, message='Internal Server Error', url='http://10.32.2.2:293/train_gen_models'
-    # print(asyncio.run(train_gen_with_data_async(case="test_case_async",
-    #                         data_path="ChemCoScientist/data_store/datasets/BTK_IC50_bindingdb.csv",  # path to client data folder
-    #                         feature_column=["smiles"],
-    #                         target_column=[
-    #                             'affinity'
-    #                         ],  # All propreties from dataframe you want to calculate in the end
-    #                         regression_props=[
-    #                             "affinity"
-    #                         ],  # Column name with data for regression tasks (That not include in calculcateble propreties)
-    #                         classification_props=[],  # Column name with data for classification tasks (That not include in calculcateble propreties)
-    #                         description="Descrption not provided",
-    #                         timeout=5,  # min
-    #                         url = conf["url_gen"] + "/train_gen_models",
-    #                         fine_tune = True,
-    #                         n_samples=10,)))
-
-    #aiohttp.client_exceptions.ClientResponseError: 404, message='Not Found', url='http://10.32.2.2:293/train_ml'
-    # print(asyncio.run(train_ml_with_data_async(case="test_case_async",
-    #                         data_path="ChemCoScientist/data_store/datasets/BTK_IC50_bindingdb.csv",  # path to client data folder
-    #                         feature_column=["smiles"],
-    #                         target_column=[
-    #                             'affinity'
-    #                         ],  # All propreties from dataframe you want to calculate in the end
-    #                         regression_props=[
-    #                             "affinity"
-    #                         ],  # Column name with data for regression tasks (That not include in calculcateble propreties)
-    #                         classification_props=[],  # Column name with data for classification tasks (That not include in calculcateble propreties)
-    #                         description="Descrption not provided",
-    #                         timeout=5)
-    # ))
-
-    print(asyncio.run(wait_for_training_completion(
-                        case = 'BTK',
-                        model_type = 'pred',
-                        poll_interval = 5
-                            )
-                    )
-        )
