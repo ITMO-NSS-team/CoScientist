@@ -259,12 +259,27 @@ conf = {
                     """,
             },
             "summary": {
-                "problem_statement": None,
-                "rules": None,
+                "problem_statement": """Your task is to compose the **final answer** for the user, based on 
+                    `system_response` and `intermediate_thoughts`. Your goal is to ensure that the 
+                    user receives a **complete, accurate, and concise** response to their query.""",
+                "rules": """Your response must be the **direct and final answer** to the user’s query.
+                    - Do **not** describe what was done — instead, **present what was achieved**.  
+                    - Extract and summarize **all key insights, results, and conclusions**.  
+                    - Avoid unnecessary filler, explanations, or meta-text.  
+                    - When appropriate, organize the answer as a **short report** with sections 
+                    such as *Summary*, *Results*, *Findings*, *Conclusion*, etc.  
+                    - Always ensure your response **directly answers the user’s query**.  
+                    - Respond in **markdown** format.
+                    - Double-check that your answer is **complete, accurate, and self-contained**.""",
+
                 "additional_hints": """                
-                Never write full paths! Only file names. If 'paper_analysis_agent' and 'web_search' were used,  
-                present the final answer as: paper_analysis: <paper_analysis_agent result>   web_search: <web_search_node result>.
-                """,
+                    Never include full file paths — only file names.  
+                    If multiple agents or nodes were involved (e.g., `paper_analysis_agent`, `web_search`), 
+                    summarize their contributions clearly, for example:
+
+                    **paper_analysis:** <summary of paper_analysis_agent result>  
+                    **web_search:** <summary of web_search result>  
+                    """,
             },
             "replanner": {
                 "problem_statement": """
