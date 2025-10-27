@@ -379,7 +379,7 @@ def fetch_activity_data(
         if isinstance(results, list):
             os.makedirs(dir_to_save, exist_ok=True)
             df = pd.DataFrame(results)
-            df.to_csv(file_name)
+            df.to_csv(file_name, index=False)
             buffer = StringIO()
             df.info(buf=buffer)
             info_str = buffer.getvalue()
