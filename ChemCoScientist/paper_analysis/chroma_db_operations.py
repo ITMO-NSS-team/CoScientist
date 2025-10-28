@@ -17,11 +17,13 @@ from protollm.connectors import create_llm_connector
 from pydantic import BaseModel, Field
 import requests
 
+from ChemCoScientist.chemical_utils.openchemie_functions import extract_molecules_from_figure, extract_reactions_from_figure
 from ChemCoScientist.paper_analysis.prompts import summarisation_prompt
 from ChemCoScientist.paper_analysis.settings import allowed_providers
 from ChemCoScientist.paper_analysis.settings import settings as default_settings
 from CoScientist.paper_parser.s3_connection import S3BucketService
 from CoScientist.paper_parser.s3_connection import s3_service as default_s3_service
+from CoScientist.paper_parser.utils import load_image_as_binary
 from CoScientist.paper_parser.parse_and_split import (
     clean_up_html,
     html_chunking,
@@ -173,6 +175,19 @@ class ChromaClient:
             where=metadata_filter,
             include=["documents", "metadatas", "distances"],
         )
+        
+    @staticmethod
+    def update_chroma_collection(collection: Collection, ids: list[str], metadata: dict):
+        """
+        Updates a Chroma collection with new metadata.
+
+        Args:
+            collection: The Chroma collection to update.
+            ids: The IDs of the documents to update.
+            metadata: The new metadata to add to the documents.
+        """
+        collection.update(ids=ids, metadatas=metadata)
+        return collection.get(ids=ids)
     
     def delete_collection(self, name: str):
         """
@@ -473,6 +488,17 @@ class ChromaDBPaperStore:
             query,
             {"source": {"$in": relevant_papers['answer']}},
             self.img_chunk_num,
+        )
+        for img in image_context["metadatas"][0]:
+            if img.get("molecules") is None or img.get("reactions") is None:
+                image_bytes = load_image_as_binary(img["image_path"])
+                img["molecules"] = str(extract_molecules_from_figure(image_bytes))
+                img["reactions"] = str(extract_reactions_from_figure(image_bytes))
+
+        self.client.update_chroma_collection(
+            self.img_collection,
+            image_context["ids"][0],
+            image_context["metadatas"][0]
         )
         text_context = self.search_with_reranker(query, raw_text_context, top_k=5)
         return text_context, image_context, relevant_papers

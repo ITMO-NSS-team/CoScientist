@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+from typing import BinaryIO
 from urllib.parse import urlparse
 
 from langchain_core.messages import HumanMessage
@@ -30,6 +31,28 @@ def convert_to_base64(file_path):
     pil_image.save(buffered, format="JPEG")
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return img_str
+
+def load_image_as_binary(file_path: str) -> BytesIO:
+    """
+    Loads an image from a local path or S3 and returns a BytesIO object.
+    
+    Args:
+        file_path (str): The path to the image file.
+    Returns:
+        BytesIO: A BytesIO object representing the image.
+    """
+    if file_path.startswith("http://") or file_path.startswith("https://"):
+        s3_key, bucket_name = extract_s3_bucket_and_key(file_path)
+        pil_image = Image.open(BytesIO(s3_service.get_image_bytes_from_s3(s3_key, bucket_name)))
+        pil_image.save("tmp.jpeg", format="JPEG")
+    else:
+        pil_image = Image.open(file_path)
+        pil_image.save("tmp.jpeg", format="JPEG")
+
+    buffered = BytesIO()
+    pil_image.save(buffered, format="JPEG")
+
+    return buffered.getvalue()
 
 
 def prompt_func(data):

@@ -1,6 +1,7 @@
 import base64
 import os
 
+from ChemCoScientist.chemical_utils.openchemie_functions import extract_molecules_from_figure
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage
 from protollm.connectors import create_llm_connector
@@ -8,7 +9,8 @@ from protollm.connectors import create_llm_connector
 from ChemCoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
 from ChemCoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt
 from ChemCoScientist.paper_analysis.settings import allowed_providers
-from CoScientist.paper_parser.utils import convert_to_base64, prompt_func
+from CoScientist.paper_parser.utils import convert_to_base64, prompt_func, load_image_as_binary
+from ChemCoScientist.chemical_utils.openchemie_functions import *
 from definitions import CONFIG_PATH
 
 load_dotenv(CONFIG_PATH)
@@ -36,7 +38,6 @@ def query_llm(
     llm = create_llm_connector(model_url, extra_body={"provider": {"only": allowed_providers}})
 
     img_context = list(map(convert_to_base64, img_paths))
-
     messages = [
         SystemMessage(content=sys_prompt),
         prompt_func(
@@ -128,6 +129,11 @@ def process_question(question: str, store: ChromaDBPaperStore) -> dict:
         img_paths.update(eval(chunk_meta["imgs_in_chunk"]))
     for img in img_data["metadatas"][0]:
         img_paths.add(img["image_path"])
+        molecules_reactions_metadata = {
+            "molecules": img["molecules"],
+            "reactions": img["reactions"]
+        }
+    txt_context += f"Molecules and reactions data: {molecules_reactions_metadata}\n\n"
 
     ans, metadata = query_llm(VISION_LLM_URL, question, txt_context, list(img_paths))
 
@@ -182,10 +188,10 @@ if __name__ == "__main__":
     #######################################################
 
     paper_store = ChromaDBPaperStore()
-    question = 'What is the title of an article?'
+    # question = 'What is the title of an article?'
     # question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
-    # question = 'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
-    # question = 'How does the synthesis of Glionitrin A/B happen?'
+    # question = f'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
+    question = 'How does the synthesis of Glionitrin A/B happen?'
 
     # res = simple_query_llm(VISION_LLM_URL, question, [paper])
     result = process_question(question, paper_store)
