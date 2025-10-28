@@ -2,13 +2,14 @@ import os
 import time
 
 import streamlit as st
-from protollm.agents.builder import GraphBuilder
+#from protollm.agents.builder import GraphBuilder
 from streamlit_extras.grid import GridDeltaGenerator, grid
 from ChemCoScientist.tools.utils import convert_to_base64
 from ChemCoScientist.logger import logger
 from ChemCoScientist.frontend.utils import file_uploader, clean_folder
 from ChemCoScientist.frontend.streamlit_endpoints import process_uploaded_paper
 from ChemCoScientist.memory.json_db import JSONFileDB
+from ChemCoScientist.memory.memory_manager import MemoryGraph
 from definitions import ROOT_DIR
 
 
@@ -326,7 +327,9 @@ def init_backend():
     from ChemCoScientist.conf.create_conf import conf
     conf['configurable']['logger'] = logger
     conf['files_db'] = JSONFileDB(os.environ.get('MEMORY_DB_PATH', 'ChemCoScientist/data_store/files_db.json'))
-    st.session_state.backend = GraphBuilder(conf)
+    #st.session_state.backend = GraphBuilder(conf)
+    if "backend" not in st.session_state:
+        st.session_state.backend = MemoryGraph(config=conf, llm=conf['configurable']['llm'], logger=logger)
 
 
 def init_dataset():

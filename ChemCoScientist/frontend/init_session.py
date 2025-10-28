@@ -118,8 +118,8 @@ def init_session_state():
             }
         ]
 
-    if "backend" not in st.session_state:
-        st.session_state.backend = None
+    # if "backend" not in st.session_state:
+    #     st.session_state.backend = None
 
     if "base_url" not in st.session_state:
         st.session_state.base_url = None
