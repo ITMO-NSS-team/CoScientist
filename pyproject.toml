@@ -36,6 +36,9 @@ dependencies = [
     "langgraph (==0.3.34)",
     "streamlit_extras (==0.7.5)",
     "psutil (==7.0.0)",
+    "faiss-cpu (>=1.12.0,<2.0.0)",
+    "openpyxl (>=3.1.5,<4.0.0)",
+    "et-xmlfile (>=2.0.0,<3.0.0)",
 ]
 
 [build-system]
