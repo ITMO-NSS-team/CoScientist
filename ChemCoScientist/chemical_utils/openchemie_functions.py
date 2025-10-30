@@ -23,7 +23,7 @@ def extract_reactions_from_pdf(file: bytes) -> List[Dict]:
     Returns:
         response (List[Dict]): List of reactions in pdf file for each page.
     """
-    response = requests.post(f"{OPENCHEMIE_URL}/extract_reactions_from_pdf/", files={"file": file})
+    response = requests.post(f"{OPENCHEMIE_URL}/extract_reactions_from_pdf/", files={"pdf_file": file})
     return response.json()["response"]
 
 
@@ -53,7 +53,7 @@ def extract_molecules_from_pdf(file: bytes) -> List[Dict]:
     Returns:
         response (List[Dict]): List of molecules in pdf file for each page.
     """
-    response = requests.post(f"{OPENCHEMIE_URL}/extract_molecules_from_pdf/", files={"file": file})
+    response = requests.post(f"{OPENCHEMIE_URL}/extract_molecules_from_pdf/", files={"pdf_file": file})
     return response.json()["response"]
 
 
