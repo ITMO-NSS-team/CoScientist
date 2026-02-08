@@ -49,7 +49,6 @@ def handle_api_request(endpoint: str, file_param_name: str = None, ):
                 logger.info(f"Calling ChemService API: {api_url}")
                 
                 if file_param_name:
-                    # For file uploads, expect first positional argument to be file data
                     if args:
                         file_data = args[0]
                     elif file_param_name in kwargs:
@@ -63,10 +62,8 @@ def handle_api_request(endpoint: str, file_param_name: str = None, ):
                         timeout=REQUEST_TIMEOUT
                     )
                 else:
-                    # For parameter requests, combine args and kwargs into params dict
                     params = {}
                     if args:
-                        # Get parameter names from function signature
                         sig = inspect.signature(func)
                         param_names = list(sig.parameters.keys())
                         for i, arg in enumerate(args):
@@ -82,27 +79,25 @@ def handle_api_request(endpoint: str, file_param_name: str = None, ):
                 if response.status_code != 200:
                     error_msg = f"ChemService API returned status {response.status_code}: {response.text[:500]}"
                     logger.error(error_msg)
-                    raise ValueError(error_msg)
-                
+                    return {'errors': error_msg}
+
                 json_response = response.json()
-                print(json_response)
                 if json_response is None:
                     error_msg = "ChemService API returned None JSON response"
                     logger.error(error_msg)
-                    raise ValueError(error_msg)
-                
+                    return {'errors': error_msg}
+
                 if "data" not in json_response:
                     error_msg = f"ChemService API response missing 'data' field. Response: {json_response}"
                     logger.error(error_msg)
-                    raise ValueError(error_msg)
+                    return {'errors': error_msg}
                 
-                return json_response["data"]
+                return json_response
                 
             except requests.exceptions.RequestException as e:
                 error_msg = f"Failed to connect to ChemService API at {CHEM_SERVICES_URL}: {str(e)}"
                 logger.error(error_msg)
-                raise ConnectionError(error_msg)
-        
+                return {'errors': error_msg}
         return wrapper
     return decorator
 
@@ -211,4 +206,5 @@ def remove_keys(obj: Any, keys_to_remove: set[str] = {"bbox", "score"}) -> Any:
 
 
 if __name__ == "__main__":
-    print(calculate_docking_score(smiles="C1CCCCC1", pdb_id="5vfi"))
+    result = calculate_docking_score(smiles="C1CCCCC1", pdb_id="5vfi")
+    print(result)

@@ -9,32 +9,38 @@ from ChemCoScientist.chemical_utils.chemical_functions import extract_molecules_
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+BOX_COLORS = {
+    "molecules": "red",
+    "products": "green",
+    "reagents": "blue",
+    "conditions": "orange",
+}
+DEFAULT_BOX_COLOR = "gray"
 
-def draw_bboxes_on_image(
-    image: bytes, 
-    bboxes: list[list],
-) -> bytes:
-    """
-    Draw bounding boxes of deceted molecules and reactions on the provided image.
-    
+
+def draw_bboxes_on_image(image: bytes, bboxes: dict) -> bytes:
+    """Draw bounding boxes of detected molecules and reactions on the provided image.
+
     Args:
-        image (bytes): Original user image
-        bboxes (List[List]): List of bounding boxes [x1, y1, x2, y2]
-    
+        image (bytes): Original user image.
+        bboxes (dict): Dict mapping category keys (molecules, products, reagents, conditions)
+            to lists of normalized bboxes [x1, y1, x2, y2] in 0..1 range.
+
     Returns:
-        bytes: JPEG image with rectangles drawn.
+        bytes: JPEG image with rectangles drawn. Colors per category from BOX_COLORS.
     """
     img = Image.open(io.BytesIO(image))
     draw = ImageDraw.Draw(img)
-    
     w, h = img.size
 
-    for bbox in bboxes:
-        x1 = bbox[0] * w
-        y1 = bbox[1] * h
-        x2 = bbox[2] * w
-        y2 = bbox[3] * h
-        draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+    for key, boxes in bboxes.items():
+        color = BOX_COLORS.get(key, DEFAULT_BOX_COLOR)
+        for bbox in boxes if isinstance(boxes, list) else [boxes]:
+            x1 = bbox[0] * w
+            y1 = bbox[1] * h
+            x2 = bbox[2] * w
+            y2 = bbox[3] * h
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
 
     output = io.BytesIO()
     img.save(output, format="JPEG", quality=95)
@@ -71,24 +77,12 @@ def molecules_ocr(images: list[str]) -> dict:
         img_path = Path(img_path)
         img_bytes = img_path.read_bytes()
         
-        try:
-            openchemie_result = extract_molecules_from_figure(img_bytes)
-        except (ConnectionError, ValueError, RuntimeError) as e:
-            logger.error(f"Error processing image {img_path}: {str(e)}")
-            result[img_path.name] = []
-            continue
-        
-        if not openchemie_result or len(openchemie_result) == 0:
-            logger.error(f"No results returned for image: {img_path}")
-            result[img_path.name] = []
-            continue
-            
-        entries = openchemie_result[0].get("bboxes", [])
-        if not entries:
-            logger.error(f"No molecular entries detected in image: {img_path}")
-            result[img_path.name] = []
-            continue
-        
+        openchemie_result = extract_molecules_from_figure(img_bytes)
+        recognitions = openchemie_result.get("data", [])
+        errors = openchemie_result.get("errors", None)
+        entries = []
+        if recognitions:  
+            entries = recognitions[0].get("bboxes", [])
         bboxes, smiles = [], []
         
         for entry in entries:
@@ -97,13 +91,16 @@ def molecules_ocr(images: list[str]) -> dict:
                 smiles.append(smi)
                 bboxes.append(entry.get("bbox"))
         
-        annotated_img = draw_bboxes_on_image(img_bytes, bboxes)
-        os.makedirs(Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH')), exist_ok=True)
-        out_path = Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH'), f"{img_path.stem}_annotated.jpg")
-        out_path.write_bytes(annotated_img)
-            
-        result[img_path.name] = smiles
-        annotated_images.append(out_path.as_posix())
+        if bboxes:
+            annotated_img = draw_bboxes_on_image(img_bytes, {"molecules": bboxes})
+            os.makedirs(Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH')), exist_ok=True)
+            out_path = Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH'), f"{img_path.stem}_annotated.jpg")
+            out_path.write_bytes(annotated_img)
+            annotated_images.append(out_path.as_posix())
+
+        result[img_path.name] = dict()
+        result[img_path.name].update({"smiles": smiles})
+        result[img_path.name].update({"errors": errors})
     
     return {
         "answer": result,
@@ -136,72 +133,61 @@ def reactions_ocr(images: list[str]) -> dict:
     """
     result = dict()
     annotated_images = []
-    
+
     for img_path in images:
         img_path = Path(img_path)
         img_bytes = img_path.read_bytes()
+        result[img_path.name] = dict()
         
-        try:
-            openchemie_result = extract_reactions_from_figure(img_bytes)
-        except (ConnectionError, ValueError, RuntimeError) as e:
-            logger.error(f"Error processing image {img_path}: {str(e)}")
-            result[img_path.name] = {"reactants": [], "conditions": [], "products": []}
-            continue
+        openchemie_result = extract_reactions_from_figure(img_bytes)
+        recognitions = openchemie_result.get("data", [])
+        errors = openchemie_result.get("errors", None)
         
-        if not openchemie_result or len(openchemie_result) == 0:
-            logger.error(f"No results returned for image: {img_path}")
-            result[img_path.name] = {"reactants": [], "conditions": [], "products": []}
-            continue
+        reactions = []
+        if recognitions:  
+            reactions = recognitions[0].get("reactions", [])
         
-        entries = openchemie_result[0].get("reactions", [])
-        if not entries:
-            logger.error(f"No reaction entries detected in image: {img_path}")
-            result[img_path.name] = {"reactants": [], "conditions": [], "products": []}
-            continue
-        
-        bboxes = []
-        result[img_path.name] = {"reactants": [], "conditions": [], "products": []}
-        
-        for entry in entries:
-            for r in entry.get("reactants", []):
-                bboxes.append(r["bbox"])
+        bboxes = {"reagents": [], "products": [], "conditions": []}
+        for reaction_id, reaction in enumerate(reactions):
+            result[img_path.name][f"reaction_{reaction_id}"] = {"reactants": [], "products": [], "conditions": []}
+            for r in reaction.get("reactants", []):
+                bboxes["reagents"].append(r["bbox"])
                 try:
-                    result[img_path.name]["reactants"].append(r["smiles"])
+                    result[img_path.name][f"reaction_{reaction_id}"]["reactants"].append(r["smiles"])
                 except:
-                    result[img_path.name]["reactants"].append(r["text"])
+                    result[img_path.name][f"reaction_{reaction_id}"]["reactants"].append(r["text"])
 
-            for p in entry.get("products", []):
-                bboxes.append(p["bbox"])
+            for p in reaction.get("products", []):
+                bboxes["products"].append(p["bbox"])
                 try:
-                    result[img_path.name]["products"].append(p["smiles"])
+                    result[img_path.name][f"reaction_{reaction_id}"]["products"].append(p["smiles"])
                 except:
-                    result[img_path.name]["products"].append(p["text"])
+                    result[img_path.name][f"reaction_{reaction_id}"]["products"].append(p["text"])
 
-            for c in entry.get("conditions", []):
-                bboxes.append(c["bbox"])
+            for c in reaction.get("conditions", []):
+                bboxes["conditions"].append(c["bbox"])
                 try:
-                    result[img_path.name]["conditions"].append(c["smiles"])
+                    result[img_path.name][f"reaction_{reaction_id}"]["conditions"].append(c["smiles"])
                 except:
                     if c["text"] != []:
-                        result[img_path.name]["conditions"].append(c["text"])
+                        result[img_path.name][f"reaction_{reaction_id}"]["conditions"].append(c["text"])
         
-        annotated_img = draw_bboxes_on_image(img_bytes, bboxes)
-        os.makedirs(Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH')), exist_ok=True)
-        out_path = Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH'), f"{img_path.stem}_annotated.jpg")
-        out_path.write_bytes(annotated_img)
-        
-        annotated_images.append(out_path.as_posix())
-    
+        if any(bboxes.values()):
+            annotated_img = draw_bboxes_on_image(img_bytes, bboxes)
+            os.makedirs(Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH')), exist_ok=True)
+            out_path = Path(os.environ.get('PROCESSED_IMG_STORAGE_PATH'), f"{img_path.stem}_annotated.jpg")
+            out_path.write_bytes(annotated_img)
+            annotated_images.append(out_path.as_posix())
+
     return {
         "answer": result,
         "metadata": {
             "annotated_images": annotated_images
-                }
         }
+    }
 
 
 if __name__ == "__main__":
-    directory = Path(r"C:\Users\computer\Documents\GitHub\CoScientist\ChemCoScientist\data_store\reactions")
-    image_paths = [p.resolve() for p in directory.iterdir() if p.is_file()]
-    # pprint(molecules_ocr(image_paths))
-    pprint(reactions_ocr(image_paths))
+    pprint(reactions_ocr(['reaction.jpeg']))
+    # pprint(molecules_ocr(['test.jpeg']))
+    # pprint(reactions_ocr(image_paths))

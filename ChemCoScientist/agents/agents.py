@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import os
 import time
 import json
@@ -7,6 +8,8 @@ import operator
 import streamlit as st
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import ToolMessage
+import logging
+from langchain_mcp_adapters.client import MultiServerMCPClient  
 
 from langgraph.types import Command
 from langgraph.graph import END
@@ -25,6 +28,24 @@ from ChemCoScientist.tools.ml_tools import agents_tools as automl_tools
 
 from ChemCoScientist.agents.agents_prompts import paper_agent_prompt, coder_prompt
 from definitions import ROOT_DIR
+
+_CHEMICAL_MCP_TOOLS = None
+
+
+def _get_chemical_mcp_tools():
+    """Return LangChain tools from the chemical MCP server. Cached after first call."""
+    global _CHEMICAL_MCP_TOOLS
+    if _CHEMICAL_MCP_TOOLS is None:
+        client = MultiServerMCPClient(
+            {
+                "chemical_server": {
+                    "transport": "http",
+                    "url": os.environ.get("CHEMICAL_MCP_URL", "http://0.0.0.0:7331/mcp"),
+                }
+            }
+        )
+        _CHEMICAL_MCP_TOOLS = asyncio.run(client.get_tools())
+    return _CHEMICAL_MCP_TOOLS
 
 
 def get_all_files(directory: str):
@@ -239,9 +260,10 @@ def chemist_node(state: dict, config: dict) -> Command:
     llm = config["configurable"]["llm"]
 
     current_prompt = f'{chemist_prompt}\nPass {{"session_id": None}} as a parameter to the detect_molecules and detect_reactions tools'
+    chemical_tools = _get_chemical_mcp_tools()
 
     chem_agent = create_react_agent(
-        llm, chem_tools, state_modifier=current_prompt
+        llm, chemical_tools, state_modifier=current_prompt
     )
 
     task_formatted = f"""For the following plan:\n{str(plan)}\n\nYou are tasked with executing: {task}."""
@@ -253,7 +275,7 @@ def chemist_node(state: dict, config: dict) -> Command:
             
             updated_metadata = state.get("metadata", {}).copy()
             for message in agent_response["messages"]:
-                if isinstance(message, ToolMessage) and message.name in ["detect_molecules", "detect_reactions"]:
+                if isinstance(message, ToolMessage) and message.name in ["detect_molecules", "detect_reactions", "extract_reactions"]:
                     result = ast.literal_eval(message.content)
                     ocr_metadata = {"chem_ocr": result.get("metadata", None)}
                     if ocr_metadata["chem_ocr"]:
