@@ -27,7 +27,7 @@ dependencies = [
     "open-clip-torch (==2.32.0)",
     "sentence-transformers (==4.1.0)",
     "chromadb (==1.0.15)",
-    "streamlit (==1.52.2)",
+    "streamlit (>=1.54.0,<2.0.0)",
     "langchain-gigachat (==0.3.3)",
     "langchain-ollama (==0.3.0)",
     "langchain-openai (==0.3.3)",
@@ -39,8 +39,11 @@ dependencies = [
     "faiss-cpu (>=1.12.0,<2.0.0)",
     "openpyxl (>=3.1.5,<4.0.0)",
     "et-xmlfile (>=2.0.0,<3.0.0)",
+    "biopython (>=1.86,<2.0)",
     "streamlit-image-zoom (==0.0.4)",
-    "PyMuPDF (==1.26.6)"
+    "PyMuPDF (==1.26.6)",
+    "pikepdf (>=10.2.0,<11.0.0)",
+    "opik (>=1.9.101,<2.0.0)"
 ]
 
 [build-system]

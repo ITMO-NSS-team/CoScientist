@@ -95,6 +95,9 @@ def chat():
             if message.get("chem_ocr") and message["role"] == "assistant":
                 display_chem_ocr_metadata(message)
 
+            if message.get("docking") and message["role"] == "assistant":
+                display_docking_metadata(message)
+
     streaming_placeholder = st.empty()
 
     user_text = st.chat_input("Enter a prompt here...", key="chat_input")
@@ -351,13 +354,10 @@ def message_handler(user_query: str, placeholder: st.delta_generator.DeltaGenera
                     if "chem_ocr" in result["metadata"].keys():
                         st.session_state.messages[-1]["chem_ocr"] = result["metadata"]["chem_ocr"]
                         # Display the metadata immediately after storing it
-                        message_index = len(st.session_state.messages) - 1
                         display_chem_ocr_metadata(st.session_state.messages[-1])
                     
                     if "docking" in result["metadata"].keys():
                         st.session_state.messages[-1]["docking"] = result["metadata"]["docking"]
-                        # Display the metadata immediately after storing it
-                        message_index = len(st.session_state.messages) - 1
                         display_docking_metadata(st.session_state.messages[-1])
 
                 if mols := msg.get("molecules_vis"):
@@ -402,14 +402,26 @@ def display_chem_ocr_metadata(message):
 
 def display_docking_metadata(message):
     html_file = message["docking"]["html_file"]
-    with open(html_file, "r") as f:
-        html_content = f.read()
+    if not os.path.isabs(html_file):
+        html_file = os.path.join(ROOT_DIR, html_file)
+    try:
+        with open(html_file, "r", encoding="utf-8") as f:
+            html_content = f.read()
+    except FileNotFoundError:
+        st.warning(f"Файл результата докинга не найден: {html_file}")
+        return
+    except Exception as e:
+        logger.exception("Ошибка при чтении файла докинга: %s", e)
+        st.warning("Не удалось загрузить визуализацию докинга.")
+        return
+    if "<head>" in html_content:
+        html_content = html_content.replace("<head>", "<head><base href=\"about:blank\" target=\"_blank\">", 1)
     st.components.v1.html(html_content, height=400)
     st.download_button(
-        label="Download HTML file",
+        label="Скачать HTML с результатом докинга",
         data=html_content,
-        file_name=html_file,
-        key=f"download_html_{html_file}",
+        file_name=os.path.basename(html_file),
+        key=f"download_docking",
     )
 
 

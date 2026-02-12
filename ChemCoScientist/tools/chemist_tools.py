@@ -608,9 +608,8 @@ def visualize_molecule(
         return f"Failed to execute. Error: {repr(e)}"
 
 
-#TODO: Implement session_id logic
 @tool
-def detect_molecules(session_id: Optional[str] = None) -> Dict:
+def detect_molecules() -> Dict:
     """
     Detects molecular structures in uploaded images and converts
     them into SMILES format using the `molecules_ocr` pipeline.
@@ -640,7 +639,7 @@ def detect_molecules(session_id: Optional[str] = None) -> Dict:
     logging.info('Running extract_molecules tool...')
     try:
         directory = Path(os.environ.get('IMG_STORAGE_PATH'))
-        images = [str(f.resolve()) for f in directory.iterdir() if f.is_file() and f.suffix.lower() == '.jpg']
+        images = [str(f.resolve()) for f in directory.iterdir() if f.is_file() and f.suffix.lower() in ['.jpg', '.png', '.jpeg']]
         if not images:
             return {'answer': 'No images provided for molecules recognition.'}
         return molecules_ocr(images)
@@ -650,7 +649,7 @@ def detect_molecules(session_id: Optional[str] = None) -> Dict:
 
 
 @tool
-def detect_reactions(session_id: Optional[str] = None) -> Dict:
+def detect_reactions() -> Dict:
     """
     Detects chemical reactions in uploaded images and converts
     them into structured reaction elements format using the `reactions_ocr` pipeline.
@@ -680,7 +679,7 @@ def detect_reactions(session_id: Optional[str] = None) -> Dict:
     logging.info('Running extract_reactions tool...')
     try:
         directory = Path(os.environ.get('IMG_STORAGE_PATH'))
-        images = [str(f.resolve()) for f in directory.iterdir() if f.is_file() and f.suffix.lower() == '.jpg']
+        images = [str(f.resolve()) for f in directory.iterdir() if f.is_file() and f.suffix.lower() in ['.jpg', '.png', '.jpeg']]
         if not images:
             return {'answer': 'No images provided for reactions recognition.'}
         return reactions_ocr(images)
@@ -700,23 +699,30 @@ def calculate_docking(smiles: str, pdb_id: str) -> str:
     Returns:
         response (dict): Dictionary containing docking score for the molecule and the HTML file.
     """
-    try:
-        data = calculate_docking_score(smiles, pdb_id)
-        html_base64 = data["visualization"]
+    response = calculate_docking_score(smiles, pdb_id)
+    data = response.get("data", None)
+    errors = response.get("error")
+    
+    if data:
+        affinity = data['affinity']
+        visualization = data['visualization']
+    
+    output_file = None
+    if visualization:
+        html_base64 = data.get("visualization", None)
         html_content = base64.b64decode(html_base64)
         output_file = os.path.join(os.environ.get("PATH_TO_RESULTS"), f"docking_result_{pdb_id}.html")
         with open(output_file, "wb") as f:
             f.write(html_content)
-        return {
-            "answer": data["affinity"],
-            "metadata": {
-                "html_file": output_file
-                    }
-            }
+    
+    result = {'affinity': affinity, "errors": errors}
+    return {
+        "answer": result,
+        "metadata": {
+            "html_file": output_file
+                }
+        }
 
-    except Exception as e:
-        logger.error(f'molecules_docking ERROR: {e}')
-        return {'answer': 'Could not calculate docking score.'}
 
 chem_tools = [
     name2smiles,

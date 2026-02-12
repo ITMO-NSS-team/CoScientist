@@ -35,6 +35,9 @@ import conf.create_conf as cc
 # inputs = {"input": "Collect a dataset of molecules and their MIC values against Staphylococcus aureus. Only use the create_dataset_from_papers tool"}
 # inputs = {"input": "Расчетное исследование реакций Дильса-Альдера с участием циклопентадиена предлагает классификацию на три типа в зависимости от полярности. Опишите эти три категории, указав их определяющие характеристики с точки зрения переноса заряда (CT) в переходном состоянии и соответствующие активационные барьеры (ΔE‡)."}
 
+# Chemical calculations
+# inputs = {"input": "Calculate docking score for the molecule C1CCCCC1 with the pdb id 5vfi"}
+
 # ChemOCR
 inputs = {"input": "Extract all molecules from these images."}
 
