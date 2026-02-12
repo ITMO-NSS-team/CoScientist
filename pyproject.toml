@@ -43,7 +43,9 @@ dependencies = [
     "streamlit-image-zoom (==0.0.4)",
     "PyMuPDF (==1.26.6)",
     "pikepdf (>=10.2.0,<11.0.0)",
-    "opik (>=1.9.101,<2.0.0)"
+    "opik (>=1.9.101,<2.0.0)",
+    "feedparser (>=6.0.12,<7.0.0)",
+    "paperscraper (>=0.3.3,<0.4.0)"
 ]
 
 [build-system]

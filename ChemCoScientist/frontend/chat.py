@@ -7,6 +7,7 @@ import threading
 
 from io import BytesIO
 from langgraph.errors import GraphRecursionError
+from pathlib import Path
 from PIL import Image
 from queue import Queue, Empty
 from urllib.parse import urlparse
@@ -68,6 +69,25 @@ def chat():
                 st.markdown(message["automl_results"])
             else:
                 st.markdown(message["content"])
+
+            if message.get('found_pubmed_papers'):
+                papers = message.get('found_pubmed_papers')
+                st.subheader("Список найденных статей:")
+
+                for idx, paper in enumerate(papers):
+                    with st.expander(
+                        f"{idx+1}. {paper.title}", expanded=False
+                    ):
+
+                        authors = ', '.join(paper.authors)
+                        st.markdown(f"**Авторы:** {authors}")
+                        st.markdown(f"**Год:** {paper.year}")
+                        st.markdown(f"**Журнал:** {paper.journal}")
+                        st.markdown(f"**Аннотация:** {paper.abstract}")
+                        
+                        if paper.link:
+                            st.markdown(f"[Перейти к статье]({paper.link})")
+
 
             gen_imgs = message.get("images_generated")
 
@@ -252,6 +272,8 @@ def message_handler(user_query: str, placeholder: st.delta_generator.DeltaGenera
 
                 # st.session_state.messages.append({'role': 'assistant', "content": result['response']})
                 st.session_state.messages[-1]["content"] = result["response"]
+                if result.get('found_pubmed_papers'):
+                    st.session_state.messages[-1]["found_pubmed_papers"] = result.get('found_pubmed_papers')
 
                 # clean_folder(os.path.join(ROOT_DIR, os.environ["DS_STORAGE_PATH"]))
                 # clean_folder(os.path.join(ROOT_DIR, os.environ["IMG_STORAGE_PATH"]))
@@ -309,6 +331,34 @@ def message_handler(user_query: str, placeholder: st.delta_generator.DeltaGenera
                     st.markdown(msg["automl_results"])
                 else:
                     st.markdown(msg["content"])
+
+                if result.get('metadata'):
+                    
+                    papers = result['metadata']
+                    print(papers)
+
+                    paper_key = 'found_papers_' + user_query
+
+                    if papers.get(paper_key):
+                        st.subheader("Список найденных статей:")
+
+                    st.session_state.messages[-1]['found_pubmed_papers'] = []
+
+                    for idx, paper in enumerate(papers.get(paper_key, [])):
+                        with st.expander(
+                            f"{idx+1}. {paper.title}", expanded=False
+                        ):
+
+                            authors = ', '.join(paper.authors)
+                            st.markdown(f"**Авторы:** {authors}")
+                            st.markdown(f"**Год:** {paper.year}")
+                            st.markdown(f"**Журнал:** {paper.journal}")
+                            st.markdown(f"**Аннотация:** {paper.abstract}")
+
+                            if paper.link:
+                                st.markdown(f"[Перейти к статье]({paper.link})")
+
+                            st.session_state.messages[-1]['found_pubmed_papers'].append(paper)
 
                 # ATTENTION: RENDER IMG FOR USER
                 if imgs := msg.get("image_urls"):
@@ -423,6 +473,26 @@ def display_docking_metadata(message):
         file_name=os.path.basename(html_file),
         key=f"download_docking",
     )
+    
+@st.dialog("Extracted compounds", width="large")
+def pdf_viewer(folder: str):
+    folder_path = Path(folder)
+
+    exts = ("*.png", "*.jpg", "*.jpeg", "*.webp")
+    image_paths = []
+    for ext in exts:
+        image_paths.extend(folder_path.glob(ext))
+
+    image_paths = sorted(image_paths)
+
+    # st.write(f"Folder: {folder_path} ({len(image_paths)} pages)")
+    with st.container(height=500, border=True):
+        for i, p in enumerate(image_paths):
+            img = Image.open(p)
+            st.image(img, width=800)
+
+            if i < len(image_paths) - 1:
+                st.divider()
 
 
 def display_paper_analysis_metadata(message, message_index):
@@ -442,7 +512,11 @@ def display_paper_analysis_metadata(message, message_index):
     paper_analysis = message["paper_analysis"]
 
     if "dataset" in paper_analysis.keys():
-        display_dataset(paper_analysis.get("dataset"), message_index)
+        display_dataset(paper_analysis.get("dataset"))
+
+    if "images_path" in paper_analysis.keys():
+        if st.button("Check extracted compounds"):
+            pdf_viewer(paper_analysis.get("images_path"))
 
     if "text_context" in paper_analysis.keys():
         text_context = paper_analysis.get("text_context")
@@ -507,23 +581,10 @@ def display_paper_analysis_metadata(message, message_index):
                     st.write("No image context available")
 
 
-def display_dataset(dataset, message_index):
+def display_dataset(dataset: str):
     import pandas as pd
-    df = pd.DataFrame.from_dict(dataset)
-
+    df = pd.read_csv(dataset, sep="\t")
     st.dataframe(df)
-
-    # Create a CSV from the DataFrame for download
-    csv = df.to_csv(sep="\t", index=False).encode('utf-8')
-
-    # Provide a download button to download the CSV file
-    st.download_button(
-        label="Download dataset as CSV",
-        data=csv,
-        file_name='dataset.csv',
-        mime='text/csv',
-        key=f"download_csv_{message_index}",
-    )
 
 
 def async_to_sync(async_gen):

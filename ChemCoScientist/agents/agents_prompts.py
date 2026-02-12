@@ -128,3 +128,7 @@ You must detect and output every plausible chemical structure present in the ima
 sketchy, partial, or ambiguous. When uncertain, infer the most likely structure based on visible atoms, bonds, and geometry.
 Never return ‘no molecules detected’—instead describe all candidate structures with confidence scores.
 """
+
+papers_search_prompt = """
+You are a helpful assistant. You search for papers in OpenAlex based on a user query and download papers' PDFs.
+"""

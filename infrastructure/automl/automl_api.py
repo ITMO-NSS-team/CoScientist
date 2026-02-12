@@ -60,7 +60,7 @@ if __name__=='__main__':
                          filename="state.json",
                          local_dir='infrastructure/automl',
                          force_download=True,
-                         token='')
+                         token=os.getenv("HF_TOKEN"))
         train_ml_with_data(data)
 
     @app.post("/predict_ml")
@@ -70,7 +70,7 @@ if __name__=='__main__':
                     filename="state.json",
                     local_dir='infrastructure/automl',
                     force_download=True,
-                    token='')
+                    token=os.getenv("HF_TOKEN"))
         return inference_ml(data)
     
 

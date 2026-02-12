@@ -80,6 +80,10 @@ explore_my_papers_prompt = (
     " If the user asks for SMILES, include only the SMILES explicitly provided in the papers.\n"
     "8. Do NOT invent or assume information beyond papers or your own established knowledge.\n"
     "9. Be very attentive to SMILES sequences and numbers. Even small errors may lead to an incorrect answer."
+    "Meta-document exception:"
+    "If USER QUESTION concerns the current session (e.g., number of uploaded papers,"
+    "their presence, titles, authors, or other metadata), answer directly using the provided documents."
+    "Do not refuse and do not apply the scientific-answer rules or two-part structure."
 )
 
 paraphrase_prompt = (

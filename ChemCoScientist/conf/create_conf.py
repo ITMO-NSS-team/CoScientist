@@ -14,7 +14,8 @@ from ChemCoScientist.agents.agents import (
     ml_dl_agent,
     nanoparticle_node,
     paper_analysis_agent,
-    coder_agent
+    coder_agent,
+    papers_search_agent
 )
 from ChemCoScientist.tools import chem_tools_rendered, nano_tools_rendered, tools_rendered, data_tools_rendered, \
     paper_analysis_tools_rendered
@@ -62,6 +63,12 @@ Outputs:
 
 Failure handling:
 If no relevant papers are found, state "no match in database" and still run "web_search".
+
+Special behavior for dataset creation:
+- If 'create_dataset_from_papers' is requested but no papers are uploaded:
+  1) Augment the user query to search for relevant papers.
+  2) Automatically invoke 'papers_search_agent' to find relevant papers with augmented query.
+  3) After successful download, retry dataset creation with downloaded papers.
 """
 
 web_search_description = """
@@ -101,12 +108,65 @@ Failure handling:
 """
 
 
+papers_search_agent_description = """
+Agent name: papers_search_agent
+
+Purpose:
+Search OpenAlex for relevant scientific papers, download their PDF files, and return
+download metadata for downstream processing.
+
+When to activate:
+- User requests finding or downloading papers for a given research topic, author,
+    journal, or institution.
+
+Procedure (implementation details):
+1) Use an LLM (via the configured `VISION_LLM_URL`) to generate the appropriate
+     OpenAlex API request URL for the user's query.
+2) Call OpenAlex (with retry logic) and inspect the returned `results`.
+3) For each result containing a `content_urls.pdf`, download the PDF and save it to
+     the configured `DOWNLOADED_PAPERS_PATH` using a sanitized filename.
+4) Return a structured response containing a human-readable `answer` and `metadata`.
+    When PDFs were downloaded, `metadata.papers` contains the list of saved file paths.
+    For queries that resolve to an entity (author/source/institution), the agent may
+    return an `id` in `metadata` instead of (or in addition to) downloaded files.
+
+Two-step / entity-ID flow:
+- The agent can be used in a two-step pattern for author/journal/institution queries:
+  1) First call the agent to resolve the target entity to an OpenAlex ID (the agent
+    will return `metadata.id` when it detects an entity-resolution response).
+  2) Then call the agent again (or include the resolved ID in the original query)
+    to search for and download papers associated with that entity. This two-step
+    approach is supported by the implementation and recommended for precise author or
+    source-based searches.
+
+Notes and constraints:
+- The agent builds the OpenAlex request via an LLM and then performs the HTTP calls
+    directly; network retry/backoff logic is applied for robustness.
+- The agent downloads PDFs listed in `content_urls.pdf` from OpenAlex results and
+    saves them locally; it does not attempt to bypass paywalls beyond what OpenAlex
+    exposes in `content_urls`.
+
+Inputs:
+- user_query: str
+
+Outputs:
+- A dict with an `answer` string and optional `metadata` dict. When downloads occur,
+    `metadata.papers` is a list of downloaded file paths; when an entity ID is resolved,
+    `metadata.id` is provided.
+
+Failure handling:
+- If no papers are found or downloads fail, the agent returns an explanatory `answer`
+    and an empty or absent `metadata.papers`.
+"""
+
+
 additional_agents_description = (
     automl_agent_description
     + dataset_builder_agent_description
     + coder_agent_description
     + paper_analysis_agent_description
     + web_search_description
+    + papers_search_agent_description
 )
 
 conf = {
@@ -114,6 +174,7 @@ conf = {
     "recursion_limit": 25,
     "configurable": {
         "user_id": "1",
+        "session_id": "1",
         "visual_model": create_llm_connector(os.environ["VISION_LLM_URL"]),
         "img_path": "image.png",
         "llm": create_llm_connector(
@@ -130,6 +191,7 @@ conf = {
             "coder_agent",
             "paper_analysis_agent",
             "web_search",
+            "papers_search_agent"
         ],
         # nodes for scenario agents
         "scenario_agent_funcs": {
@@ -140,6 +202,7 @@ conf = {
             "coder_agent": coder_agent,
             "paper_analysis_agent": paper_analysis_agent,
             "web_search": web_search_node,
+            "papers_search_agent": papers_search_agent
         },
         # descripton for agents tools - if using langchain @tool
         # or description of agent capabilities in free format
@@ -204,6 +267,9 @@ conf = {
                     7. You must include all information you see in user prompt to your plan
                     8. If you get a general question about chemistry first call paper_analysis_agent. Use web search
                     only if paper_analysis_agent has no answer. 
+                    9. If you get a query to find or download papers, use papers_search_agent:
+                       - For topic-based searches (e.g., "Download papers about CRISPR CAS"), directly search for papers using that topic.
+                       - For author, journal, or institution searches, create two sequential subtasks: first resolve the entity's OpenAlex ID, then search for papers using that ID.
                     """,
                 "desc_restrictions": """
                     - You cant name agents
@@ -238,6 +304,23 @@ conf = {
                     Response: {
                         "steps": [
                             ["Generate 5 molecules related to MEK1", "Generate 3 molecules using the GSK model"]
+                        ]
+                    }
+
+                    Example 4 (author search):
+                    Request: "Find papers by author 'Jane Q. Researcher' about quantum dots"
+                    Response: {
+                        "steps": [
+                            ["Search OpenAlex for author ID for 'Jane Q. Researcher'"],
+                            ["Search OpenAlex for papers by the found author ID about quantum dots"]
+                        ]
+                    }
+
+                    Example 5 (topic search):
+                    Request: "Download papers about CRISPR CAS"
+                    Response: {
+                        "steps": [
+                            ["Search and download papers about CRISPR CAS"]
                         ]
                     }
                     """,

@@ -19,12 +19,15 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(path, 'imgs'), exist_ok=True)
     os.makedirs(os.path.join(path, 'another'), exist_ok=True)
 
+    
+
     db = JSONFileDB(os.environ.get('MEMORY_DB_PATH', 'ChemCoScientist/data_store/files_db.json'))
 
     start_cleanup_thread()
     init_page()
-    side_bar()
 
+    backend_type = os.environ.get('BACKEND_TYPE', "ChemCoScientist")
+    side_bar(backend=backend_type)
     tab_chat, tab_files, tab_datasets = st.tabs(["💬 Chat", "📁 File Management", "Available Datasets"])
 
     with tab_chat:

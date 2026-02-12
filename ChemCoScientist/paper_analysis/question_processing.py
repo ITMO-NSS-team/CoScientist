@@ -1,10 +1,14 @@
 import base64
 import os
+import time
+import pikepdf
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage
 from protollm.connectors import create_llm_connector
 from pydantic import BaseModel, Field
+from pypdf import PdfReader, PdfWriter
+from io import BytesIO
 
 from ChemCoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
 from ChemCoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt
@@ -90,18 +94,34 @@ def simple_query_llm(model_url: str, question: str, pdfs: list, img_descriptions
     llm = create_llm_connector(model_url)
 
     content = []
+    
+    writer = PdfWriter()
 
+    # Merge all PDFs
     for paper_pdf in pdfs:
-        with open(paper_pdf, "rb") as f:
-            base64_pdf = base64.b64encode(f.read()).decode("utf-8")
-        paper_part = {
-            "type": "file",
-            "file": {
-                "filename": paper_pdf,
-                "file_data": f"data:application/pdf;base64,{base64_pdf}",
-            },
-        }
-        content.append(paper_part)
+        reader = PdfReader(paper_pdf)
+        for page in reader.pages:
+            writer.add_page(page)
+
+    merged_buffer = BytesIO()
+    writer.write(merged_buffer)
+    merged_buffer.seek(0)
+   
+    # Linearize merged PDF
+    clean_buffer = BytesIO()
+    with pikepdf.open(merged_buffer) as pdf:
+        pdf.save(clean_buffer, linearize=True)
+    clean_buffer.seek(0)
+
+    base64_pdf = base64.b64encode(clean_buffer.read()).decode("utf-8")
+    paper_part = {
+        "type": "file",
+        "file": {
+            "filename": "merged_papers.pdf",
+            "file_data": f"data:application/pdf;base64,{base64_pdf}",
+        },
+    }
+    content.append(paper_part)
 
     text_part = {"type": "text", "text": f"USER QUESTION: {question}\n\n{img_descriptions}"}
     content.append(text_part)
@@ -111,9 +131,16 @@ def simple_query_llm(model_url: str, question: str, pdfs: list, img_descriptions
         SystemMessage(content=explore_my_papers_prompt),
         HumanMessage(content=content)
     ]
-
-    res = llm.invoke(messages)
-    return {'answer': res.content}
+    
+    for attempt in range(3):
+        try:
+            res = llm.invoke(messages)
+            return {'answer': res.content}
+        except Exception as e:
+            print(f"LLM query error: {str(e)}. Retrying ({attempt + 1}/3)")
+            time.sleep(1.2 ** attempt)
+            
+    return {'answer': 'LLM invocation failed after 3 attempts.'}
 
 
 def process_question(question: str, store: ChromaDBPaperStore) -> dict:
@@ -194,6 +221,8 @@ def process_question(question: str, store: ChromaDBPaperStore) -> dict:
         })
 
     return {
+        "chunk_metadata": txt_data,
+        "img_metadata": img_data,
         "answer": ans['answer'],
         "explanation": ans['explanation'],
         "chunk_explanation": ans.get('chunk_explanation', ''),
@@ -247,9 +276,11 @@ if __name__ == "__main__":
 
     paper_store = ChromaDBPaperStore()
     question = 'What is the title of an article?'
-    question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
-    question = 'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
-    question = 'How does the synthesis of Glionitrin A/B happen?'
+      # question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
+    # question = 'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
+    # question = 'How does the synthesis of Glionitrin A/B happen?'
+
+    # res = simple_query_llm(VISION_LLM_URL, question, [paper])
     result = process_question(question, paper_store)
     from pprint import pprint
     pprint(result)

@@ -31,19 +31,31 @@ import conf.create_conf as cc
 
 # Paper analysis
 # inputs = {"input": "How does the synthesis of Glionitrin A/B happen?"}
+# inputs['input'] = inputs.get('input', '') + " Only use the files provided by the user to answer " \
+#                                                                 "the question. You can only use one of these tools:" \
+#                                                                 "create_dataset_from_papers or " \
+#                                                                 "explore_my_papers tools from paper_analysis_agent. " \
+#                                                                 "use create_dataset_from_papers when the user asks " \
+#                                                                 "to create/collect a dataset," \
+#                                                                 "use explore_my_papers when the user has a question " \
+#                                                                 "about chemistry or about uploaded files/papers"
 # inputs = {"input": "How does the calculated spin-wave spectrum of Cu₂(OH)₃X vary as the halide (X) is changed from Cl to Br to I, particularly concerning the bandwidth in the interchain direction?"}
-# inputs = {"input": "Collect a dataset of molecules and their MIC values against Staphylococcus aureus. Only use the create_dataset_from_papers tool"}
 # inputs = {"input": "Расчетное исследование реакций Дильса-Альдера с участием циклопентадиена предлагает классификацию на три типа в зависимости от полярности. Опишите эти три категории, указав их определяющие характеристики с точки зрения переноса заряда (CT) в переходном состоянии и соответствующие активационные барьеры (ΔE‡)."}
 
 # Chemical calculations
 # inputs = {"input": "Calculate docking score for the molecule C1CCCCC1 with the pdb id 5vfi"}
 
 # ChemOCR
-inputs = {"input": "Extract all molecules from these images."}
+# inputs = {"input": "Extract all molecules from these images."}
+
+# Download papers
+inputs = {"input": "Find 3 papers of Yann LeCun and download these papers"}
+# inputs = {"input": "Find 3 open access papers about antibacterial activity of oxazolidinone derivatives and download these papers. Then collect a dataset of oxazolidinones and their MIC values against Staphylococcus aureus. Only use the create_dataset_from_papers tool"}
+# inputs = {"input": "Сollect a dataset of oxazolidinones and their MIC values against Staphylococcus aureus. Only use the create_dataset_from_papers tool"}
 
 if __name__ == "__main__":
     graph = GraphBuilder(cc.conf)
-    for step in graph.stream(inputs, user_id="1", session_id="1"):
+    for step in graph.stream(inputs, user_id="1"):
         print(f"=====\n"
               f"PLAN: {step['plan']}\n"
               f"PAST_STEPS: {[f'{i[:30]}...' for i in step['past_steps']]}\n"

@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(ROOT_DIR, 'config.env')
+ROOT_DIR = Path(__file__).parent.absolute()
+CONFIG_PATH = ROOT_DIR / 'config.env'

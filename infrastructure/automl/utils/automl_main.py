@@ -115,8 +115,9 @@ def input_data_preparing_from_list(case:str,
         return data
 
 def run_train_automl(case:str,
-                     timeout:int = 5,
-                     path_to_save = r'generative_models_data/generative_models/transformer_auto'):
+                     timeout:int = 60*20,
+                     path_to_save = r'infrastructure\automl\ML_models',
+                     save_trained_data_to_sync_server:bool=False):
     """
     Runs automated machine learning training for a given case and its predictable properties.
     
@@ -132,7 +133,6 @@ def run_train_automl(case:str,
     Returns:
         None
     """
-
     state = TrainState()
     metrics = {'regression':None,'classification':None}
     state.ml_model_upd_status(case=case,status=1)
@@ -242,7 +242,6 @@ def run_predict_automl_from_list(case:str,
                 properties[prop] = list(map(float,resutls.predict[:,i]))
             else:
                 properties[prop] = list(map(float,resutls.predict))
-
     return properties
 
 
@@ -267,7 +266,7 @@ if __name__=='__main__':
                             target_column=target_column,
                             predictable_properties={ "regression":regression_props})
     
-    run_train_automl(case=task,path_to_save='automl/trained_data',timeout=60*10)
+    run_train_automl(case=task,path_to_save='infrastructure/automl/ML_models',timeout=60*10)
 
 
     # data_path = r"automl\data\base_cases\tau_kinase_inhib_reg.csv"

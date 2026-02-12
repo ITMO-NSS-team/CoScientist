@@ -1,17 +1,23 @@
 import os, json, base64
+import logging
 import pandas as pd
 from dotenv import load_dotenv
 import fitz
 from io import BytesIO, StringIO
+from pathlib import Path
 from PIL import Image
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage
 from protollm.connectors import create_llm_connector, get_allowed_providers
+import uuid
+
+logger = logging.getLogger(__name__)
 
 from ChemCoScientist.chemical_utils.chemical_functions import extract_molecules_from_figure
 from ChemCoScientist.paper_analysis.settings import allowed_providers
 from ChemCoScientist.paper_analysis.prompts import extract_mol_properties_prompt
+from ChemCoScientist.chemical_utils.ocr_pipeline import render_molecule_detections
 
-from definitions import CONFIG_PATH
+from definitions import CONFIG_PATH, ROOT_DIR
 
 load_dotenv(CONFIG_PATH)
 
@@ -114,39 +120,55 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df[new_order]
 
 
-def extract_mols_prop_dataset(model_url: str, question: str, pdfs: list) -> pd.DataFrame:
+def extract_mols_prop_dataset(model_url: str, question: str, pdfs: list, session_id: str) -> (Path, Path):
     """
     Extracts a dataset with molecular SMILES and properties from PDF documents
-    by calling OpenChemIE tool and quering a language model.
+    by calling the OpenChemIE tool and quering a language model. It returns the resulting dataset
+    along with the original PDF pages, annotated with bounding boxes highlighting the detected
+    molecular structures.
     
     Args:
         model_url (str): The URL of the language model to use for querying.
         question (str): The question to ask the language model.
         pdfs (list): A list of paths to PDF documents.
+        session_id (str): Session ID.
 
     Returns:
-        pd.DataFrame: A dataset with molecular IDs, SMILES and required properties extracted from provided PDF documents.
+        (str, str): Path to the file containing the extracted dataset,
+                    path to the processed PDF pages with bounding boxes around extracted
+                    molecular structures..
     """
+    res_img_path = ROOT_DIR / os.environ.get("IMG_STORAGE_PATH") / "paper_images" / session_id / str(uuid.uuid4())
+    final_dataset_path = Path(res_img_path, "final_dataset.csv")
     all_datasets = []
     for pdf in pdfs:
-        images = convert_pdf_pages_to_images(pdf)
-        results = extract_smiles_from_images(images)
-        mols_df = mols_to_csv(results)
-        mols_df['id'] = mols_df['id'].astype(str)
-        props_df = extract_props(model_url, question, [pdf])
-        props_df['id'] = props_df['id'].astype(str)
-        merged_df = pd.merge(props_df, mols_df, on="id", how="inner")
-        merged_df["source"] = os.path.basename(pdf)
-        all_datasets.append(merged_df)
-        
+        try:
+            images = convert_pdf_pages_to_images(pdf)
+            results = extract_smiles_from_images(images)
+            mols_df = mols_to_csv(results)
+            mols_df['id'] = mols_df['id'].astype(str)
+            props_df = extract_props(model_url, question, [pdf])
+            props_df['id'] = props_df['id'].astype(str)
+            merged_df = pd.merge(props_df, mols_df, on="id", how="inner")
+            merged_df["source"] = os.path.basename(pdf)
+            all_datasets.append(merged_df)
+        except Exception as e:
+            logger.error(f"Error processing PDF {pdf}: {e}")
+            logger.info("Skipping this PDF and continuing with others...")
+            continue
+    
+    if not all_datasets:
+        raise ValueError("No PDFs were successfully processed")
+
     combined_dataset = pd.concat(all_datasets, ignore_index=True)
     final_dataset = reorder_columns(combined_dataset)
-    final_dataset.to_csv("final_dataset.csv", sep="\t", index=False)
-    return final_dataset
+    final_dataset.to_csv(final_dataset_path, sep="\t", index=False)
+    return final_dataset_path, res_img_path
 
 
 # if __name__ == "__main__":
 #     pdfs = [r"C:\Users\computer\Documents\GitHub\CoScientist\ChemCoScientist\paper_analysis\papers\187152108785908820.pdf",
 #             r"C:\Users\computer\Documents\GitHub\CoScientist\ChemCoScientist\paper_analysis\papers\ph16040516.pdf"]
+#     pdfs = ['/Users/lizzy/Downloads/ph16040516.pdf']
 #     question = "Collect a dataset of molecules and their MIC values against Staphylococcus aureus."
-#     extract_mols_prop_dataset(DATASETS_LLM_URL, question, pdfs)
+#     extract_mols_prop_dataset(DATASETS_LLM_URL, question, pdfs, '1')

@@ -128,7 +128,7 @@ def clean_up_html(
         if not img_src:
             continue
 
-        local_img_path = str(Path(doc_dir) / img_src).replace("\\", "/")
+        local_img_path = (Path(doc_dir) / img_src).as_posix()
         try:
             images = list(map(convert_to_base64, [local_img_path]))
         except OSError as e:
@@ -168,7 +168,7 @@ def clean_up_html(
                 image_url_mapping[local_img_path] = local_img_path
 
     new_file_name = f"{file_name}_processed.html"
-    new_path = str(Path(doc_dir, new_file_name)).replace("\\", "/")
+    new_path = (Path(doc_dir, new_file_name)).as_posix()
     with open(new_path, "w", encoding='utf-8') as file:
         file.write(str(soup.prettify()))
 

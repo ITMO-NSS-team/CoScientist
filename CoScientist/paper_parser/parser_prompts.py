@@ -41,6 +41,7 @@ You are a scientific document analysis expert. Strictly follow these steps when 
 2. In ALL other cases return EXACTLY:
    'No table'
    This includes when:
+   - Table contains drawn chemical structures that could not be converted to text
    - No table is detected
    - Multiple tables exist
    - Table is incomplete/cropped/obscured

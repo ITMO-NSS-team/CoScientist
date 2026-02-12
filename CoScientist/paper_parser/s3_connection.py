@@ -79,7 +79,7 @@ class S3BucketService:
             None
         """
         client = self.create_s3_client()
-        destination_path = str(Path(prefix, source_file_name)).replace("\\", "/")
+        destination_path = (Path(prefix, source_file_name)).as_posix()
         
         with open(file_path, 'rb') as f:
             content = f.read()
@@ -124,7 +124,7 @@ class S3BucketService:
             None
         """
         client = self.create_s3_client()
-        path_to_file = str(Path(prefix, source_file_name)).replace("\\", "/")
+        path_to_file = (Path(prefix, source_file_name)).as_posix()
         client.delete_object(Bucket=self.bucket_name, Key=path_to_file)
     
     def create_new_bucket(self, bucket_name: str) -> None:

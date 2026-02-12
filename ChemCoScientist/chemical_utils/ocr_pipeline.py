@@ -1,8 +1,10 @@
-from pprint import pprint
-import os, io
-from PIL import Image, ImageDraw
-from pathlib import Path
+import fitz
+import io
+import os
 import logging
+from pathlib import Path
+from PIL import Image, ImageDraw
+from pprint import pprint
 
 from ChemCoScientist.chemical_utils.chemical_functions import extract_molecules_from_figure, extract_reactions_from_figure
 
@@ -29,7 +31,10 @@ def draw_bboxes_on_image(image: bytes, bboxes: dict) -> bytes:
     Returns:
         bytes: JPEG image with rectangles drawn. Colors per category from BOX_COLORS.
     """
+    if isinstance(image, fitz.Pixmap):
+        image = image.tobytes("ppm")
     img = Image.open(io.BytesIO(image))
+
     draw = ImageDraw.Draw(img)
     w, h = img.size
 
@@ -187,7 +192,53 @@ def reactions_ocr(images: list[str]) -> dict:
     }
 
 
+def render_molecule_detections(images: list, bboxes_list: list, res_path: str) -> None:
+    """
+    Renders bounding boxes around molecular structures that were extracted by
+    OpenChemIE tools and saves annotated versions of each image.
+
+    Parameters
+    ----------
+    images : list
+        List of images.
+
+    bboxes_list: list
+        Coordinates of boxes.
+
+    res_path: str
+        Path to resulting images.
+
+    Returns
+    -------
+        None
+
+    Side Effects
+    ------------
+    - Saves an annotated image for each input image as <original_name>_annotated.jpg,
+      containing bounding boxes around detected molecules.
+    """
+
+    for i, img_bytes in enumerate(images):
+
+        entries = bboxes_list[i][0].get('bboxes')
+
+        if entries:
+            bboxes = []
+
+            for entry in entries:
+                smi = entry.get("smiles")
+                if smi:
+                    bboxes.append(entry.get("bbox"))
+
+            if bboxes:
+                annotated_img = draw_bboxes_on_image(img_bytes, bboxes)
+                os.makedirs(Path(res_path), exist_ok=True)
+                out_path = Path(res_path, f"{i}_annotated.jpg")
+                out_path.write_bytes(annotated_img)
+
+
 if __name__ == "__main__":
-    pprint(reactions_ocr(['reaction.jpeg']))
-    # pprint(molecules_ocr(['test.jpeg']))
-    # pprint(reactions_ocr(image_paths))
+    directory = Path(r"C:\Users\computer\Documents\GitHub\CoScientist\ChemCoScientist\data_store\reactions")
+    image_paths = [p.resolve() for p in directory.iterdir() if p.is_file()]
+    # pprint(molecules_ocr(image_paths))
+    pprint(reactions_ocr(image_paths))
