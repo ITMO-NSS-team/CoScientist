@@ -16,3 +16,8 @@ Leave `[ ]` when there is no MCP coverage yet, but tool exist.
 - [x] `Retrosynthesis route search`
 - [x] `Forward reaction product prediction`
 - [x] `Reaction classification`
+- [] `Docking calculation`
+- [] `Exctract molecules from pdf`
+- [] `Exctract molecules from figure`
+- [] `Exctract reactions from pdf`
+- [] `Exctract reactions from figure`
