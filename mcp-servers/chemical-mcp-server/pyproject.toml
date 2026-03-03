@@ -1,0 +1,12 @@
+[project]
+name = "my-mcp-server"
+version = "0.1.0"
+dependencies = ["fastmcp>=2.14.5"]
+
+[project.scripts]
+my-mcp-server = "my_server.server:main"
+
+[tool.fedotmas.mcp]
+name = "my-server"
+description = "Short description of what the server does — the meta-agent reads this to decide when to use it."
+tags = ["relevant", "tags"]

@@ -13,8 +13,6 @@ import pubchempy as pcp
 import py3Dmol
 import rdkit.Chem as Chem
 import requests
-from langchain_core.runnables.config import RunnableConfig
-from langchain_experimental.utilities import PythonREPL
 from rdkit.Chem import AllChem
 from rdkit.Chem.Descriptors import CalcMolDescriptors
 from typing import Dict, List, Optional
@@ -39,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 CHEMBL_BASE = "https://www.ebi.ac.uk/chembl/api/data"
 VALID_AFFINITY_TYPES = {"Ki", "Kd", "IC50", "EC50"}
-repl = PythonREPL()
 
 
 mcp = FastMCP("ChemTools")
@@ -341,7 +338,7 @@ async def fetch_chembl_data(
 def fetch_activity_data(
     source: str,
     protein_name: str,
-    dir_to_save: str,
+    output_path: Annotated[str, "Full path to the output CSV file"],
     protein_id: Optional[str] = None,
     affinity_type: str = "IC50",
     cutoff: int = 10000,
@@ -349,21 +346,19 @@ def fetch_activity_data(
     """
     Unified data retrieval tool for biochemical databases.
 
-    This function fetches protein-ligand interaction or activity data from supported sources
-    such as BindingDB and ChEMBL. It automatically handles protein ID resolution and
-    standardized affinity type filtering.
+    Fetches protein-ligand interaction or activity data from BindingDB or ChEMBL.
+    Saves results to the given CSV file path.
 
     Args:
-        source (str): Name of data source ("bindingdb" or "chembl").
+        source (str): Data source ("bindingdb" or "chembl").
         protein_name (str): Target protein name.
-        dir_to_save (str): directory to save parsed data in csv format
-        protein_id (str, optional): Target protein id. If passed, protein_name is ignored
-        affinity_type (str, optional): Type of affinity (Ki, Kd, IC50). Defaults to "Ki".
+        output_path (str): Full path to the output CSV file.
+        protein_id (str, optional): Target protein id. If passed, protein_name is ignored.
+        affinity_type (str, optional): Type of affinity (Ki, Kd, IC50). Defaults to "IC50".
         cutoff (int, optional): Optional threshold (nM) for BindingDB. Defaults to 10000.
 
     Returns:
-        str: Summary of results with path to file and some statistics
-        Returns error string if data not found or error occurs.
+        str: On success, path to the saved file and dataset info. On failure, error message.
     """
     source = source.lower().strip()
     if affinity_type not in VALID_AFFINITY_TYPES:
@@ -397,48 +392,22 @@ def fetch_activity_data(
 
     try:
         results = _run_async(_main())
-        file_name = os.path.join(dir_to_save, f'{protein_name}_{affinity_type}_{source}.csv')
+        output_path = output_path.strip()
         if isinstance(results, list):
-            os.makedirs(dir_to_save, exist_ok=True)
+            out_dir = os.path.dirname(output_path)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
             df = pd.DataFrame(results)
-            if len(df)>0:
-                df.to_csv(file_name, index=False)
+            if len(df) > 0:
+                df.to_csv(output_path, index=False)
                 buffer = StringIO()
                 df.info(buf=buffer)
                 info_str = buffer.getvalue()
-                return_str = f"The data was saved to {file_name}. Here is info about dataset: {info_str}"
-                del df
-            else:
-                return_str = f"The data was not saved because it is empty"
-            return return_str
-        else:
-            return results
+                return f"The data was saved to {os.path.abspath(output_path)}. Here is info about dataset: {info_str}"
+            return "The data was not saved because it is empty."
+        return results
     except Exception as e:
         return f"[fetch_activity_data] Error: {str(e)}"
-
-
-@mcp.tool()
-def python_repl_tool(
-    code: Annotated[str, "The python code to execute"],
-):
-    """
-    Use this tool to perform calculations or execute Python code. It provides a safe environment for code execution without access to external resources like files, networks, or external libraries.
-    
-    Args:
-        code (str): The Python code to execute.
-    
-    Returns:
-        str: The result of the execution, including the code and its standard output. If an error occurs during execution, the error message is returned instead.
-    """
-    try:
-        result = repl.run(code)
-    except BaseException as e:
-        # logger.exception(f"'python_repl_tool' failed with error: {e}")
-        return f"Failed to execute. Error: {repr(e)}"
-    result_str = (
-        f"Successfully executed:\n```python\n{code}\n```\nStdout: {result}"
-    )
-    return result_str
 
 
 @mcp.tool()
@@ -525,86 +494,85 @@ def smiles2prop(
         res = CalcMolDescriptors(Chem.MolFromSmiles(smiles))
         return res
     except BaseException as e:
-        # logger.exception(f"'smiles2prop' failed with error: {e}")
         return f"Failed to execute. Error: {repr(e)}"
 
 
 @mcp.tool()
 def visualize_molecule(
     smiles: Annotated[str, "SMILES of a molecule"],
-    config: RunnableConfig,
+    save_path: Annotated[str, "Full path to the output HTML file, or directory (then vis.html is used)"],
 ):
     """
     Visualizes a molecule from its SMILES representation and saves the 3D structure as an HTML file.
-    
+
     Args:
         smiles (str): The SMILES string representing the molecule to visualize.
-        config (RunnableConfig): Configuration object containing necessary settings,
-                                  including the path to save the visualization.
-    
+        save_path (str): Path to the output HTML file or directory (saves vis.html in that case).
+
     Returns:
-        str: A message indicating success or failure of the visualization process.
-             On success, it confirms the molecule was visualized and saved.
-             On failure, it provides an error message.
+        str: On success, returns the absolute path to the saved file. On failure, returns an error message.
     """
     try:
         mol = Chem.MolFromSmiles(smiles)
-        if mol:
-            mol = Chem.Mol(mol)
-            mol = AllChem.AddHs(mol, addCoords=True)
-            AllChem.EmbedMolecule(mol)
-            AllChem.MMFFOptimizeMolecule(mol)
+        if not mol:
+            return f"I couldn't visualize this molecule. Perhaps SMILES is invalid: {smiles}"
 
-            view = py3Dmol.view(
-                data=Chem.MolToMolBlock(mol),  # Convert the RDKit molecule for py3Dmol
-                style={
-                    "stick": {},
-                    "sphere": {"scale": 0.3},
-                },
-                width=600,
-                height=400,
-            )
-            view.setBackgroundColor("#b8bfcc")
-            view.zoomTo()
-            html_content = view.write_html()
+        mol = Chem.Mol(mol)
+        AllChem.AddHs(mol, addCoords=True)
+        AllChem.EmbedMolecule(mol)
+        AllChem.MMFFOptimizeMolecule(mol)
 
-            state = config["configurable"].get("state")
-            # tool_call_id: Annotated[str, InjectedToolCallId] = state['messages'][-1]["tool_calls"][0]['id']
+        view = py3Dmol.view(
+            data=Chem.MolToMolBlock(mol),
+            style={
+                "stick": {},
+                "sphere": {"scale": 0.3},
+            },
+            width=600,
+            height=400,
+        )
+        view.setBackgroundColor("#b8bfcc")
+        view.zoomTo()
+        html_content = view.write_html()
 
-            path_to_results = os.path.join(
-                os.environ.get("PATH_TO_RESULTS"), "vis_mols"
-            )
-            if not os.path.exists(path_to_results):
-                os.makedirs(path_to_results)
+        save_path = Path(save_path.strip())
+        if not str(save_path).endswith(".html"):
+            save_path = save_path / "vis.html"
 
-            with open(
-                os.path.join(path_to_results, "vis.html"), "w", encoding="utf-8"
-            ) as f:
-                f.write(html_content)
+        out_dir = save_path.parent
+        if out_dir and not out_dir.exists():
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-            answer = f"I've successfully generated images of {smiles} molecule"
-            return answer
-        else:
-            return f"I've couldn't visualize this molecule. Perhaps SMILES is invalid"
+        with save_path.open("w", encoding="utf-8") as f:
+            f.write(html_content)
+
+        if not save_path.exists() or save_path.stat().st_size == 0:
+            return f"Failed to save visualization: file was not written or is empty."
+
+        return save_path.as_posix()
 
     except BaseException as e:
         return f"Failed to execute. Error: {repr(e)}"
 
 
 @mcp.tool()
-def extract_reactions() -> Dict:
-    """Detects chemical reactions in uploaded images and converts them into structured reaction elements using the `reactions_ocr` pipeline.
+def extract_reactions(
+    images_directory: Annotated[str, "Path to directory containing images (.jpg, .png, .jpeg)"],
+) -> Dict:
+    """Detects chemical reactions in images from the given directory using the `reactions_ocr` pipeline.
 
-    Image paths are read from the directory given by the `IMG_STORAGE_PATH` environment variable.
+    Args:
+        images_directory (str): Path to directory containing image files.
 
     Returns:
         dict: On success: dictionary from `reactions_ocr` (image filenames to reactants,
             conditions, products) and annotated images saved as <original_name>_annotated.jpg.
-            On failure or no images: dict with an `"answer"` key and an explanatory message.
-    """    
-    logger.info('Running extract_reactions tool...')
+            On failure or no images: dict with an "answer" key and an explanatory message.
+    """
     try:
-        directory = Path(os.environ.get('IMG_STORAGE_PATH'))
+        directory = Path(images_directory.strip())
+        if not directory.exists() or not directory.is_dir():
+            return {'answer': f'Directory does not exist or is not a directory: {images_directory}'}
         images = [str(f.resolve()) for f in directory.iterdir() if f.is_file() and f.suffix.lower() in ['.jpg', '.png', '.jpeg']]
         if not images:
             return {'answer': 'No images provided for reactions recognition.'}
@@ -615,19 +583,23 @@ def extract_reactions() -> Dict:
 
 
 @mcp.tool()
-def detect_molecules() -> Dict:
-    """Detects molecular structures in uploaded images and converts them into SMILES using the `molecules_ocr` pipeline.
+def detect_molecules(
+    images_directory: Annotated[str, "Path to directory containing images (.jpg, .png, .jpeg)"],
+) -> Dict:
+    """Detects molecular structures in images from the given directory and converts them to SMILES using the `molecules_ocr` pipeline.
 
-    Image paths are read from the directory given by the `IMG_STORAGE_PATH` environment variable.
+    Args:
+        images_directory (str): Path to directory containing image files.
 
     Returns:
         dict: On success: dictionary from `molecules_ocr` (image filenames to SMILES and errors),
             with annotated images saved as <original_name>_annotated.jpg. On failure or no images:
-            dict with an `"answer"` key and an explanatory message.
-    """    
-    logger.info('Running extract_molecules tool...')
+            dict with an "answer" key and an explanatory message.
+    """
     try:
-        directory = Path(os.environ.get('IMG_STORAGE_PATH'))
+        directory = Path(images_directory.strip())
+        if not directory.exists() or not directory.is_dir():
+            return {'answer': f'Directory does not exist or is not a directory: {images_directory}'}
         images = [str(f.resolve()) for f in directory.iterdir() if f.is_file() and f.suffix.lower() in ['.jpg', '.png', '.jpeg']]
         if not images:
             return {'answer': 'No images provided for molecules recognition.'}
@@ -638,39 +610,48 @@ def detect_molecules() -> Dict:
 
 
 @mcp.tool()
-def calculate_docking(smiles: str, pdb_id: str) -> str:
+def calculate_docking(
+    smiles: str,
+    pdb_id: str,
+    output_path: Annotated[str, "Full path for the output HTML file with docking result"],
+) -> dict:
     """
-    Calculate docking score for a molecule.
-    Response contains docking score for the molecule.
+    Calculate docking score for a molecule and save the visualization to the given path.
+
     Args:
         smiles (str): SMILES string of the molecule.
         pdb_id (str): ID of the PDB file containing the receptor structure.
+        output_path (str): Full path for the output HTML file.
+
     Returns:
-        response (dict): Dictionary containing docking score for the molecule and the HTML file.
+        dict: answer (affinity, errors) and metadata (html_file path). On failure, metadata may be None.
     """
     response = calculate_docking_score(smiles, pdb_id)
     data = response.get("data", None)
     errors = response.get("error")
-    
-    if data:
-        affinity = data['affinity']
-        visualization = data['visualization']
-    
+    affinity = None
     output_file = None
-    if visualization:
-        html_base64 = data.get("visualization", None)
-        html_content = base64.b64decode(html_base64)
-        output_file = os.path.join(os.environ.get("PATH_TO_RESULTS"), f"docking_result_{pdb_id}.html")
-        with open(output_file, "wb") as f:
-            f.write(html_content)
-    
-    result = {'affinity': affinity, "errors": errors}
+
+    if data:
+        affinity = data.get("affinity")
+        visualization = data.get("visualization")
+        if visualization:
+            html_base64 = data.get("visualization")
+            html_content = base64.b64decode(html_base64)
+            output_path = output_path.strip()
+            if not output_path.lower().endswith(".html"):
+                output_path = os.path.join(output_path, f"docking_result_{pdb_id}.html")
+            out_dir = os.path.dirname(output_path)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(html_content)
+            output_file = os.path.abspath(output_path)
+
     return {
-        "answer": result,
-        "metadata": {
-            "html_file": output_file
-                }
-        }
+        "answer": {"affinity": affinity, "errors": errors},
+        "metadata": {"html_file": output_file} if output_file else {},
+    }
 
 
 if __name__ == "__main__":

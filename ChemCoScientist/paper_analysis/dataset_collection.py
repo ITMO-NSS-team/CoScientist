@@ -41,7 +41,7 @@ def extract_smiles_from_images(images: list) -> list:
         pil_image.save(buffered, format="JPEG")
         image_file = buffered.getvalue()
         res = extract_molecules_from_figure(image=image_file)
-        results.append(res)
+        results.append(res.get("data", []))
     return results
 
 def mols_to_csv(results):
@@ -139,7 +139,8 @@ def extract_mols_prop_dataset(model_url: str, question: str, pdfs: list, session
                     molecular structures..
     """
     res_img_path = ROOT_DIR / os.environ.get("IMG_STORAGE_PATH") / "paper_images" / session_id / str(uuid.uuid4())
-    final_dataset_path = Path(res_img_path, "final_dataset.csv")
+    res_img_path.mkdir(parents=True, exist_ok=True)
+    final_dataset_path = res_img_path / "final_dataset.csv"
     all_datasets = []
     for pdf in pdfs:
         try:

@@ -259,7 +259,7 @@ def chemist_node(state: dict, config: dict) -> Command:
             updated_metadata = state.get("metadata", {}).copy()
             for message in agent_response["messages"]:
                 if isinstance(message, ToolMessage) and message.name in ["detect_molecules", "detect_reactions", "extract_reactions"]:
-                    result = ast.literal_eval(message.content)
+                    result = json.loads(message.content)
                     ocr_metadata = {"chem_ocr": result.get("metadata", None)}
                     if ocr_metadata["chem_ocr"]:
                         if "chem_ocr" in updated_metadata.keys():
@@ -391,7 +391,7 @@ def paper_analysis_agent(state: dict, config: dict) -> Command:
         try:
             response = paper_analysis_agent.invoke({"messages": [("user", task)]})
 
-            result = ast.literal_eval(response["messages"][2].content)
+            result = json.loads(response["messages"][2].content)
 
             updated_metadata = state.get("metadata", {}).copy()
             pa_metadata = {"paper_analysis": result.get("metadata")}

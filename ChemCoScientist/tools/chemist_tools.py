@@ -610,31 +610,15 @@ def visualize_molecule(
 
 @tool
 def detect_molecules() -> Dict:
-    """
-    Detects molecular structures in uploaded images and converts
-    them into SMILES format using the `molecules_ocr` pipeline.
+    """Detects molecular structures in images and converts them to SMILES via `molecules_ocr`.
 
-    The tool retrieves image paths either from:
-    - `SELECTED_PAPERS[session_id]` if a session is active, or
-    - an OCR input directory defined by the `OCR_IMAGES_PATH` environment
-      variable.
+    Image paths are taken from `SELECTED_PAPERS[session_id]` when a session is active,
+    or from the OCR input directory given by the `IMG_STORAGE_PATH` environment variable.
 
-    Parameters
-    ----------
-    session_id (str, optional): An identifier for the current user session.
-            Used to access session-specific uploaded papers from `SELECTED_PAPERS`.
-
-    Returns
-    -------
-    dict
-        On success:  
-        - A dictionary returned by `molecules_ocr`, mapping image filenames to lists
-        of extracted SMILES strings.
-        - An annotated image saved by `molecules_ocr` for each input image as <original_name>_annotated.jpg,
-        containing bounding boxes around detected molecules.
-
-        On failure or if no images are available:  
-        A dictionary containing an `"answer"` key with an explanatory message.    
+    Returns:
+        On success: dict from `molecules_ocr` (image filenames to lists of SMILES),
+        with annotated images saved as <original_name>_annotated.jpg. On failure or
+        no images: dict with an "answer" key and an explanatory message.
     """    
     logging.info('Running extract_molecules tool...')
     try:
@@ -650,31 +634,15 @@ def detect_molecules() -> Dict:
 
 @tool
 def detect_reactions() -> Dict:
-    """
-    Detects chemical reactions in uploaded images and converts
-    them into structured reaction elements format using the `reactions_ocr` pipeline.
+    """Detects chemical reactions in images and converts them via `reactions_ocr`.
 
-    The tool retrieves image paths either from:
-    - `SELECTED_PAPERS[session_id]` if a session is active, or
-    - an OCR input directory defined by the `OCR_IMAGES_PATH` environment
-      variable.
+    Image paths are taken from `SELECTED_PAPERS[session_id]` when a session is active,
+    or from the OCR input directory given by the `IMG_STORAGE_PATH` environment variable.
 
-    Parameters
-    ----------
-    session_id (str, optional): An identifier for the current user session.
-            Used to access session-specific uploaded papers from `SELECTED_PAPERS`.
-
-    Returns
-    -------
-    dict
-        On success:  
-        - A dictionary returned by `reactions_ocr`, mapping image filenames to
-        extracted reactants, conditions and products.
-        - An annotated image saved by `reactions_ocr` for each input image as <original_name>_annotated.jpg
-        containing bounding boxes around detected reaction elements.
-
-        On failure or if no images are available:  
-        A dictionary containing an `"answer"` key with an explanatory message.    
+    Returns:
+        On success: dict from `reactions_ocr` (image filenames to reactants, conditions,
+        products), with annotated images saved as <original_name>_annotated.jpg. On
+        failure or no images: dict with an "answer" key and an explanatory message.
     """    
     logging.info('Running extract_reactions tool...')
     try:

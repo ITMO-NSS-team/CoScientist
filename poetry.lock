@@ -10496,8 +10496,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-<<<<<<< HEAD
 content-hash = "d20fc8c6133ffe742d02c74a1ef04aaae9b10b8dd1a5c3cde4701ffbb11bc25c"
-=======
-content-hash = "be5b7200b7277acc0abe2a4249a0d726a1821b0623b85dd4ff807b21db9166a3"
->>>>>>> 32d0673 (added download papers agent)
