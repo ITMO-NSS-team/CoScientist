@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import chromadb
 import numpy as np
@@ -17,7 +18,8 @@ from protollm.connectors import create_llm_connector
 from pydantic import BaseModel, Field
 import requests
 
-from ChemCoScientist.chemical_utils.chemical_functions import extract_molecules_from_figure, extract_reactions_from_figure
+from ChemCoScientist.chemical_utils.openchemie_functions import extract_molecules_from_figure, extract_reactions_from_figure
+from ChemCoScientist.paper_analysis.constants import ResearchArea
 from ChemCoScientist.paper_analysis.prompts import summarisation_prompt
 from ChemCoScientist.paper_analysis.settings import allowed_providers
 from ChemCoScientist.paper_analysis.settings import settings as default_settings
@@ -53,10 +55,18 @@ class ExpandedSummary(BaseModel):
         description="Title of the paper. If the title is not explicitly specified, use the default value - 'NO TITLE'"
     )
     publication_year: int = Field(
-        description=(
-            "Year of publication of the paper. If the publication year is not explicitly specified, use the default"
+        description="Year of publication of the paper. If the publication year is not explicitly specified, use the default"
             " value - 9999."
-        )
+    )
+    paper_authors: str = Field(
+        description="Authors of the paper. If the authors are not explicitly specified, use the default value - 'NO AUTHORS'"
+    )
+    publication_source: str = Field(
+        description="Source where the paper was published. If the source is not explicitly specified, use the default value - 'NO SOURCE'"
+    )
+    research_area: ResearchArea = Field(
+        description="Area or field of chemistry the paper is about. Must be one of the predefined values."
+        " If the area has no match in the predefined list or is hard to determine, use the default value - 'OTHER'"
     )
 
 
@@ -455,7 +465,7 @@ class ChromaDBPaperStore:
         return res
 
     def retrieve_context(
-            self, query: str, relevant_papers: dict = None
+            self, query: str, relevant_papers: dict = None, meta_filter: dict = None
     ) -> tuple[list, dict, dict]:
         """
         Retrieves relevant information from text and images associated with scientific papers based on a user query.
@@ -468,6 +478,7 @@ class ChromaDBPaperStore:
             query (str): The search query used to identify relevant information.
             relevant_papers (list, optional): A list of pre-identified relevant papers. Defaults to None, in which case
                 a search for relevant papers is initiated.
+            meta_filter (dict, optional): A dictionary of metadata filters to apply during the search.
 
         Returns:
             tuple[list, dict]: A tuple containing the retrieved text and image context.
@@ -475,7 +486,7 @@ class ChromaDBPaperStore:
                 - image_context (dict): A dictionary containing image data associated with the query.
         """
         if not relevant_papers:
-            relevant_papers = self.search_for_papers(query)
+            relevant_papers = self.search_for_papers(query, meta_filter=meta_filter)
 
         raw_text_context = self.client.query_chromadb(
             self.txt_collection,
@@ -558,7 +569,24 @@ class ChromaDBPaperStore:
 
         return scored_docs[:top_k]
 
-    def add_paper_summary_to_db(self, paper_name: str, parsed_paper: str, llm) -> None:
+    def _generate_expanded_summary(self, parsed_paper: str, llm) -> ExpandedSummary:
+        """
+        Generates an expanded summary of a paper using a language model.
+
+        This method takes parsed paper content and uses an LLM to extract and structure
+        key information including summary, title, authors, publication year, and source.
+
+        Args:
+            parsed_paper (str): The text content of the parsed paper.
+            llm: The language model used to generate the summary.
+
+        Returns:
+            ExpandedSummary: An object containing the paper's structured summary information.
+        """
+        expanded_summary: ExpandedSummary = llm.invoke([HumanMessage(content=summarisation_prompt + parsed_paper)])
+        return expanded_summary
+
+    def add_paper_summary_to_db(self, paper_name: str, parsed_paper: str, expanded_summary: ExpandedSummary) -> None:
         """
         Adds a paper summary to the document collection for efficient information retrieval.
 
@@ -574,13 +602,15 @@ class ChromaDBPaperStore:
         Returns:
             None
         """
-        expanded_summary: ExpandedSummary = llm.invoke([HumanMessage(content=summarisation_prompt + parsed_paper)])
         doc = Document(
             page_content=expanded_summary.paper_summary,
             metadata={
                 "source": paper_name,
                 "paper_title": expanded_summary.paper_title,
-                "publication_year": expanded_summary.publication_year
+                "publication_year": expanded_summary.publication_year,
+                "paper_authors": expanded_summary.paper_authors,
+                "publication_source": expanded_summary.publication_source,
+                "research_area": expanded_summary.research_area
             }
         )
         embedding = self.get_embeddings([doc.page_content])
@@ -771,13 +801,15 @@ def process_single_document(folder_path: Path, s3_service: S3BucketService, s3_p
         else:
             parsed_paper, mapping = clean_up_html(folder_path, paper_name, text)
         print(f"Finished post-processing paper: {paper_name}")
-        documents = html_chunking(parsed_paper, paper_name)
         
         llm = create_llm_connector(SUMMARY_LLM_URL, extra_body={"provider": {"only": allowed_providers}})
         struct_llm = llm.with_structured_output(schema=ExpandedSummary)
+        paper_summary = process_local_store._generate_expanded_summary(parsed_paper, struct_llm)
+        
+        documents = html_chunking(parsed_paper, paper_name, paper_summary)
         
         print(f"Starting loading paper: {paper_name}")
-        process_local_store.add_paper_summary_to_db(str(paper_name_to_load), parsed_paper, struct_llm)
+        process_local_store.add_paper_summary_to_db(str(paper_name_to_load), parsed_paper, paper_summary)
         process_local_store.store_text_chunks_in_chromadb(documents)
         process_local_store.store_images_in_chromadb_txt_format(str(folder_path), str(paper_name_to_load), mapping)
         print(f"Finished loading paper: {paper_name}")

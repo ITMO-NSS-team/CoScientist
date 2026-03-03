@@ -92,23 +92,22 @@ class S3BucketService:
         Lists all objects in the S3 bucket with the given prefix.
 
         Args:
-            prefix: The prefix to filter objects in the S3 bucket
+            prefix: The prefix to filter objects in the S3 bucket. If empty, lists all objects.
 
         Returns:
             A list of object keys (file paths) that match the prefix
         """
         client = self.create_s3_client()
         
-        response = client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
+        paginator = client.get_paginator("list_objects_v2")
+        page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
+        
         storage_content: list[str] = []
         
-        try:
-            contents = response["Contents"]
-        except KeyError:
-            return storage_content
-        
-        for item in contents:
-            storage_content.append(item["Key"])
+        for page in page_iterator:
+            contents = page.get("Contents", [])
+            for item in contents:
+                storage_content.append(item["Key"])
         
         return storage_content
     
@@ -249,4 +248,3 @@ if __name__ == "__main__":
     #     print(bucket["Name"], bucket["CreationDate"])
     # objects = s3_service.list_objects(prefix="")
     # print(objects)
-    

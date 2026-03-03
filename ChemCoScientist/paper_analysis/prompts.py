@@ -55,7 +55,9 @@ summarisation_prompt = (
     " list separately all tables with its names, all images with its names, and all main"
     " substances that are in the article. Keywords/terms, as well as lists of tables, images, and"
     " substances are also part of the summary.\n"
-    " Also try to determine the title of the article and the year of its publication.\n\n"
+    " Also try to determine the title of the article, the year of its publication, authors,"
+    " its publication source (journal name, venue name, preprint server name etc.)"
+    " and the research area of the paper.\n\n"
     "Article in Markdown markup:\n"
 )
 
@@ -106,4 +108,31 @@ extract_mol_properties_prompt = (
     "Include all molecules for which the required properties are reported — do not omit any.\n"
     "Do not include molecules where the required property is not mentioned."
     "Output only the CSV data (no explanations, no markdown, no additional text)."
+)
+
+extract_query_filters_prompt = (
+    "You are an assistant that extracts metadata filters from user questions about scientific papers. "
+    "Your task is to analyze the USER QUESTION and identify any mentions of:"
+    "\n1. Author names (e.g., 'What did Smith say', 'According to John Doe', 'research by Dr. Jane')"
+    "\n2. Publication year or year range (e.g., 'papers from 2020', 'research since 2018', 'recent studies')"
+    "\n3. Publication source/journal (e.g., 'papers in Nature', 'from ACS Catalysis', 'published in Science')"
+    "\n4. Research area (e.g., 'polymer chemistry papers', 'nanomaterials research', 'DFT studies')"
+    "\n\nFor year filters:"
+    "\n- 'recent' or 'latest' should translate to publication_year_min = current_year - 2"
+    "\n- 'since YEAR' should translate to publication_year_min = YEAR"
+    "\n- 'in YEAR' or 'from YEAR' should translate to publication_year_exact = YEAR"
+    "\n- 'between YEAR1 and YEAR2' should translate to publication_year_min = YEAR1, publication_year_max = YEAR2"
+    "\n\nFor research areas, use only these values if detected:"
+    "\n'Polymer Chemistry', 'Organic Chemistry', 'Nanomaterials', 'Molecular Dynamics', 'Membrane Chemistry', "
+    "'Electrochemistry', 'DFT', 'Biological Macromolecules', 'Biological Chemistry', 'Analytical Chemistry'"
+    "\n\nIf no specific filter is mentioned for a field, leave it as null."
+    "\n\nExamples:"
+    "\nQ: 'What did Sam Smith say about catalysis?'"
+    "\nA: {\"paper_authors\": \"Sam Smith\", \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_area\": null}"
+    "\n\nQ: 'What are recent advances in polymer chemistry?'"
+    "\nA: {\"paper_authors\": null, \"publication_year_min\": 2024, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_area\": \"Polymer Chemistry\"}"
+    "\n\nQ: 'Show me DFT studies from Nature Chemistry published in 2023'"
+    "\nA: {\"paper_authors\": null, \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": 2023, \"publication_source\": \"Nature Chemistry\", \"research_area\": \"DFT\"}"
+    "\n\nQ: 'What synthesis methods are used for nanoparticles?'"
+    "\nA: {\"paper_authors\": null, \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_area\": null}"
 )

@@ -11,7 +11,8 @@ from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 
 from ChemCoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
-from ChemCoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt
+from ChemCoScientist.paper_analysis.constants import ResearchArea
+from ChemCoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt, extract_query_filters_prompt
 from ChemCoScientist.paper_analysis.settings import allowed_providers
 from CoScientist.paper_parser.utils import convert_to_base64, prompt_func, load_image_as_binary
 from ChemCoScientist.chemical_utils.chemical_functions import *
@@ -20,6 +21,111 @@ from definitions import CONFIG_PATH
 load_dotenv(CONFIG_PATH)
 
 VISION_LLM_URL = os.environ["VISION_LLM_URL"]
+
+
+class QueryFilters(BaseModel):
+    """Metadata filters extracted from user question."""
+    paper_authors: str | None = Field(
+        description="Author name(s) mentioned in the question",
+        default=None
+    )
+    publication_year_min: int | None = Field(
+        description="Minimum publication year for filtering",
+        default=None
+    )
+    publication_year_max: int | None = Field(
+        description="Maximum publication year for filtering",
+        default=None
+    )
+    publication_year_exact: int | None = Field(
+        description="Exact publication year when specified",
+        default=None
+    )
+    publication_source: str | None = Field(
+        description="Journal or publication source name",
+        default=None
+    )
+    research_area: ResearchArea | None = Field(
+        description="Research area/field of chemistry",
+        default=None
+    )
+
+
+def extract_metadata_filters(question: str) -> QueryFilters:
+    """
+    Uses LLM to extract metadata filters from user question.
+    
+    Args:
+        question: The user's question string
+        
+    Returns:
+        QueryFilters: Structured filters including authors, year, source, and research area
+    """
+    llm = create_llm_connector(
+        VISION_LLM_URL,
+        extra_body={"provider": {"only": allowed_providers}},
+        temperature=0.0
+    )
+    
+    struct_llm = llm.with_structured_output(schema=QueryFilters)
+    
+    prompt = extract_query_filters_prompt + f"\n\nUSER QUESTION: {question}"
+    
+    from langchain_core.messages import HumanMessage
+    filters: QueryFilters = struct_llm.invoke([HumanMessage(content=prompt)])
+    
+    return filters
+
+
+def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
+    """
+    Converts QueryFilters to ChromaDB where clause format.
+    
+    Args:
+        filters: QueryFilters object with extracted metadata
+        
+    Returns:
+        dict: ChromaDB where clause ready for collection.query(), or None if no filters
+        
+    Example output:
+        {"paper_authors": {"$eq": "Smith"}}
+        {
+            "$and": [
+                {"paper_authors": {"$eq": "Smith"}},
+                {"publication_year": {"$gte": 2020}}
+            ]
+        }
+    """
+    conditions = []
+    
+    if filters.paper_authors:
+        conditions.append({"paper_authors": {"$eq": filters.paper_authors}})
+    
+    if filters.publication_year_exact:
+        conditions.append({"publication_year": {"$eq": filters.publication_year_exact}})
+    elif filters.publication_year_min or filters.publication_year_max:
+        year_condition = {}
+        if filters.publication_year_min:
+            year_condition["$gte"] = filters.publication_year_min
+        if filters.publication_year_max:
+            year_condition["$lte"] = filters.publication_year_max
+        if year_condition:
+            conditions.append({"publication_year": year_condition})
+    
+    if filters.publication_source:
+        conditions.append({"publication_source": {"$eq": filters.publication_source}})
+    
+    if filters.research_area and filters.research_area != "OTHER":
+        conditions.append({"research_area": {"$eq": filters.research_area}})
+    
+    if not conditions:
+        return None
+    
+    if len(conditions) == 1:
+        return conditions[0]
+    
+    return {"$and": conditions}
+
 
 def query_llm(
     model_url: str, question: str, txt_context: str, img_paths: list[str]
@@ -158,7 +264,10 @@ def process_question(question: str, store: ChromaDBPaperStore) -> dict:
                 'image_context' - the set of image paths identified as relevant to the question;
                 'metadata' - Additional metadata returned by the LLM query.
     """
-    txt_data, img_data = store.retrieve_context(question)
+    meta_filter = extract_metadata_filters(question)
+    meta_filter_chroma = build_chroma_where_filter(meta_filter)
+    
+    txt_data, img_data = store.retrieve_context(question, meta_filter=meta_filter_chroma)
     txt_context = ""
     relevant_txt_context = []
     img_paths = []
@@ -275,7 +384,7 @@ if __name__ == "__main__":
     #######################################################
 
     paper_store = ChromaDBPaperStore()
-    question = 'What is the title of an article?'
+    question = 'What are papers since 2023 about analytical chemistry are focused on?'
       # question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
     # question = 'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
     # question = 'How does the synthesis of Glionitrin A/B happen?'
