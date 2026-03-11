@@ -1,14 +1,21 @@
 import asyncio
+import ast
 import glob
 import logging
 import os
 import streamlit as st
 import threading
+import re
+from typing import Optional, List
+from typing import Optional
 
 from io import BytesIO
 from langgraph.errors import GraphRecursionError
 from pathlib import Path
 from PIL import Image
+
+from rdkit import Chem
+from rdkit.Chem import Draw, rdChemReactions
 from queue import Queue, Empty
 from urllib.parse import urlparse
 
@@ -114,6 +121,15 @@ def chat():
 
             if message.get("chem_ocr") and message["role"] == "assistant":
                 display_chem_ocr_metadata(message)
+
+            if message.get("retrosynthesis") and message["role"] == "assistant":
+                display_retrosynthesis_metadata(message)
+
+            if message.get("forward_prediction") and message["role"] == "assistant":
+                display_forward_prediction_metadata(message)
+
+            if message.get("reaction_classification") and message["role"] == "assistant":
+                display_reaction_classification_metadata(message)
 
             if message.get("docking") and message["role"] == "assistant":
                 display_docking_metadata(message)
@@ -395,6 +411,8 @@ def message_handler(user_query: str, placeholder: st.delta_generator.DeltaGenera
                             #os.remove(file)
 
                     # Store metadata in the message for later display
+                    
+                    logger.info(f"RESULT METADATA: {result}")
                     if "paper_analysis" in result["metadata"].keys():
                         st.session_state.messages[-1]["paper_analysis"] = result["metadata"]["paper_analysis"]
                         # Display the metadata immediately after storing it
@@ -409,6 +427,18 @@ def message_handler(user_query: str, placeholder: st.delta_generator.DeltaGenera
                     if "docking" in result["metadata"].keys():
                         st.session_state.messages[-1]["docking"] = result["metadata"]["docking"]
                         display_docking_metadata(st.session_state.messages[-1])
+
+                    if "retrosynthesis" in result["metadata"].keys():
+                        st.session_state.messages[-1]["retrosynthesis"] = result["metadata"]["retrosynthesis"]
+                        display_retrosynthesis_metadata(st.session_state.messages[-1])
+
+                    if "forward_prediction" in result["metadata"].keys():
+                        st.session_state.messages[-1]["forward_prediction"] = result["metadata"]["forward_prediction"]
+                        display_forward_prediction_metadata(st.session_state.messages[-1])
+
+                    if "reaction_classification" in result["metadata"].keys():
+                        st.session_state.messages[-1]["reaction_classification"] = result["metadata"]["reaction_classification"]
+                        display_reaction_classification_metadata(st.session_state.messages[-1])
 
                 if mols := msg.get("molecules_vis"):
                     for mol in mols:
@@ -493,6 +523,325 @@ def pdf_viewer(folder: str):
 
             if i < len(image_paths) - 1:
                 st.divider()
+
+
+def _reaction_smiles_to_image(reaction_smiles: str):
+    if not rdChemReactions or not Draw:
+        return None
+    try:
+        rxn = rdChemReactions.ReactionFromSmarts(reaction_smiles, useSmiles=True)
+        if rxn is None:
+            return None
+        return Draw.ReactionToImage(rxn, subImgSize=(300, 200))
+    except Exception:
+        return None
+
+
+def _render_reaction_smiles(reaction_smiles: str, caption: Optional[str] = None):
+    normalized = reaction_smiles
+    if isinstance(normalized, str):
+        normalized = normalized.replace(" -> ", ">>").replace(" → ", ">>")
+        normalized = normalized.replace(" + ", ".")
+    img = _reaction_smiles_to_image(normalized)
+    if img is not None:
+        st.image(img, caption=caption)
+    else:
+        st.code(reaction_smiles)
+
+
+def display_retrosynthesis_metadata(message):
+    data = message.get("retrosynthesis") or {}
+    if not data:
+        return
+    if isinstance(data, str):
+        try:
+            data = ast.literal_eval(data)
+        except Exception:
+            st.markdown("### Retrosynthesis")
+            st.code(data)
+            return
+    payload = data
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), dict):
+            payload = data["data"]
+        elif isinstance(data.get("result"), dict):
+            payload = data["result"]
+    st.markdown("### Retrosynthesis")
+    target = payload.get("target") if isinstance(payload, dict) else None
+    if target:
+        st.markdown(f"**Target:** `{target}`")
+    routes = payload.get("routes") if isinstance(payload, dict) else None
+    if not isinstance(routes, list):
+        st.write("No routes returned.")
+        return
+    routes = [r for r in routes if isinstance(r, dict)]
+    if not routes:
+        st.write("No routes returned.")
+        return
+    # pick the best route by score (fallback: lowest precursor_cost)
+    def _route_sort_key(r):
+        score = r.get("score")
+        precursor_cost = r.get("precursor_cost")
+        return (
+            score is not None,
+            score if score is not None else float("-inf"),
+            precursor_cost is not None,
+            -precursor_cost if precursor_cost is not None else 0,
+        )
+
+    try:
+        best_route = max(routes, key=_route_sort_key)
+    except Exception:
+        best_route = routes[0]
+    for idx, route in enumerate([best_route], start=1):
+        title_parts = ["Best route"]
+        meta_parts = []
+        for key in ["score", "depth", "precursor_cost"]:
+            if route.get(key) is not None:
+                meta_parts.append(f"{key}={route.get(key)}")
+        if meta_parts:
+            title_parts.append(f"({', '.join(meta_parts)})")
+        with st.expander(" ".join(title_parts), expanded=idx == 1):
+            steps = route.get("steps") or []
+            if not steps:
+                st.write("No steps returned.")
+                continue
+            for step_idx, step in enumerate(steps, start=1):
+                reaction_smiles = step.get("reaction_smiles") or step.get("mapped_smiles")
+                caption = f"Step {step_idx}"
+                if step.get("plausibility") is not None:
+                    caption += f" | plausibility={step.get('plausibility')}"
+                if reaction_smiles:
+                    _render_reaction_smiles(reaction_smiles, caption=caption)
+                else:
+                    st.markdown(f"**Step {step_idx}**")
+                    st.write(step)
+                reactants = [r.get("smiles") for r in (step.get("reactants") or []) if r.get("smiles")]
+                products = [p.get("smiles") for p in (step.get("products") or []) if p.get("smiles")]
+                if reactants:
+                    st.caption(f"Reactants: {', '.join(reactants)}")
+                if products:
+                    st.caption(f"Products: {', '.join(products)}")
+
+
+def display_forward_prediction_metadata(message):
+    data = message.get("forward_prediction") or {}
+    if not data:
+        return
+    st.markdown("### Forward Prediction")
+    backend = data.get("backend")
+    model_name = data.get("model_name")
+    if backend or model_name:
+        st.markdown(f"**Backend:** `{backend}`  **Model:** `{model_name}`")
+    inputs = data.get("inputs") or []
+    if inputs:
+        st.markdown("**Inputs:**")
+        for item in inputs:
+            st.code(item)
+    predictions = data.get("predictions") or []
+    if predictions and isinstance(predictions, list):
+        predictions = sorted(
+            predictions,
+            key=lambda p: p.get("score") if isinstance(p, dict) else None,
+            reverse=True,
+        )[:2]
+    if not predictions:
+        st.write("No predictions returned.")
+        return
+    if len(inputs) == 1:
+        base = inputs[0]
+        for idx, pred in enumerate(predictions, start=1):
+            prod = pred.get("smiles")
+            score = pred.get("score")
+            if not prod:
+                continue
+            reaction_smiles = f"{base}>>{prod}"
+            caption = f"Prediction {idx}"
+            if score is not None:
+                caption += f" | score={score}"
+            _render_reaction_smiles(reaction_smiles, caption=caption)
+    else:
+        rows = [{"smiles": p.get("smiles"), "score": p.get("score")} for p in predictions]
+        st.dataframe(rows)
+
+
+def display_reaction_classification_metadata(message):
+    data = message.get("reaction_classification") or {}
+    if not data:
+        return
+    st.markdown("### Reaction Classification")
+    status_code = data.get("status_code")
+    if status_code is not None:
+        st.markdown(f"**Status:** {status_code}")
+    msg = data.get("message")
+    if msg:
+        st.markdown(f"**Message:** {msg}")
+    results = data.get("result") or []
+    if results:
+        st.dataframe(results)
+    else:
+        st.write("No classification results.")
+
+
+def _reaction_smiles_to_image(reaction_smiles: str):
+    if not rdChemReactions or not Draw:
+        return None
+    try:
+        rxn = rdChemReactions.ReactionFromSmarts(reaction_smiles, useSmiles=True)
+        if rxn is None:
+            return None
+        return Draw.ReactionToImage(rxn, subImgSize=(300, 200))
+    except Exception:
+        return None
+
+
+def _render_reaction_smiles(reaction_smiles: str, caption: Optional[str] = None):
+    logger.info(f"RENDERING REACTION SMILES: {reaction_smiles}")
+    normalized = reaction_smiles
+    if isinstance(normalized, str):
+        normalized = normalized.replace(" -> ", ">>").replace(" → ", ">>")
+        normalized = normalized.replace(" + ", ".")
+        normalized = re.sub(r">{3,}", ">>", normalized)
+        normalized = re.sub(r">>\s*>>", ">>", normalized)
+    img = _reaction_smiles_to_image(normalized)
+    if img is not None:
+        st.image(img, caption=caption)
+    else:
+        st.code(reaction_smiles)
+
+
+def display_retrosynthesis_metadata(message):
+    logger.info(f"DISPLAYING RETROSYNTHESIS METADATA: {message}")
+    data = message.get("retrosynthesis") or {}
+    if not data:
+        return
+    if isinstance(data, str):
+        try:
+            data = ast.literal_eval(data)
+        except Exception:
+            st.markdown("### Retrosynthesis")
+            st.code(data)
+            return
+    payload = data
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), dict):
+            payload = data["data"]
+        elif isinstance(data.get("result"), dict):
+            payload = data["result"]
+    st.markdown("### Retrosynthesis")
+    target = payload.get("target") if isinstance(payload, dict) else None
+    if target:
+        st.markdown(f"**Target:** `{target}`")
+    routes = payload.get("routes") if isinstance(payload, dict) else None
+    if not isinstance(routes, list):
+        st.write("No routes returned.")
+        return
+    routes = [r for r in routes if isinstance(r, dict)]
+    if not routes:
+        st.write("No routes returned.")
+        return
+    # pick the best route by score (fallback: lowest precursor_cost)
+    def _route_sort_key(r):
+        score = r.get("score")
+        precursor_cost = r.get("precursor_cost")
+        return (
+            score is not None,
+            score if score is not None else float("-inf"),
+            precursor_cost is not None,
+            -precursor_cost if precursor_cost is not None else 0,
+        )
+
+    try:
+        best_route = max(routes, key=_route_sort_key)
+    except Exception:
+        best_route = routes[0]
+    for idx, route in enumerate([best_route], start=1):
+        title_parts = ["Best route"]
+        meta_parts = []
+        for key in ["score", "depth", "precursor_cost"]:
+            if route.get(key) is not None:
+                meta_parts.append(f"{key}={route.get(key)}")
+        if meta_parts:
+            title_parts.append(f"({', '.join(meta_parts)})")
+        with st.expander(" ".join(title_parts), expanded=idx == 1):
+            steps = route.get("steps") or []
+            if not steps:
+                st.write("No steps returned.")
+                continue
+            for step_idx, step in enumerate(steps, start=1):
+                reaction_smiles = step.get("reaction_smiles") or step.get("mapped_smiles")
+                logger.info(f"REACTION SMILES: {reaction_smiles}")
+                logger.info(f"STEP: {step}")
+                caption = f"Step {step_idx}"
+                if step.get("plausibility") is not None:
+                    caption += f" | plausibility={step.get('plausibility')}"
+                if reaction_smiles:
+                    logger.info(f"RENDERING REACTION SMILES: {reaction_smiles}")
+                    _render_reaction_smiles(reaction_smiles, caption=caption)
+                else:
+                    st.markdown(f"**Step {step_idx}**")
+                    st.write(step)
+                reactants = [r.get("smiles") for r in (step.get("reactants") or []) if r.get("smiles")]
+                products = [p.get("smiles") for p in (step.get("products") or []) if p.get("smiles")]
+                if reactants:
+                    st.caption(f"Reactants: {', '.join(reactants)}")
+                if products:
+                    st.caption(f"Products: {', '.join(products)}")
+
+
+def display_forward_prediction_metadata(message):
+    data = message.get("forward_prediction") or {}
+    if not data:
+        return
+    st.markdown("### Forward Prediction")
+    backend = data.get("backend")
+    model_name = data.get("model_name")
+    if backend or model_name:
+        st.markdown(f"**Backend:** `{backend}`  **Model:** `{model_name}`")
+    inputs = data.get("inputs") or []
+    predictions = data.get("predictions") or []
+    if predictions and isinstance(predictions, list):
+        predictions = sorted(
+            predictions,
+            key=lambda p: p.get("score") if isinstance(p, dict) else None,
+            reverse=True,
+        )[:2]
+    if not predictions:
+        st.write("No predictions returned.")
+        return
+    if len(inputs) == 1:
+        base = inputs[0]
+        pred = predictions[0] if predictions else None
+        if pred:
+            prod = pred.get("smiles")
+            score = pred.get("score")
+            if prod:
+                reaction_smiles = f"{base}>>{prod}"
+                caption = "Best prediction"
+                if score is not None:
+                    caption += f" | score={score}"
+                _render_reaction_smiles(reaction_smiles, caption=caption)
+    else:
+        rows = [{"smiles": p.get("smiles"), "score": p.get("score")} for p in predictions]
+        st.dataframe(rows)
+
+
+def display_reaction_classification_metadata(message):
+    data = message.get("reaction_classification") or {}
+    if not data:
+        return
+    st.markdown("### Reaction Classification")
+    status_code = data.get("status_code")
+    if status_code is not None:
+        st.markdown(f"**Status:** {status_code}")
+    msg = data.get("message")
+    if msg:
+        st.markdown(f"**Message:** {msg}")
+    results = data.get("result") or []
+    if results:
+        st.dataframe(results)
+    else:
+        st.write("No classification results.")
 
 
 def display_paper_analysis_metadata(message, message_index):

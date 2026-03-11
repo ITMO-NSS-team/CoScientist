@@ -18,7 +18,10 @@ from definitions import CONFIG_PATH
 from pathlib import Path
 from dotenv import load_dotenv
 from ChemCoScientist.chemical_utils.ocr_pipeline import molecules_ocr, reactions_ocr
-from ChemCoScientist.chemical_utils.chemical_functions import calculate_docking_score
+from ChemCoScientist.chemical_utils.chemical_functions import (
+    calculate_docking_score,
+)
+from ChemCoScientist.chemical_utils.retrosynthesis import retrosynthesis_result, classify_reaction_smiles, forward_predict_products
 
 import aiohttp
 import base64
@@ -655,6 +658,95 @@ def detect_reactions() -> Dict:
         logger.error(f'reactions_recognition ERROR: {e}')
         return {'answer': 'Could not detect any reactions in the uploaded images.'}
 
+@tool
+def retrosynthesis_tree_search(
+    smiles: Annotated[str, "Target molecule SMILES"],
+    mode: Annotated[str, "One of: fast, balanced, deep"] = "fast",
+) -> Dict:
+    """
+    Plan a retrosynthesis route for a target molecule.
+
+    Use this when the user asks for possible synthetic routes or precursors
+    for a target SMILES. This calls the retrosynthesis service and returns
+    ASKCOS-like routes with steps, reactants, and scores.
+
+    Args:
+        smiles (str): Target molecule SMILES.
+        mode (str): Search depth/quality preset ("fast", "balanced", "deep").
+
+    Returns:
+        dict: Retrosynthesis result with target and routes.
+        On failure returns a dict with an "answer" message.
+    """
+    try:
+        return retrosynthesis_result(smiles=smiles, mode=mode)
+    except Exception as e:
+        logger.error(f"retrosynthesis_tree_search ERROR: {e}")
+        return {"answer": "Could not run retrosynthesis tree search."}
+
+@tool
+def classify_reaction(
+    smiles: Annotated[List[str], "List of reaction SMILES, e.g. ['A.B>>C']"],
+    num_results: Annotated[int, "Max classes per reaction (1..50)"] = 10,
+) -> Dict:
+    """
+    Classify reaction SMILES into reaction classes.
+
+    Use this when the user provides reaction SMILES and wants the reaction
+    type/class (e.g., named reactions or class labels). Returns ASKCOS-like
+    classification hits with ranks and confidence.
+
+    Args:
+        smiles (List[str]): List of reaction SMILES to classify.
+        num_results (int): Max classes per reaction (1..50).
+
+    Returns:
+        dict: status_code/message/result list with classification hits.
+        On failure returns a dict with an "answer" message.
+    """
+    try:
+        return classify_reaction_smiles(smiles=smiles, num_results=num_results)
+    except Exception as e:
+        logger.error(f"classify_reaction ERROR: {e}")
+        return {"answer": "Could not classify reaction SMILES."}
+
+@tool
+def forward_predict(
+    smiles: Annotated[List[str], "Batch of reaction inputs (reactants)"],
+    backend: Annotated[str, "One of: wldn5, graph2smiles, augmented_transformer"],
+    retrosynthesis_model_name: Annotated[str, "Model name for backend"] = "pistachio",
+    reagents: Annotated[str, "Reagents string"] = "",
+    solvent: Annotated[str, "Solvent string"] = "",
+) -> Dict:
+    """
+    Predict reaction products from reactants (forward synthesis).
+
+    Use this when the user provides reactants and wants predicted products.
+    You can specify backend/model_name and optional reagents/solvent strings.
+
+    Args:
+        smiles (List[str]): Batch of reaction inputs (reactants).
+        backend (str): Model backend ("wldn5", "graph2smiles", "augmented_transformer").
+        model_name (str): Model name for backend (default "pistachio").
+        reagents (str): Reagents string.
+        solvent (str): Solvent string.
+
+    Returns:
+        dict: inputs/backend/model_name/predictions with product SMILES and scores.
+        On failure returns a dict with an "answer" message.
+    """
+    try:
+        return forward_predict_products(
+            smiles=smiles,
+            backend=backend,
+            model_name=retrosynthesis_model_name,
+            reagents=reagents,
+            solvent=solvent,
+        )
+    except Exception as e:
+        logger.error(f"forward_predict ERROR: {e}")
+        return {"answer": "Could not run forward prediction."}
+
 
 @tool
 def calculate_docking(smiles: str, pdb_id: str) -> str:
@@ -699,6 +791,9 @@ chem_tools = [
     visualize_molecule,
     detect_molecules,
     detect_reactions,
+    retrosynthesis_tree_search,
+    classify_reaction,
+    forward_predict,
     calculate_docking,
 ]
 

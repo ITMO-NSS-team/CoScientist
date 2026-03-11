@@ -256,6 +256,15 @@ def chemist_node(state: dict, config: dict) -> Command:
             config["configurable"]["state"] = state
             agent_response = chem_agent.invoke({"messages": [("user", task_formatted)]})
             
+            def _parse_tool_content(content):
+                try:
+                    return json.loads(content)
+                except Exception:
+                    try:
+                        return ast.literal_eval(content)
+                    except Exception:
+                        return None
+                    
             updated_metadata = state.get("metadata", {}).copy()
             for message in agent_response["messages"]:
                 if isinstance(message, ToolMessage) and message.name in ["detect_molecules", "detect_reactions", "extract_reactions"]:
@@ -275,6 +284,24 @@ def chemist_node(state: dict, config: dict) -> Command:
                             updated_metadata["docking"].update(docking_metadata["docking"])
                         else:
                             updated_metadata.update(docking_metadata)
+                
+                elif isinstance(message, ToolMessage) and message.name in ["retrosynthesis_tree_search"]:
+                    result = _parse_tool_content(message.content)
+                    if result is None:
+                        continue
+                    updated_metadata.update({"retrosynthesis": result})
+
+                elif isinstance(message, ToolMessage) and message.name in ["classify_reaction"]:
+                    result = _parse_tool_content(message.content)
+                    if result is None:
+                        continue
+                    updated_metadata.update({"reaction_classification": result})
+
+                elif isinstance(message, ToolMessage) and message.name in ["forward_predict"]:
+                    result = _parse_tool_content(message.content)
+                    if result is None:
+                        continue
+                    updated_metadata.update({"forward_prediction": result})
 
             return Command(update={
                 "past_steps": Annotated[set, operator.or_](set([
