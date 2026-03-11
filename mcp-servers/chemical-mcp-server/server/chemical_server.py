@@ -1,36 +1,27 @@
 import base64
-from fastmcp import FastMCP
-import logging 
-from pathlib import Path
-import os
-from ChemCoScientist.chemical_utils.ocr_pipeline import *
-from ChemCoScientist.chemical_utils.chemical_functions import *
-import os
-from typing import Annotated, Optional, List, Dict
-from urllib.parse import quote
-
-import pubchempy as pcp
-import py3Dmol
-import rdkit.Chem as Chem
-import requests
-from rdkit.Chem import AllChem
-from rdkit.Chem.Descriptors import CalcMolDescriptors
-from typing import Dict, List, Optional
-from definitions import CONFIG_PATH
-from pathlib import Path
-from dotenv import load_dotenv
-from ChemCoScientist.chemical_utils.ocr_pipeline import molecules_ocr, reactions_ocr
-from ChemCoScientist.chemical_utils.chemical_functions import calculate_docking_score
-
-import aiohttp
-import base64
 import asyncio
 import json
+import logging
+import os
 import re
-import pandas as pd
 from io import StringIO
+from pathlib import Path
+from typing import Annotated, Dict, List, Optional
+from urllib.parse import quote
 
-load_dotenv(CONFIG_PATH)
+import aiohttp
+import pandas as pd
+import pubchempy as pcp
+import py3Dmol
+import requests
+from fastmcp import FastMCP
+import rdkit.Chem as Chem
+from rdkit.Chem import AllChem
+from rdkit.Chem.Descriptors import CalcMolDescriptors
+
+from .chemical_functions import calculate_docking_score
+from .ocr_pipeline import molecules_ocr, reactions_ocr
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -583,7 +574,7 @@ def extract_reactions(
 
 
 @mcp.tool()
-def detect_molecules(
+def extract_molecules(
     images_directory: Annotated[str, "Path to directory containing images (.jpg, .png, .jpeg)"],
 ) -> Dict:
     """Detects molecular structures in images from the given directory and converts them to SMILES using the `molecules_ocr` pipeline.
@@ -654,5 +645,10 @@ def calculate_docking(
     }
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for the MCP server."""
     mcp.run(transport="http", host="0.0.0.0", port=7331, path="/mcp")
+
+
+if __name__ == "__main__":
+    main()
