@@ -21,13 +21,13 @@ Leave `[ ]` when there is no MCP coverage yet, but tool exist.
 - [ ] `Shape of a nanomaterial prediction from its descriptive text`
 - [ ] `Generates an image representation of a nanoparticle based on its specified shape.`
 - [ ] `Analyzes images to determine the shape of nanoparticles present.`
-- [ ] `Docking calculation`
+- [x] `Docking calculation`
 - [ ] `Exctract molecules from pdf`
-- [ ] `Exctract molecules from figure`
-- [ ] `Exctract reactions from pdf`
-- [ ] `Exctract reactions from figure`
-- [ ] `Convert IUPAC name to SMILES`
-- [ ] `Convert SMILES to IUPAC name`
-- [ ] `Get all RDKit properties from SMILES`
-- [ ] `Get html visualization of SMILES`
-- [ ] `Fetch activities from Chembl or Bindingdb via proteinId or proteinName`
+- [x] `Exctract molecules from figure`
+- [] `Exctract reactions from pdf`
+- [x] `Exctract reactions from figure`
+- [x] `Convert IUPAC name to SMILES`
+- [x] `Convert SMILES to IUPAC name`
+- [x] `Get all RDKit properties from SMILES`
+- [x] `Get html visualization of SMILES`
+- [x] `Fetch activities from Chembl or Bindingdb via proteinId or proteinName`
