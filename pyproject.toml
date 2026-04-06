@@ -98,6 +98,7 @@ dependencies = [
     "opentelemetry-resourcedetector-gcp==1.11.0a0",
     "opentelemetry-sdk==1.38.0",
     "opentelemetry-semantic-conventions==0.59b0",
+    "opik>=1.10.58",
     "packaging==26.0",
     "platformdirs==4.9.4",
     "propcache==0.4.1",

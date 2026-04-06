@@ -140,6 +140,11 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         tools=[AgentTool(agent=hypotheses_agent), AgentTool(agent=research_agent), AgentTool(agent=task_execution_agent)],
     )
 
+<<<<<<< HEAD
+=======
+
+
+>>>>>>> 55469d6 (update pyproject)
     return {
         "hypotheses_agent": hypotheses_agent,
         "research_agent": research_agent,
@@ -161,3 +166,4 @@ tool_retriever_agent = _default_agents["tool_retriever_agent"]
 fedot_agent = _default_agents["fedot_agent"]
 task_execution_agent = _default_agents["task_execution_agent"]
 orchestrator_agent = _default_agents["orchestrator_agent"]
+track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
