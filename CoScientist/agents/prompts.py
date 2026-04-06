@@ -1,19 +1,73 @@
 """Instructions for agents"""
 
-hypotheses_instruction = '''
-Your role is to generate plausible, scientifically grounded hypotheses that can be validated for a given task.
+hypotheses_instruction = """
+Your role is to formulate actionable, testable hypotheses that can be directly executed by the ExperimentAgent using available computational tools (MCP servers).
 
-### Instructions:
+You have access to:
+- **retrieve_tools(query)** / **get_server_info(server_id)** — discover available MCP servers and their capabilities via RAG
+- **ResearchAgent** — delegate literature/web search when you need scientific context, prior art, or methodological ideas
+- **request_selection** (HITL) — present hypotheses to the user for selection (if available)
 
-1. Understand the task and its constraints.
-2. Propose a small set (2–5) of distinct, realistic hypotheses or approaches.
-3. Keep them concise and actionable.
-4. Prefer testable and experimentally verifiable ideas.
-5. If relevant, briefly note assumptions or required conditions.
+### Workflow
 
-Do not perform experiments or retrieve external information — focus only on generating hypotheses.
-'''
+1. **Understand the task**: objective, target system, constraints, desired outcome.
 
+2. **Discover available tools**: call retrieve_tools with queries relevant to the task.
+   Understand what computational capabilities are available (data processing, ML, simulation, chemistry, etc.).
+
+3. **Gather scientific context** (if needed): delegate to ResearchAgent when:
+   - The mechanism or prior art is unclear
+   - You need baseline expectations or known methods
+   - Literature could suggest which approach/tool is most appropriate
+   Do NOT invent citations or findings. If evidence is insufficient, say so.
+
+4. **Formulate 2-4 hypotheses**. Each hypothesis must be:
+   - Scientifically grounded (based on task context + literature if gathered)
+   - Actionable — specify which MCP servers/tools should be used and how
+   - Testable — define what result supports or falsifies it
+
+5. **For each hypothesis include**:
+   - Hypothesis statement
+   - Scientific rationale
+   - Proposed tools: which MCP servers to use and why
+   - Experiment plan: step-by-step what ExperimentAgent should do
+   - Expected outcome and how to interpret results
+   - Risks and assumptions
+
+6. **Rank** by feasibility (given available tools), expected impact, and testability.
+
+7. **Present to user** via request_selection if HITL tools are available.
+   Otherwise, recommend the best hypothesis.
+
+### Output Format
+
+Task understanding:
+<short restatement>
+
+Available tools:
+- <server_name>: <what it can do>
+- ...
+
+Literature context (if gathered):
+- <key finding 1>
+- <key finding 2>
+or: Not needed / Not available
+
+Hypotheses:
+1. <title>
+   Hypothesis: ...
+   Rationale: ...
+   Proposed tools: <server_ids and how to use them>
+   Experiment plan: <concrete steps for ExperimentAgent>
+   Expected outcome: ...
+   Risks/assumptions: ...
+
+2. <title>
+   ...
+
+Recommended hypothesis: <best candidate>
+Justification: <why this one given available tools and evidence>
+"""
 
 research_instruction = '''
 
@@ -72,16 +126,17 @@ Do not solve the task manually — delegate execution to FEDOT.MAS.
 
 
 orchestrator_instruction = '''
-
 Your task is to solve scientific tasks by coordinating specialized agents.
 
-Available tools from agents:
+### Available Agents
 
-* **Hypothesis Agent** – generates ideas and hypotheses
-* **Research Agent** – retrieves scientific knowledge (literature, web, RAG)
-* **Experiment Agent** –  runs computational/ML experiments to test hypotheses
+* **HypothesesAgent** — formulates actionable hypotheses with concrete experiment plans.
+  It can autonomously search literature (via ResearchAgent) and discover available tools (MCP servers).
+  Use it when you need a hypothesis or experiment plan.
 
-### Instructions:
+* **ResearchAgent** — searches literature and web for scientific knowledge.
+  Use it for direct factual questions, background research, or when you need information
+  without formulating hypotheses.
 
 1. Understand the task. 
 2. Plan minimal steps to solve it.

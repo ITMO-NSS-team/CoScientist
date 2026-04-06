@@ -117,6 +117,15 @@ class OpikSettings(BaseModel):
 
 
 # =========================
+# HITL (Human-in-the-Loop)
+# =========================
+class HITLSettings(BaseModel):
+    enabled: bool = True
+    default_timeout: Optional[float] = 300.0
+    agents_requiring_approval: List[str] = ["HypothesesAgent"]
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -129,6 +138,7 @@ class Settings(BaseSettings):
     collections: CollectionsSettings = CollectionsSettings()
     s3: S3Settings = S3Settings()
     opik: OpikSettings = OpikSettings()
+    hitl: HITLSettings = HITLSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
 
     model_config = SettingsConfigDict(

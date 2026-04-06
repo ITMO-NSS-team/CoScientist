@@ -13,13 +13,21 @@ load_dotenv()
 import asyncio
 from typing import Optional
 
-from dotenv import load_dotenv
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
-from CoScientist.agents.agents import orchestrator_agent
+from CoScientist.agents.agents import create_agents
+from CoScientist.hitl import (
+    AbstractHITLHandler,
+    CallbackHITLHandler,
+    HITLRequest,
+    HITLResponse,
+)
+
+settings = get_settings()
+
 
 class CoScientistManager:
     """
@@ -31,6 +39,7 @@ class CoScientistManager:
         app_name: str = "coscientist_app",
         user_id: str = "user_1",
         session_id: str = "session_001",
+        hitl_handler: Optional[AbstractHITLHandler] = None,
     ):
         self.app_name = app_name
         self.user_id = user_id
@@ -40,10 +49,21 @@ class CoScientistManager:
         self.runner: Optional[Runner] = None
         self._initialized = False
 
+        # HITL setup
+        self._hitl_handler = hitl_handler
+        self._agents = None
+
     async def initialize(self):
         """Initialize session + runner."""
         if self._initialized:
             return
+
+        # Create agents with HITL handler
+        if self._hitl_handler is not None:
+            self._agents = await create_agents(hitl_handler=self._hitl_handler)
+        else:
+            self._agents = await create_agents()
+        agent = self._agents["orchestrator_agent"]
 
         # Session service
         self.session_service = InMemorySessionService()
@@ -56,7 +76,7 @@ class CoScientistManager:
 
         # Runner
         self.runner = Runner(
-            agent=orchestrator_agent,
+            agent=agent,
             app_name=self.app_name,
             session_service=self.session_service,
         )
@@ -98,9 +118,34 @@ class CoScientistManager:
                     final_response = event.content.parts[0].text
                 elif event.actions and event.actions.escalate:
                     final_response = f"Escalation: {event.error_message or 'Unknown error'}"
-                
+
 
         return final_response
+
+    # --- HITL convenience methods for external UI integration ---
+
+    async def get_hitl_request(self) -> Optional[HITLRequest]:
+        """Get pending HITL request (for web UI / chat bot integration).
+
+        Only works when hitl_handler is CallbackHITLHandler.
+        """
+        if isinstance(self._hitl_handler, CallbackHITLHandler):
+            return await self._hitl_handler.get_pending_request()
+        return None
+
+    async def submit_hitl_response(self, response: HITLResponse) -> None:
+        """Submit human response to a HITL request (for web UI / chat bot integration).
+
+        Only works when hitl_handler is CallbackHITLHandler.
+        """
+        if isinstance(self._hitl_handler, CallbackHITLHandler):
+            await self._hitl_handler.submit_response(response)
+
+    def has_pending_hitl(self) -> bool:
+        """Check if there is a pending HITL request (non-blocking)."""
+        if isinstance(self._hitl_handler, CallbackHITLHandler):
+            return self._hitl_handler.has_pending_request()
+        return False
 
     async def close(self):
         """Cleanup (placeholder)."""
@@ -108,9 +153,16 @@ class CoScientistManager:
         pass
 
 # Convenience functions
-async def create_manager() -> CoScientistManager:
-    """Create and initialize a CoScientistManager."""
-    manager = CoScientistManager()
+async def create_manager(
+    hitl_handler: Optional[AbstractHITLHandler] = None,
+) -> CoScientistManager:
+    """Create and initialize a CoScientistManager.
+
+    Args:
+        hitl_handler: Optional HITL handler. Pass CallbackHITLHandler for
+                      web UI integration, or None for console-based HITL.
+    """
+    manager = CoScientistManager(hitl_handler=hitl_handler)
     await manager.initialize()
     return manager
 
@@ -119,7 +171,6 @@ async def create_manager() -> CoScientistManager:
 __all__ = [
     # Main classes
     "CoScientistManager",
-    # Models
     # Functions
     "create_manager"
 ]
