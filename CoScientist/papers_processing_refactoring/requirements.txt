@@ -1,0 +1,17 @@
+beautifulsoup4
+boto3
+botocore
+chromadb
+feedparser # for arXiv
+langchain
+langchain-core
+langchain-openai
+langchain-text-splitters
+marker-pdf
+pillow
+psycopg2
+pydantic
+pydantic-settings
+python-dotenv
+qdrant-client
+requests
