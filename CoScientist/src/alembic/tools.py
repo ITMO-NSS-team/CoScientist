@@ -147,20 +147,19 @@ def search(repo_url: str, pattern: str) -> dict:
     return {"pattern": pattern, "matches": sorted(matched)}
 
 
-def read_report(repo_url: str) -> dict:
-    """Read the Markdown analysis report previously written by the explorer agent.
+def read_report(report_name: str) -> dict:
+    """Read a Markdown report from the shared reports directory (/tmp/alembic_reports/).
 
-    Call this first — it gives you the repo description and MCP usage scenarios
-    to implement as tools.
+    Args:
+        report_name: Filename without the .md extension, e.g. "massformer_exploration".
 
     Example:
-        read_report("https://github.com/Roestlab/massformer")
-        # -> {"report_path": "...", "content": "# massformer\\n..."}
+        read_report("massformer_exploration")
+        # -> {"report_path": "/tmp/alembic_reports/massformer_exploration.md", "content": "..."}
     """
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
-    path = REPORTS_DIR / f"{name}.md"
+    path = REPORTS_DIR / f"{report_name}.md"
     if not path.exists():
-        return {"error": f"No report found at {path}. Run the explorer agent first."}
+        return {"error": f"No report found at {path}."}
     return {"report_path": str(path), "content": path.read_text(encoding="utf-8")}
 
 
@@ -187,26 +186,141 @@ def write_file(repo_url: str, relative_path: str, content: str) -> dict:
     return {"written": str(dest)}
 
 
-def write_report(repo_url: str, content: str) -> dict:
-    """Write the final Markdown analysis report for the repository.
+def read_output_file(repo_url: str, relative_path: str) -> dict:
+    """Read a file from the MCP server output directory for this repo.
 
-    Call this as the last step after you have explored the repo.
-    The report must contain:
-      1. A concise description of what the repo does.
-      2. 1–5 usage scenarios most likely to be useful as MCP tools.
+    Use this to inspect generated server.py or test files before fixing them.
+    Returns up to 40 KB of content.
 
     Args:
-        repo_url: The repository URL (used to name the output file).
-        content:  Full Markdown content of the report.
+        repo_url:      Repository URL.
+        relative_path: Path relative to the output folder, e.g. "server.py"
+                       or "tests/test_server.py".
+
+    Examples:
+        read_output_file("https://github.com/Roestlab/massformer", "server.py")
+        read_output_file("https://github.com/Roestlab/massformer", "tests/test_server.py")
+    """
+    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    full = OUTPUT_DIR / name / relative_path
+    if not full.exists():
+        return {"error": f"File not found: {full}"}
+    raw = full.read_bytes()[:MAX_BYTES]
+    return {"path": str(full), "content": raw.decode("utf-8", errors="replace")}
+
+
+def update_file(repo_url: str, relative_path: str, content: str) -> dict:
+    """Overwrite a file in the MCP server output directory with corrected content.
+
+    Read the file first with read_output_file, fix the issue, then call this
+    with the complete corrected content. Always write the full file — not a patch.
+
+    Args:
+        repo_url:      Repository URL.
+        relative_path: Path relative to the output folder, e.g. "server.py"
+                       or "tests/test_server.py".
+        content:       Complete corrected file content.
+
+    Examples:
+        update_file("https://github.com/Roestlab/massformer", "server.py", "...")
+        update_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
+    """
+    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    dest = OUTPUT_DIR / name / relative_path
+    if not dest.exists():
+        return {"error": f"File not found: {dest}. Cannot update a file that does not exist."}
+    dest.write_text(content, encoding="utf-8")
+    return {"updated": str(dest)}
+
+
+def validate_syntax(repo_url: str) -> dict:
+    """Check server.py for syntax errors and failed imports.
+
+    Runs two checks in sequence:
+      1. py_compile  — catches SyntaxError before any code runs
+      2. module load — imports the file to surface missing packages or
+                       top-level NameError / ImportError
+
+    Returns {"passed": True} on success, or
+            {"passed": False, "stage": "syntax"|"imports", "error": "<traceback>"}
 
     Example:
-        write_report(
-            "https://github.com/Roestlab/massformer",
-            "# massformer\\n\\n## Description\\n...\\n\\n## MCP Usage Scenarios\\n..."
+        validate_syntax("https://github.com/Roestlab/massformer")
+    """
+    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    server = OUTPUT_DIR / name / "server.py"
+    if not server.exists():
+        return {"passed": False, "stage": "syntax", "error": f"server.py not found at {server}"}
+
+    # Stage 1: syntax check
+    r1 = subprocess.run(
+        ["python", "-m", "py_compile", str(server)],
+        capture_output=True, text=True,
+    )
+    if r1.returncode != 0:
+        return {"passed": False, "stage": "syntax", "error": r1.stderr.strip()}
+
+    # Stage 2: import check (load module without running mcp.run())
+    load_snippet = (
+        "import importlib.util as _u, sys as _s; "
+        f"_s.path.insert(0, '{server.parent}'); "
+        f"_spec=_u.spec_from_file_location('server', r'{server}'); "
+        "_mod=_u.module_from_spec(_spec); "
+        "_spec.loader.exec_module(_mod)"
+    )
+    r2 = subprocess.run(
+        ["python", "-c", load_snippet],
+        capture_output=True, text=True, timeout=30,
+        cwd=str(server.parent),
+    )
+    if r2.returncode != 0:
+        return {"passed": False, "stage": "imports", "error": r2.stderr.strip()}
+
+    return {"passed": True}
+
+
+def run_tests(repo_url: str) -> dict:
+    """Run the pytest test suite for the generated MCP server.
+
+    Executes tests/test_server.py under /tmp/alembic_output/<repo-name>/.
+    Returns pass/fail status and the full pytest output (stdout + stderr,
+    truncated to 40 KB).
+
+    Example:
+        run_tests("https://github.com/Roestlab/massformer")
+        # -> {"passed": True/False, "output": "...pytest output..."}
+    """
+    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    out_dir = OUTPUT_DIR / name
+    test_dir = out_dir / "tests"
+    if not test_dir.exists():
+        return {"passed": False, "output": f"Test directory not found: {test_dir}"}
+
+    try:
+        r = subprocess.run(
+            ["python", "-m", "pytest", str(test_dir), "-v", "--tb=short", "--no-header"],
+            capture_output=True, text=True, timeout=120,
+            cwd=str(out_dir),
         )
+    except subprocess.TimeoutExpired:
+        return {"passed": False, "output": "pytest timed out after 120 seconds."}
+
+    output = (r.stdout + r.stderr)[:MAX_BYTES]
+    return {"passed": r.returncode == 0, "output": output}
+
+
+def write_report(report_name: str, content: str) -> dict:
+    """Write a Markdown report to the shared reports directory (/tmp/alembic_reports/).
+
+    Args:
+        report_name: Filename without the .md extension, e.g. "massformer_exploration".
+        content:     Full Markdown content to write.
+
+    Example:
+        write_report("massformer_exploration", "# massformer\\n\\n## Description\\n...")
+        # -> {"report_path": "/tmp/alembic_reports/massformer_exploration.md"}
     """
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
-    out = REPORTS_DIR / f"{name}.md"
+    out = REPORTS_DIR / f"{report_name}.md"
     out.write_text(content, encoding="utf-8")
     return {"report_path": str(out)}
