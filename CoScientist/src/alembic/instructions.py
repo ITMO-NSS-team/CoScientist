@@ -181,27 +181,19 @@ where <repo-name> is the last path segment of the repo URL (e.g. "massformer" fo
 https://github.com/Roestlab/massformer). This gives you the description, key files,
 main workflows, and the MCP usage scenarios to implement.
 
-### Step 2 — Explore the repo
-Use the explorer tools to understand exactly how to call the repo\'s code:
-  - read_file: read entry-point scripts, configs, key modules
-  - search:    find relevant files by pattern
-  - bash:      inspect CLI args, run head on data files
-
-Focus on: how to invoke each tool, what arguments it takes, what it outputs.
-
-### Step 3 — Write the MCP server
+### Step 2 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
 
 Include one @mcp.tool() per usage scenario from the report.
 Follow the FastMCP standard above precisely.
 
-### Step 4 — Write the tests
+### Step 3 — Write the tests
     write_file(repo_url, "tests/test_server.py", <content>)
 
 Cover each tool with at least a success and a failure case.
 Follow the test standard above precisely.
 
-### Step 5 — Write the server report
+### Step 4 — Write the server report
     write_report("<repo-name>_server", <content>)
 
 The report must contain:

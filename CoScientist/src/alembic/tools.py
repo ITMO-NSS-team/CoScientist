@@ -29,8 +29,7 @@ def _repo_path(repo_url: str) -> Path:
 def clone_repo(repo_url: str) -> dict:
     """Clone a GitHub repository to local disk.
 
-    Call this first — before any other tool. Returns the local path and
-    a flat file list for you to select from.
+    Returns the local path and a flat file list for you to select from.
 
     Example:
         clone_repo("https://github.com/Roestlab/massformer")
@@ -68,6 +67,10 @@ def read_file(repo_url: str, path: str) -> dict:
         read_file("https://github.com/Roestlab/massformer", "src/train.py")
     """
     full = _repo_path(repo_url) / path
+    if not full.exists():
+        return {"error": f"File not found: {path}. It may be a data file not included in the shallow clone."}
+    if full.suffix in IGNORE_EXTS:
+        return {"error": f"Binary/data file skipped: {path}. Use bash('head -n 20 {full}') to peek if it is text-based."}
     raw = full.read_bytes()[:MAX_BYTES]
     return {"path": path, "content": raw.decode("utf-8", errors="replace")}
 
