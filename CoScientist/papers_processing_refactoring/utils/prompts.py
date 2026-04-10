@@ -1,21 +1,25 @@
-# TODO: generalize prompts
-
 summarisation_prompt = (
-    "You are an expert in summarizing scientific articles for semantic search."
-    " Create a concise and informative summary of the following scientific article. Focus on the"
-    " key elements:\n"
-    "1. Objective : Describe the main problem, hypothesis, or research question addressed.\n"
-    "2. Methodology : Highlight the key methods, experiments, or approaches used in the study.\n"
-    "3. Results : Summarize the primary findings, data, or observations, including statistical"
-    " significance (if applicable).\n"
-    "Maintain a neutral tone, ensure logical flow. Emphasize the novelty of the work and how it"
-    " differs from prior studies. Maximum length: 200 words. Don't add any comments at the"
-    " beginning and end of the summary. Before the main part of the summary, indicate on a separate"
-    " line all keywords/terms that characterise the article. After the main part of the summary,"
-    " list separately all tables with its names, all images with its names, and all main"
-    " substances that are in the article. Keywords/terms, as well as lists of tables, images, and"
-    " substances are also part of the summary.\n"
-    " Also try to determine the title of the article and the year of its publication.\n\n"
+    "You are a professional research analyst specializing in scientific indexing and semantic search. "
+    "Your task is to extract metadata and create a comprehensive summary from the provided scientific article (HTML). "
+    "This data will be used for RAG (Retrieval-Augmented Generation), so prioritize technical density and clarity.\n\n"
+    
+    "### FIELD GUIDELINES:\n"
+    "1. paper_title: Extract the full title. If missing, use 'NO TITLE'.\n"
+    "2. publication_year: Extract as an integer. If missing, use 9999.\n"
+    "3. authors: List as 'First Last, First Last'. If missing, use 'NO AUTHORS'.\n"
+    "4. source: Journal name, conference, or publisher. If missing, use 'UNDEFINED'.\n"
+    "5. research_area: Identify the scientific domain (e.g., Computer Science, Biology, Physics). If unclear, use 'OTHER'.\n"
+    "6. paper_summary: This field MUST follow this internal structure:\n"
+    "   - KEYWORDS: [10-15 technical terms/entities for indexing]\n"
+    "   - BODY: A concise summary (max 250 words) covering: Objective (problem/hypothesis), "
+    "Methodology (approach/tools), Results (findings/significance), and Novelty (what is new).\n"
+    "   - APPENDICES: A list of all Tables (names), Images (captions/names), and Core Entities "
+    "(specific algorithms, chemicals, proteins, theorems, or variables mentioned).\n\n"
+    
+    "### CONSTRAINTS:\n"
+    "- Maintain a neutral, academic tone.\n"
+    "- Do not add any conversational filler or meta-comments about the task.\n"
+    "- Ensure all extracted data is strictly based on the provided text.\n\n"
     "Article in HTML markup:\n"
 )
 
@@ -82,8 +86,14 @@ Option B: No table (all other cases)
 """
 
 image_captioning_prompt = (
-    "This is an image from a scientific paper in chemistry. "
-    "Write a short but succinct description of the image that reflects its essence."
-    "Be as concise as possible. "
-    "Only use data from image, do NOT make anything up."
+    "You are a technical vision assistant. Describe this scientific figure/image for a "
+    "knowledge retrieval system. Your description must include:\n"
+    "1. Type of Image: (e.g., flow chart, scatter plot, microscopic image, architectural diagram).\n"
+    "2. Key Elements: Identify labels, axes (if applicable), variables, and any distinct symbols.\n"
+    "3. Contextual Essence: Briefly explain what the image demonstrates or what trend it reveals.\n"
+    "Constraints:\n"
+    "- Be extremely objective. Describe only what is visible.\n"
+    "- Use precise technical terminology relevant to the context of the paper.\n"
+    "- Avoid vague phrases like 'this is a picture of...'. Start directly with the description.\n"
+    "- Length: 2-4 information-dense sentences."
 )

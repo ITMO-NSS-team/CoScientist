@@ -17,17 +17,9 @@ class PaperSummarisatonStep(ETLStep):
         html = ctx.artifact_store.get_html(article_id, "image_captioning")
         manifest_data = ctx.artifact_store.get_metadata(article_id, "image_captioning")
         
-        # summary_llm = ctx.llm.with_structured_output(ExpandedSummary)
-        # expanded_summary: ExpandedSummary = summary_llm.invoke([HumanMessage(content=summarisation_prompt + html)])
-        
-        # TODO: delete dummy data
-        expanded_summary: ExpandedSummary = ExpandedSummary(
-            paper_summary=f"Dummy summary of {article_id}",
-            paper_title=f"Dummy title of {article_id}",
-            publication_year=9999,
-            authors="author_1, author_2",
-            source="Dummy publisher",
-            research_area="Dummy research area"
+        summary_llm = ctx.llm.with_structured_output(ExpandedSummary)
+        expanded_summary: ExpandedSummary = summary_llm.invoke(  # noqa
+            [HumanMessage(content=summarisation_prompt + html)]
         )
         
         manifest_data["summary"] = {

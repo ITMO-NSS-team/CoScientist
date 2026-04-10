@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ConfigDict
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from ..domain.entities import Article, Chunk
 from ..embeddings import *
 from ..storage.artifacts.domain_s3 import S3DomainArtifactStore
-from ..storage.artifacts.etl_s3 import S3ETLArtifactStore, MockArtifactStore
+from ..storage.artifacts.etl_s3 import S3ETLArtifactStore
 from ..storage.state.state_db import SQLiteStateManager
 from ..storage.vector.base import VectorStore
 
@@ -24,7 +24,7 @@ class ETLContext(BaseModel):
     artifacts: Dict[str, Any] = Field(default_factory=dict)
     
     state_manager: SQLiteStateManager
-    artifact_store: Union[S3ETLArtifactStore, MockArtifactStore]
+    artifact_store: S3ETLArtifactStore
     public_store: S3DomainArtifactStore
     vector_store: VectorStore
     

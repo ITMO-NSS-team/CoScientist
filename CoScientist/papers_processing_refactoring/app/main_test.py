@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
@@ -34,9 +35,6 @@ def build_services(settings):
 
 def build_vector_store(settings):
 
-    # if settings.vectordb.backend == "qdrant":
-    #     return QdrantVectorStore(etl_settings.vectordb.qdrant)
-
     if settings.vectordb.backend == "chromadb":
         return ChromaVectorStore(
             settings.vectordb.chroma.host,
@@ -70,8 +68,6 @@ def build_artifacts_stores(settings):
 
 def main(settings):
     papers_dir = Path("/home/kamilfatkhiev/work_data/chem_projects/test_papers")
-    # artifacts_dir = "/home/kamilfatkhiev/work_data/chem_projects/test_artifacts"
-    # artifact_store = MockArtifactStore(artifacts_dir)
     
     source = LocalSource(papers_dir)
     vector_store = build_vector_store(settings)
@@ -103,6 +99,7 @@ def main(settings):
         print("Starting Pipeline...")
         for article in source.list_articles():
             print(f"\n--- Processing: {article.name} (ID: {article.id}) ---")
+            start = time.perf_counter()
 
             ctx = ETLContext(
                 article=article,
@@ -116,23 +113,28 @@ def main(settings):
 
             try:
                 pipeline.run(ctx)
-                print("Article processing finished successfully.")
+                end = time.perf_counter()
+                print(f"Article processing finished successfully in {end - start:.2f} seconds")
             except Exception as e:
-                print(f"Article processing stopped due to error: {e}")
+                end = time.perf_counter()
+                print(f"Article processing stopped due to error: {e}\n after {end - start:.2f} seconds")
     
     # retriever = TwoStageRetriever(vector_store, embedding_model)
-    # res = retriever.retrieve("Simple query", rerank_k=20, filters={"role": {"$eq": "body"}})
-    # res_with_image = [r for r in res if eval(r.metadata["imgs_in_chunk"])]
-    # for c in res_with_image:
+    # res = retriever.retrieve(
+    #     "Что такое аллергический ответ?",
+    #     rerank_k=10,
+    #     filters={"role": {"$eq": "summary"}}
+    # )
+    # for c in res:
     #     print(c)
     #
-    # for r in res_with_image:
+    # for r in [r for r in res if eval(r.metadata["imgs_in_chunk"])]:
     #     for img_name in eval(r.metadata["imgs_in_chunk"]):
     #         public_store.download_image_from_s3(
     #             "",
     #             r.article_id,
     #             img_name,
-    #             f"imgs/{r.article_id + "-" + img_name}"
+    #             f"/home/kamilfatkhiev/work_data/chem_projects/imgs/{r.article_id + img_name}"
     #         )
 
 
