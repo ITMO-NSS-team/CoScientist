@@ -17,11 +17,12 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from alembic.agents import explorer_agent, coder_agent, validator_agent
+from alembic.tools import REPORTS_DIR, OUTPUT_DIR
 
 APP_NAME = "alembic_app"
 USER_ID  = "user_1"
 
-TRUNC = 200  # max chars shown for tool args / responses inline
+TRUNC = 2000  # max chars shown for tool args / responses inline
 
 
 def _repo_name(repo_url: str) -> str:
@@ -110,17 +111,19 @@ async def run_agent(agent, session_service, session_id: str, message: str) -> st
     return final
 
 
-_TMP_DIRS = ("repos", "alembic_reports", "alembic_output")
+_SNAPSHOT_DIRS = {
+    "reports": REPORTS_DIR,
+    "output":  OUTPUT_DIR,
+}
 
 
 def _snapshot_tmp(run_dir: Path) -> None:
-    """Copy the alembic /tmp/ subdirs into run_dir, overwriting previous snapshot."""
+    """Copy the alembic work dirs into run_dir, overwriting previous snapshot."""
     run_dir.mkdir(parents=True, exist_ok=True)
-    for name in _TMP_DIRS:
-        src = Path("/tmp") / name
+    for label, src in _SNAPSHOT_DIRS.items():
         if not src.exists():
             continue
-        dest = run_dir / name
+        dest = run_dir / label
         if dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(src, dest)
@@ -150,7 +153,7 @@ async def run_pipeline(repo_url: str):
     explorer_response = await run_agent(
         explorer_agent, session_service, f"{name}_explorer", repo_url
     )
-    print(f"\n[Explorer done] report → /tmp/alembic_reports/{name}_exploration.md")
+    print(f"\n[Explorer done] report → {REPORTS_DIR}/{name}_exploration.md")
     _snapshot_tmp(run_dir)
     print(f"  [snapshot] {run_dir}")
 
@@ -159,8 +162,8 @@ async def run_pipeline(repo_url: str):
     coder_response = await run_agent(
         coder_agent, session_service, f"{name}_coder", repo_url
     )
-    print(f"\n[Coder done] server → /tmp/alembic_output/{name}/server.py")
-    print(f"             tests  → /tmp/alembic_output/{name}/tests/test_server.py")
+    print(f"\n[Coder done] server → {OUTPUT_DIR}/{name}/server.py")
+    print(f"             tests  → {OUTPUT_DIR}/{name}/tests/test_server.py")
     _snapshot_tmp(run_dir)
     print(f"  [snapshot] {run_dir}")
 
@@ -169,15 +172,15 @@ async def run_pipeline(repo_url: str):
     validator_response = await run_agent(
         validator_agent, session_service, f"{name}_validator", repo_url
     )
-    print(f"\n[Validator done] report → /tmp/alembic_reports/{name}_validation.md")
+    print(f"\n[Validator done] report → {REPORTS_DIR}/{name}_validation.md")
     _snapshot_tmp(run_dir)
     print(f"  [snapshot] {run_dir}")
 
     # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"  Pipeline complete: {name}")
-    print(f"  Reports : /tmp/alembic_reports/{name}_*.md")
-    print(f"  Output  : /tmp/alembic_output/{name}/")
+    print(f"  Reports : {REPORTS_DIR}/{name}_*.md")
+    print(f"  Output  : {OUTPUT_DIR}/{name}/")
     print(f"{'='*60}")
     print(f"\n--- Validator summary ---\n")
     print(textwrap.indent(validator_response.strip(), "  "))

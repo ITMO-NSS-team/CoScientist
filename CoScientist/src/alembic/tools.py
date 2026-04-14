@@ -1,9 +1,12 @@
 import subprocess
 from pathlib import Path
 
-REPO_DIR = Path("/tmp/repos")
-REPORTS_DIR = Path("/tmp/alembic_reports")
-OUTPUT_DIR = Path("/tmp/alembic_output")
+_ALEMBIC_BASE = Path(
+    __import__("os").environ.get("ALEMBIC_WORKDIR", "/var/tmp/alembic")
+)
+REPO_DIR    = _ALEMBIC_BASE / "repos"
+REPORTS_DIR = _ALEMBIC_BASE / "reports"
+OUTPUT_DIR  = _ALEMBIC_BASE / "output"
 MAX_BYTES = 40_000
 
 IGNORE = {
@@ -21,9 +24,18 @@ IGNORE_EXTS = {
 _ALLOWED_CMDS = ("ls", "grep", "head", "glob")
 
 
+def _repo_name(repo_url: str) -> str:
+    return repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+
+
 def _repo_path(repo_url: str) -> Path:
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
-    return REPO_DIR / name
+    return REPO_DIR / _repo_name(repo_url)
+
+
+def _venv_python(out_dir: Path) -> str:
+    """Return the venv python path if it exists, else fall back to 'python'."""
+    candidate = out_dir / ".venv" / "bin" / "python"
+    return str(candidate) if candidate.exists() else "python"
 
 
 def clone_repo(repo_url: str) -> dict:
@@ -182,7 +194,7 @@ def write_file(repo_url: str, relative_path: str, content: str) -> dict:
         write_file("https://github.com/Roestlab/massformer", "server.py", "...")
         write_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
     """
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    name = _repo_name(repo_url)
     dest = OUTPUT_DIR / name / relative_path
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
@@ -204,7 +216,7 @@ def read_output_file(repo_url: str, relative_path: str) -> dict:
         read_output_file("https://github.com/Roestlab/massformer", "server.py")
         read_output_file("https://github.com/Roestlab/massformer", "tests/test_server.py")
     """
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    name = _repo_name(repo_url)
     full = OUTPUT_DIR / name / relative_path
     if not full.exists():
         return {"error": f"File not found: {full}"}
@@ -228,12 +240,136 @@ def update_file(repo_url: str, relative_path: str, content: str) -> dict:
         update_file("https://github.com/Roestlab/massformer", "server.py", "...")
         update_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
     """
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    name = _repo_name(repo_url)
     dest = OUTPUT_DIR / name / relative_path
     if not dest.exists():
         return {"error": f"File not found: {dest}. Cannot update a file that does not exist."}
     dest.write_text(content, encoding="utf-8")
     return {"updated": str(dest)}
+
+
+def setup_venv(repo_url: str, packages: list[str] | None = None,
+               requirements_file: str | None = None,
+               pyproject_toml: str | None = None,
+               python_version: str | None = None) -> dict:
+    """Create a .venv in the output directory and install dependencies.
+
+    Uses `uv` when available, falls back to `python -m venv` + `pip`.
+    Always installs `mcp` as a base dependency so the generated server works.
+
+    Args:
+        repo_url:          Repository URL (used to namespace the output folder).
+        packages:          Extra pip-installable package names,
+                           e.g. ["numpy", "torch"].  May be None.
+        requirements_file: Path to a requirements.txt file relative to the
+                           cloned repo root, e.g. "requirements.txt". May be None.
+        pyproject_toml:    Path to a pyproject.toml relative to the cloned repo
+                           root, e.g. "pyproject.toml". When provided the repo
+                           itself is installed as an editable package so all its
+                           declared dependencies are pulled in. May be None.
+        python_version:    Python version to use, e.g. "3.11" or "3.10".
+                           With uv, passed as --python <version>. Without uv,
+                           resolved as `python<version>` on PATH. May be None
+                           (uses the system default).
+
+    Returns:
+        {"success": True,  "venv": "<path>", "python": "<python-executable>"}
+        {"success": False, "error": "<message>"}
+
+    Examples:
+        setup_venv("https://github.com/Roestlab/massformer",
+                   requirements_file="requirements.txt")
+        setup_venv("https://github.com/Roestlab/massformer",
+                   pyproject_toml="pyproject.toml")
+        setup_venv("https://github.com/Roestlab/massformer",
+                   pyproject_toml="pyproject.toml", packages=["extra-pkg"])
+        setup_venv("https://github.com/Roestlab/massformer",
+                   pyproject_toml="pyproject.toml", python_version="3.11")
+    """
+    name     = _repo_name(repo_url)
+    out_dir  = OUTPUT_DIR / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    venv_dir = out_dir / ".venv"
+    python   = str(venv_dir / "bin" / "python")
+
+    use_uv = subprocess.run(["which", "uv"], capture_output=True).returncode == 0
+
+    # ── Create the virtual environment ───────────────────────────────────────
+    try:
+        if use_uv:
+            uv_venv_cmd = ["uv", "venv", str(venv_dir)]
+            if python_version:
+                uv_venv_cmd += ["--python", python_version]
+            subprocess.run(uv_venv_cmd, check=True, capture_output=True, text=True)
+        else:
+            py_bin = f"python{python_version}" if python_version else "python"
+            subprocess.run([py_bin, "-m", "venv", str(venv_dir)],
+                           check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        return {"success": False, "error": f"venv creation failed: {e.stderr.strip()}"}
+
+    # ── Install from requirements.txt ────────────────────────────────────────
+    errors = []
+
+    if requirements_file:
+        req_path = _repo_path(repo_url) / requirements_file
+        if req_path.exists():
+            try:
+                if use_uv:
+                    subprocess.run(
+                        ["uv", "pip", "install", "--python", python, "-r", str(req_path)],
+                        check=True, capture_output=True, text=True,
+                    )
+                else:
+                    subprocess.run(
+                        [str(venv_dir / "bin" / "pip"), "install", "-r", str(req_path)],
+                        check=True, capture_output=True, text=True,
+                    )
+            except subprocess.CalledProcessError as e:
+                errors.append(f"requirements install failed: {e.stderr.strip()}")
+        else:
+            errors.append(f"requirements file not found: {req_path}")
+
+    # ── Install from pyproject.toml (editable install of the repo) ───────────
+    if pyproject_toml:
+        proj_path = _repo_path(repo_url) / pyproject_toml
+        if proj_path.exists():
+            try:
+                if use_uv:
+                    subprocess.run(
+                        ["uv", "pip", "install", "--python", python, "-e", str(proj_path.parent)],
+                        check=True, capture_output=True, text=True,
+                    )
+                else:
+                    subprocess.run(
+                        [str(venv_dir / "bin" / "pip"), "install", "-e", str(proj_path.parent)],
+                        check=True, capture_output=True, text=True,
+                    )
+            except subprocess.CalledProcessError as e:
+                errors.append(f"pyproject.toml install failed: {e.stderr.strip()}")
+        else:
+            errors.append(f"pyproject.toml not found: {proj_path}")
+
+    # ── Install base mcp package + any extra packages ────────────────────────
+    install_pkgs = ["mcp", "pytest"] + (packages or [])
+    try:
+        if use_uv:
+            subprocess.run(
+                ["uv", "pip", "install", "--python", python] + install_pkgs,
+                check=True, capture_output=True, text=True,
+            )
+        else:
+            subprocess.run(
+                [str(venv_dir / "bin" / "pip"), "install"] + install_pkgs,
+                check=True, capture_output=True, text=True,
+            )
+    except subprocess.CalledProcessError as e:
+        errors.append(f"package install failed: {e.stderr.strip()}")
+
+    if errors:
+        return {"success": False, "venv": str(venv_dir), "error": "; ".join(errors)}
+
+    return {"success": True, "venv": str(venv_dir), "python": python}
 
 
 def validate_syntax(repo_url: str) -> dict:
@@ -250,14 +386,16 @@ def validate_syntax(repo_url: str) -> dict:
     Example:
         validate_syntax("https://github.com/Roestlab/massformer")
     """
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
-    server = OUTPUT_DIR / name / "server.py"
+    name = _repo_name(repo_url)
+    out_dir = OUTPUT_DIR / name
+    server  = out_dir / "server.py"
+    python  = _venv_python(out_dir)
     if not server.exists():
         return {"passed": False, "stage": "syntax", "error": f"server.py not found at {server}"}
 
     # Stage 1: syntax check
     r1 = subprocess.run(
-        ["python", "-m", "py_compile", str(server)],
+        [python, "-m", "py_compile", str(server)],
         capture_output=True, text=True,
     )
     if r1.returncode != 0:
@@ -272,7 +410,7 @@ def validate_syntax(repo_url: str) -> dict:
         "_spec.loader.exec_module(_mod)"
     )
     r2 = subprocess.run(
-        ["python", "-c", load_snippet],
+        [python, "-c", load_snippet],
         capture_output=True, text=True, timeout=30,
         cwd=str(server.parent),
     )
@@ -293,15 +431,16 @@ def run_tests(repo_url: str) -> dict:
         run_tests("https://github.com/Roestlab/massformer")
         # -> {"passed": True/False, "output": "...pytest output..."}
     """
-    name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
-    out_dir = OUTPUT_DIR / name
+    name = _repo_name(repo_url)
+    out_dir  = OUTPUT_DIR / name
     test_dir = out_dir / "tests"
+    python   = _venv_python(out_dir)
     if not test_dir.exists():
         return {"passed": False, "output": f"Test directory not found: {test_dir}"}
 
     try:
         r = subprocess.run(
-            ["python", "-m", "pytest", str(test_dir), "-v", "--tb=short", "--no-header"],
+            [python, "-m", "pytest", str(test_dir), "-v", "--tb=short", "--no-header"],
             capture_output=True, text=True, timeout=120,
             cwd=str(out_dir),
         )
