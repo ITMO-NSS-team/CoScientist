@@ -22,6 +22,7 @@ class HITLRequest(BaseModel):
     message: str = Field(..., description="Message to the human")
     options: List[str] = Field(default_factory=list, description="Options for selection")
     context: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
+    invoked_via: str = Field(default="unspecified", description="Source of the request: callback, tool or internal_loop.")
     timeout_seconds: Optional[float] = Field(default=None, description="Timeout for the request")
 
 
@@ -29,6 +30,6 @@ class HITLResponse(BaseModel):
     """Response from a human to an agent."""
     action: HITLAction = Field(..., description="Action taken by the human")
     selected_option: Optional[str] = Field(default=None, description="Selected option (for SELECT)")
-    edited_content: Optional[str] = Field(default=None, description="Edited content (for EDIT)")
+    instructions: Optional[str] = Field(default=None, description="Edited content (for EDIT)")
     free_input: Optional[str] = Field(default=None, description="Free-form input")
     approved: bool = Field(default=False, description="Whether the action was approved")

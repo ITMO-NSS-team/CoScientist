@@ -23,55 +23,91 @@ class ConsoleHITLHandler(AbstractHITLHandler):
 
     async def handle_request(self, request: HITLRequest) -> HITLResponse:
         print(f"\n{'=' * 60}")
-        print(f"[HITL] Agent '{request.agent_name}' requests: {request.action_type.value}")
+        print(f"[HITL] Agent '{request.agent_name}' requests: {request.action_type.value}. Invoked_via: {request.invoked_via}")
         print(f"Message: {request.message}")
+
+        if request.context and "output" in request.context:
+            print(f"\nPROPOSED PLAN/OUTPUT:")
+            print(f"{'-' * 30}")
+            print(f"{request.context['output']}")
+            print(f"{'-' * 30}")
 
         if request.options:
             print("\nOptions:")
             for i, opt in enumerate(request.options, 1):
                 print(f"  {i}. {opt}")
 
-        user_input = await asyncio.to_thread(input, "\nYour response: ")
+        is_simple_toggle = (request.invoked_via == "callback" and request.action_type == HITLAction.APPROVE)
+        
+        print("\nAction Menu:")
+        if is_simple_toggle:
+            print("  1. Approve (Proceed with agent execution)")
+            print("  2. Reject (Skip this agent's execution)")
+        else:
+            print("  1. Approve (Accept and proceed)")
+            print("  2. Edit (Provide feedback / request changes to agent)")
+            print("  3. Free input (Custom answer, then proceed to the next agent)")
+            print("  4. Stop program (Exit completely)")
+        
+        while True:
+            choice = await asyncio.to_thread(input, f"\nSelect action (1-{2 if is_simple_toggle else 4}): ")
+            choice = choice.strip()
 
-        if request.action_type == HITLAction.SELECT and request.options:
-            try:
-                idx = int(user_input.strip()) - 1
-                if 0 <= idx < len(request.options):
+            if choice == "1":
+                return HITLResponse(
+                    action=HITLAction.APPROVE,
+                    approved=True
+                )
+            elif choice == "2":
+                if is_simple_toggle:
+                    return HITLResponse(
+                        action=HITLAction.REJECT,
+                        approved=False,
+                        instructions="Human rejected execution."
+                    )
+                else:
+                    feedback = await asyncio.to_thread(input, "Enter your feedback/changes: ")
+                    return HITLResponse(
+                        action=HITLAction.EDIT,
+                        approved=False,
+                        instructions=feedback
+                    )
+            elif choice == "3" and not is_simple_toggle:
+                user_msg = await asyncio.to_thread(input, "Enter your input: ")
+                user_msg = user_msg.strip()
+                
+                if request.action_type == HITLAction.SELECT and request.options:
+                    try:
+                        idx = int(user_msg) - 1
+                        if 0 <= idx < len(request.options):
+                            return HITLResponse(
+                                action=HITLAction.SELECT,
+                                selected_option=request.options[idx],
+                                approved=True,
+                            )
+                    except (ValueError, IndexError):
+                        pass
+                    
+                    # If not a number, treat as free selection or choice
                     return HITLResponse(
                         action=HITLAction.SELECT,
-                        selected_option=request.options[idx],
+                        selected_option=user_msg,
+                        free_input=user_msg,
                         approved=True,
                     )
-            except (ValueError, IndexError):
-                pass
-            return HITLResponse(
-                action=HITLAction.SELECT,
-                selected_option=user_input.strip(),
-                free_input=user_input.strip(),
-                approved=True,
-            )
+                else:
+                    return HITLResponse(
+                        action=HITLAction.PROVIDE_INPUT,
+                        free_input=user_msg,
+                        approved=True,
+                    )
+            elif choice == "4" and not is_simple_toggle:
+                print("\nStopping program execution based on user request...")
+                import sys
+                sys.exit(0)
+            else:
+                print(f"Invalid choice. Please enter a valid option.")
 
-        elif request.action_type == HITLAction.APPROVE:
-            approved = user_input.strip().lower() in ("y", "yes", "da", "1", "ok")
-            return HITLResponse(
-                action=HITLAction.APPROVE,
-                approved=approved,
-                free_input=user_input.strip() if not approved else None,
-            )
-
-        elif request.action_type == HITLAction.EDIT:
-            return HITLResponse(
-                action=HITLAction.EDIT,
-                edited_content=user_input.strip(),
-                approved=True,
-            )
-
-        else:
-            return HITLResponse(
-                action=request.action_type,
-                free_input=user_input.strip(),
-                approved=True,
-            )
 
 
 class CallbackHITLHandler(AbstractHITLHandler):

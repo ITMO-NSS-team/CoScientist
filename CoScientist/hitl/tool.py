@@ -26,8 +26,7 @@ class HITLToolset(BaseToolset):
     ) -> List[BaseTool]:
         return [
             FunctionTool(self.request_approval),
-            FunctionTool(self.request_selection),
-            FunctionTool(self.request_input),
+            FunctionTool(self.request_selection)
         ]
 
     async def close(self) -> None:
@@ -55,13 +54,14 @@ class HITLToolset(BaseToolset):
         request = HITLRequest(
             agent_name=agent_name,
             action_type=HITLAction.APPROVE,
-            message=message,
+            message=f"Agent '{agent_name}' requests approval for the following action: {message}",
             context=context or {},
+            invoked_via="tool"
         )
         response = await self._handler.handle_request(request)
         return {
             "approved": response.approved,
-            "feedback": response.free_input,
+            "feedback": response.instructions or response.free_input or "No feedback provided.",
         }
 
     async def request_selection(
@@ -88,14 +88,16 @@ class HITLToolset(BaseToolset):
             action_type=HITLAction.SELECT,
             message=message,
             options=options,
+            invoked_via="tool"
         )
         response = await self._handler.handle_request(request)
         return {
             "selected": response.selected_option,
             "approved": response.approved,
+            "feedback": response.instructions or response.free_input or "No feedback provided.",
         }
 
-    async def request_input(
+    '''async def request_input(
         self,
         agent_name: str,
         message: str,
@@ -124,4 +126,4 @@ class HITLToolset(BaseToolset):
         return {
             "input": response.free_input,
             "approved": response.approved,
-        }
+        }'''

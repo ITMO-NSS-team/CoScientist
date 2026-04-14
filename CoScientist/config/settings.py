@@ -122,7 +122,7 @@ class OpikSettings(BaseModel):
 class HITLSettings(BaseModel):
     enabled: bool = True
     default_timeout: Optional[float] = 300.0
-    agents_requiring_approval: List[str] = ["HypothesesAgent"]
+    agents_requiring_approval: List[str] = ["HypothesesAgent", "OrchestratorAgent", "ExperimentAgent", "TaskExecutorAgent", "ResearchAgent", "ToolRetrieverAgent", "PlannerAgent"]
 
 
 # =========================

@@ -10,10 +10,18 @@ from google.adk.planners import BasePlanner, BuiltInPlanner, PlanReActPlanner
 import litellm
 
 from CoScientist.config import get_settings
-from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction
+from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction
+from CoScientist.hitl.looping_agent import LoopingAgent
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance
 from CoScientist.storage import RetrievalFinalResult
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+from CoScientist.hitl import HITLToolset
+from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
+from CoScientist.hitl.callbacks import make_hitl_after_callback, make_hitl_before_callback
+from CoScientist.hitl.models import HITLAction
+>>>>>>> daf6f1c (add human-in-the-loop (HITL))
 from CoScientist.logging import multi_agent_tracer
 
 
@@ -56,7 +64,8 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
 
     # Create HITL toolset if enabled
     hitl_tools = []
-    if hitl_enabled and hitl_agents:
+    handler = None
+    if hitl_enabled:
         handler = hitl_handler or ConsoleHITLHandler()
         hitl_toolset = HITLToolset(handler=handler)
         hitl_tools = await hitl_toolset.get_tools(None)
@@ -64,37 +73,42 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
     def _agent_tools(agent_name: str, base_tools: list = None) -> list:
         """Append HITL tools to base tools if agent is in agents_requiring_approval."""
         base = list(base_tools) if base_tools else []
+
+        # HITL tools
         if hitl_enabled and agent_name in hitl_agents:
             base.extend(hitl_tools)
         return base
 
-    research_agent = LlmAgent(
+    research_agent = LoopingAgent(
         name="ResearchAgent",
         model=LiteLlm(model=MODEL),
         instruction=research_instruction,
         description="Agent to answer questions and knowledge mining using Literature and Web Search.",
         output_key="search_results",
         tools=_agent_tools("ResearchAgent", [websearch_toolset_instance]),
+        before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "ResearchAgent" in hitl_agents) else None,
+        #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "ResearchAgent" in hitl_agents) else None,
+        
+        # only for LoopingAgent
+        hitl_handler=handler if (hitl_enabled and "ResearchAgent" in hitl_agents) else None,
     )
 
-    # HypothesesAgent has access to:
-    # - retrieval tools (RAG) to discover available MCP servers/tools
-    # - ResearchAgent (as AgentTool) to search literature when needed
-    # - HITL tools (if enabled) for human confirmation
     hypotheses_base_tools = [
         *retrieval_toolset_instance,
         AgentTool(agent=research_agent),
     ]
-    hypotheses_agent = LlmAgent(
+    hypotheses_agent = LoopingAgent(
         name="HypothesesAgent",
         model=LiteLlm(model=MODEL),
         instruction=hypotheses_instruction,
         description="Agent to generate actionable scientific hypotheses grounded in available tools and literature",
         output_key="hypotheses",
         tools=_agent_tools("HypothesesAgent", hypotheses_base_tools),
-        # --- Variant B (callback-based HITL, commented out) ---
-        # If you prefer system-level HITL instead of tool-based:
-        # after_agent_callback=make_hitl_after_callback(handler, HITLAction.SELECT) if hitl_enabled else None,
+        before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "HypothesesAgent" in hitl_agents) else None,
+        #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "HypothesesAgent" in hitl_agents) else None,
+
+        # only for LoopingAgent
+        hitl_handler=handler if (hitl_enabled and "HypothesesAgent" in hitl_agents) else None,
     )
 
     thinking_config = types.ThinkingConfig(
@@ -106,7 +120,7 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         thinking_config=thinking_config
     )
 
-    tool_retriever_agent = LlmAgent(
+    tool_retriever_agent = LoopingAgent(
         name='ToolRetriever',
         model=LiteLlm(model=MODEL),
         instruction=tool_retriever_instruction,
@@ -114,16 +128,27 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         # planner=planner,
         output_schema=RetrievalFinalResult,
         tools=_agent_tools("ToolRetriever", retrieval_toolset_instance),
-        output_key="retrieved_tools"
+        output_key="retrieved_tools",
+        before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "ToolRetrieverAgent" in hitl_agents) else None,
+        #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "ToolRetrieverAgent" in hitl_agents) else None,
+
+        # only for LoopingAgent
+        hitl_handler=handler if (hitl_enabled and "ToolRetrieverAgent" in hitl_agents) else None,
+        correction_prompt="The human reviewed the tools you selected and provided feedback:\n\n{feedback}\n\nYou MUST try to retrieve tools again or adjust your selection based on this feedback. You MUST still return a valid RetrievalFinalResult JSON object.",
     )
 
-    fedot_agent = LlmAgent(
+    fedot_agent = LoopingAgent(
         name="ExperimentAgent",
         model=LiteLlm(model=MODEL),
         instruction=fedot_instruction,
         description="Agent to invoke MAS for solving given task. Uses MCP tools",
         output_key="fedot_results",
         tools=_agent_tools("ExperimentAgent", fedot_toolset_instance),
+        before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "ExperimentAgent" in hitl_agents) else None,
+        #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "ExperimentAgent" in hitl_agents) else None,
+
+        # only for LoopingAgent
+        hitl_handler=handler if (hitl_enabled and "ExperimentAgent" in hitl_agents) else None,
     )
 
     task_execution_agent = SequentialAgent(
@@ -132,25 +157,49 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         description="Agent to complete experiments and run calculations. Use it for any computation and idea validation. It can use a lot of MCP tools",
     )
 
-    orchestrator_agent = LlmAgent(
+    planner_agent = LoopingAgent(
+        name="PlannerAgent",
+        model=LiteLlm(model=MODEL),
+        instruction=planner_instruction,
+        description="Generates a roadmap for solving the task",
+        output_key="planner_plan",
+        before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
+        #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
+
+        # only for LoopingAgent
+        hitl_handler=handler if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
+    )    
+
+    orchestrator_agent = LoopingAgent(
         name="OrchestratorAgent",
         model=LiteLlm(model=MODEL),
         instruction=orchestrator_instruction,
         description="Main Orchestrator Agent",
-        tools=[AgentTool(agent=hypotheses_agent), AgentTool(agent=research_agent), AgentTool(agent=task_execution_agent)],
+        output_key="orchestrator_answer",
+        #tools=[AgentTool(agent=hypotheses_agent), AgentTool(agent=research_agent), AgentTool(agent=task_execution_agent)],
+        tools=_agent_tools("OrchestratorAgent", [AgentTool(agent=planner_agent),AgentTool(agent=hypotheses_agent), AgentTool(agent=research_agent), AgentTool(agent=task_execution_agent)]),
+        #before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "OrchestratorAgent" in hitl_agents) else None,
+        #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "OrchestratorAgent" in hitl_agents) else None,
+
+        # only for LoopingAgent
+        hitl_handler=handler if (hitl_enabled and "OrchestratorAgent" in hitl_agents) else None,
     )
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
 
 
 >>>>>>> 55469d6 (update pyproject)
+=======
+>>>>>>> daf6f1c (add human-in-the-loop (HITL))
     return {
         "hypotheses_agent": hypotheses_agent,
         "research_agent": research_agent,
         "tool_retriever_agent": tool_retriever_agent,
         "fedot_agent": fedot_agent,
         "task_execution_agent": task_execution_agent,
+        "planner_agent": planner_agent,
         "orchestrator_agent": orchestrator_agent,
     }
 
@@ -165,5 +214,6 @@ research_agent = _default_agents["research_agent"]
 tool_retriever_agent = _default_agents["tool_retriever_agent"]
 fedot_agent = _default_agents["fedot_agent"]
 task_execution_agent = _default_agents["task_execution_agent"]
+planner_agent = _default_agents["planner_agent"]
 orchestrator_agent = _default_agents["orchestrator_agent"]
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
