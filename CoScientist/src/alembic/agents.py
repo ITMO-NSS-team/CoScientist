@@ -7,7 +7,7 @@ from alembic.tools import (
     clone_repo, read_file, bash, search,
     read_report, write_report,
     write_file, read_output_file, update_file,
-    validate_syntax, run_tests,
+    setup_venv, validate_syntax, run_tests,
 )
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
@@ -29,7 +29,7 @@ coder_agent = Agent(
     model=LiteLlm(model=MODEL),
     description="Reads an explorer report and implements a FastMCP server with pytest tests for the repository.",
     instruction=coder_instruction,
-    tools=[read_report, clone_repo, bash, read_file, write_file, write_report],
+    tools=[read_report, setup_venv, bash, read_file, write_file, write_report], 
 )
 
 debugger_agent = Agent(
