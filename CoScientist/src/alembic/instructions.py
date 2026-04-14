@@ -21,7 +21,7 @@ Read the error message carefully. Identify:
     read_output_file(repo_url, "tests/test_server.py")
 
 Use bash grep to locate surrounding context if the file is large:
-    bash("grep -n 'ErrorKeyword' /tmp/alembic_output/<repo>/server.py")
+    bash("grep -n 'ErrorKeyword' /var/tmp/alembic/output/<repo>/server.py")
 
 ### Step 3 — Fix and write
 Apply the minimal change that resolves the error. Then write the entire
@@ -179,26 +179,51 @@ The explorer agent wrote the analysis report for this repo. Read it with:
     read_report("<repo-name>_exploration")
 where <repo-name> is the last path segment of the repo URL (e.g. "massformer" for
 https://github.com/Roestlab/massformer). This gives you the description, key files,
-main workflows, and the MCP usage scenarios to implement.
+main workflows, MCP usage scenarios, and the **Environment Setup** section.
 
-### Step 2 — Write the MCP server
+### Step 2 — Set up the virtual environment
+Read the **Environment Setup** section of the exploration report.
+If it lists a *SPECIFIC* command then proceed to use it, but make sure
+that thwe environment is installed in
+`setup_venv` to create a `.venv` in the output directory:
+
+  - If the report lists a `requirements.txt`:
+        setup_venv(repo_url, requirements_file="requirements.txt")
+  - If the report lists a `pyproject.toml` (and no requirements.txt):
+        setup_venv(repo_url, pyproject_toml="pyproject.toml")
+  - If only individual packages are listed:
+        setup_venv(repo_url, packages=["numpy", "torch", ...])
+  - You can combine options, e.g.:
+        setup_venv(repo_url, pyproject_toml="pyproject.toml", packages=["extra"])
+  - If the **Environment Setup** section specifies a Python version, pass it:
+        setup_venv(repo_url, pyproject_toml="pyproject.toml", python_version="3.11")
+
+`mcp` and `pytest` is always installed automatically — you do not need to list it.
+If `setup_venv` returns `{"success": False, ...}`, note the error in your
+server report but continue — tests will still run (using system Python as fallback).
+
+### Step 3 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
 
 Include one @mcp.tool() per usage scenario from the report.
 Follow the FastMCP standard above precisely.
 
-### Step 3 — Write the tests
+### Step 4 — Write the tests
     write_file(repo_url, "tests/test_server.py", <content>)
 
 Cover each tool with at least a success and a failure case.
 Follow the test standard above precisely.
 
-### Step 4 — Write the server report
+### Step 5 — Write the server report
     write_report("<repo-name>_server", <content>)
 
 The report must contain:
 
   # <repo-name> MCP Server
+
+  ## Environment
+  - venv: /var/tmp/alembic/output/<repo-name>/.venv
+  - setup result: PASSED / FAILED (include error if failed)
 
   ## Tools Implemented
   For each @mcp.tool():
@@ -207,11 +232,11 @@ The report must contain:
   - Output: what is returned and its structure
 
   ## Output Files
-  - server: /tmp/alembic_output/<repo-name>/server.py
-  - tests:  /tmp/alembic_output/<repo-name>/tests/test_server.py
+  - server: /var/tmp/alembic/output/<repo-name>/server.py
+  - tests:  /var/tmp/alembic/output/<repo-name>/tests/test_server.py
 
   ## How to run
-  cd /tmp/alembic_output/<repo-name> && python server.py
+  cd /var/tmp/alembic/output/<repo-name> && .venv/bin/python server.py
 '''
 
 explorer_instruction = '''
@@ -253,6 +278,22 @@ Useful tool patterns:
 Do NOT use read_file on .csv, .parquet, .tsv, or large data files —
 use bash("head -n 20 <path>") to peek at their structure instead.
 
+### Step 4b — Identify environment requirements
+Locate and read the files that define how to install the repo's dependencies.
+Check in this order (stop once you have enough information):
+  1. requirements.txt    — read_file(repo_url, "requirements.txt")
+  2. pyproject.toml      — read_file(repo_url, "pyproject.toml")
+  3. setup.py / setup.cfg — read_file(repo_url, "setup.py")
+  4. README install section — look for "pip install", "conda install", or
+     "uv add" blocks in the README you already read.
+  5. environment.yml     — read_file(repo_url, "environment.yml")
+
+Record:
+  - Which file(s) exist (relative paths)
+  - Is the python version specified? (plain or as a part of command)
+  - The key runtime dependencies (package names + versions if pinned)
+  - The exact install command from the README, if any
+
 ### Step 5 — Write report
 Save your findings by calling:
     write_report("<repo-name>_exploration", <content>)
@@ -270,6 +311,15 @@ The report must contain:
 
   ## List of main workflows
   Describe each, add the input and output data description and formats
+
+  ## Environment Setup
+  - **Requirements files**: list each file found (e.g. `requirements.txt`,
+    `pyproject.toml`) with its repo-relative path, or "none found".
+  - **Python version**: if specified, plain or as a part of command
+  - **Key dependencies**: bullet list of runtime package names (and pinned
+    versions where specified).
+  - **Install command**: the exact command from the README, or the recommended
+    one you derived (e.g. `pip install -e .` or `uv pip install -r requirements.txt`).
 
   ## Suggested MCP Usage Scenarios
   List up to 5 scenarios in decreasing order of usefulness. Each scenario:
