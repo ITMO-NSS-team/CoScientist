@@ -46,11 +46,10 @@ class ConsoleHITLHandler(AbstractHITLHandler):
         else:
             print("  1. Approve (Accept and proceed)")
             print("  2. Edit (Provide feedback / request changes to agent)")
-            print("  3. Free input (Custom answer, then proceed to the next agent)")
-            print("  4. Stop program (Exit completely)")
+            print("  3. Stop program (Exit completely)")
         
         while True:
-            choice = await asyncio.to_thread(input, f"\nSelect action (1-{2 if is_simple_toggle else 4}): ")
+            choice = await asyncio.to_thread(input, f"\nSelect action (1-{2 if is_simple_toggle else 3}): ")
             choice = choice.strip()
 
             if choice == "1":
@@ -73,35 +72,6 @@ class ConsoleHITLHandler(AbstractHITLHandler):
                         instructions=feedback
                     )
             elif choice == "3" and not is_simple_toggle:
-                user_msg = await asyncio.to_thread(input, "Enter your input: ")
-                user_msg = user_msg.strip()
-                
-                if request.action_type == HITLAction.SELECT and request.options:
-                    try:
-                        idx = int(user_msg) - 1
-                        if 0 <= idx < len(request.options):
-                            return HITLResponse(
-                                action=HITLAction.SELECT,
-                                selected_option=request.options[idx],
-                                approved=True,
-                            )
-                    except (ValueError, IndexError):
-                        pass
-                    
-                    # If not a number, treat as free selection or choice
-                    return HITLResponse(
-                        action=HITLAction.SELECT,
-                        selected_option=user_msg,
-                        free_input=user_msg,
-                        approved=True,
-                    )
-                else:
-                    return HITLResponse(
-                        action=HITLAction.PROVIDE_INPUT,
-                        free_input=user_msg,
-                        approved=True,
-                    )
-            elif choice == "4" and not is_simple_toggle:
                 print("\nStopping program execution based on user request...")
                 import sys
                 sys.exit(0)

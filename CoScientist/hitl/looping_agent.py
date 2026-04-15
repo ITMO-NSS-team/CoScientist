@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import AsyncGenerator, Optional
 
 from google.genai import types
@@ -16,6 +17,7 @@ class LoopingAgent(LlmAgent):
     to itself and generates a new plan, looping until approved.
     """
     hitl_handler: Optional[AbstractHITLHandler] = None
+    plan_file_path: Optional[str] = None
     correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback. If you had an output schema, you MUST still follow it strictly and return a valid JSON object."
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
@@ -43,24 +45,55 @@ class LoopingAgent(LlmAgent):
                 output_text = ctx.session.state.get(self.output_key, output_text)
                 
             # Perform HITL check
+            message = f"[INTERNAL_LOOP: AGENT_LOGIC] Agent '{self.name}' proposes its result. Please review."
+            
+            # If plan_file_path is set, write to file and update message
+            if self.plan_file_path:
+                try:
+                    with open(self.plan_file_path, "w", encoding="utf-8") as f:
+                        f.write(str(output_text))
+                    message += f"\n\n--> The plan has been recorded to '{self.plan_file_path}'. You can edit it before approving."
+                except Exception as e:
+                    message += f"\n\n[Warning] Failed to write plan to {self.plan_file_path}: {e}"
+
             request = HITLRequest(
                 agent_name=self.name,
                 action_type=HITLAction.APPROVE,
-                message=f"[INTERNAL_LOOP: AGENT_LOGIC] Agent '{self.name}' proposes its result. Please review.",
+                message=message,
                 context={"output": str(output_text)},
                 invoked_via="internal_loop"
             )
             
             response = await self.hitl_handler.handle_request(request)
             
-            # If approved and there is free input, OVERWRITE the result with user text
+            # If approved without any further instructions, we are done.
+            # But first, check if we should read back the edited plan from the file
             if response.approved:
-                if response.free_input:
-                    output_text = response.free_input
-                    if self.output_key:
-                        ctx.session.state[self.output_key] = output_text
-                
-                if response.action != HITLAction.EDIT:
+                if self.plan_file_path:
+                    try:
+                        if os.path.exists(self.plan_file_path):
+                            with open(self.plan_file_path, "r", encoding="utf-8") as f:
+                                edited_content = f.read()
+                            
+                            # If edited_content is different, we use it as the final output
+                            if self.output_key:
+                                ctx.session.state[self.output_key] = edited_content
+                                print(f"\n[LoopingAgent] SUCCESS: Updated '{self.output_key}' from '{self.plan_file_path}'.")
+                                
+                                # Yield an informative event that content was updated from file
+                                yield Event(
+                                    invocation_id=ctx.invocation_id,
+                                    author=self.name,
+                                    branch=ctx.branch,
+                                    content=types.Content(
+                                        role="model",
+                                        parts=[types.Part(text=edited_content)]
+                                    )
+                                )
+                    except Exception as e:
+                        print(f"Error reading plan from {self.plan_file_path}: {e}")
+
+                if not response.free_input and response.action != HITLAction.EDIT:
                     break
             
             # If rejected or "Edit" requested

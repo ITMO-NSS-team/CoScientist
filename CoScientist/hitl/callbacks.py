@@ -76,14 +76,14 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
                 )],
             )
 
-        if response.action == HITLAction.PROVIDE_INPUT and response.free_input:
+        '''if response.action == HITLAction.PROVIDE_INPUT and response.free_input:
             # Override agent output entirely with user's free input
             return genai_types.Content(
                 role="model",
                 parts=[genai_types.Part(
                     text=response.free_input
                 )],
-            )
+            )'''
 
         if action_type == HITLAction.SELECT and response.selected_option:
             # Override agent output with human's selection

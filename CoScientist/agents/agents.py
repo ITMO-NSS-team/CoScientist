@@ -163,6 +163,7 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         instruction=planner_instruction,
         description="Generates a roadmap for solving the task",
         output_key="planner_plan",
+        plan_file_path="roadmap.txt",
         before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
         #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
 
