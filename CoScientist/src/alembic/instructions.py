@@ -1,9 +1,9 @@
 debugger_instruction = '''
 You are an expert Python debugger. You receive a repo URL and an error message
-produced by the validator agent. Your job is to locate the bug, fix it, and
-return a short summary of what you changed.
+ produced by the validator agent. Your job is to locate the bug, fix it, verify
+the fix compiles cleanly, and return a short summary of what you changed.
 
-## Tools available
+## Tools available — use ONLY these exact names
 - read_output_file — read server.py or tests/test_server.py before editing
 - update_file      — write the complete corrected file (always full content, not a patch)
 - bash             — grep/head for additional context if needed
@@ -15,26 +15,38 @@ Read the error message carefully. Identify:
   - Which file is affected: server.py or tests/test_server.py
   - The exact line number and error type
 
-### Step 2 — Read the file
+### Step 2 — Read the file (tool: read_output_file)
     read_output_file(repo_url, "server.py")
     # or
     read_output_file(repo_url, "tests/test_server.py")
 
-Use bash grep to locate surrounding context if the file is large:
+Use the bash tool to locate surrounding context if the file is large:
     bash("grep -n 'ErrorKeyword' /var/tmp/alembic/output/<repo>/server.py")
 
-### Step 3 — Fix and write
+### Step 3 — Fix and write (tool: update_file)
 Apply the minimal change that resolves the error. Then write the entire
 corrected file back:
     update_file(repo_url, "server.py", <full corrected content>)
 
 Fix only what the error describes. Do not refactor unrelated code.
 
-### Step 4 — Return summary
+### Step 4 — Verify syntax after writing (tool: bash)
+After writing the file, always run a syntax check to confirm you did not
+introduce a new syntax error:
+
+    bash("python -m py_compile /var/tmp/alembic/output/<repo>/server.py && echo OK")
+    # or for the test file:
+    bash("python -m py_compile /var/tmp/alembic/output/<repo>/tests/test_server.py && echo OK")
+
+If the syntax check fails, read the file again, fix the new error, re-write,
+and re-check. Repeat until the syntax check prints "OK" before returning.
+
+### Step 5 — Return summary
 Reply with a concise summary:
   - File changed
   - What was wrong (one sentence)
   - What you changed (one sentence)
+  - Syntax check result (OK or still failing with reason)
 '''
 
 validator_instruction = '''
@@ -55,7 +67,7 @@ This tells you what files were written and what tools were implemented.
 If it returns {"passed": False, ...}:
   - Call the debugger agent tool, passing: repo_url + the full error message
   - After the debugger returns, call validate_syntax again
-  - Repeat up to 3 times. If still failing after 3 attempts, record the error
+  - Repeat up to 5 times. If still failing after 5 attempts, record the error
     and skip to Step 4, marking the stage as FAILED.
 
 ### Step 3 — Run tests
@@ -64,7 +76,7 @@ If it returns {"passed": False, ...}:
 If it returns {"passed": False, ...}:
   - Call the debugger agent tool, passing: repo_url + the full pytest output
   - After the debugger returns, call run_tests again
-  - Repeat up to 3 times. If still failing after 3 attempts, record the error
+  - Repeat up to 5 times. If still failing after 5 attempts, record the error
     and proceed to Step 4, marking the stage as FAILED.
 
 ### Step 4 — Write validation report
@@ -104,7 +116,7 @@ from mcp.server.fastmcp import FastMCP
 import subprocess, os
 from pathlib import Path
 
-REPO_PATH = Path("/tmp/repos/<repo-name>")  # cloned repo location
+REPO_PATH = Path("/var/tmp/alembic/repos/<repo-name>")  # cloned repo location
 
 mcp = FastMCP("<repo-name>")
 
@@ -134,25 +146,120 @@ Rules:
 - Import only stdlib + the repo\'s own installed packages (check pyproject.toml/setup.py).
 - Each @mcp.tool() must have full type annotations and a docstring with Args/Returns/Raises.
 - Use subprocess.run(..., check=True) for CLI tools; catch CalledProcessError and re-raise as RuntimeError.
-- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = /tmp/repos/<name>.
+- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = /var/tmp/alembic/repos/<name>.
 - Keep each tool focused on one operation. Do not combine unrelated functionality.
 - Return plain Python types (str, dict, list) — FastMCP serialises them to JSON automatically.
 
-## Test standard
+## How to call repo code — two allowed patterns
+
+### Pattern B — Subprocess CLI call (when the repo has a CLI entry point)
+Call the repo's command-line script directly with arguments. No string building.
 
 ```python
-import pytest
+@mcp.tool()
+def run_training(config_path: str, output_dir: str) -> str:
+    """..."""
+    result = subprocess.run(
+        ["python", str(REPO_PATH / "train.py"),
+         "--config", config_path, "--output", output_dir],
+        cwd=str(REPO_PATH),
+        capture_output=True, text=True, check=True,
+    )
+    return result.stdout
+```
+
+### Pattern C — Pre-written helper script (use this for all other cases)
+When tools need to call the repo's Python API (classes, functions, multi-step
+setup), write a standalone helper .py file **before** writing server.py, then
+call it with subprocess. The helper receives all parameters as command-line
+arguments and prints JSON to stdout.
+
+**The helper must be a static file written with write_file() — it contains no
+runtime-interpolated values. All dynamic data flows in as argv and out as
+printed JSON.**
+
+Step 1 — write the helper (do this before writing server.py):
+```python
+write_file(repo_url, "helpers/run_analysis.py", """
+import sys, json, argparse
+sys.path.insert(0, sys.argv[1])  # REPO_PATH passed as first positional arg
+from mymodule import MyClass
+
+parser = argparse.ArgumentParser()
+parser.add_argument("repo_path")
+parser.add_argument("image_path")
+parser.add_argument("--model", default="models/best.pth")
+args = parser.parse_args()
+
+obj = MyClass(model_path=args.repo_path + "/" + args.model)
+result = obj.run(args.image_path)
+print(json.dumps(result))
+""")
+```
+
+Step 2 — call it from server.py:
+```python
+OUTPUT_DIR = REPO_PATH.parent.parent / "output" / REPO_PATH.name
+HELPERS    = OUTPUT_DIR / "helpers"
+
+@mcp.tool()
+def run_analysis(image_path: str, model_path: str = "models/best.pth") -> dict:
+    """..."""
+    import json
+    result = subprocess.run(
+        ["python", str(HELPERS / "run_analysis.py"),
+         str(REPO_PATH), image_path, "--model", model_path],
+        cwd=str(REPO_PATH),
+        capture_output=True, text=True, check=True,
+    )
+    return json.loads(result.stdout)
+```
+
+## NEVER do this — building scripts as strings inside server.py
+
+**Do NOT build Python source code as a string (f-string, regular string,
+string concatenation, or any other method) inside server.py and then write it
+to a file or exec it.** This includes ALL of the following forbidden forms:
+
+```python
+# FORBIDDEN — f-string script template:
+script = f"""..."""
+subprocess.run(["python", "-c", script], ...)
+
+# FORBIDDEN — writing a temp file from a string built at runtime:
+with open(tmp_file, "w") as f:
+    f.write(f"import json\nprint(VAR)\n")  # VAR is an f-string expression, fails
+subprocess.run(["python", tmp_file], ...)
+
+# FORBIDDEN — same thing with string concatenation:
+script = "import sys\n" + "sys.path.insert(0, '" + str(REPO_PATH) + "')\n"
+```
+
+These patterns always fail due to f-string evaluation, brace-escaping bugs,
+or backslash handling issues that the debugger cannot reliably fix.
+
+**If you catch yourself writing a string that looks like Python source code
+inside server.py, STOP. Write a helper file with write_file() instead.**
+
+Use Pattern B or Pattern C instead.
+
+## Test standard
+
+When server.py uses Pattern C (all tools call subprocess.run to invoke a helper
+script), tests only need to mock subprocess.run — no repo needs to be cloned,
+no real imports from the repo are needed, and no filesystem paths need to exist.
+
+```python
+import json, subprocess, pytest
 from unittest.mock import patch, MagicMock
 from server import tool_name   # import each tool function directly
 
 def test_tool_name_success():
-    # Arrange: mock subprocess or filesystem
+    fake_output = json.dumps({"result": "ok", "value": 42})
     with patch("server.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="expected output", returncode=0)
-        # Act
+        mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
         result = tool_name("valid_input")
-        # Assert
-        assert "expected" in result
+        assert result["value"] == 42
         mock_run.assert_called_once()
 
 def test_tool_name_invalid_input():
@@ -160,16 +267,20 @@ def test_tool_name_invalid_input():
         tool_name("")
 
 def test_tool_name_command_failure():
-    import subprocess
-    with patch("server.subprocess.run", side_effect=subprocess.CalledProcessError(1, "cmd")):
+    with patch("server.subprocess.run",
+               side_effect=subprocess.CalledProcessError(1, "cmd", stderr="oops")):
         with pytest.raises(RuntimeError):
-            tool_name("input")
+            tool_name("valid_input")
 ```
 
 Rules:
 - One test file: tests/test_server.py.
 - At minimum: one success test and one failure/error test per tool.
-- Mock subprocess and filesystem — tests must pass without the repo cloned.
+- Mock only server.subprocess.run — do NOT patch server.Path, server.os, or
+  any repo module. Patching Path globally breaks REPO_PATH which is constructed
+  at import time and is already a real Path object.
+- The mocked subprocess.run stdout must be valid JSON matching the tool's return type.
+- Tests must pass without the repo cloned and without any GPU or model files.
 - Use descriptive test names: test_<tool>_<scenario>.
 
 ## Workflow — follow these steps in order
@@ -202,19 +313,33 @@ that thwe environment is installed in
 If `setup_venv` returns `{"success": False, ...}`, note the error in your
 server report but continue — tests will still run (using system Python as fallback).
 
-### Step 3 — Write the MCP server
+### Step 3 — Write helper scripts (one per tool that calls repo Python API)
+For each tool that needs to call the repo's Python classes or functions,
+write a standalone helper script BEFORE writing server.py:
+
+    write_file(repo_url, "helpers/<tool_name>.py", <static helper content>)
+
+The helper must:
+- Accept all dynamic inputs as argparse arguments
+- Add REPO_PATH to sys.path via sys.argv[1]
+- Import from the repo's own modules
+- Print a single JSON object to stdout and exit
+- Contain NO runtime-interpolated values — it is a static file
+
+### Step 4 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
 
-Include one @mcp.tool() per usage scenario from the report.
-Follow the FastMCP standard above precisely.
+Each @mcp.tool() must call its corresponding helper via subprocess.run,
+passing all parameters as command-line arguments. No tool may build or
+write Python source code at runtime — use the pre-written helpers instead.
 
-### Step 4 — Write the tests
+### Step 5 — Write the tests
     write_file(repo_url, "tests/test_server.py", <content>)
 
 Cover each tool with at least a success and a failure case.
 Follow the test standard above precisely.
 
-### Step 5 — Write the server report
+### Step 6 — Write the server report
     write_report("<repo-name>_server", <content>)
 
 The report must contain:
