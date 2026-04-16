@@ -1,157 +1,172 @@
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import timedelta
 import time
+import threading
 
-from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from marker.models import create_model_dict
 
 from CoScientist.papers_processing_refactoring.app.config_loader import get_settings
 from CoScientist.papers_processing_refactoring.etl import *
 from CoScientist.papers_processing_refactoring.embeddings import *
+from CoScientist.papers_processing_refactoring.scheduling.scheduler import IngestionScheduler, Schedule
 from CoScientist.papers_processing_refactoring.sources.local import LocalSource
 from CoScientist.papers_processing_refactoring.storage.state.state_db import SQLiteStateManager
 from CoScientist.papers_processing_refactoring.storage.artifacts import *
 from CoScientist.papers_processing_refactoring.storage.vector import *
 from CoScientist.papers_processing_refactoring.definitions import CONFIG_PATH
 
-# from CoScientist.papers_processing_refactoring.retrieval import TwoStageRetriever
+MAX_WORKERS = 3
 
 load_dotenv(CONFIG_PATH)
-etl_settings = get_settings()
+settings = get_settings()
 
 
-def build_services(settings):
-
+def build_services(etl_settings):
     embedding_model = create_embedding_model({
-        "type": settings.embeddings.type,
-        "url": settings.embeddings.api_url,
-        "model_name": settings.embeddings.model_name,
-        "batch_size": settings.embeddings.batch_size,
+        "type": etl_settings.embeddings.type,
+        "url": etl_settings.embeddings.api_url,
+        "model_name": etl_settings.embeddings.model_name,
+        "batch_size": etl_settings.embeddings.batch_size,
     })
-    
     return {
         "embedding_model": embedding_model
     }
 
 
-def build_vector_store(settings):
-
-    if settings.vectordb.backend == "chromadb":
+def build_vector_store(etl_settings):
+    if etl_settings.vectordb.backend == "chromadb":
         return ChromaVectorStore(
-            settings.vectordb.chroma.host,
-            settings.vectordb.chroma.port,
-            settings.vectordb.chroma.collection
+            etl_settings.vectordb.chroma.host,
+            etl_settings.vectordb.chroma.port,
+            etl_settings.vectordb.chroma.collection
         )
     else:
         raise ValueError("Vector store configuration must be provided")
     
 
-def build_artifacts_stores(settings):
+def build_artifacts_stores(etl_settings):
     etl_art_store = S3ETLArtifactStore(
-        endpoint=settings.s3.endpoint,
-        access_key=settings.s3.access_key,
-        secret_key=settings.s3.secret_key,
-        bucket=settings.s3.etl_bucket
+        endpoint=etl_settings.s3.endpoint,
+        access_key=etl_settings.s3.access_key,
+        secret_key=etl_settings.s3.secret_key,
+        bucket=etl_settings.s3.etl_bucket
     )
     public_art_store = S3DomainArtifactStore(
-        endpoint=settings.s3.endpoint,
-        access_key=settings.s3.access_key,
-        secret_key=settings.s3.secret_key,
-        bucket=settings.s3.public_bucket  # Delete after testing
+        endpoint=etl_settings.s3.endpoint,
+        access_key=etl_settings.s3.access_key,
+        secret_key=etl_settings.s3.secret_key,
+        bucket=etl_settings.s3.public_bucket  # Delete after testing
     )
     return etl_art_store, public_art_store
 
 
-# TODO: implement SQL state storage connector initialization
-# def build_state_store(settings):
-#     pass
+def build_state_store(etl_settings):
+    if etl_settings.database.type == "sqlite":
+        return SQLiteStateManager(etl_settings.database.sqlite_path)
+    # elif etl_settings.database.type == "postgres":
+    #     return PostgreSQLStateManager(etl_settings.database.postgres.dsn)
+    else:
+        raise ValueError("State store configuration must be provided")
 
 
-def main(settings):
-    papers_dir = Path("/home/kamilfatkhiev/work_data/chem_projects/test_papers")
+def process_single_article(article, app_settings, shared_models, parse_lock):
+    print(f"[{article.name}] Thread started...")
     
-    source = LocalSource(papers_dir)
+    state_manager = build_state_store(app_settings)
+    
+    if state_manager.get_status(article.id, "publish") == "done":
+        return f"[{article.name}] Already processed. Skipped."
+    
+    if any(elem["status"] == "running" for elem in state_manager.list_states(article.id)):
+        return f"[{article.name}] Processing is already running. Skipped."
+    
+    local_source = LocalSource(settings.files.directory)
     vector_store = build_vector_store(settings)
     artifact_store, public_store = build_artifacts_stores(settings)
     llm_model = ChatOpenAI(
         model=settings.llm.llm_name,
         base_url=settings.llm.llm_base_url,
-        api_key=settings.llm.llm_api_key
+        api_key=settings.llm.llm_api_key,  # noqa
+        temperature=0.1
     )
     embedding_model = build_services(settings)["embedding_model"]
-
-    with SQLiteStateManager(settings.database.sqlite_path) as state_manager:
-        state_manager.reset_running_states()
-
-        pipeline = ETLPipeline(
-            steps=[
-                FetchStep(source=source),
-                ParseStep(),
-                HtmlCleaningStep(),
-                ImageFilteringStep(),
-                ImageCaptioningStep(),
-                PaperSummarisatonStep(),
-                ChunkingStep(),
-                EmbeddingStep(),
-                PublishStep()
-            ]
-        )
-
-        print("Starting Pipeline...")
-        for article in source.list_articles():
-            print(f"\n--- Processing: {article.name} (ID: {article.id}) ---")
-            start = time.perf_counter()
-
-            ctx = ETLContext(
-                article=article,
-                state_manager=state_manager,
-                artifact_store=artifact_store,
-                public_store=public_store,
-                vector_store=vector_store,
-                llm=llm_model,
-                embedding_model=embedding_model
-            )
-
-            try:
-                pipeline.run(ctx)
-                end = time.perf_counter()
-                print(f"Article processing finished successfully in {end - start:.2f} seconds")
-            except Exception as e:
-                end = time.perf_counter()
-                print(f"Article processing stopped due to error: {e}\n after {end - start:.2f} seconds")
     
-    # retriever = TwoStageRetriever(vector_store, embedding_model)
-    # res = retriever.retrieve(
-    #     "Что такое аллергический ответ?",
-    #     rerank_k=10,
-    #     filters={"role": {"$eq": "summary"}}
-    # )
-    # for c in res:
-    #     print(c)
-    #
-    # for r in [r for r in res if eval(r.metadata["imgs_in_chunk"])]:
-    #     for img_name in eval(r.metadata["imgs_in_chunk"]):
-    #         public_store.download_image_from_s3(
-    #             "",
-    #             r.article_id,
-    #             img_name,
-    #             f"/home/kamilfatkhiev/work_data/chem_projects/imgs/{r.article_id + img_name}"
-    #         )
+    pipeline = ETLPipeline(
+        steps=[
+            FetchStep(source=local_source),
+            ParseStep(shared_models=shared_models, parse_lock=parse_lock),
+            HtmlCleaningStep(),
+            ImageFilteringStep(),
+            ImageCaptioningStep(),
+            PaperSummarisatonStep(),
+            ChunkingStep(),
+            EmbeddingStep(),
+            PublishStep()
+        ]
+    )
+    
+    ctx = ETLContext(
+        article=article,
+        state_manager=state_manager,
+        artifact_store=artifact_store,
+        public_store=public_store,
+        vector_store=vector_store,
+        llm=llm_model,
+        embedding_model=embedding_model
+    )
+    
+    start = time.perf_counter()
+    
+    try:
+        pipeline.run(ctx)
+        end = time.perf_counter()
+        return f"[{article.id}] Success in {end - start:.2f}s"
+    except Exception as e:
+        end = time.perf_counter()
+        return f"[{article.id}] Failed: {str(e)} in {end - start:.2f}s"
+
+
+def handle_articles_batch(articles, shared_models, parse_lock):
+    print(f"Scheduler found {len(articles)} articles. Starting parallel processing...")
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_article = {
+            executor.submit(process_single_article, art, settings, shared_models, parse_lock): art
+            for art in articles
+        }
+        
+        for future in as_completed(future_to_article):
+            result_msg = future.result()
+            print(result_msg)
+
+
+def main():
+    print("Starting Papers ETL Daemon...")
+    
+    with build_state_store(settings) as state_manager:
+        print("Cleaning up hanging tasks...")
+        state_manager.reset_running_states()
+    
+    shared_parser_models = create_model_dict()
+    parse_lock = threading.Lock()
+    
+    local_source = LocalSource(settings.files.directory)
+    
+    scheduler = IngestionScheduler(
+        on_batch=lambda batch: handle_articles_batch(batch, shared_parser_models, parse_lock)
+    )
+    scheduler.register(local_source, Schedule(timedelta(minutes=1)))
+    
+    try:
+        while True:
+            scheduler.poll()
+            time.sleep(10)
+    except KeyboardInterrupt:
+        print("Shutting down daemon...")
 
 
 if __name__ == "__main__":
-    main(etl_settings)
-    
-    # with SQLiteStateManager(etl_settings.database.sqlite_path) as state_manager:
-    #     # state_manager.clear_data()
-    #
-    #     entries = state_manager.list_states(status="done")
-    #     if entries:
-    #         for entry in entries:
-    #             print(entry)
-    #     else:
-    #         print("No records in StateDB")
-    # vector_store = build_vector_store(etl_settings)
-    # if "new_etl_test" in [col.name for col in vector_store.show_collections()]:
-    #     vector_store.delete_collection("new_etl_test")
-    #     print("Collection deleted")
+    main()
     

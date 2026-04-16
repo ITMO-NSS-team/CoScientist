@@ -108,6 +108,20 @@ class S3ETLArtifactStore:
         key = self._prefix(article_id, step) + "meta.json"
         obj = self.client.get_object(Bucket=self.bucket, Key=key)
         return json.loads(obj["Body"].read().decode("utf-8"))
+    
+    # ---------- Files ----------
+    
+    def put_file(self, article_id: str, step: str, file_name: str, data: bytes) -> None:
+        key = self._prefix(article_id, step) + file_name
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+    
+    def get_file(self, article_id: str, step: str, file_name: str) -> bytes | None:
+        key = self._prefix(article_id, step) + file_name
+        try:
+            resp = self.client.get_object(Bucket=self.bucket, Key=key)
+            return resp["Body"].read()
+        except Exception:
+            return None
 
     # ---------- Delete ----------
 
@@ -145,109 +159,3 @@ class S3ETLArtifactStore:
             Bucket=self.bucket,
             Key=key,
         )
-
-
-# for testing
-class MockArtifactStore:
-    def __init__(self, root_dir):
-        self.root = Path(root_dir)
-        self.root.mkdir(exist_ok=True)
-    
-    # ---------- HTML ----------
-        
-    def put_html(self, article_id: str, step: str, html: str) -> None:
-        article_step_dir = Path(self.root, article_id, step)
-        article_step_dir.mkdir(parents=True, exist_ok=True)
-        path = article_step_dir / "document.html"
-        mode = "wb" if isinstance(html, bytes) else "w"
-        with open(path, mode) as f:
-            f.write(html)
-        
-    def get_html(self, article_id, step):
-        article_step_dir = Path(self.root, article_id, step)
-        path = article_step_dir / "document.html"
-        if not path.exists(): return None
-        try:
-            with open(path, "rb") as f:
-                return f.read().decode('utf-8')
-        except:
-            return None
-    
-    # ---------- Images ----------
-    
-    def put_images(
-            self,
-            article_id: str,
-            step: str,
-            images: dict[str, Image.Image],
-    ) -> None:
-        article_step_dir = Path(self.root, article_id, step)
-        images_dir = article_step_dir / "images"
-        images_dir.mkdir(parents=True, exist_ok=True)
-        
-        for name, img in images.items():
-            buf = BytesIO()
-            img.save(buf, format="JPEG")
-            buf.seek(0)
-            path = images_dir / name
-            with open(path, "wb") as f:
-                f.write(buf.getvalue())
-    
-    def list_images(self, article_id: str, step: str) -> list[str]:
-        article_step_dir = Path(self.root, article_id, step)
-        images_dir = article_step_dir / "images"
-        if not images_dir.exists():
-            return []
-        return [f.name for f in images_dir.iterdir() if f.is_file()]
-    
-    def get_image(
-            self,
-            article_id: str,
-            step: str,
-            image_name: str,
-    ) -> Image.Image | None:
-        article_step_dir = Path(self.root, article_id, step)
-        path = article_step_dir / "images" / image_name
-        if not path.exists():
-            return None
-        return Image.open(path)
-    
-    # ---------- Metadata ----------
-    
-    def put_metadata(
-            self,
-            article_id: str,
-            step: str,
-            metadata: dict[str, Any],
-    ) -> None:
-        article_step_dir = Path(self.root, article_id, step)
-        article_step_dir.mkdir(parents=True, exist_ok=True)
-        path = article_step_dir / "meta.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f)
-    
-    def get_metadata(self, article_id: str, step: str) -> dict[str, Any] | None:
-        article_step_dir = Path(self.root, article_id, step)
-        path = article_step_dir / "meta.json"
-        if not path.exists():
-            return None
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    
-    # ---------- Delete ----------
-    
-    @staticmethod
-    def _delete_path(step_path: Path) -> None:
-        if step_path.exists():
-            from shutil import rmtree
-            rmtree(step_path)
-
-    def delete_step(self, article_id: str, step: str) -> None:
-        article_step_dir = Path(self.root, article_id, step)
-        self._delete_path(article_step_dir)
-        
-    def delete_file(self, article_id: str, step: str, filename: str) -> None:
-        article_step_dir = Path(self.root, article_id, step)
-        path = article_step_dir / filename
-        if path.exists():
-            path.unlink()

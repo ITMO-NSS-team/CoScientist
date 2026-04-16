@@ -8,7 +8,8 @@ summarisation_prompt = (
     "2. publication_year: Extract as an integer. If missing, use 9999.\n"
     "3. authors: List as 'First Last, First Last'. If missing, use 'NO AUTHORS'.\n"
     "4. source: Journal name, conference, or publisher. If missing, use 'UNDEFINED'.\n"
-    "5. research_area: Identify the scientific domain (e.g., Computer Science, Biology, Physics). If unclear, use 'OTHER'.\n"
+    "5. research_area: Identify the scientific domain (e.g., Computer Science, Biology, Physics). If unclear, "
+    "use 'OTHER'.\n"
     "6. paper_summary: This field MUST follow this internal structure:\n"
     "   - KEYWORDS: [10-15 technical terms/entities for indexing]\n"
     "   - BODY: A concise summary (max 250 words) covering: Objective (problem/hypothesis), "
@@ -23,67 +24,71 @@ summarisation_prompt = (
     "Article in HTML markup:\n"
 )
 
-cls_prompt = """
-Act as a scientific image classifier. Analyze the input image from an academic paper and determine if it contains meaningful scientific information relevant to the article's content.
+cls_prompt = (
+    "Act as a general domain scientific image classifier for a RAG knowledge retrieval system. Analyze the input image "
+    "from an academic paper. Determine if it conveys specific, non-trivial information related to the paper's "
+    "subject, method, or result.\n\n"
+    "**Meaningful scientific information (True):**\n"
+    "- Original data visualizations (charts, graphs, plots, heatmaps, maps).\n"
+    "- Diagrams of systems, processes, apparatus, or logical flows (e.g., computer architecture, flow charts, "
+    "experimental setups).\n"
+    "- Chemical/Biological/Physical structures.\n"
+    "- Data tables of any kind containing raw or processed numbers/labels.\n"
+    "- Microscopic, macroscopic, medical, or field observation imaging (photos of samples, organisms, archaeological "
+    "sites, etc.).\n"
+    "- Original mathematical or statistical formulas.\n"
+    "- Documented historical objects, handwritten notes, or specialized tools that are subjects of research.\n\n"
+    "**Non-meaningful information (False):**\n"
+    "- Journal, institution, or publisher Logos.\n"
+    "- Standard decorative icons (print, social media, download, generic UI elements).\n"
+    "- Copyright watermarks or navigation bars.\n"
+    "- Banner advertisements.\n"
+    "- Authors photos (unless the photo itself is the object of historical research).\n\n"
+    "**Classification Standard:**\n"
+    "An image is 'True' if it contains **any** unique visual or textual content related to the paper's research that "
+    "is worth indexing for future retrieval, beyond standardized decorative or navigational elements. If the image is "
+    "extremely low resolution or very small, only classify as 'True' if its content is undeniably unique scientific "
+    "data.\n\n"
+    "**Output Rules:**\n"
+    "1. Return *only* a single-word verdict: 'True' for meaningful images, 'False' for non-meaningful.\n"
+    "2. Prioritize 'True' if the image contains any research-related content, even if it is non-traditional (e.g., "
+    "historical photo).\n"
+    "3. Return 'False' *only* for non-informative logos, ads, or standard UI icons.\n\n"
+    "Classify this image:"
+)
 
-**Meaningful images (True):**
-- Research diagrams, charts, or graphs
-- Experimental photographs or microscopy images
-- Data tables with substantive content
-- Mathematical formulas/equations
-- Technical schematics or flowcharts
-- Biological/chemical structures
-- Statistical visualizations
-
-**Non-meaningful images (False):**
-- Journal/publisher logos
-- Decorative icons (social media, print, download etc.)
-- Banner advertisements
-- Author photos or institutional emblems
-- Pure decorative elements
-- Copyright watermarks
-- Navigation buttons
-
-**Output Rules:**
-1. Return only single-word verdict: 'True' for meaningful images, 'False' for non-meaningful
-2. Prioritize false negatives over false positives
-3. Assume small size (<150px) suggests non-meaningful content
-4. Ignore textual content within logos/icons
-
-**Classification standard:**
-An image is only 'True' if it conveys scientific data/results/methods essential for understanding the paper's research.
-
-Now classify this image:"""
-
-table_extraction_prompt = """
-You are a scientific document analysis expert. Strictly follow these steps when processing the chemistry paper image:
-
-1. Detect all table-like structures in the image:
-   - If exactly ONE complete table exists (fully visible borders, headers, and data cells with no cropping/obscuring)
-     → Extract tabular data and convert to HTML using <table>, <tr>, <th>, <td> tags
-     → Return ONLY the HTML code
-
-2. In ALL other cases return EXACTLY:
-   'No table'
-   This includes when:
-   - Table contains drawn chemical structures that could not be converted to text
-   - No table is detected
-   - Multiple tables exist
-   - Table is incomplete/cropped/obscured
-   - Table headers are missing
-   - Part of table extends beyond image boundaries
-
-3. Formatting rules:
-   - Never add explanations, comments or markdown
-   - Don't process non-tabular content
-   - Skip text recognition outside tables
-   - Omit confidence indicators
-   - Output either pure HTML or exact string 'No table'
-
-Critical: Your response must contain ONLY one of two options:
-Option A: <table>...</table> (for single valid table)
-Option B: No table (all other cases)
-"""
+table_extraction_prompt = (
+    "You are a general scientific document analysis expert in a RAG knowledge retrieval pipeline. Analyze the provided "
+    "image to find valid, structure-convertible scientific data tables. Use precise technical terminology for "
+    "non-conversion reasons.\n\n"
+    "### STRICT OPERATIONAL STEPS:\n\n"
+    "**Step 1: Determine Table Suitability.**\n"
+    "You must classify the image into ONE of the following precise categories. Do *not* extract content yet.\n\n"
+    "A. **Invalid/Non-convertible structures:**\n"
+    "- Diagrammatized/Visual tables: The 'table' is primarily a schematic or diagram *formatted* as a grid, "
+    "containing drawings of objects (cells, circuits, apparatus, flow arrows) instead of purely text/numbers. (For "
+    "example, a process diagram with visual cells).\n"
+    "- Complex notation: A single table cell contains multiple chemical structures, equations, or non-unicode symbols "
+    "that cannot be easily converted to a clean string.\n"
+    "- Partial/Obscured table: Critical parts of the table (headers, large blocks of data) are missing or cut off.\n"
+    "- Multiple tables or non-table content: The image contains two or more distinct tables, or a table mixed with "
+    "separate paragraphs of text that are not captions.\n\n"
+    "B. **Single Valid data table:** Exactly one complete, self-contained table consisting *entirely* of rows/columns "
+    "of text and numbers, suitable for direct text indexing. All headers and data are readable as characters.\n\n"
+    "**Step 2: Generate Final Output based on Step 1.**\n"
+    "- If the image matches any description in category A, return EXACTLY this case-sensitive string: 'No table'\n"
+    "- If and *only if* the image matches category B, extract the data and convert it *only* to clean HTML code:"
+    "<table>...</table>\n\n"
+    "### FORMATTING RULES:\n\n"
+    "- The output MUST contain ONLY 'No table' or ONLY <table>...</table> code.\n"
+    "- Absolutely NO conversational text, explanations, markdown formatting (like ```html), or text outside the HTML "
+    "tags.\n"
+    "- Ignore all text outside the table borders (captions, surrounding paragraphs).\n"
+    "- Omit confidence scores.\n\n"
+    "CRITICAL: If the image is a diagram arranged in a grid (containing icons, drawings, or process flow arrows), it "
+    "is NOT a convertible data table. Output 'No table'.\n\n"
+    "Now process the image:"
+)
 
 image_captioning_prompt = (
     "You are a technical vision assistant. Describe this scientific figure/image for a "

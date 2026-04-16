@@ -30,6 +30,8 @@ class PaperSummarisatonStep(ETLStep):
             "source": expanded_summary.source,
             "research_area": expanded_summary.research_area
         }
+        manifest_data["paper_of_file_name"] = ctx.article.name
+        manifest_data["article_metadata"] = ctx.article.metadata
         
         ctx.artifact_store.put_html(article_id, self.name, html)
         if manifest_data:

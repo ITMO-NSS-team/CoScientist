@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 from ..domain.entities import Article
 from ..sources.base import ArticleSource
@@ -12,10 +12,10 @@ class Schedule:
 
 class IngestionScheduler:
 
-    def __init__(self, on_article: Callable[[Article], None]):
-        self._on_article = on_article
+    def __init__(self, on_batch: Callable[[list[Article]], None]):
+        self._on_batch = on_batch
         self._sources: Dict[ArticleSource, Schedule] = {}
-        self._last_run: Dict[ArticleSource, datetime] = {}
+        self._last_run: Dict[ArticleSource, Optional[datetime]] = {}
 
     def register(self, source: ArticleSource, schedule: Schedule) -> None:
         self._sources[source] = schedule
@@ -30,7 +30,8 @@ class IngestionScheduler:
             if now - last < schedule.interval:
                 continue
 
-            for article in source.list_articles():
-                self._on_article(article)
+            articles = list(source.list_articles())
+            if articles:
+                self._on_batch(articles)
 
             self._last_run[source] = now

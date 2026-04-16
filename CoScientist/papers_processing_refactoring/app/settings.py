@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
@@ -120,6 +122,15 @@ class DatabaseSettings(BaseSettings):
     )
 
 
+class FilesSettings(BaseSettings):
+    directory: Path
+    
+    model_config = SettingsConfigDict(
+        env_prefix="FILES_",
+        extra="ignore",
+    )
+
+
 class AppSettings(BaseSettings):
     
     embeddings: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
@@ -128,6 +139,7 @@ class AppSettings(BaseSettings):
     s3: S3Settings = Field(default_factory=S3Settings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    files: FilesSettings = Field(default_factory=FilesSettings)
     
     model_config = SettingsConfigDict(
         env_file=CONFIG_PATH,

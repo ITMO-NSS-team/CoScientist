@@ -17,7 +17,7 @@ class ETLContext(BaseModel):
     article: Article
 
     raw_data: Optional[bytes] = None
-    parsed_representation: Optional[Any] = None
+    parsed_representation: Optional[str] = None
     chunks: Dict[str, List[Chunk]] = Field(default_factory=dict)
     embeddings: Dict[str, Dict[str, List[List[float]] | List[str]]] = Field(default_factory=dict)
     

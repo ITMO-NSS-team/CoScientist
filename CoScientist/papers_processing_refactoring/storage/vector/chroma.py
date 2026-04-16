@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 import chromadb
 
 from .base import VectorStore
@@ -21,14 +23,16 @@ class ChromaVectorStore(VectorStore):
         documents = [chunk.content for chunk in chunks]
         metadatas = []
         for chunk in chunks:
-            meta = {
+            meta: Dict[str, Any] = {
                 "article_id": chunk.article_id,
                 "role": chunk.role,
                 "domain": chunk.domain or "default",
                 "modality": chunk.modality,
             }
             if chunk.metadata:
-                meta.update({k: str(v) for k, v in chunk.metadata.items()})
+                meta.update({
+                    k: v if isinstance(v, (int, float, bool, str)) else str(v) for k, v in chunk.metadata.items()
+                })
             metadatas.append(meta)
         
         self.collection.upsert(
