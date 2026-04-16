@@ -21,7 +21,7 @@ Read the error message carefully. Identify:
     read_output_file(repo_url, "tests/test_server.py")
 
 Use the bash tool to locate surrounding context if the file is large:
-    bash("grep -n 'ErrorKeyword' /var/tmp/alembic/output/<repo>/server.py")
+    bash("grep -n 'ErrorKeyword' /var/tmp/alembic/<repo>/output/server.py")
 
 ### Step 3 — Fix and write (tool: update_file)
 Apply the minimal change that resolves the error. Then write the entire
@@ -34,9 +34,9 @@ Fix only what the error describes. Do not refactor unrelated code.
 After writing the file, always run a syntax check to confirm you did not
 introduce a new syntax error:
 
-    bash("python -m py_compile /var/tmp/alembic/output/<repo>/server.py && echo OK")
+    bash("python -m py_compile /var/tmp/alembic/<repo>/output/server.py && echo OK")
     # or for the test file:
-    bash("python -m py_compile /var/tmp/alembic/output/<repo>/tests/test_server.py && echo OK")
+    bash("python -m py_compile /var/tmp/alembic/<repo>/output/tests/test_server.py && echo OK")
 
 If the syntax check fails, read the file again, fix the new error, re-write,
 and re-check. Repeat until the syntax check prints "OK" before returning.
@@ -57,8 +57,7 @@ coordinate fixes with the debugger agent when errors are found.
 ## Workflow
 
 ### Step 1 — Read the coder report
-    read_report("<repo-name>_server")
-where <repo-name> is the last path segment of the repo URL.
+    read_report(repo_url, "server")
 This tells you what files were written and what tools were implemented.
 
 ### Step 2 — Validate syntax and imports
@@ -80,7 +79,7 @@ If it returns {"passed": False, ...}:
     and proceed to Step 4, marking the stage as FAILED.
 
 ### Step 4 — Write validation report
-    write_report("<repo-name>_validation", <content>)
+    write_report(repo_url, "validation", <content>)
 
 The report must contain:
 
@@ -116,7 +115,7 @@ from mcp.server.fastmcp import FastMCP
 import subprocess, os
 from pathlib import Path
 
-REPO_PATH = Path("/var/tmp/alembic/repos/<repo-name>")  # cloned repo location
+REPO_PATH = Path("/var/tmp/alembic/<repo-name>/repos")  # cloned repo location
 
 mcp = FastMCP("<repo-name>")
 
@@ -146,7 +145,7 @@ Rules:
 - Import only stdlib + the repo\'s own installed packages (check pyproject.toml/setup.py).
 - Each @mcp.tool() must have full type annotations and a docstring with Args/Returns/Raises.
 - Use subprocess.run(..., check=True) for CLI tools; catch CalledProcessError and re-raise as RuntimeError.
-- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = /var/tmp/alembic/repos/<name>.
+- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = /var/tmp/alembic/<name>/repos.
 - Keep each tool focused on one operation. Do not combine unrelated functionality.
 - Return plain Python types (str, dict, list) — FastMCP serialises them to JSON automatically.
 
@@ -199,8 +198,7 @@ print(json.dumps(result))
 
 Step 2 — call it from server.py:
 ```python
-OUTPUT_DIR = REPO_PATH.parent.parent / "output" / REPO_PATH.name
-HELPERS    = OUTPUT_DIR / "helpers"
+HELPERS = REPO_PATH.parent / "output" / "helpers"
 
 @mcp.tool()
 def run_analysis(image_path: str, model_path: str = "models/best.pth") -> dict:
@@ -287,10 +285,9 @@ Rules:
 
 ### Step 1 — Read the exploration report
 The explorer agent wrote the analysis report for this repo. Read it with:
-    read_report("<repo-name>_exploration")
-where <repo-name> is the last path segment of the repo URL (e.g. "massformer" for
-https://github.com/Roestlab/massformer). This gives you the description, key files,
-main workflows, MCP usage scenarios, and the **Environment Setup** section.
+    read_report(repo_url, "exploration")
+This gives you the description, key files, main workflows, MCP usage scenarios,
+and the **Environment Setup** section.
 
 ### Step 2 — Set up the virtual environment
 Read the **Environment Setup** section of the exploration report.
@@ -340,14 +337,14 @@ Cover each tool with at least a success and a failure case.
 Follow the test standard above precisely.
 
 ### Step 6 — Write the server report
-    write_report("<repo-name>_server", <content>)
+    write_report(repo_url, "server", <content>)
 
 The report must contain:
 
   # <repo-name> MCP Server
 
   ## Environment
-  - venv: /var/tmp/alembic/output/<repo-name>/.venv
+  - venv: /var/tmp/alembic/<repo-name>/output/.venv
   - setup result: PASSED / FAILED (include error if failed)
 
   ## Tools Implemented
@@ -357,11 +354,11 @@ The report must contain:
   - Output: what is returned and its structure
 
   ## Output Files
-  - server: /var/tmp/alembic/output/<repo-name>/server.py
-  - tests:  /var/tmp/alembic/output/<repo-name>/tests/test_server.py
+  - server: /var/tmp/alembic/<repo-name>/output/server.py
+  - tests:  /var/tmp/alembic/<repo-name>/output/tests/test_server.py
 
   ## How to run
-  cd /var/tmp/alembic/output/<repo-name> && .venv/bin/python server.py
+  cd /var/tmp/alembic/<repo-name>/output && .venv/bin/python server.py
 '''
 
 explorer_instruction = '''
@@ -421,8 +418,7 @@ Record:
 
 ### Step 5 — Write report
 Save your findings by calling:
-    write_report("<repo-name>_exploration", <content>)
-where <repo-name> is the last path segment of the repo URL (e.g. "massformer").
+    write_report(repo_url, "exploration", <content>)
 
 The report must contain:
 
