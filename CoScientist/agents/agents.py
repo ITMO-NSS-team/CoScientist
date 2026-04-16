@@ -14,27 +14,15 @@ from CoScientist.agents.prompts import hypotheses_instruction, research_instruct
 from CoScientist.hitl.looping_agent import LoopingAgent
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance
 from CoScientist.storage import RetrievalFinalResult
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 from CoScientist.hitl import HITLToolset
 from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
 from CoScientist.hitl.callbacks import make_hitl_after_callback, make_hitl_before_callback
 from CoScientist.hitl.models import HITLAction
->>>>>>> daf6f1c (add human-in-the-loop (HITL))
 from CoScientist.logging import multi_agent_tracer
 
 
 from opik.integrations.adk import track_adk_agent_recursive
 
-=======
-from CoScientist.hitl import HITLToolset
-from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
->>>>>>> 3749709 (ADD HITL)
-
-# Variant B imports (commented out):
-# from CoScientist.hitl.callbacks import make_hitl_after_callback, make_hitl_before_callback
-# from CoScientist.hitl.models import HITLAction
 
 from typing import Dict, Any, Optional
 import uuid
@@ -47,6 +35,7 @@ settings = get_settings()
 
 MODEL = settings.llm.main_model
 litellm.api_key = settings.llm.openai_api_key
+
 
 
 async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
@@ -79,7 +68,7 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
             base.extend(hitl_tools)
         return base
 
-    research_agent = LoopingAgent(
+    research_agent = LlmAgent(
         name="ResearchAgent",
         model=LiteLlm(model=MODEL),
         instruction=research_instruction,
@@ -90,7 +79,7 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "ResearchAgent" in hitl_agents) else None,
         
         # only for LoopingAgent
-        hitl_handler=handler if (hitl_enabled and "ResearchAgent" in hitl_agents) else None,
+        #hitl_handler=handler if (hitl_enabled and "ResearchAgent" in hitl_agents) else None,
     )
 
     hypotheses_base_tools = [
@@ -120,7 +109,7 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         thinking_config=thinking_config
     )
 
-    tool_retriever_agent = LoopingAgent(
+    tool_retriever_agent = LlmAgent(
         name='ToolRetriever',
         model=LiteLlm(model=MODEL),
         instruction=tool_retriever_instruction,
@@ -133,11 +122,11 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "ToolRetrieverAgent" in hitl_agents) else None,
 
         # only for LoopingAgent
-        hitl_handler=handler if (hitl_enabled and "ToolRetrieverAgent" in hitl_agents) else None,
-        correction_prompt="The human reviewed the tools you selected and provided feedback:\n\n{feedback}\n\nYou MUST try to retrieve tools again or adjust your selection based on this feedback. You MUST still return a valid RetrievalFinalResult JSON object.",
+        #hitl_handler=handler if (hitl_enabled and "ToolRetrieverAgent" in hitl_agents) else None,
+        #correction_prompt="The human reviewed the tools you selected and provided feedback:\n\n{feedback}\n\nYou MUST try to retrieve tools again or adjust your selection based on this feedback. You MUST still return a valid RetrievalFinalResult JSON object.",
     )
 
-    fedot_agent = LoopingAgent(
+    fedot_agent = LlmAgent(
         name="ExperimentAgent",
         model=LiteLlm(model=MODEL),
         instruction=fedot_instruction,
@@ -148,7 +137,7 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "ExperimentAgent" in hitl_agents) else None,
 
         # only for LoopingAgent
-        hitl_handler=handler if (hitl_enabled and "ExperimentAgent" in hitl_agents) else None,
+        #hitl_handler=handler if (hitl_enabled and "ExperimentAgent" in hitl_agents) else None,
     )
 
     task_execution_agent = SequentialAgent(
@@ -186,14 +175,8 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         hitl_handler=handler if (hitl_enabled and "OrchestratorAgent" in hitl_agents) else None,
     )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
+    track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
 
-
->>>>>>> 55469d6 (update pyproject)
-=======
->>>>>>> daf6f1c (add human-in-the-loop (HITL))
     return {
         "hypotheses_agent": hypotheses_agent,
         "research_agent": research_agent,
@@ -203,8 +186,6 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         "planner_agent": planner_agent,
         "orchestrator_agent": orchestrator_agent,
     }
-
-track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
 
 
 # Default agents (without HITL handler — uses ConsoleHITLHandler if HITL enabled)
@@ -217,4 +198,3 @@ fedot_agent = _default_agents["fedot_agent"]
 task_execution_agent = _default_agents["task_execution_agent"]
 planner_agent = _default_agents["planner_agent"]
 orchestrator_agent = _default_agents["orchestrator_agent"]
-track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
