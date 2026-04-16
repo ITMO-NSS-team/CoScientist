@@ -18,7 +18,7 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from alembic.agents import explorer_agent, coder_agent, validator_agent
-from alembic.tools import REPORTS_DIR, OUTPUT_DIR
+from alembic.tools import WORKDIR
 
 # ── Patch ADK tool lookup to return an error response instead of crashing ─────
 # When the LLM hallucinates a tool name, ADK raises ValueError and kills the
@@ -154,22 +154,16 @@ async def run_agent(agent, session_service, session_id: str, message: str) -> st
     return final
 
 
-_SNAPSHOT_DIRS = {
-    "reports": REPORTS_DIR,
-    "output":  OUTPUT_DIR,
-}
-
-
-def _snapshot_tmp(run_dir: Path) -> None:
-    """Copy the alembic work dirs into run_dir, overwriting previous snapshot."""
+def _snapshot_tmp(name: str, run_dir: Path) -> None:
+    """Copy the repo work dir into run_dir, overwriting previous snapshot."""
+    src = WORKDIR / name
+    if not src.exists():
+        return
     run_dir.mkdir(parents=True, exist_ok=True)
-    for label, src in _SNAPSHOT_DIRS.items():
-        if not src.exists():
-            continue
-        dest = run_dir / label
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(src, dest)
+    dest = run_dir / name
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".venv"))
 
 
 def _banner(stage: int, label: str) -> None:
@@ -179,15 +173,11 @@ def _banner(stage: int, label: str) -> None:
 
 
 def _clean_workdir(name: str) -> None:
-    """Remove output and report files from any previous run for this repo."""
-    out_dir = OUTPUT_DIR / name
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-        print(f"  [clean] removed {out_dir}")
-
-    for report in REPORTS_DIR.glob(f"{name}_*.md"):
-        report.unlink()
-        print(f"  [clean] removed {report}")
+    """Remove the entire work directory for this repo before a fresh run."""
+    repo_dir = WORKDIR / name
+    if repo_dir.exists():
+        shutil.rmtree(repo_dir)
+        print(f"  [clean] removed {repo_dir}")
 
 
 async def run_pipeline(repo_url: str):
@@ -200,6 +190,7 @@ async def run_pipeline(repo_url: str):
 
     _clean_workdir(name)
 
+    base = WORKDIR / name
     for sid in (f"{name}_explorer", f"{name}_coder", f"{name}_validator"):
         await session_service.create_session(
             app_name=APP_NAME, user_id=USER_ID, session_id=sid
@@ -207,21 +198,17 @@ async def run_pipeline(repo_url: str):
 
     # ── Stage 1: Explorer ──────────────────────────────────────────────────
     _banner(1, f"Explorer  ({repo_url})")
-    explorer_response = await run_agent(
-        explorer_agent, session_service, f"{name}_explorer", repo_url
-    )
-    print(f"\n[Explorer done] report → {REPORTS_DIR}/{name}_exploration.md")
-    _snapshot_tmp(run_dir)
+    await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url)
+    print(f"\n[Explorer done] report → {base}/reports/exploration.md")
+    _snapshot_tmp(name, run_dir)
     print(f"  [snapshot] {run_dir}")
 
     # ── Stage 2: Coder ────────────────────────────────────────────────────
     _banner(2, f"Coder  ({repo_url})")
-    coder_response = await run_agent(
-        coder_agent, session_service, f"{name}_coder", repo_url
-    )
-    print(f"\n[Coder done] server → {OUTPUT_DIR}/{name}/server.py")
-    print(f"             tests  → {OUTPUT_DIR}/{name}/tests/test_server.py")
-    _snapshot_tmp(run_dir)
+    await run_agent(coder_agent, session_service, f"{name}_coder", repo_url)
+    print(f"\n[Coder done] server → {base}/output/server.py")
+    print(f"             tests  → {base}/output/tests/test_server.py")
+    _snapshot_tmp(name, run_dir)
     print(f"  [snapshot] {run_dir}")
 
     # ── Stage 3: Validator (calls Debugger internally on failures) ─────────
@@ -229,15 +216,15 @@ async def run_pipeline(repo_url: str):
     validator_response = await run_agent(
         validator_agent, session_service, f"{name}_validator", repo_url
     )
-    print(f"\n[Validator done] report → {REPORTS_DIR}/{name}_validation.md")
-    _snapshot_tmp(run_dir)
+    print(f"\n[Validator done] report → {base}/reports/validation.md")
+    _snapshot_tmp(name, run_dir)
     print(f"  [snapshot] {run_dir}")
 
     # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"  Pipeline complete: {name}")
-    print(f"  Reports : {REPORTS_DIR}/{name}_*.md")
-    print(f"  Output  : {OUTPUT_DIR}/{name}/")
+    print(f"  Reports : {base}/reports/")
+    print(f"  Output  : {base}/output/")
     print(f"{'='*60}")
     print(f"\n--- Validator summary ---\n")
     print(textwrap.indent(validator_response.strip(), "  "))
