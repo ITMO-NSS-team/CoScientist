@@ -181,11 +181,10 @@ where <repo-name> is the last path segment of the repo URL (e.g. "massformer" fo
 https://github.com/Roestlab/massformer). This gives you the description, key files,
 main workflows, MCP usage scenarios, and the **Environment Setup** section.
 
-### Step 2 — Set up the virtual environment
+### Step 2 — Build the Docker runtime image
 Read the **Environment Setup** section of the exploration report.
-If it lists a *SPECIFIC* command then proceed to use it, but make sure
-that thwe environment is installed in
-`setup_venv` to create a `.venv` in the output directory:
+If it lists a *SPECIFIC* install command, still encode the same dependencies via
+`setup_venv` (Dockerfile + `docker build`); Docker must be available on the host.
 
   - If the report lists a `requirements.txt`:
         setup_venv(repo_url, requirements_file="requirements.txt")
@@ -198,9 +197,10 @@ that thwe environment is installed in
   - If the **Environment Setup** section specifies a Python version, pass it:
         setup_venv(repo_url, pyproject_toml="pyproject.toml", python_version="3.11")
 
-`mcp` and `pytest` is always installed automatically — you do not need to list it.
+`mcp` and `pytest` are always installed in the image — you do not need to list them.
 If `setup_venv` returns `{"success": False, ...}`, note the error in your
-server report but continue — tests will still run (using system Python as fallback).
+server report but continue — validation still runs using host `python` as fallback
+when no image marker is present.
 
 ### Step 3 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
@@ -222,7 +222,8 @@ The report must contain:
   # <repo-name> MCP Server
 
   ## Environment
-  - venv: /var/tmp/alembic/output/<repo-name>/.venv
+  - dockerfile: /var/tmp/alembic/output/<repo-name>/Dockerfile
+  - image: (value of `image` from `setup_venv` on success, or "not built")
   - setup result: PASSED / FAILED (include error if failed)
 
   ## Tools Implemented
@@ -236,7 +237,8 @@ The report must contain:
   - tests:  /var/tmp/alembic/output/<repo-name>/tests/test_server.py
 
   ## How to run
-  cd /var/tmp/alembic/output/<repo-name> && .venv/bin/python server.py
+  docker run --rm -v /var/tmp/alembic/output/<repo-name>:/workspace -w /workspace <image> python server.py
+  (use the `image` field returned by `setup_venv`, or the `python` hint string on success)
 '''
 
 explorer_instruction = '''
