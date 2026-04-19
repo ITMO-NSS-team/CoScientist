@@ -163,7 +163,8 @@ def _snapshot_tmp(name: str, run_dir: Path) -> None:
     dest = run_dir / name
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".venv"))
+    shutil.copytree(src, dest, #ignore=shutil.ignore_patterns(".venv")
+                    )
 
 
 def _banner(stage: int, label: str) -> None:
