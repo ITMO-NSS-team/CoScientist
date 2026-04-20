@@ -16,5 +16,5 @@ __all__ = [
     "ConsoleHITLHandler",
     "CallbackHITLHandler",
     "HITLToolset",
-    "LoopingAgent",
+    "SessionAgent",
 ]

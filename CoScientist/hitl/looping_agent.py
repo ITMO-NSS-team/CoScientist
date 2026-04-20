@@ -11,7 +11,7 @@ from google.adk.utils.context_utils import Aclosing
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLRequest, HITLAction
 
-class LoopingAgent(LlmAgent):
+class SessionAgent(LlmAgent):
     """A planner that generates a plan and asks the human.
     If the human requests changes, it automatically feeds the changes back
     to itself and generates a new plan, looping until approved.
@@ -78,7 +78,7 @@ class LoopingAgent(LlmAgent):
                             # If edited_content is different, we use it as the final output
                             if self.output_key:
                                 ctx.session.state[self.output_key] = edited_content
-                                print(f"\n[LoopingAgent] SUCCESS: Updated '{self.output_key}' from '{self.plan_file_path}'.")
+                                print(f"\n[SessionAgent] SUCCESS: Updated '{self.output_key}' from '{self.plan_file_path}'.")
                                 
                                 # Yield an informative event that content was updated from file
                                 yield Event(
