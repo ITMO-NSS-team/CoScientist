@@ -1,11 +1,13 @@
-import os
+import os, json
 
 from pydantic_settings import BaseSettings
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
-allowed_providers = os.getenv("ALLOWED_PROVIDERS")
+allowed_providers = json.loads(
+    os.getenv("LLM__ALLOWED_PROVIDERS", "[]")
+)
 
 
 class ChromaSettings(BaseSettings):
@@ -28,18 +30,19 @@ class ChromaSettings(BaseSettings):
     """
 
     # Chroma DB settings
-    chroma_host: str = os.getenv("CHROMA_HOST")
-    chroma_port: int = int(os.getenv("CHROMA_PORT"))
+    chroma_host: str = os.getenv("HOSTS_PORTS__CHROMA_HOST")
+    chroma_port: int = int(os.getenv("HOSTS_PORTS__CHROMA_PORT"))
     allow_reset: bool = False
     
     # Documents collection's settings
-    embedding_host: str = os.getenv("EMBEDDING_HOST")
-    embedding_port: int = int(os.getenv("EMBEDDING_PORT"))
+    embedding_host: str = os.getenv("HOSTS_PORTS__EMBEDDING_HOST")
+    embedding_port: int = int(os.getenv("HOSTS_PORTS__EMBEDDING_PORT"))
     embedding_endpoint: str = "/embed"
     
     # Reranker settings
-    reranker_host: str = os.getenv("RERANKER_HOST")
-    reranker_port: int = int(os.getenv("RERANKER_PORT"))
+    reranker_host: str = os.getenv("HOSTS_PORTS__RERANKER_HOST")
+    reranker_port: int = int(os.getenv("HOSTS_PORTS__RERANKER_PORT"))
     reranker_endpoint: str = "/rerank"
+
 
 settings = ChromaSettings()

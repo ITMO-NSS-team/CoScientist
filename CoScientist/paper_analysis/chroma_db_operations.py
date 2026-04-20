@@ -30,9 +30,9 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 DATA_LOADER = ImageLoader()
-ROOT_DIR = os.getenv("ROOT_DIR")
-CHROMA_DB_PATH = os.path.join(ROOT_DIR, os.getenv("CHROMA_STORAGE_PATH"))
-VISION_LLM_URL = os.getenv("VISION_LLM_URL")
+CHROMA_DB_PATH = os.getenv("STORAGE__CHROMA_STORAGE")
+
+VISION_LLM_URL = os.getenv("LLM__VISION_URL")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -280,9 +280,9 @@ class ChromaDBPaperStore:
 
         self.client = ChromaClient()
 
-        self.sum_collection_name = sum_collection_name or os.getenv("SUMMARIES_COLLECTION_NAME")
-        self.txt_collection_name = txt_collection_name or os.getenv("TEXTS_COLLECTION_NAME")
-        self.img_collection_name = img_collection_name or os.getenv("IMAGES_COLLECTION_NAME")
+        self.sum_collection_name = sum_collection_name or os.getenv("COLLECTIONS__SUMMARIES")
+        self.txt_collection_name = txt_collection_name or os.getenv("COLLECTIONS__TEXTS")
+        self.img_collection_name = img_collection_name or os.getenv("COLLECTIONS__IMAGES")
 
         self.sum_chunk_num = 15
         self.final_sum_chunk_num = 3

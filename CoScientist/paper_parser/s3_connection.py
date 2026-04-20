@@ -233,10 +233,10 @@ class S3BucketService:
 
 
 s3_service = S3BucketService(
-    endpoint=os.getenv("S3_ENDPOINT_URL"),
-    access_key=os.getenv("S3_ACCESS_KEY"),
-    secret_key=os.getenv("S3_SECRET_KEY"),
-    bucket_name=os.getenv("S3_BUCKET_NAME")
+    endpoint=os.getenv("S3__ENDPOINT_URL"),
+    access_key=os.getenv("S3__ACCESS_KEY"),
+    secret_key=os.getenv("S3__SECRET_KEY"),
+    bucket_name=os.getenv("S3__BUCKET_NAME")
 )
 
 if __name__ == "__main__":

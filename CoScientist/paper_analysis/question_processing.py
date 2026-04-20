@@ -1,9 +1,10 @@
+import asyncio
 import base64
 import os
 import time
 import pikepdf
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from protollm.connectors import create_llm_connector
 from pydantic import BaseModel, Field, model_validator
 from pypdf import PdfReader, PdfWriter
@@ -12,6 +13,7 @@ from io import BytesIO
 from CoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
 from CoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt, extract_query_filters_prompt
 from CoScientist.paper_analysis.research_taxonomy import (
+    DOMAIN_TO_SUBDOMAINS,
     ResearchDomain,
     get_sub_domains_for_domain,
 )
@@ -22,7 +24,7 @@ from CoScientist.chemical_utils.chemical_functions import *
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
-VISION_LLM_URL = os.getenv("VISION_LLM_URL")
+VISION_LLM_URL = os.getenv("LLM__VISION_URL")
 
 
 class QueryFilters(BaseModel):
@@ -54,7 +56,7 @@ class QueryFilters(BaseModel):
     research_sub_domain: str | None = Field(
         description="Specific research sub-domain within the selected research domain"
         " Must match the selected research_domain based on this mapping:\n"
-        f"{DOMAIN_SUBDOMAIN_MAPPING}\n",
+        f"{DOMAIN_TO_SUBDOMAINS}\n",
         default=None
     )
 
@@ -94,9 +96,7 @@ def extract_metadata_filters(question: str) -> QueryFilters:
     
     prompt = extract_query_filters_prompt + f"\n\nUSER QUESTION: {question}"
     
-    from langchain_core.messages import HumanMessage
     filters: QueryFilters = struct_llm.invoke([HumanMessage(content=prompt)])
-    
     return filters
 
 
@@ -121,27 +121,27 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
     """
     conditions = []
     
-    if filters.paper_authors:
+    if filters.paper_authors is not None:
         conditions.append({"paper_authors": {"$eq": filters.paper_authors}})
     
-    if filters.publication_year_exact:
+    if filters.publication_year_exact is not None:
         conditions.append({"publication_year": {"$eq": filters.publication_year_exact}})
-    elif filters.publication_year_min or filters.publication_year_max:
+    elif filters.publication_year_min is not None or filters.publication_year_max is not None:
         year_condition = {}
-        if filters.publication_year_min:
+        if filters.publication_year_min is not None:
             year_condition["$gte"] = filters.publication_year_min
-        if filters.publication_year_max:
+        if filters.publication_year_max is not None:
             year_condition["$lte"] = filters.publication_year_max
         if year_condition:
             conditions.append({"publication_year": year_condition})
     
-    if filters.publication_source:
+    if filters.publication_source is not None:
         conditions.append({"publication_source": {"$eq": filters.publication_source}})
     
-    if filters.research_domain:
+    if filters.research_domain is not None:
         conditions.append({"research_domain": {"$eq": filters.research_domain}})
     
-    if filters.research_sub_domain:
+    if filters.research_sub_domain is not None:
         conditions.append({"research_sub_domain": {"$eq": filters.research_sub_domain}})
     
     if not conditions:
@@ -149,7 +149,6 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
     
     if len(conditions) == 1:
         return conditions[0]
-    
     return {"$and": conditions}
 
 
@@ -228,10 +227,7 @@ def simple_query_llm(
         dict: A dictionary containing the answer from the language model. The dictionary has a single key, 'answer',
             which holds the answer string.
     """
-    from ChemCoScientist.frontend.utils import update_activity
 
-    if pdfs:
-        update_activity(os.path.dirname(pdfs[0]))
     llm = create_llm_connector(model_url)
 
     content = []
@@ -428,6 +424,6 @@ if __name__ == "__main__":
     # question = 'How does the synthesis of Glionitrin A/B happen?'
 
     # res = simple_query_llm(VISION_LLM_URL, question, [paper])
-    result = process_question(question, paper_store)
+    result = process_question(question, sys_prompt, paper_store)
     from pprint import pprint
     pprint(result)
