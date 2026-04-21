@@ -38,6 +38,7 @@ class S3DomainArtifactStore:
         html: str,
         images: dict[str, Image.Image | None],
         metadata: dict[str, Any] | None = None,
+        pdf_data: bytes | None = None,
     ) -> None:
         # Paper summary
         self.client.put_object(
@@ -53,6 +54,14 @@ class S3DomainArtifactStore:
             Key=self._article_prefix(article_id) + "article.html",
             Body=html.encode("utf-8"),
             ContentType="text/html",
+        )
+        
+        # Paper file
+        self.client.put_object(
+            Bucket=self.bucket,
+            Key=self._article_prefix(article_id) + "paper.pdf",
+            Body=pdf_data,
+            ContentType="application/pdf",
         )
 
         # Images

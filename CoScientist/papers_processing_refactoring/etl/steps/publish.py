@@ -29,6 +29,7 @@ class PublishStep(ETLStep):
                 ctx.vector_store.delete_by_article_id(article_id)
                 ctx.vector_store.upsert_chunks(chunks_to_upload, vectors_to_upload)
             
+            pdf_data = ctx.artifact_store.get_file(article_id, "fetching", "source.pdf")
             html = ctx.artifact_store.get_html(article_id, "paper_summarisation")
             manifest_data = ctx.artifact_store.get_metadata(article_id, "paper_summarisation")
             summary_data = manifest_data["summary"]["paper_summary"]
@@ -45,7 +46,8 @@ class PublishStep(ETLStep):
                 paper_summary=summary_data,
                 html=html,
                 images=images,
-                metadata=manifest_data
+                metadata=manifest_data,
+                pdf_data=pdf_data,
             )
             
             # ctx.artifact_store.delete_article(article_id)

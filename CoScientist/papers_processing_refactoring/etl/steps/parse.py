@@ -39,7 +39,6 @@ class ParseStep(ETLStep):
                 renderer=self.config_parser.get_renderer()
             )
             
-            # Newer versions of marker-pdf can accept bytes along with the file path
             rendered = converter(str(pdf_path))
             
             text, _, images = text_from_rendered(rendered)
