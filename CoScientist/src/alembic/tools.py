@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 
 WORKDIR = Path(
-    __import__("os").environ.get("ALEMBIC_WORKDIR", "/var/tmp/alembic")
+    __import__("os").environ.get("ALEMBIC_WORKDIR", ".alembic")
 )
 MAX_BYTES = 40_000
 
@@ -58,7 +58,7 @@ def clone_repo(repo_url: str) -> dict:
 
     Example:
         clone_repo("https://github.com/Roestlab/massformer")
-        # -> {"local_path": "/var/tmp/alembic/massformer/repos", "files": [...]}
+        # -> {"local_path": ".alembic/massformer/repos", "files": [...]}
     """
     dest = _repo_path(repo_url)
     if not dest.exists():
@@ -100,11 +100,11 @@ def bash(command: str) -> dict:
     """Run a restricted shell command. Only ls, grep, head, and glob are supported.
 
     Examples:
-        bash("ls /var/tmp/alembic/massformer/repos")
-        bash("grep -r 'def train' /var/tmp/alembic/massformer/repos -l")
-        bash("head -n 30 /var/tmp/alembic/massformer/repos/README.md")
-        bash("glob /var/tmp/alembic/massformer/repos/**/*.yaml")
-        bash("python -m py_compile /var/tmp/alembic/massformer/output/server.py && echo OK")
+        bash("ls .alembic/massformer/repos")
+        bash("grep -r 'def train' .alembic/massformer/repos -l")
+        bash("head -n 30 .alembic/massformer/repos/README.md")
+        bash("glob .alembic/massformer/repos/**/*.yaml")
+        bash("python -m py_compile .alembic/massformer/output/server.py && echo OK")
     """
     stripped = command.strip()
     cmd_name = stripped.split()[0] if stripped else ""
@@ -169,7 +169,7 @@ def read_report(repo_url: str, report_name: str) -> dict:
 
     Example:
         read_report("https://github.com/Roestlab/massformer", "exploration")
-        # -> {"report_path": "/var/tmp/alembic/massformer/reports/exploration.md", ...}
+        # -> {"report_path": ".alembic/massformer/reports/exploration.md", ...}
     """
     path = _reports_dir(repo_url) / f"{report_name}.md"
     if not path.exists():
@@ -180,7 +180,7 @@ def read_report(repo_url: str, report_name: str) -> dict:
 def write_file(repo_url: str, relative_path: str, content: str) -> dict:
     """Write a source file to the output directory for this repo.
 
-    Output lives at /var/tmp/alembic/<repo-name>/output/<relative_path>.
+    Output lives at .alembic/<repo-name>/output/<relative_path>.
 
     Examples:
         write_file("https://github.com/Roestlab/massformer", "server.py", "...")
@@ -398,7 +398,7 @@ def write_report(repo_url: str, report_name: str, content: str) -> dict:
 
     Example:
         write_report("https://github.com/Roestlab/massformer", "exploration", "# massformer...")
-        # -> {"report_path": "/var/tmp/alembic/massformer/reports/exploration.md"}
+        # -> {"report_path": ".alembic/massformer/reports/exploration.md"}
     """
     reports = _reports_dir(repo_url)
     reports.mkdir(parents=True, exist_ok=True)

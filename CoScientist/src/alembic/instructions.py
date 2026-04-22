@@ -21,7 +21,7 @@ Read the error message carefully. Identify:
     read_output_file(repo_url, "tests/test_server.py")
 
 Use the bash tool to locate surrounding context if the file is large:
-    bash("grep -n 'ErrorKeyword' /var/tmp/alembic/<repo>/output/server.py")
+    bash("grep -n 'ErrorKeyword' .alembic/<repo>/output/server.py")
 
 ### Step 3 — Fix and write (tool: update_file)
 Apply the minimal change that resolves the error. Then write the entire
@@ -34,9 +34,9 @@ Fix only what the error describes. Do not refactor unrelated code.
 After writing the file, always run a syntax check to confirm you did not
 introduce a new syntax error:
 
-    bash("python -m py_compile /var/tmp/alembic/<repo>/output/server.py && echo OK")
+    bash("python -m py_compile .alembic/<repo>/output/server.py && echo OK")
     # or for the test file:
-    bash("python -m py_compile /var/tmp/alembic/<repo>/output/tests/test_server.py && echo OK")
+    bash("python -m py_compile .alembic/<repo>/output/tests/test_server.py && echo OK")
 
 If the syntax check fails, read the file again, fix the new error, re-write,
 and re-check. Repeat until the syntax check prints "OK" before returning.
@@ -115,7 +115,7 @@ from mcp.server.fastmcp import FastMCP
 import subprocess, os
 from pathlib import Path
 
-REPO_PATH = Path("/var/tmp/alembic/<repo-name>/repos")  # cloned repo location
+REPO_PATH = Path(".alembic/<repo-name>/repos")  # cloned repo location
 
 mcp = FastMCP("<repo-name>")
 
@@ -145,7 +145,7 @@ Rules:
 - Import only stdlib + the repo\'s own installed packages (check pyproject.toml/setup.py).
 - Each @mcp.tool() must have full type annotations and a docstring with Args/Returns/Raises.
 - Use subprocess.run(..., check=True) for CLI tools; catch CalledProcessError and re-raise as RuntimeError.
-- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = /var/tmp/alembic/<name>/repos.
+- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = .alembic/<name>/repos.
 - Keep each tool focused on one operation. Do not combine unrelated functionality.
 - Return plain Python types (str, dict, list) — FastMCP serialises them to JSON automatically.
 
@@ -344,7 +344,7 @@ The report must contain:
   # <repo-name> MCP Server
 
   ## Environment
-  - venv: /var/tmp/alembic/<repo-name>/output/.venv
+  - venv: .alembic/<repo-name>/output/.venv
   - setup result: PASSED / FAILED (include error if failed)
 
   ## Tools Implemented
@@ -354,11 +354,11 @@ The report must contain:
   - Output: what is returned and its structure
 
   ## Output Files
-  - server: /var/tmp/alembic/<repo-name>/output/server.py
-  - tests:  /var/tmp/alembic/<repo-name>/output/tests/test_server.py
+  - server: .alembic/<repo-name>/output/server.py
+  - tests:  .alembic/<repo-name>/output/tests/test_server.py
 
   ## How to run
-  cd /var/tmp/alembic/<repo-name>/output && .venv/bin/python server.py
+  cd .alembic/<repo-name>/output && .venv/bin/python server.py
 '''
 
 explorer_instruction = '''
