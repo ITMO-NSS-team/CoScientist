@@ -154,17 +154,17 @@ async def run_agent(agent, session_service, session_id: str, message: str) -> st
     return final
 
 
-def _snapshot_tmp(name: str, run_dir: Path) -> None:
-    """Copy the repo work dir into run_dir, overwriting previous snapshot."""
-    src = WORKDIR / name
-    if not src.exists():
-        return
-    run_dir.mkdir(parents=True, exist_ok=True)
-    dest = run_dir / name
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest, #ignore=shutil.ignore_patterns(".venv")
-                    )
+# def _snapshot_tmp(name: str, run_dir: Path) -> None:
+#     """Copy the repo work dir into run_dir, overwriting previous snapshot."""
+#     src = WORKDIR / name
+#     if not src.exists():
+#         return
+#     run_dir.mkdir(parents=True, exist_ok=True)
+#     dest = run_dir / name
+#     if dest.exists():
+#         shutil.rmtree(dest)
+#     shutil.copytree(src, dest, #ignore=shutil.ignore_patterns(".venv")
+#                    )
 
 
 def _banner(stage: int, label: str) -> None:
@@ -201,7 +201,7 @@ async def run_pipeline(repo_url: str):
     _banner(1, f"Explorer  ({repo_url})")
     await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url)
     print(f"\n[Explorer done] report → {base}/reports/exploration.md")
-    _snapshot_tmp(name, run_dir)
+    #_snapshot_tmp(name, run_dir)
     print(f"  [snapshot] {run_dir}")
 
     # ── Stage 2: Coder ────────────────────────────────────────────────────
@@ -209,7 +209,8 @@ async def run_pipeline(repo_url: str):
     await run_agent(coder_agent, session_service, f"{name}_coder", repo_url)
     print(f"\n[Coder done] server → {base}/output/server.py")
     print(f"             tests  → {base}/output/tests/test_server.py")
-    _snapshot_tmp(name, run_dir)
+    print(f"             report  → {base}/reports/server.md")
+    #_snapshot_tmp(name, run_dir)
     print(f"  [snapshot] {run_dir}")
 
     # ── Stage 3: Validator (calls Debugger internally on failures) ─────────
@@ -218,7 +219,7 @@ async def run_pipeline(repo_url: str):
         validator_agent, session_service, f"{name}_validator", repo_url
     )
     print(f"\n[Validator done] report → {base}/reports/validation.md")
-    _snapshot_tmp(name, run_dir)
+    #_snapshot_tmp(name, run_dir)
     print(f"  [snapshot] {run_dir}")
 
     # ── Summary ───────────────────────────────────────────────────────────
