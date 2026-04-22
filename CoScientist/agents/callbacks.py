@@ -38,5 +38,20 @@ def after_tool_reranker_agent(
         if rerank_map.get(tool['tool_index'], 0) >= 0.3
     ]
 
+    if not filtered_tools:
+        # fallback: take top-2 by rerank score
+        top_indices = sorted(
+            rerank_map.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:2]
+
+        top_ids = {idx for idx, _ in top_indices}
+
+        filtered_tools = [
+            tool for tool in acc_tools
+            if tool['tool_index'] in top_ids
+        ]
+
     callback_context.state['filtered_tools'] = filtered_tools
     return
