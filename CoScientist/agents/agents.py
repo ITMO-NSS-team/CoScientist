@@ -133,7 +133,7 @@ async def create_agents(hitl_handler: Optional[AbstractHITLHandler] = None):
         output_key="planner_roadmap",
         plan_file_path="roadmap.txt",
         planner=planner,
-        before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
+        #before_agent_callback=make_hitl_before_callback(handler) if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
         #after_agent_callback=make_hitl_after_callback(handler, HITLAction.APPROVE) if (hitl_enabled and "PlannerAgent" in hitl_agents) else None,
 
         # only for SessionAgent

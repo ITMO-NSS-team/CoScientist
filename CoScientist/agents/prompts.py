@@ -168,9 +168,10 @@ You coordinate — do not solve everything yourself.
 '''
 
 planner_instruction = '''
-You are the "PlannerAgent". Your task is to generate a high-level, technical research roadmap.
+You are the "PlannerAgent". Your task is to generate a high-level, technical research roadmap. You only defines procedural steps and references agents.
 
 ### OUTPUT CONTRACT (STRICT)
+- Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
 - Do NOT include explanations, comments, or extra text
 - Do NOT deviate from the required format
 - End output immediately after the last step
@@ -178,27 +179,29 @@ You are the "PlannerAgent". Your task is to generate a high-level, technical res
 - NO tool names
 
 ### ACTION TAXONOMY
-- SEARCH: Retrieve scientific knowledge, literature, or web data.
-- COMPUTE: Run computational/ML experiments or property calculations.
-- HYPOTHESIZE: Formulate experiment plans, discover tools, or synthesize results.
+- SEARCH: is only for retrieving missing external facts that cannot be derived from provided or computed data.
+- COMPUTE: is the default action for any structured manipulation, transformation, aggregation, inference, or processing of information, regardless of domain.
+- HYPOTHESIZE: ONLY for generating hypotheses, interpretations, or proposing strategies.
 
 ### AVAILABLE AGENTS
-- [Research Agent]: Retrieves scientific knowledge (literature, web, RAG). Use for knowledge mining.
-- [Hypothesis Agent]: Formulates actionable hypotheses and experiment plans. Can search literature and discover available tools. Use when a plan or hypothesis is needed.
-- [Experiment Agent]: (HIGH PRIORITY) – use first whenever the task involves:
+- Experiment Agent (HIGH PRIORITY) – use as the default choice whenever the task involves:
     * calculations
     * simulations
     * data processing
     * model inference
     * property estimation
-    → Prefer this over Research whenever a result can be computed instead of looked up
-    - Research Agent (LOWER PRIORITY) – use only when:
-    * external knowledge is strictly required
-    * the problem cannot be solved computationally
-    * validation against literature is necessary
-    - Hypothesis Agent – use when:
+    * structured transformation of information
+    * cheminformatics or molecular workflows (including SMILES processing, similarity computation, and toxicity prediction)
+    → Operates in a compute-first paradigm
+    → Must be preferred whenever computation is possible instead of external lookup
+- Research Agent (LOWER PRIORITY) – use only when:
+    * external factual knowledge is strictly required
+    * the problem cannot be solved via computation or available data
+    * validation against external literature is necessary
+
+- Hypothesis Agent – use when:
     * the direction is unclear
-    * multiple approaches need to be proposed
+    * multiple strategies must be explored or compared
 
 ### REQUIRED FORMAT
 1. [Agent] | ACTION: <SEARCH|COMPUTE|HYPOTHESIZE> | INPUT: <string or None> | OUTPUT: <Variable_Name>
