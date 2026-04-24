@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
@@ -11,7 +12,6 @@ import json
 import shutil
 import textwrap
 import traceback
-from datetime import datetime
 
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
@@ -59,10 +59,42 @@ USER_ID  = "user_1"
 
 TRUNC = 2000  # max chars shown for tool args / responses inline
 
-
 def _repo_name(repo_url: str) -> str:
     return repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
 
+
+def _make_report_guard(required_report: str):
+    """Return an after_agent_callback that re-prompts the agent if it forgot write_report.
+
+    Scans session events for the current invocation. If no FunctionResponse from
+    write_report with the expected report name is found, returns a Content that
+    tells the agent to call write_report before finishing.
+    """
+    def _guard(callback_context) -> types.Content | None:
+        inv_id = callback_context.invocation_id
+        for event in callback_context.session.events:
+            if event.invocation_id != inv_id:
+                continue
+            if not event.content or not event.content.parts:
+                continue
+            for part in event.content.parts:
+                fr = getattr(part, "function_response", None)
+                if fr and fr.name == "write_report":
+                    report_path = str((fr.response or {}).get("report_path", ""))
+                    if required_report in report_path:
+                        return None  # report was written — all good
+        # Report missing: instruct the agent to write it now.
+        print(f"  [guard] write_report('{required_report}') not found — prompting agent.")
+        return types.Content(
+            role="user",
+            parts=[types.Part(text=(
+                f"IMPORTANT: You have not called write_report with "
+                f"report_name='{required_report}' yet. "
+                f"You MUST call write_report now to save your report before finishing."
+            ))],
+        )
+
+    return _guard
 
 def _trunc(text: str, n: int = TRUNC) -> str:
     text = str(text).replace("\n", " ")
@@ -96,8 +128,25 @@ MAX_TOOL_REPEATS = 3   # abort if same tool+args combo is called this many times
 MAX_STEPS        = 60  # hard ceiling on total events per agent
 
 
-async def run_agent(agent, session_service, session_id: str, message: str) -> str:
-    """Run a single agent turn, log every event, return final response text."""
+async def run_agent(
+    agent,
+    session_service,
+    session_id: str,
+    message: str,
+    required_report: str | None = None,
+) -> str:
+    """Run a single agent turn, log every event, return final response text.
+
+    If *required_report* is given (e.g. "exploration"), an after_agent_callback
+    is installed that re-prompts the agent when it finishes without having called
+    write_report with that report name.
+    """
+    # ── install write_report guard ─────────────────────────────────────────
+    _original_cb = agent.after_agent_callback
+    if required_report is not None:
+        agent.after_agent_callback = _make_report_guard(required_report)
+    # ──────────────────────────────────────────────────────────────────────
+
     runner  = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
     content = types.Content(role="user", parts=[types.Part(text=message)])
     final   = "Agent did not produce a final response."
@@ -151,20 +200,10 @@ async def run_agent(agent, session_service, session_id: str, message: str) -> st
         traceback.print_exc()
         print()
 
+    finally:
+        agent.after_agent_callback = _original_cb
+
     return final
-
-
-# def _snapshot_tmp(name: str, run_dir: Path) -> None:
-#     """Copy the repo work dir into run_dir, overwriting previous snapshot."""
-#     src = WORKDIR / name
-#     if not src.exists():
-#         return
-#     run_dir.mkdir(parents=True, exist_ok=True)
-#     dest = run_dir / name
-#     if dest.exists():
-#         shutil.rmtree(dest)
-#     shutil.copytree(src, dest, #ignore=shutil.ignore_patterns(".venv")
-#                    )
 
 
 def _banner(stage: int, label: str) -> None:
@@ -185,10 +224,6 @@ async def run_pipeline(repo_url: str):
     name = _repo_name(repo_url)
     session_service = InMemorySessionService()
 
-    run_id  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(f".alembic/{run_id}-{name}")
-    print(f"\n[Run] snapshot dir → {run_dir}")
-
     _clean_workdir(name)
 
     base = WORKDIR / name
@@ -199,28 +234,25 @@ async def run_pipeline(repo_url: str):
 
     # ── Stage 1: Explorer ──────────────────────────────────────────────────
     _banner(1, f"Explorer  ({repo_url})")
-    await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url)
+    await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url,
+                    required_report="exploration")
     print(f"\n[Explorer done] report → {base}/reports/exploration.md")
-    #_snapshot_tmp(name, run_dir)
-    print(f"  [snapshot] {run_dir}")
 
     # ── Stage 2: Coder ────────────────────────────────────────────────────
     _banner(2, f"Coder  ({repo_url})")
-    await run_agent(coder_agent, session_service, f"{name}_coder", repo_url)
+    await run_agent(coder_agent, session_service, f"{name}_coder", repo_url,
+                    required_report="server")
     print(f"\n[Coder done] server → {base}/output/server.py")
     print(f"             tests  → {base}/output/tests/test_server.py")
     print(f"             report  → {base}/reports/server.md")
-    #_snapshot_tmp(name, run_dir)
-    print(f"  [snapshot] {run_dir}")
 
     # ── Stage 3: Validator (calls Debugger internally on failures) ─────────
     _banner(3, f"Validator  ({repo_url})")
     validator_response = await run_agent(
-        validator_agent, session_service, f"{name}_validator", repo_url
+        validator_agent, session_service, f"{name}_validator", repo_url,
+        required_report="validation",
     )
     print(f"\n[Validator done] report → {base}/reports/validation.md")
-    #_snapshot_tmp(name, run_dir)
-    print(f"  [snapshot] {run_dir}")
 
     # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{'='*60}")

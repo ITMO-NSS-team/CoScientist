@@ -48,7 +48,7 @@ def _reports_dir(repo_url: str) -> Path:
 def _venv_python(out_dir: Path) -> str:
     """Return the venv python path if it exists, else fall back to 'python'."""
     candidate = out_dir / ".venv" / "bin" / "python"
-    return str(candidate) if candidate.exists() else "python"
+    return str(candidate.resolve()) if candidate.exists() else "python"
 
 
 def clone_repo(repo_url: str) -> dict:
