@@ -19,6 +19,7 @@ IGNORE_EXTS = {
 }
 
 _ALLOWED_CMDS = ("ls", "grep", "head", "glob")
+_ENV_ALLOWED_CMDS = (*_ALLOWED_CMDS, "pip", "pip3", "uv", "conda", "python", "python3", "which")
 
 
 def _repo_name(repo_url: str) -> str:
@@ -140,6 +141,51 @@ def bash(command: str) -> dict:
         return {"output": output[:MAX_BYTES]}
     except subprocess.TimeoutExpired:
         return {"error": "Command timed out after 15 seconds."}
+
+
+def bash_env(command: str) -> dict:
+    """Run an environment setup command (pip, uv, conda, python, etc.).
+
+    Extends bash with package-manager commands. Timeout is 300 s to
+    accommodate slow installs.
+
+    Examples:
+        bash_env("uv venv .alembic/massformer/output/.venv --python 3.11")
+        bash_env("uv pip install --python .alembic/massformer/output/.venv/bin/python torch torchvision")
+        bash_env("pip install -r .alembic/massformer/repos/requirements.txt")
+        bash_env("which python3")
+    """
+    stripped = command.strip()
+    cmd_name = stripped.split()[0] if stripped else ""
+
+    if cmd_name not in _ENV_ALLOWED_CMDS:
+        return {
+            "error": f"Command '{cmd_name}' is not allowed. "
+                     f"Supported: {sorted(_ENV_ALLOWED_CMDS)}."
+        }
+
+    if cmd_name == "glob":
+        parts = stripped.split(None, 1)
+        if len(parts) < 2:
+            return {"error": "glob requires a pattern argument."}
+        pattern = parts[1]
+        matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
+        return {"matches": matched}
+
+    try:
+        result = subprocess.run(
+            stripped,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        output = result.stdout
+        if result.returncode != 0 and result.stderr:
+            output += "\n[stderr] " + result.stderr
+        return {"output": output[:MAX_BYTES]}
+    except subprocess.TimeoutExpired:
+        return {"error": "Command timed out after 300 seconds."}
 
 
 def search(repo_url: str, pattern: str) -> dict:
