@@ -17,7 +17,7 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
-from alembic.agents import explorer_agent, coder_agent, validator_agent
+from alembic.agents import explorer_agent, environment_agent, coder_agent, validator_agent
 from alembic.tools import WORKDIR
 
 # ── Patch ADK tool lookup to return an error response instead of crashing ─────
@@ -96,6 +96,37 @@ def _make_report_guard(required_report: str):
 
     return _guard
 
+
+def _make_venv_guard(venv_python_path: str):
+    """Return an after_agent_callback that re-prompts when the venv Python doesn't exist."""
+    def _guard(callback_context) -> types.Content | None:
+        if Path(venv_python_path).exists():
+            return None
+        print(f"  [guard] venv not found at {venv_python_path} — prompting agent.")
+        return types.Content(
+            role="user",
+            parts=[types.Part(text=(
+                f"IMPORTANT: The virtual environment was not successfully created. "
+                f"Expected Python binary at: {venv_python_path}. "
+                f"You MUST set up the environment (using setup_venv or bash_env) "
+                f"before finishing."
+            ))],
+        )
+
+    return _guard
+
+
+def _chain_guards(*guards):
+    """Combine multiple after_agent_callbacks into one, stopping at the first non-None result."""
+    def _combined(callback_context) -> types.Content | None:
+        for g in guards:
+            result = g(callback_context)
+            if result is not None:
+                return result
+        return None
+    return _combined
+
+
 def _trunc(text: str, n: int = TRUNC) -> str:
     text = str(text).replace("\n", " ")
     return text if len(text) <= n else text[:n] + "…"
@@ -134,17 +165,25 @@ async def run_agent(
     session_id: str,
     message: str,
     required_report: str | None = None,
+    venv_guard_path: str | None = None,
 ) -> str:
     """Run a single agent turn, log every event, return final response text.
 
-    If *required_report* is given (e.g. "exploration"), an after_agent_callback
-    is installed that re-prompts the agent when it finishes without having called
-    write_report with that report name.
+    Guards installed via after_agent_callback re-prompt the agent if it finishes
+    without satisfying requirements (venv existence and/or write_report).
     """
-    # ── install write_report guard ─────────────────────────────────────────
+    # ── install guards ────────────────────────────────────────────────────
     _original_cb = agent.after_agent_callback
+    active_guards = []
+    if venv_guard_path is not None:
+        active_guards.append(_make_venv_guard(venv_guard_path))
     if required_report is not None:
-        agent.after_agent_callback = _make_report_guard(required_report)
+        active_guards.append(_make_report_guard(required_report))
+    if active_guards:
+        agent.after_agent_callback = (
+            active_guards[0] if len(active_guards) == 1
+            else _chain_guards(*active_guards)
+        )
     # ──────────────────────────────────────────────────────────────────────
 
     runner  = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
@@ -227,7 +266,10 @@ async def run_pipeline(repo_url: str):
     _clean_workdir(name)
 
     base = WORKDIR / name
-    for sid in (f"{name}_explorer", f"{name}_coder", f"{name}_validator"):
+    venv_python = str((base / "output" / ".venv" / "bin" / "python").resolve())
+
+    for sid in (f"{name}_explorer", f"{name}_environment",
+                f"{name}_coder", f"{name}_validator"):
         await session_service.create_session(
             app_name=APP_NAME, user_id=USER_ID, session_id=sid
         )
@@ -238,13 +280,18 @@ async def run_pipeline(repo_url: str):
                     required_report="exploration")
     print(f"\n[Explorer done] report → {base}/reports/exploration.md")
 
-    # ── Stage 2: Coder ────────────────────────────────────────────────────
-    _banner(2, f"Coder  ({repo_url})")
-    await run_agent(coder_agent, session_service, f"{name}_coder", repo_url,
-                    required_report="server")
-    print(f"\n[Coder done] server → {base}/output/server.py")
-    print(f"             tests  → {base}/output/tests/test_server.py")
-    print(f"             report  → {base}/reports/server.md")
+    # ── Stage 2: Environment + Coder (parallel) ───────────────────────────
+    _banner(2, f"Environment + Coder  ({repo_url})")
+    await asyncio.gather(
+        run_agent(environment_agent, session_service, f"{name}_environment", repo_url,
+                  required_report="environment", venv_guard_path=venv_python),
+        run_agent(coder_agent, session_service, f"{name}_coder", repo_url,
+                  required_report="server"),
+    )
+    print(f"\n[Environment done] report → {base}/reports/environment.md")
+    print(f"[Coder done]       server → {base}/output/server.py")
+    print(f"                   tests  → {base}/output/tests/test_server.py")
+    print(f"                   report → {base}/reports/server.md")
 
     # ── Stage 3: Validator (calls Debugger internally on failures) ─────────
     _banner(3, f"Validator  ({repo_url})")
