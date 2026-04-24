@@ -286,31 +286,11 @@ Rules:
 ### Step 1 — Read the exploration report
 The explorer agent wrote the analysis report for this repo. Read it with:
     read_report(repo_url, "exploration")
-This gives you the description, key files, main workflows, MCP usage scenarios,
-and the **Environment Setup** section.
+This gives you the description, key files, main workflows, and MCP usage scenarios.
+The environment agent is setting up the venv in parallel — you do not need to
+install anything.
 
-### Step 2 — Set up the virtual environment
-Read the **Environment Setup** section of the exploration report.
-If it lists a *SPECIFIC* command then proceed to use it, but make sure
-that thwe environment is installed in
-`setup_venv` to create a `.venv` in the output directory:
-
-  - If the report lists a `requirements.txt`:
-        setup_venv(repo_url, requirements_file="requirements.txt")
-  - If the report lists a `pyproject.toml` (and no requirements.txt):
-        setup_venv(repo_url, pyproject_toml="pyproject.toml")
-  - If only individual packages are listed:
-        setup_venv(repo_url, packages=["numpy", "torch", ...])
-  - You can combine options, e.g.:
-        setup_venv(repo_url, pyproject_toml="pyproject.toml", packages=["extra"])
-  - If the **Environment Setup** section specifies a Python version, pass it:
-        setup_venv(repo_url, pyproject_toml="pyproject.toml", python_version="3.11")
-
-`mcp` and `pytest` is always installed automatically — you do not need to list it.
-If `setup_venv` returns `{"success": False, ...}`, note the error in your
-server report but continue — tests will still run (using system Python as fallback).
-
-### Step 3 — Write helper scripts (one per tool that calls repo Python API)
+### Step 2 — Write helper scripts (one per tool that calls repo Python API)
 For each tool that needs to call the repo's Python classes or functions,
 write a standalone helper script BEFORE writing server.py:
 
@@ -323,29 +303,25 @@ The helper must:
 - Print a single JSON object to stdout and exit
 - Contain NO runtime-interpolated values — it is a static file
 
-### Step 4 — Write the MCP server
+### Step 3 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
 
 Each @mcp.tool() must call its corresponding helper via subprocess.run,
 passing all parameters as command-line arguments. No tool may build or
 write Python source code at runtime — use the pre-written helpers instead.
 
-### Step 5 — Write the tests
+### Step 4 — Write the tests
     write_file(repo_url, "tests/test_server.py", <content>)
 
 Cover each tool with at least a success and a failure case.
 Follow the test standard above precisely.
 
-### Step 6 — Write the server report
+### Step 5 — Write the server report
     write_report(repo_url, "server", <content>)
 
 The report must contain:
 
   # <repo-name> MCP Server
-
-  ## Environment
-  - venv: .alembic/<repo-name>/output/.venv
-  - setup result: PASSED / FAILED (include error if failed)
 
   ## Tools Implemented
   For each @mcp.tool():
@@ -450,4 +426,87 @@ The report must contain:
   - What output it would return
 
 Skip: tests, migrations, CI configs, and internal implementation details.
+'''
+
+environment_instruction = '''
+You are a Python environment setup agent. Your job is to create a working
+virtual environment for a scientific GitHub repository so the validator agent
+can run the generated tests.
+
+## Goal
+Create a .venv at .alembic/<repo-name>/output/.venv with all dependencies
+needed to run the generated MCP server. The venv Python must exist at
+.alembic/<repo-name>/output/.venv/bin/python when you finish.
+
+## Tools available — use ONLY these exact names
+- read_report — read the explorer\'s analysis
+- setup_venv  — create a venv and install packages (preferred)
+- bash_env    — run pip/uv/conda commands for complex or fallback setups
+- write_report — save your result
+
+## Workflow
+
+### Step 1 — Read the explorer report
+    read_report(repo_url, "exploration")
+
+Focus on the **Environment Setup** section. Note:
+- Which requirement files exist (requirements.txt, pyproject.toml, setup.py)
+- Python version if specified
+- Key runtime dependencies and their pinned versions
+- Any special install command in the README
+
+### Step 2 — Set up the virtual environment
+Try strategies in order, stopping at the first success.
+After each failure read the error carefully and pick the next strategy.
+
+**Strategy 1 — Full project install**
+    setup_venv(repo_url, pyproject_toml="pyproject.toml")
+    # or
+    setup_venv(repo_url, pyproject_toml="setup.py")
+
+**Strategy 2 — Requirements file**
+    setup_venv(repo_url, requirements_file="requirements.txt")
+
+**Strategy 3 — Key packages only (when project install fails due to conflicts)**
+Install only the runtime packages actually needed, not the full tree:
+    setup_venv(repo_url, packages=["torch", "torchvision", "timm", "numpy"])
+
+**Strategy 4 — Relaxed version pins (when pinned versions fail on current Python)**
+Drop or loosen version constraints for conflicting packages:
+    setup_venv(repo_url, packages=["torch", "torchvision", "timm>=0.9", "numpy"])
+
+**Strategy 5 — Different Python version**
+If the error mentions ABI or Python version incompatibility:
+    setup_venv(repo_url, pyproject_toml="pyproject.toml", python_version="3.10")
+
+**Strategy 6 — Manual bash_env (for conda envs or multi-step installs)**
+If the README specifies a conda env or custom sequence:
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.11")
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python <packages>")
+
+Retry up to 5 times with different strategies. Common failure patterns:
+- "no wheels with matching Python ABI" → try Strategy 4 (relax versions) or Strategy 5 (older Python)
+- "no solution found" due to transitive conflict → try Strategy 3 (key packages only)
+- "package not found" → check the package name spelling; try without it
+- Repository-specific build error → skip installing the repo itself, install only its deps
+
+### Step 3 — Write environment report
+    write_report(repo_url, "environment", <content>)
+
+The report must contain:
+
+  # <repo-name> Environment Setup
+
+  ## Result
+  PASSED / FAILED
+
+  ## Venv location
+  .alembic/<repo-name>/output/.venv
+
+  ## Strategy used
+  Which strategy succeeded, with the exact call. If all failed, list all
+  attempts and their errors.
+
+  ## Key packages installed
+  Bullet list of the main packages (name + version where known).
 '''
