@@ -12,13 +12,13 @@ from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLRequest, HITLAction
 
 class SessionAgent(LlmAgent):
-    """A planner that generates a plan and asks the human.
+    """A planner that generates a roadmap and asks the human.
     If the human requests changes, it automatically feeds the changes back
-    to itself and generates a new plan, looping until approved.
+    to itself and generates a new roadmap, looping until approved.
     """
     hitl_handler: Optional[AbstractHITLHandler] = None
     plan_file_path: Optional[str] = None
-    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback. If you had an output schema, you MUST still follow it strictly and return a valid JSON object."
+    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         
@@ -45,7 +45,7 @@ class SessionAgent(LlmAgent):
                 output_text = ctx.session.state.get(self.output_key, output_text)
                 
             # Perform HITL check
-            message = f"[INTERNAL_LOOP: AGENT_LOGIC] Agent '{self.name}' proposes its result. Please review."
+            message = f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes its result. Please review."
             
             # If plan_file_path is set, write to file and update message
             if self.plan_file_path:

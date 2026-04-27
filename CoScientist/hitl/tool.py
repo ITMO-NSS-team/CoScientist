@@ -6,9 +6,17 @@ from google.adk.tools import BaseTool, FunctionTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
+from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLRequest, HITLAction
-from CoScientist.hitl.handler import AbstractHITLHandler
+from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
 
+settings = get_settings()
+
+def get_hitl_tools() -> list:
+    return [
+        FunctionTool(hitl_toolset.request_approval),
+        FunctionTool(hitl_toolset.request_selection)
+    ]
 
 class HITLToolset(BaseToolset):
     """Toolset providing HITL tools to agents.
@@ -97,33 +105,4 @@ class HITLToolset(BaseToolset):
             "feedback": response.instructions or response.free_input or "No feedback provided.",
         }
 
-    '''async def request_input(
-        self,
-        agent_name: str,
-        message: str,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Request free-form input from the human.
-
-        Use this tool when you need additional information,
-        clarification, or guidance from the user.
-
-        Args:
-            agent_name: Name of the agent requesting input.
-            message: What information is needed and why.
-            context: Additional context for the human.
-
-        Returns:
-            Dictionary with 'input' (str) and 'approved' (bool).
-        """
-        request = HITLRequest(
-            agent_name=agent_name,
-            action_type=HITLAction.PROVIDE_INPUT,
-            message=message,
-            context=context or {},
-        )
-        response = await self._handler.handle_request(request)
-        return {
-            "input": response.free_input,
-            "approved": response.approved,
-        }'''
+hitl_toolset = HITLToolset(handler=ConsoleHITLHandler())

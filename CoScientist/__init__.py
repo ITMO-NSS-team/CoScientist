@@ -11,12 +11,11 @@ from CoScientist.tools import FedotMASToolset
 
 from CoScientist.agents import (
     orchestrator_agent,
-    hypotheses_agent,
-    research_agent,
+    hypotheses_agent, 
+    research_agent, 
     fedot_agent,
     tool_retriever_agent,
-    task_execution_agent,
-    create_agents,
+    task_execution_agent
 )
 
 from CoScientist.storage import RetrievalFinalResult, RetrievalToolResult
@@ -27,7 +26,6 @@ from CoScientist.hitl import (
     HITLResponse,
     AbstractHITLHandler,
     ConsoleHITLHandler,
-    CallbackHITLHandler,
     HITLToolset,
 )
 
@@ -54,7 +52,6 @@ __all__ = [
     "HITLResponse",
     "AbstractHITLHandler",
     "ConsoleHITLHandler",
-    "CallbackHITLHandler",
     "HITLToolset",
     # Functions
     "create_manager",

@@ -6,8 +6,7 @@ from CoScientist.agents.agents import (
     fedot_agent,
     orchestrator_agent,
     tool_retriever_agent,
-    task_execution_agent,
-    create_agents,
+    task_execution_agent
 )
 
 __all__ = [
@@ -17,6 +16,5 @@ __all__ = [
     "research_agent",
     "hypotheses_agent",
     "tool_retriever_agent",
-    "task_execution_agent",
-    "create_agents",
+    "task_execution_agent"
 ]

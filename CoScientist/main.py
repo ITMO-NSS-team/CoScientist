@@ -18,10 +18,9 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
-from CoScientist.agents.agents import create_agents
+from CoScientist.agents.agents import orchestrator_agent
 from CoScientist.hitl import (
     AbstractHITLHandler,
-    CallbackHITLHandler,
     HITLRequest,
     HITLResponse,
 )
@@ -53,18 +52,22 @@ class CoScientistManager:
         self._hitl_handler = hitl_handler
         self._agents = None
 
+
     async def initialize(self):
         """Initialize session + runner."""
         if self._initialized:
             return
 
-        # Create agents with HITL handler
+        '''from CoScientist.agents import agents as agent_module
+        
+        # Inject custom HITL handler if provided
         if self._hitl_handler is not None:
-            self._agents = await create_agents(hitl_handler=self._hitl_handler)
-        else:
-            self._agents = await create_agents()
-        agent = self._agents["orchestrator_agent"]
+            agent_module.hitl_toolset._handler = self._hitl_handler
+            if agent_module.planner_agent.hitl_handler is not None:
+                agent_module.planner_agent.hitl_handler = self._hitl_handler
 
+        agent = agent_module.orchestrator_agent'''
+    
         # Session service
         self.session_service = InMemorySessionService()
 
@@ -76,7 +79,7 @@ class CoScientistManager:
 
         # Runner
         self.runner = Runner(
-            agent=agent,
+            agent=orchestrator_agent,
             app_name=self.app_name,
             session_service=self.session_service,
         )
@@ -122,47 +125,15 @@ class CoScientistManager:
 
         return final_response
 
-    # --- HITL convenience methods for external UI integration ---
-
-    async def get_hitl_request(self) -> Optional[HITLRequest]:
-        """Get pending HITL request (for web UI / chat bot integration).
-
-        Only works when hitl_handler is CallbackHITLHandler.
-        """
-        if isinstance(self._hitl_handler, CallbackHITLHandler):
-            return await self._hitl_handler.get_pending_request()
-        return None
-
-    async def submit_hitl_response(self, response: HITLResponse) -> None:
-        """Submit human response to a HITL request (for web UI / chat bot integration).
-
-        Only works when hitl_handler is CallbackHITLHandler.
-        """
-        if isinstance(self._hitl_handler, CallbackHITLHandler):
-            await self._hitl_handler.submit_response(response)
-
-    def has_pending_hitl(self) -> bool:
-        """Check if there is a pending HITL request (non-blocking)."""
-        if isinstance(self._hitl_handler, CallbackHITLHandler):
-            return self._hitl_handler.has_pending_request()
-        return False
-
     async def close(self):
         """Cleanup (placeholder)."""
         # If you switch to persistent sessions later, close here
         pass
 
 # Convenience functions
-async def create_manager(
-    hitl_handler: Optional[AbstractHITLHandler] = None,
-) -> CoScientistManager:
-    """Create and initialize a CoScientistManager.
-
-    Args:
-        hitl_handler: Optional HITL handler. Pass CallbackHITLHandler for
-                      web UI integration, or None for console-based HITL.
-    """
-    manager = CoScientistManager(hitl_handler=hitl_handler)
+async def create_manager() -> CoScientistManager:
+    """Create and initialize a CoScientistManager."""
+    manager = CoScientistManager()
     await manager.initialize()
     return manager
 
@@ -171,6 +142,7 @@ async def create_manager(
 __all__ = [
     # Main classes
     "CoScientistManager",
+    # Models
     # Functions
     "create_manager"
 ]
