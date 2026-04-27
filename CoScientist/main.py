@@ -57,16 +57,6 @@ class CoScientistManager:
         """Initialize session + runner."""
         if self._initialized:
             return
-
-        '''from CoScientist.agents import agents as agent_module
-        
-        # Inject custom HITL handler if provided
-        if self._hitl_handler is not None:
-            agent_module.hitl_toolset._handler = self._hitl_handler
-            if agent_module.planner_agent.hitl_handler is not None:
-                agent_module.planner_agent.hitl_handler = self._hitl_handler
-
-        agent = agent_module.orchestrator_agent'''
     
         # Session service
         self.session_service = InMemorySessionService()

@@ -44,6 +44,16 @@ def _agent_tools(base_tools: Any, hitl_tools: bool = False) -> list:
         tools.extend(get_hitl_tools())
     return tools
 
+hypotheses_agent = LlmAgent(
+    name="HypothesesAgent",
+    model=LiteLlm(model=MODEL),
+    instruction=hypotheses_instruction,
+    description="Agent to generate scientific hypotheses and ideas for given task",
+    output_key="hypotheses",
+    tools=_agent_tools([], hitl_tools=True),
+    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
+    #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
+)
 
 research_agent = LlmAgent(
     name="ResearchAgent",
@@ -52,17 +62,6 @@ research_agent = LlmAgent(
     description="Agent to answer questions and knowledge mining using Literature and Web Search.",
     output_key="search_results",
     tools=_agent_tools([websearch_toolset_instance], hitl_tools=True),
-    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
-    #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
-)
-
-hypotheses_agent = LlmAgent(
-    name="HypothesesAgent",
-    model=LiteLlm(model=MODEL),
-    instruction=hypotheses_instruction,
-    description="Agent to generate actionable scientific hypotheses grounded in available tools and literature",
-    output_key="hypotheses",
-    tools=_agent_tools([], hitl_tools=True),
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
@@ -125,6 +124,5 @@ orchestrator_agent = LlmAgent(
     ], hitl_tools=True),
 )
 
-# Enable tracking
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
 
