@@ -1,17 +1,18 @@
+import fnmatch
 import re
-import shlex
+import os
 import subprocess
 from pathlib import Path
 
-DEFAULT_PYTHON_VERSION = "3.11"
 DOCKER_IMAGE_MARKER = ".docker_image"
+DOCKER_BUILD_FAIL_COUNTER = ".docker_build_failures"
+DOCKER_BUILD_MAX_ATTEMPTS = 5
 
 _ALEMBIC_BASE = Path(
-    __import__("os").environ.get("ALEMBIC_WORKDIR", "/var/tmp/alembic")
+    os.environ.get("ALEMBIC_WORKDIR", "/var/tmp/alembic")
 )
 REPO_DIR    = _ALEMBIC_BASE / "repos"
 REPORTS_DIR = _ALEMBIC_BASE / "reports"
-OUTPUT_DIR  = _ALEMBIC_BASE / "output"
 MAX_BYTES = 40_000
 
 IGNORE = {
@@ -25,6 +26,11 @@ IGNORE_EXTS = {
     ".pdf", ".zip", ".tar", ".gz", ".h5", ".hdf5",
     ".pt", ".pth", ".ckpt", ".pkl", ".npy", ".npz", ".parquet",
 }
+
+
+def _path_part_ignored(part: str) -> bool:
+    return any(fnmatch.fnmatch(part, pattern) for pattern in IGNORE)
+
 
 _ALLOWED_CMDS = ("ls", "grep", "head", "glob")
 
@@ -44,19 +50,19 @@ def _docker_safe_image_component(name: str) -> str:
     return s or "repo"
 
 
-def _python_exec_argv(out_dir: Path, python_cli: list[str]) -> list[str]:
+def _python_exec_argv(workspace_root: Path, python_cli: list[str]) -> list[str]:
     """Argv prefix + python subcommand for either Docker (mounted workspace) or host Python."""
-    marker_path = out_dir / DOCKER_IMAGE_MARKER
+    marker_path = workspace_root / DOCKER_IMAGE_MARKER
     if marker_path.exists():
         image = marker_path.read_text(encoding="utf-8").strip()
         return [
             "docker", "run", "--rm",
-            "-v", f"{out_dir.resolve()}:/workspace",
-            "-w", "/workspace",
+            "-v", f"{workspace_root.resolve()}:/app",
+            "-w", "/app",
             image,
             "python",
         ] + python_cli
-    venv_python = out_dir / ".venv" / "bin" / "python"
+    venv_python = workspace_root / ".venv" / "bin" / "python"
     if venv_python.exists():
         return [str(venv_python)] + python_cli
     return ["python"] + python_cli
@@ -83,7 +89,7 @@ def clone_repo(repo_url: str) -> dict:
     for p in dest.rglob("*"):
         if p.is_file() and p.suffix not in IGNORE_EXTS:
             rel = p.relative_to(dest)
-            if not any(part in IGNORE for part in rel.parts):
+            if not any(_path_part_ignored(part) for part in rel.parts):
                 files.append(str(rel))
 
     return {"local_path": str(dest), 
@@ -181,7 +187,7 @@ def search(repo_url: str, pattern: str) -> dict:
     for p in dest.glob(pattern):
         if p.is_file() and p.suffix not in IGNORE_EXTS:
             rel = p.relative_to(dest)
-            if not any(part in IGNORE for part in rel.parts):
+            if not any(_path_part_ignored(part) for part in rel.parts):
                 matched.append(str(rel))
     return {"pattern": pattern, "matches": sorted(matched)}
 
@@ -203,139 +209,57 @@ def read_report(report_name: str) -> dict:
 
 
 def write_file(repo_url: str, relative_path: str, content: str) -> dict:
-    """Write a source file to the MCP server output directory for this repo.
+    """Write a file inside the cloned repository (e.g. ``server.py``, ``tests/...``).
 
-    Output lives at /tmp/alembic_output/<repo-name>/<relative_path>.
-    Call this to write the server file and test file.
-
-    Args:
-        repo_url:      Repository URL (used to namespace the output folder).
-        relative_path: Path relative to the output folder, e.g. "server.py"
-                       or "tests/test_server.py".
-        content:       Full text content to write.
+    Markdown reports belong in ``reports/`` via ``write_report`` only.
 
     Examples:
         write_file("https://github.com/Roestlab/massformer", "server.py", "...")
         write_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
     """
-    name = _repo_name(repo_url)
-    dest = OUTPUT_DIR / name / relative_path
+    dest = _repo_path(repo_url) / Path((relative_path or "").strip())
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
     return {"written": str(dest)}
 
 
-def read_output_file(repo_url: str, relative_path: str) -> dict:
-    """Read a file from the MCP server output directory for this repo.
-
-    Use this to inspect generated server.py or test files before fixing them.
-    Returns up to 40 KB of content.
-
-    Args:
-        repo_url:      Repository URL.
-        relative_path: Path relative to the output folder, e.g. "server.py"
-                       or "tests/test_server.py".
-
-    Examples:
-        read_output_file("https://github.com/Roestlab/massformer", "server.py")
-        read_output_file("https://github.com/Roestlab/massformer", "tests/test_server.py")
-    """
-    name = _repo_name(repo_url)
-    full = OUTPUT_DIR / name / relative_path
-    if not full.exists():
-        return {"error": f"File not found: {full}"}
-    raw = full.read_bytes()[:MAX_BYTES]
-    return {"path": str(full), "content": raw.decode("utf-8", errors="replace")}
-
-
 def update_file(repo_url: str, relative_path: str, content: str) -> dict:
-    """Overwrite a file in the MCP server output directory with corrected content.
+    """Overwrite a file in the cloned repository (full file content, not a patch).
 
-    Read the file first with read_output_file, fix the issue, then call this
-    with the complete corrected content. Always write the full file — not a patch.
-
-    Args:
-        repo_url:      Repository URL.
-        relative_path: Path relative to the output folder, e.g. "server.py"
-                       or "tests/test_server.py".
-        content:       Complete corrected file content.
+    Read the current file with ``read_file(repo_url, relative_path)`` first.
 
     Examples:
         update_file("https://github.com/Roestlab/massformer", "server.py", "...")
         update_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
     """
-    name = _repo_name(repo_url)
-    dest = OUTPUT_DIR / name / relative_path
+    dest = _repo_path(repo_url) / Path((relative_path or "").strip())
     if not dest.exists():
         return {"error": f"File not found: {dest}. Cannot update a file that does not exist."}
     dest.write_text(content, encoding="utf-8")
     return {"updated": str(dest)}
 
 
-def compose_dockerfile_body(
-    py_minor: str,
-    requirements_rel: str | None,
-    editable_relpath: str | None,
-    install_pkgs: list[str],
-) -> str:
-    """Dockerfile with build context = cloned repo root. Repo is copied to /app."""
-    lines = [
-        f"FROM python:{py_minor}-slim",
-        "WORKDIR /app",
-        "ENV PIP_DISABLE_PIP_VERSION_CHECK=1",
-        "RUN pip install --no-cache-dir --upgrade pip",
-        "COPY . .",
-    ]
-    if requirements_rel:
-        rq = Path(requirements_rel).as_posix()
-        lines.append(f"RUN pip install --no-cache-dir -r {shlex.quote(rq)}")
-    if editable_relpath is not None:
-        ep = Path(editable_relpath).as_posix()
-        ed_arg = "." if ep in (".", "") else "./" + ep
-        lines.append(f"RUN pip install --no-cache-dir -e {shlex.quote(ed_arg)}")
-    quoted_pkgs = " ".join(shlex.quote(p) for p in install_pkgs)
-    lines.append(f"RUN pip install --no-cache-dir {quoted_pkgs}")
-    return "\n".join(lines) + "\n"
+def build_docker_image(repo_url: str) -> dict:
+    """Run ``docker build`` for project using ``Dockerfile`` at the repository root.
 
+    On success, writes ``.docker_image`` in the repository root so ``validate_syntax`` /
+    ``run_tests`` use this image and removes ``.docker_build_failures``.
 
-def setup_venv(repo_url: str, packages: list[str] | None = None,
-               requirements_file: str | None = None,
-               pyproject_toml: str | None = None,
-               python_version: str | None = None) -> dict:
-    """Build a Docker image from the cloned repo with the requested Python and deps.
+    After ``DOCKER_BUILD_MAX_ATTEMPTS`` failed builds for the same repository, returns
+    without running ``docker build`` (``max_attempts_reached: true``).
 
-    Writes ``Dockerfile`` under the output directory and runs ``docker build`` with
-    the clone root as context. Records the image name in ``.docker_image`` for
-    ``validate_syntax`` / ``run_tests``. Requires Docker on the host.
-
-    Uses ``python:<version>-slim`` as the base image (not suitable for CUDA/GPU-only stacks).
-
-    Args:
-        repo_url:          Repository URL (used to namespace the output folder).
-        packages:          Extra pip-installable package names,
-                           e.g. ["numpy", "torch"].  May be None.
-        requirements_file: Path to a requirements.txt file relative to the
-                           cloned repo root, e.g. "requirements.txt". May be None.
-        pyproject_toml:    Path to a pyproject.toml relative to the cloned repo
-                           root. When provided, that directory is installed editable.
-                           May be None.
-        python_version:    Python minor series, e.g. "3.11" or "3.10". May be None
-                           (defaults to DEFAULT_PYTHON_VERSION).
+    Build output is captured so the returned ``error`` includes docker's stderr/stdout
+    (truncated to ``MAX_BYTES``).
 
     Returns:
         {"success": True,  "image": "<tag>", "dockerfile": "<path>",
          "python": "<example docker run ...>"}
-        {"success": False, "error": "<message>", "dockerfile": "<path>" if written}
+        {"success": False, "error": "<message>", "dockerfile": "<path>" if present,
+         optional "failed_attempts", "max_attempts_reached"}
 
-    Examples:
-        setup_venv("https://github.com/Roestlab/massformer",
-                   requirements_file="requirements.txt")
-        setup_venv("https://github.com/Roestlab/massformer",
-                   pyproject_toml="pyproject.toml")
-        setup_venv("https://github.com/Roestlab/massformer",
-                   pyproject_toml="pyproject.toml", packages=["extra-pkg"])
-        setup_venv("https://github.com/Roestlab/massformer",
-                   pyproject_toml="pyproject.toml", python_version="3.11")
+    Example:
+        write_file(repo_url, "Dockerfile", "FROM python:3.11-slim\\n...")
+        build_docker_image(repo_url)
     """
     dv = subprocess.run(
         ["docker", "version"],
@@ -347,74 +271,86 @@ def setup_venv(repo_url: str, packages: list[str] | None = None,
         return {"success": False, "error": f"docker not available: {err}"}
 
     name = _repo_name(repo_url)
-    out_dir = OUTPUT_DIR / name
-    out_dir.mkdir(parents=True, exist_ok=True)
     repo_root = _repo_path(repo_url)
-    dockerfile_path = out_dir / "Dockerfile"
-    marker_path = out_dir / DOCKER_IMAGE_MARKER
-    if marker_path.exists():
-        marker_path.unlink()
-
-    errors: list[str] = []
-    requirements_rel: str | None = None
-    if requirements_file:
-        req_path = repo_root / requirements_file
-        if req_path.exists():
-            requirements_rel = Path(requirements_file).as_posix()
-        else:
-            errors.append(f"requirements file not found: {req_path}")
-
-    editable_relpath: str | None = None
-    if pyproject_toml:
-        proj_path = repo_root / pyproject_toml
-        if proj_path.exists():
-            try:
-                rel = proj_path.parent.resolve().relative_to(repo_root.resolve())
-                editable_relpath = "." if rel == Path(".") else rel.as_posix()
-            except ValueError:
-                errors.append(f"pyproject.toml not under repo root: {proj_path}")
-        else:
-            errors.append(f"pyproject.toml not found: {proj_path}")
-
-    if errors:
+    dockerfile_path = repo_root / "Dockerfile"
+    marker_path = repo_root / DOCKER_IMAGE_MARKER
+    if not dockerfile_path.is_file():
         return {
             "success": False,
-            "dockerfile": str(dockerfile_path),
-            "error": "; ".join(errors),
+            "error": "No Dockerfile at repository root. Use write_file(repo_url, 'Dockerfile', <full content>) first.",
         }
 
-    py_minor = (python_version or DEFAULT_PYTHON_VERSION).lstrip("python").strip()
-    if py_minor.startswith("v"):
-        py_minor = py_minor[1:]
-
-    install_pkgs = ["mcp", "pytest"] + (packages or [])
-    body = compose_dockerfile_body(py_minor, requirements_rel, editable_relpath, install_pkgs)
-    dockerfile_path.write_text(body, encoding="utf-8")
+    counter_path = repo_root / DOCKER_BUILD_FAIL_COUNTER
+    prev_fails = 0
+    if counter_path.is_file():
+        try:
+            prev_fails = int(counter_path.read_text(encoding="utf-8").strip() or 0)
+        except ValueError:
+            pass
+    if prev_fails >= DOCKER_BUILD_MAX_ATTEMPTS:
+        return {
+            "success": False,
+            "max_attempts_reached": True,
+            "failed_attempts": prev_fails,
+            "dockerfile": str(dockerfile_path),
+            "error": (
+                f"docker build already failed {DOCKER_BUILD_MAX_ATTEMPTS} times for this "
+                "clone; not retrying. Stop calling build_docker_image and record the "
+                "outcome in the server report."
+            ),
+        }
 
     image_tag = f"alembic-{_docker_safe_image_component(name)}:latest"
-    try:
-        subprocess.run(
-            [
-                "docker", "build",
-                "-f", str(dockerfile_path),
-                "-t", image_tag,
-                str(repo_root),
-            ],
-            check=True,
-            capture_output=False,
-            text=True,
+    docker_build_proc = subprocess.Popen(
+        [
+            "docker",
+            "build",
+            "-f",
+            str(dockerfile_path),
+            "-t",
+            image_tag,
+            str(repo_root),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    error_logs = []
+    full_log = []
+    for line in docker_build_proc.stdout:
+        print(line, end="")  
+        full_log.append(line)
+    
+    for line in docker_build_proc.stderr:
+        print(line, end="")  
+        error_logs.append(line)
+    
+    docker_build_proc.wait()
+    returncode = docker_build_proc.returncode
+    if returncode != 0:
+        log = "\n".join(
+            s for s in (error_logs) if s
         )
-    except subprocess.CalledProcessError as e:
-        msg = (e.stderr or e.stdout or "").strip()
-        return {
+        if not log:
+            log = "(no output captured from docker build)"
+        fails = prev_fails + 1
+        counter_path.write_text(f"{fails}\n", encoding="utf-8")
+        err = f"docker build failed (exit {returncode}):\n{log}"[:MAX_BYTES]
+        out: dict = {
             "success": False,
             "dockerfile": str(dockerfile_path),
-            "error": f"docker build failed: {msg}"[:MAX_BYTES],
+            "failed_attempts": fails,
+            "error": err,
         }
+        if fails >= DOCKER_BUILD_MAX_ATTEMPTS:
+            out["max_attempts_reached"] = True
+        return out
 
+    if counter_path.exists():
+        counter_path.unlink()
     marker_path.write_text(image_tag + "\n", encoding="utf-8")
     run_hint = (
-        f"docker run --rm -v {out_dir.resolve()}:/workspace -w /workspace "
+        f"docker run --rm -v {repo_root.resolve()}:/app -w /app "
         f"{image_tag} python server.py"
     )
     return {
@@ -439,56 +375,41 @@ def validate_syntax(repo_url: str) -> dict:
     Example:
         validate_syntax("https://github.com/Roestlab/massformer")
     """
-    name = _repo_name(repo_url)
-    out_dir = OUTPUT_DIR / name
-    server  = out_dir / "server.py"
+    workspace = _repo_path(repo_url)
+    server = workspace / "server.py"
     if not server.exists():
         return {"passed": False, "stage": "syntax", "error": f"server.py not found at {server}"}
 
-    run_kw: dict = {"capture_output": True, "text": True}
-    run_kw["cwd"] = str(out_dir)
-
-    # Stage 1: syntax check
-    r1 = subprocess.run(
-        _python_exec_argv(out_dir, ["-m", "py_compile", "server.py"]),
-        **run_kw,
+    # Syntax check
+    syntax_check_proc = subprocess.Popen(
+        _python_exec_argv(workspace, ["-m", "py_compile", "server.py"]),
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.PIPE, 
+        text=True, 
+        cwd=str(workspace),
     )
-    if r1.returncode != 0:
-        return {"passed": False, "stage": "syntax", "error": r1.stderr.strip()}
-
-    # Stage 2: import check (load module without running mcp.run())
-    marker_path = out_dir / DOCKER_IMAGE_MARKER
-    if marker_path.exists():
-        load_snippet = (
-            "import importlib.util as _u, sys as _s; "
-            "_s.path.insert(0, '/workspace'); "
-            "_spec=_u.spec_from_file_location('server', '/workspace/server.py'); "
-            "_mod=_u.module_from_spec(_spec); "
-            "_spec.loader.exec_module(_mod)"
-        )
-    else:
-        load_snippet = (
-            "import importlib.util as _u, sys as _s; "
-            f"_s.path.insert(0, r'{server.parent}'); "
-            f"_spec=_u.spec_from_file_location('server', r'{server}'); "
-            "_mod=_u.module_from_spec(_spec); "
-            "_spec.loader.exec_module(_mod)"
-        )
-    r2 = subprocess.run(
-        _python_exec_argv(out_dir, ["-c", load_snippet]),
-        capture_output=True, text=True, timeout=30,
-        cwd=str(out_dir),
-    )
-    if r2.returncode != 0:
-        return {"passed": False, "stage": "imports", "error": r2.stderr.strip()}
-
+    error_logs = []
+    logs = []
+    for line in syntax_check_proc.stdout:
+        print(line, end="")  
+        error_logs.append(line)
+    
+    for line in syntax_check_proc.stderr:
+        print(line, end="")  
+        logs.append(line)
+    
+    syntax_check_proc.wait()
+    
+    if syntax_check_proc.returncode != 0:
+        return {"passed": False, "stage": "syntax", "error": "".join(error_logs)}
+    
     return {"passed": True}
 
 
 def run_tests(repo_url: str) -> dict:
     """Run the pytest test suite for the generated MCP server.
 
-    Executes tests/test_server.py under /tmp/alembic_output/<repo-name>/.
+    Runs ``pytest`` in the clone root (``tests/`` under the repo).
     Returns pass/fail status and the full pytest output (stdout + stderr,
     truncated to 40 KB).
 
@@ -496,9 +417,8 @@ def run_tests(repo_url: str) -> dict:
         run_tests("https://github.com/Roestlab/massformer")
         # -> {"passed": True/False, "output": "...pytest output..."}
     """
-    name = _repo_name(repo_url)
-    out_dir  = OUTPUT_DIR / name
-    test_dir = out_dir / "tests"
+    workspace = _repo_path(repo_url)
+    test_dir = workspace / "tests"
     if not test_dir.exists():
         return {"passed": False, "output": f"Test directory not found: {test_dir}"}
 
@@ -507,12 +427,12 @@ def run_tests(repo_url: str) -> dict:
         "text": True,
         "timeout": 120,
     }
-    run_kw["cwd"] = str(out_dir)
+    run_kw["cwd"] = str(workspace)
 
     try:
         r = subprocess.run(
             _python_exec_argv(
-                out_dir,
+                workspace,
                 ["-m", "pytest", "tests", "-v", "--tb=short", "--no-header"],
             ),
             **run_kw,

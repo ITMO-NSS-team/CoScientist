@@ -17,16 +17,12 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from alembic.agents import explorer_agent, coder_agent, validator_agent
-from alembic.tools import REPORTS_DIR, OUTPUT_DIR
+from alembic.tools import REPORTS_DIR, REPO_DIR, _repo_name
 
 APP_NAME = "alembic_app"
 USER_ID  = "user_1"
 
 TRUNC = 2000  # max chars shown for tool args / responses inline
-
-
-def _repo_name(repo_url: str) -> str:
-    return repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
 
 
 def _trunc(text: str, n: int = TRUNC) -> str:
@@ -111,16 +107,14 @@ async def run_agent(agent, session_service, session_id: str, message: str) -> st
     return final
 
 
-_SNAPSHOT_DIRS = {
-    "reports": REPORTS_DIR,
-    "output":  OUTPUT_DIR,
-}
-
-
-def _snapshot_tmp(run_dir: Path) -> None:
-    """Copy the alembic work dirs into run_dir, overwriting previous snapshot."""
+def _snapshot_tmp(run_dir: Path, repo_name: str) -> None:
+    """Copy reports dir and this repo's clone into run_dir."""
     run_dir.mkdir(parents=True, exist_ok=True)
-    for label, src in _SNAPSHOT_DIRS.items():
+    pairs = [
+        ("reports", REPORTS_DIR),
+        ("repo", REPO_DIR / repo_name),
+    ]
+    for label, src in pairs:
         if not src.exists():
             continue
         dest = run_dir / label
@@ -154,7 +148,7 @@ async def run_pipeline(repo_url: str):
         explorer_agent, session_service, f"{name}_explorer", repo_url
     )
     print(f"\n[Explorer done] report → {REPORTS_DIR}/{name}_exploration.md")
-    _snapshot_tmp(run_dir)
+    _snapshot_tmp(run_dir, name)
     print(f"  [snapshot] {run_dir}")
 
     # ── Stage 2: Coder ────────────────────────────────────────────────────
@@ -162,9 +156,9 @@ async def run_pipeline(repo_url: str):
     coder_response = await run_agent(
         coder_agent, session_service, f"{name}_coder", repo_url
     )
-    print(f"\n[Coder done] server → {OUTPUT_DIR}/{name}/server.py")
-    print(f"             tests  → {OUTPUT_DIR}/{name}/tests/test_server.py")
-    _snapshot_tmp(run_dir)
+    print(f"\n[Coder done] server → {REPO_DIR}/{name}/server.py")
+    print(f"             tests  → {REPO_DIR}/{name}/tests/test_server.py")
+    _snapshot_tmp(run_dir, name)
     print(f"  [snapshot] {run_dir}")
 
     # ── Stage 3: Validator (calls Debugger internally on failures) ─────────
@@ -173,14 +167,14 @@ async def run_pipeline(repo_url: str):
         validator_agent, session_service, f"{name}_validator", repo_url
     )
     print(f"\n[Validator done] report → {REPORTS_DIR}/{name}_validation.md")
-    _snapshot_tmp(run_dir)
+    _snapshot_tmp(run_dir, name)
     print(f"  [snapshot] {run_dir}")
 
     # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"  Pipeline complete: {name}")
     print(f"  Reports : {REPORTS_DIR}/{name}_*.md")
-    print(f"  Output  : {OUTPUT_DIR}/{name}/")
+    print(f"  Clone     : {REPO_DIR}/{name}/  (server, tests, Dockerfile, .docker_image)")
     print(f"{'='*60}")
     print(f"\n--- Validator summary ---\n")
     print(textwrap.indent(validator_response.strip(), "  "))

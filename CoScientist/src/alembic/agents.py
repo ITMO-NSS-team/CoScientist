@@ -9,8 +9,8 @@ from google.adk.tools.agent_tool import AgentTool
 from alembic.tools import (
     clone_repo, read_file, bash, search,
     read_report, write_report,
-    write_file, read_output_file, update_file,
-    setup_venv, validate_syntax, run_tests,
+    write_file, update_file,
+    build_docker_image, validate_syntax, run_tests,
 )
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
@@ -32,7 +32,16 @@ coder_agent = Agent(
     model=LiteLlm(model=MODEL),
     description="Reads an explorer report and implements a FastMCP server with pytest tests for the repository.",
     instruction=coder_instruction,
-    tools=[read_report, setup_venv, bash, read_file, write_file, write_report], 
+    tools=[
+        read_report,
+        validate_syntax,
+        run_tests,
+        build_docker_image,
+        bash,
+        read_file,
+        write_file,
+        write_report,
+    ],
 )
 
 debugger_agent = Agent(
@@ -40,7 +49,7 @@ debugger_agent = Agent(
     model=LiteLlm(model=MODEL),
     description="Receives a repo URL and an error message, reads the offending file, fixes the bug, and returns a summary of what was changed.",
     instruction=debugger_instruction,
-    tools=[read_output_file, update_file, bash],
+    tools=[read_file, update_file, bash],
 )
 
 validator_agent = Agent(

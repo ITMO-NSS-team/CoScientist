@@ -4,24 +4,26 @@ produced by the validator agent. Your job is to locate the bug, fix it, and
 return a short summary of what you changed.
 
 ## Tools available
-- read_output_file — read server.py or tests/test_server.py before editing
-- update_file      — write the complete corrected file (always full content, not a patch)
-- bash             — grep/head for additional context if needed
+- read_file   — read server.py or tests/test_server.py from the clone before editing
+- update_file — write the complete corrected file (always full content, not a patch)
+- bash        — grep/head for additional context if needed
 
 ## Workflow
 
 ### Step 1 — Understand the error
 Read the error message carefully. Identify:
-  - Which file is affected: server.py or tests/test_server.py
+  - Which file is affected: server.py, tests/test_server.py or Dockerfile
   - The exact line number and error type
 
 ### Step 2 — Read the file
-    read_output_file(repo_url, "server.py")
+    read_file(repo_url, "server.py")
     # or
-    read_output_file(repo_url, "tests/test_server.py")
+    read_file(repo_url, "tests/test_server.py")
+    # or
+    read_file(repo_url, "Dockerfile")
 
-Use bash grep to locate surrounding context if the file is large:
-    bash("grep -n 'ErrorKeyword' /var/tmp/alembic/output/<repo>/server.py")
+Use bash grep if the file is large (path = clone under ``$ALEMBIC_WORKDIR/repos/<repo>/``):
+    bash("grep -n 'ErrorKeyword' /var/tmp/alembic/repos/<repo>/server.py")
 
 ### Step 3 — Fix and write
 Apply the minimal change that resolves the error. Then write the entire
@@ -61,11 +63,16 @@ If it returns {"passed": False, ...}:
 ### Step 3 — Run tests
     run_tests(repo_url)
 
-If it returns {"passed": False, ...}:
-  - Call the debugger agent tool, passing: repo_url + the full pytest output
-  - After the debugger returns, call run_tests again
-  - Repeat up to 3 times. If still failing after 3 attempts, record the error
-    and proceed to Step 4, marking the stage as FAILED.
+``run_tests`` runs pytest **only inside** the image built by the coder (requires
+``.docker_image``). If it returns {"passed": False, ...}:
+
+  - If ``output`` says there is **no Docker image** (``.docker_image`` missing),
+    record the tests stage as FAILED (prerequisite not met) and **do not** call
+    the debugger — the coder must supply a successful ``build_docker_image``.
+  - Otherwise (pytest failed inside the container): call the debugger agent tool,
+    passing: repo_url + the full pytest output. After the debugger returns, call
+    ``run_tests`` again. Repeat up to 3 times. If still failing after 3 attempts,
+    record the error and proceed to Step 4, marking the stage as FAILED.
 
 ### Step 4 — Write validation report
     write_report("<repo-name>_validation", <content>)
@@ -90,68 +97,44 @@ The report must contain:
   PASSED (both stages green) or FAILED (list failing stages)
 '''
 
-coder_instruction = '''
-You are an expert Python engineer. Your job is to implement a FastMCP server
-and a pytest test suite for a scientific GitHub repository, based on a report
-written by the explorer agent.
+coder_instruction = f'''
+You are an expert Python engineer. Your job is to implement an MCP server with the
+**fastmcp** library (``pip install fastmcp``) and a pytest suite for a scientific GitHub repository and write ``Dockerfile`` for the repository and build the image, using the explorer agent\'s Markdown report.
 
-## FastMCP standard
+### MCP server
 
-Every server you write must follow this pattern exactly:
+You must implement the scenarios from the explorer report as MCP HTTP server tools. Use this template:
+where <repo-name> is the last path segment of the repo URL (e.g. "massformer").
+First, create mcp entity and after that implement the tools.
 
 ```python
-from mcp.server.fastmcp import FastMCP
-import subprocess, os
-from pathlib import Path
+from fastmcp import FastMCP
 
-REPO_PATH = Path("/tmp/repos/<repo-name>")  # cloned repo location
+mcp = FastMCP("<repo-name> MCP Server")
 
-mcp = FastMCP("<repo-name>")
-
-@mcp.tool()
-def tool_name(param: type) -> return_type:
-    """One-line summary.
-
-    Args:
-        param: What it is and valid values/format.
-
-    Returns:
-        What the caller gets back and its structure.
-
-    Raises:
-        ValueError: When input is invalid.
-        RuntimeError: When the underlying command fails.
-    """
-    # implementation: call subprocess / read files from REPO_PATH
-    result = subprocess.run([...], capture_output=True, text=True, check=True)
-    return result.stdout
+@mcp.tool
+def add(a: int, b: int) -> int:
+    """Add two numbers"""
+    return a + b
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="http", host="0.0.0.0", port=8000, path="/mcp")
 ```
+### Tests (``tests/test_server.py``)
 
-Rules:
-- Import only stdlib + the repo\'s own installed packages (check pyproject.toml/setup.py).
-- Each @mcp.tool() must have full type annotations and a docstring with Args/Returns/Raises.
-- Use subprocess.run(..., check=True) for CLI tools; catch CalledProcessError and re-raise as RuntimeError.
-- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = /tmp/repos/<name>.
-- Keep each tool focused on one operation. Do not combine unrelated functionality.
-- Return plain Python types (str, dict, list) — FastMCP serialises them to JSON automatically.
-
-## Test standard
+You must write the full tests for the server.py file.
+Create a separate test file for each tool.
+Use the following template:
 
 ```python
 import pytest
 from unittest.mock import patch, MagicMock
-from server import tool_name   # import each tool function directly
+<tool imports here>
 
 def test_tool_name_success():
-    # Arrange: mock subprocess or filesystem
     with patch("server.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout="expected output", returncode=0)
-        # Act
         result = tool_name("valid_input")
-        # Assert
         assert "expected" in result
         mock_run.assert_called_once()
 
@@ -172,49 +155,79 @@ Rules:
 - Mock subprocess and filesystem — tests must pass without the repo cloned.
 - Use descriptive test names: test_<tool>_<scenario>.
 
-## Workflow — follow these steps in order
+### Dockerfile
+Write the full Dockerfile. Use **Environment Setup** and MCP scenarios. 
+
+**Do not invent** dependencies, install commands, file
+paths, or project layout: follow what the report states; the most important section for you is **Install command**, use described commands from this section. If there the report is silent, use
+the minimal, conventional choice for that stack and say so in the server report.
+
+**One install path in the Dockerfile (especially dependencies).** Pick a single strategy
+and mirror only what the report describes — e.g. if **Environment Setup** says conda,
+install with conda only; if it is ``setup.py`` / ``pip install .`` / ``pyproject.toml`` /
+``requirements.txt``, follow that mechanism only. Do **not** combine several parallel
+install stacks (e.g. conda **and** a redundant full ``pip install -r`` of the same tree,
+or poetry **and** duplicate conda envs) unless the report **explicitly** documents that
+dual workflow.
+If nowhere is mentioned about the dependencies, use the minimal, conventional choice for that stack and say so in the server report.
+Use the following template, you can change all sections, but you must keep the same structure:
+
+```dockerfile
+FROM python:<python-version>-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    zlib1g-dev \
+    libx11-dev \
+    libgtk-3-dev \
+    libboost-python-dev \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+<install-system-dependencies-here>
+<install-all-dependencies-here>
+
+EXPOSE 8000
+
+CMD ["python", "server.py"]
+```
+
+## Workflow — do these steps in order (only listed tools)
 
 ### Step 1 — Read the exploration report
-The explorer agent wrote the analysis report for this repo. Read it with:
     read_report("<repo-name>_exploration")
-where <repo-name> is the last path segment of the repo URL (e.g. "massformer" for
-https://github.com/Roestlab/massformer). This gives you the description, key files,
-main workflows, MCP usage scenarios, and the **Environment Setup** section.
+``<repo-name>`` = last path segment of the repo URL (e.g. ``massformer`` for
+``https://github.com/Roestlab/massformer``). 
 
-### Step 2 — Build the Docker runtime image
-Read the **Environment Setup** section of the exploration report.
-If it lists a *SPECIFIC* install command, still encode the same dependencies via
-`setup_venv` (Dockerfile + `docker build`); Docker must be available on the host.
-
-  - If the report lists a `requirements.txt`:
-        setup_venv(repo_url, requirements_file="requirements.txt")
-  - If the report lists a `pyproject.toml` (and no requirements.txt):
-        setup_venv(repo_url, pyproject_toml="pyproject.toml")
-  - If only individual packages are listed:
-        setup_venv(repo_url, packages=["numpy", "torch", ...])
-  - You can combine options, e.g.:
-        setup_venv(repo_url, pyproject_toml="pyproject.toml", packages=["extra"])
-  - If the **Environment Setup** section specifies a Python version, pass it:
-        setup_venv(repo_url, pyproject_toml="pyproject.toml", python_version="3.11")
-
-`mcp` and `pytest` are always installed in the image — you do not need to list them.
-If `setup_venv` returns `{"success": False, ...}`, note the error in your
-server report but continue — validation still runs using host `python` as fallback
-when no image marker is present.
-
-### Step 3 — Write the MCP server
+### Step 2 — Write ``server.py`` (in the project root)
     write_file(repo_url, "server.py", <content>)
+Implement every scenario from the report; follow the MCP server pattern above.
 
-Include one @mcp.tool() per usage scenario from the report.
-Follow the FastMCP standard above precisely.
-
-### Step 4 — Write the tests
+### Step 3 — Write ``tests/test_server.py`` (in the project root)
     write_file(repo_url, "tests/test_server.py", <content>)
 
-Cover each tool with at least a success and a failure case.
-Follow the test standard above precisely.
+### Step 4 — Pre-docker check
 
-### Step 5 — Write the server report
+  1. ``validate_syntax(repo_url)`` — must return ``passed: true`` (``py_compile``).
+
+If it fails: fix ``server.py`` / ``tests/test_server.py`` with ``write_file``, then run ``validate_syntax`` again. Repeat until it passes.
+
+### Step 5 — Write ``Dockerfile``
+    write_file(repo_url, "Dockerfile", <entire Dockerfile>)
+Include all the dependencies and install commands from the exploration report.
+
+### Step 6 — Build the image
+    build_docker_image(repo_url)
+  
+### Step 7 — Run tests
+    run_tests(repo_url)
+If it fails: fix ``server.py`` / ``tests/test_server.py`` / ``Dockerfile`` with ``write_file``, then run ``run_tests`` again. Repeat until it passes.
+
+### Step 8 — Server report
     write_report("<repo-name>_server", <content>)
 
 The report must contain:
@@ -222,45 +235,43 @@ The report must contain:
   # <repo-name> MCP Server
 
   ## Environment
-  - dockerfile: /var/tmp/alembic/output/<repo-name>/Dockerfile
-  - image: (value of `image` from `setup_venv` on success, or "not built")
-  - setup result: PASSED / FAILED (include error if failed)
+  - pre-docker: ``validate_syntax`` PASSED on **host** before ``Dockerfile`` / ``build_docker_image``
+  - after image: ``run_tests`` PASSED **inside** the built image (or FAILED + summary)
+  - image tag from ``build_docker_image`` (or "not built") and build PASSED/FAILED + errors
 
   ## Tools Implemented
-  For each @mcp.tool():
-  - **tool_name(param: type, ...) -> return_type** — one-line description
-  - Input: what the caller passes and valid values
-  - Output: what is returned and its structure
+  For each @mcp.tool(): signature, inputs, outputs.
 
-  ## Output Files
-  - server: /var/tmp/alembic/output/<repo-name>/server.py
-  - tests:  /var/tmp/alembic/output/<repo-name>/tests/test_server.py
+  ## Generated files
+  - ``.../repos/<repo-name>/server.py``
+  - ``.../repos/<repo-name>/tests/test_server.py``
 
   ## How to run
-  docker run --rm -v /var/tmp/alembic/output/<repo-name>:/workspace -w /workspace <image> python server.py
-  (use the `image` field returned by `setup_venv`, or the `python` hint string on success)
+  - HTTP MCP: ``docker run --rm -p <host>:<port> <image-tag>``
+
 '''
 
 explorer_instruction = '''
 You are a scientific software analyst. Your goal is to understand a GitHub
 repository well enough to write a concise Markdown report describing its
-functionality and the 1–5 usage scenarios most likely to be useful as MCP tools.
+functionality and **between 1 and 5** MCP usage scenarios — only as many as the
+repo genuinely supports (one scenario is enough when there is effectively a single
+user-facing capability).
 
 ## Workflow — follow these steps in order
 
 ### Step 1 — Clone
 Call clone_repo with the repo URL. Note the local_path and the file list.
 
-### Step 2 — Read README
-Always read the README first:
-    read_file(repo_url, "README.md")
-If README.md is absent, try README.rst or README.
-
-### Step 3 — Get tree structure
+### Step 2 — Get tree structure
 Get a full directory tree to understand the repo layout:
     bash("ls -R <local_path>")
+    
+### Step 3 — Read README
+Always read the README first:
+    read_file(repo_url, "README.md"), or another file depending on the tree structure.
 
-### Step 4 — Explore key files
+### Step 4a — Explore key files
 Using the file list and tree, select up to 10 additional files that best
 reveal how to *use* the repo. Priority order:
   - setup.py, pyproject.toml, setup.cfg   (entry points, dependencies)
@@ -321,14 +332,30 @@ The report must contain:
   - **Key dependencies**: bullet list of runtime package names (and pinned
     versions where specified).
   - **Install command**: the exact command from the README, or the recommended
-    one you derived (e.g. `pip install -e .` or `uv pip install -r requirements.txt`).
+    one you derived (e.g. `pip install -e .` or `uv pip install -r requirements.txt`). 
+    It's the most important section for the coder agent. 
+    He will use this command to install the dependencies in the Dockerfile.
+
 
   ## Suggested MCP Usage Scenarios
-  List up to 5 scenarios in decreasing order of usefulness. Each scenario:
+  List **1 to 5** scenarios in decreasing order of usefulness — **never** more than five.
+  Prefer roughly **one scenario per** distinct user-facing capability you actually
+  found (README, scripts, public API). If the repo effectively has **one** such capability,
+  list **exactly one** scenario; do **not** invent extra scenarios to fill a quota. If you
+  found several, cap the list at the five most useful; do **not** pad with speculative
+  duplicates.
+
+  Every scenario must tie to evidence from the repo (README command, script path,
+  ``argparse``/CLI you read, public function or class you saw). **Do not** invent flags,
+  subcommands, JSON shapes, or Python signatures that do not appear in those sources;
+  if the interface is unclear, stay vague or omit detail rather than fabricate syntax.
+
+  For each scenario:
   - **Title** — one line
-  - What input parameters the MCP tool would receive, with types and defaults
-  - What command / script it would wrap (direct run or as part of a script)
-  - What output it would return
+  - **Inputs** — parameters only where they map to real CLI args, function args, or
+    config keys you observed; types and defaults **only** when stated in the repo
+  - **Wraps** — concrete file or module and how it is run (as in README or script)
+  - **Output** — what the user actually gets (files, stdout, return value) per that source
 
 Skip: tests, migrations, CI configs, and internal implementation details.
 '''
