@@ -11,14 +11,24 @@ import asyncio
 import json
 import shutil
 import textwrap
-import traceback
 
+from loguru import logger
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
 from alembic.agents import explorer_agent, environment_agent, coder_agent, validator_agent
 from alembic.tools import WORKDIR
+
+# ── Loguru: terminal sink ──────────────────────────────────────────────────────
+logger.remove()
+logger.add(
+    sys.stderr,
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
+    level="DEBUG",
+    colorize=True,
+)
+# ──────────────────────────────────────────────────────────────────────────────
 
 # ── Patch ADK tool lookup to return an error response instead of crashing ─────
 # When the LLM hallucinates a tool name, ADK raises ValueError and kills the
@@ -70,26 +80,27 @@ def _trunc(text: str, n: int = TRUNC) -> str:
 
 
 def _log_event(agent_name: str, event) -> None:
-    """Print a human-readable line for every ADK event."""
+    """Log a human-readable line for every ADK event."""
     if not event.content or not event.content.parts:
         return
 
     for part in event.content.parts:
         if part.text:
-            # Agent thinking / final answer
-            prefix = "FINAL" if event.is_final_response() else "text"
             snippet = _trunc(part.text.strip())
-            print(f"  [{agent_name}] {prefix}: {snippet}")
+            if event.is_final_response():
+                logger.info(f"[{agent_name}] FINAL: {snippet}")
+            else:
+                logger.debug(f"[{agent_name}] text:  {snippet}")
 
         elif hasattr(part, "function_call") and part.function_call:
             fc = part.function_call
             args_str = _trunc(str(fc.args))
-            print(f"  [{agent_name}] CALL  {fc.name}({args_str})")
+            logger.debug(f"[{agent_name}] CALL  {fc.name}({args_str})")
 
         elif hasattr(part, "function_response") and part.function_response:
             fr = part.function_response
             resp_str = _trunc(str(fr.response))
-            print(f"  [{agent_name}] RESP  {fr.name} → {resp_str}")
+            logger.debug(f"[{agent_name}] RESP  {fr.name} → {resp_str}")
 
 
 MAX_TOOL_REPEATS  = 3   # abort if same tool+args combo is called this many times
@@ -203,9 +214,8 @@ async def run_agent(
 
 
 def _banner(stage: int, label: str) -> None:
-    print(f"\n{'='*60}")
-    print(f"  STAGE {stage} — {label}")
-    print(f"{'='*60}")
+    sep = "=" * 60
+    logger.info(f"\n{sep}\n  STAGE {stage} — {label}\n{sep}")
 
 
 def _clean_workdir(name: str) -> None:
@@ -213,7 +223,7 @@ def _clean_workdir(name: str) -> None:
     repo_dir = WORKDIR / name
     if repo_dir.exists():
         shutil.rmtree(repo_dir)
-        print(f"  [clean] removed {repo_dir}")
+        logger.debug(f"[clean] removed {repo_dir}")
 
 
 STAGES = ("explorer", "environment", "coder", "validator")
@@ -227,12 +237,24 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
         _clean_workdir(name)
     else:
         if resume_from not in STAGES:
-            print(f"Unknown stage '{resume_from}'. Valid: {', '.join(STAGES)}")
+            logger.error(f"Unknown stage '{resume_from}'. Valid: {', '.join(STAGES)}")
             return
-        print(f"\n[Resume] starting from stage: {resume_from}  (workdir preserved)")
+        logger.info(f"[Resume] starting from stage: {resume_from}  (workdir preserved)")
 
     base = WORKDIR / name
     venv_python = str((base / "output" / ".venv" / "bin" / "python").resolve())
+
+    # ── per-run file sink ──────────────────────────────────────────────────
+    log_file = base / "pipeline.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    _file_sink_id = logger.add(
+        log_file,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+        level="DEBUG",
+        encoding="utf-8",
+    )
+    logger.info(f"[Run] log → {log_file}")
+    # ──────────────────────────────────────────────────────────────────────
 
     for sid in (f"{name}_explorer", f"{name}_environment",
                 f"{name}_coder", f"{name}_validator"):
@@ -245,60 +267,63 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             return True
         return STAGES.index(stage) >= STAGES.index(resume_from)
 
-    # ── Stage 1: Explorer ──────────────────────────────────────────────────
-    if _should_run("explorer"):
-        _banner(1, f"Explorer  ({repo_url})")
-        await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url,
-                        required_report="exploration")
-        print(f"\n[Explorer done] report → {base}/reports/exploration.md")
+    try:
+        # ── Stage 1: Explorer ──────────────────────────────────────────────
+        if _should_run("explorer"):
+            _banner(1, f"Explorer  ({repo_url})")
+            await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url,
+                            required_report="exploration")
+            logger.info(f"[Explorer done] report → {base}/reports/exploration.md")
 
-    # Later the Environment + Coder could be returned to parallel 
+        # ── Stage 2: Environment ───────────────────────────────────────────
+        if _should_run("environment"):
+            _banner(2, f"Environment ({repo_url})")
+            await run_agent(
+                environment_agent, session_service, f"{name}_environment", repo_url,
+                required_report="environment", venv_guard_path=venv_python,
+            )
+            logger.info(f"[Environment done] report → {base}/reports/environment.md")
 
-    # ── Stage 2: Environment  ───────────────────────────
-    if _should_run("environment"): 
-        _banner(2, f"Environment ({repo_url})")
-        await run_agent(
-            environment_agent, session_service, f"{name}_environment", repo_url,
-            required_report="environment", venv_guard_path=venv_python,
-        )
-        print(f"\n[Environment done] report → {base}/reports/environment.md")
-    
-    # ── Stage 3: Coder ───────────────────────────
-    if _should_run("coder"):
-        _banner(3, f"Coder  ({repo_url})")
-        await run_agent(
-            coder_agent, session_service, f"{name}_coder", repo_url,
-            required_report="server",
-        )
-        print(f"[Coder done]       server → {base}/output/server.py")
-        print(f"                   tests  → {base}/output/tests/test_server.py")
-        print(f"                   report → {base}/reports/server.md")
+        # ── Stage 3: Coder ─────────────────────────────────────────────────
+        if _should_run("coder"):
+            _banner(3, f"Coder  ({repo_url})")
+            await run_agent(
+                coder_agent, session_service, f"{name}_coder", repo_url,
+                required_report="server",
+            )
+            logger.info(f"[Coder done] server → {base}/output/server.py")
+            logger.info(f"             tests  → {base}/output/tests/test_server.py")
+            logger.info(f"             report → {base}/reports/server.md")
 
-    # ── Stage 4: Validator (calls Debugger internally on failures) ─────────
-    if _should_run("validator"):
-        _banner(4, f"Validator  ({repo_url})")
-        validator_response = await run_agent(
-            validator_agent, session_service, f"{name}_validator", repo_url,
-            required_report="validation",
-        )
-        print(f"\n[Validator done] report → {base}/reports/validation.md")
+        # ── Stage 4: Validator (calls Debugger internally on failures) ─────
+        if _should_run("validator"):
+            _banner(4, f"Validator  ({repo_url})")
+            validator_response = await run_agent(
+                validator_agent, session_service, f"{name}_validator", repo_url,
+                required_report="validation",
+            )
+            logger.info(f"[Validator done] report → {base}/reports/validation.md")
 
-        print(f"\n{'='*60}")
-        print(f"  Pipeline complete: {name}")
-        print(f"  Reports : {base}/reports/")
-        print(f"  Output  : {base}/output/")
-        print(f"{'='*60}")
-        print(f"\n--- Validator summary ---\n")
-        print(textwrap.indent(validator_response.strip(), "  "))
-        print()
+            sep = "=" * 60
+            logger.success(
+                f"\n{sep}\n  Pipeline complete: {name}\n"
+                f"  Reports : {base}/reports/\n"
+                f"  Output  : {base}/output/\n"
+                f"  Log     : {log_file}\n{sep}\n\n"
+                f"--- Validator summary ---\n\n"
+                + textwrap.indent(validator_response.strip(), "  ")
+            )
+
+    finally:
+        logger.remove(_file_sink_id)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: ./main.py <repo_url> [--resume <stage>]")
-        print(f"       stages: {', '.join(STAGES)}")
-        print(f"Example: ./main.py https://github.com/Roestlab/massformer")
-        print(f"Example: ./main.py https://github.com/Roestlab/massformer --resume validator")
+        logger.error(f"Usage: ./main.py <repo_url> [--resume <stage>]")
+        logger.error(f"       stages: {', '.join(STAGES)}")
+        logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer")
+        logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer --resume validator")
         sys.exit(1)
 
     repo_url    = sys.argv[1]
@@ -306,12 +331,12 @@ if __name__ == "__main__":
     if "--resume" in sys.argv:
         idx = sys.argv.index("--resume")
         if idx + 1 >= len(sys.argv):
-            print("--resume requires a stage name")
+            logger.error("--resume requires a stage name")
             sys.exit(1)
         resume_from = sys.argv[idx + 1]
 
     try:
         asyncio.run(run_pipeline(repo_url, resume_from=resume_from))
-    except Exception as e:
-        print(f"\nPipeline error: {e}")
+    except Exception:
+        logger.exception("Pipeline error:")
         raise
