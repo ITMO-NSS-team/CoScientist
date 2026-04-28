@@ -176,7 +176,6 @@ PaperAnalysis/
 
 .DS_Store
 
-
 tools/models
 
 *.tif
@@ -190,3 +189,7 @@ ChemCoScientist/tests/integration/data/.last_activity
 *db.json
 
 roadmap.txt
+
+#alembic output & testing
+.alembic
+.test
