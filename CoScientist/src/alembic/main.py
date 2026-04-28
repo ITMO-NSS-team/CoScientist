@@ -259,11 +259,20 @@ def _clean_workdir(name: str) -> None:
         print(f"  [clean] removed {repo_dir}")
 
 
-async def run_pipeline(repo_url: str):
+STAGES = ("explorer", "environment", "coder", "validator")
+
+
+async def run_pipeline(repo_url: str, resume_from: str | None = None):
     name = _repo_name(repo_url)
     session_service = InMemorySessionService()
 
-    _clean_workdir(name)
+    if resume_from is None:
+        _clean_workdir(name)
+    else:
+        if resume_from not in STAGES:
+            print(f"Unknown stage '{resume_from}'. Valid: {', '.join(STAGES)}")
+            return
+        print(f"\n[Resume] starting from stage: {resume_from}  (workdir preserved)")
 
     base = WORKDIR / name
     venv_python = str((base / "output" / ".venv" / "bin" / "python").resolve())
@@ -274,53 +283,78 @@ async def run_pipeline(repo_url: str):
             app_name=APP_NAME, user_id=USER_ID, session_id=sid
         )
 
+    def _should_run(stage: str) -> bool:
+        if resume_from is None:
+            return True
+        return STAGES.index(stage) >= STAGES.index(resume_from)
+
     # ── Stage 1: Explorer ──────────────────────────────────────────────────
-    _banner(1, f"Explorer  ({repo_url})")
-    await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url,
-                    required_report="exploration")
-    print(f"\n[Explorer done] report → {base}/reports/exploration.md")
+    if _should_run("explorer"):
+        _banner(1, f"Explorer  ({repo_url})")
+        await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url,
+                        required_report="exploration")
+        print(f"\n[Explorer done] report → {base}/reports/exploration.md")
 
-    # ── Stage 2: Environment + Coder (parallel) ───────────────────────────
-    _banner(2, f"Environment + Coder  ({repo_url})")
-    await asyncio.gather(
-        run_agent(environment_agent, session_service, f"{name}_environment", repo_url,
-                  required_report="environment", venv_guard_path=venv_python),
-        run_agent(coder_agent, session_service, f"{name}_coder", repo_url,
-                  required_report="server"),
-    )
-    print(f"\n[Environment done] report → {base}/reports/environment.md")
-    print(f"[Coder done]       server → {base}/output/server.py")
-    print(f"                   tests  → {base}/output/tests/test_server.py")
-    print(f"                   report → {base}/reports/server.md")
+    # Later the Environment + Coder could be returned to parallel 
 
-    # ── Stage 3: Validator (calls Debugger internally on failures) ─────────
-    _banner(3, f"Validator  ({repo_url})")
-    validator_response = await run_agent(
-        validator_agent, session_service, f"{name}_validator", repo_url,
-        required_report="validation",
-    )
-    print(f"\n[Validator done] report → {base}/reports/validation.md")
+    # ── Stage 2: Environment  ───────────────────────────
+    if _should_run("environment"): 
+        _banner(2, f"Environment ({repo_url})")
+        await run_agent(
+            environment_agent, session_service, f"{name}_environment", repo_url,
+            required_report="environment", venv_guard_path=venv_python,
+        )
+        print(f"\n[Environment done] report → {base}/reports/environment.md")
+    
+    # ── Stage 3: Coder ───────────────────────────
+    if _should_run("coder"):
+        _banner(3, f"Coder  ({repo_url})")
+        await run_agent(
+            coder_agent, session_service, f"{name}_coder", repo_url,
+            required_report="server",
+        )
+        print(f"[Coder done]       server → {base}/output/server.py")
+        print(f"                   tests  → {base}/output/tests/test_server.py")
+        print(f"                   report → {base}/reports/server.md")
 
-    # ── Summary ───────────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  Pipeline complete: {name}")
-    print(f"  Reports : {base}/reports/")
-    print(f"  Output  : {base}/output/")
-    print(f"{'='*60}")
-    print(f"\n--- Validator summary ---\n")
-    print(textwrap.indent(validator_response.strip(), "  "))
-    print()
+    # ── Stage 4: Validator (calls Debugger internally on failures) ─────────
+    if _should_run("validator"):
+        _banner(4, f"Validator  ({repo_url})")
+        validator_response = await run_agent(
+            validator_agent, session_service, f"{name}_validator", repo_url,
+            required_report="validation",
+        )
+        print(f"\n[Validator done] report → {base}/reports/validation.md")
+
+        print(f"\n{'='*60}")
+        print(f"  Pipeline complete: {name}")
+        print(f"  Reports : {base}/reports/")
+        print(f"  Output  : {base}/output/")
+        print(f"{'='*60}")
+        print(f"\n--- Validator summary ---\n")
+        print(textwrap.indent(validator_response.strip(), "  "))
+        print()
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: ./main.py <repo_url>")
-        print("Example: ./main.py https://github.com/Roestlab/massformer")
+        print(f"Usage: ./main.py <repo_url> [--resume <stage>]")
+        print(f"       stages: {', '.join(STAGES)}")
+        print(f"Example: ./main.py https://github.com/Roestlab/massformer")
+        print(f"Example: ./main.py https://github.com/Roestlab/massformer --resume validator")
         sys.exit(1)
 
-    repo_url = sys.argv[1]
+    repo_url    = sys.argv[1]
+    resume_from = None
+    if "--resume" in sys.argv:
+        idx = sys.argv.index("--resume")
+        if idx + 1 >= len(sys.argv):
+            print("--resume requires a stage name")
+            sys.exit(1)
+        resume_from = sys.argv[idx + 1]
+
     try:
-        asyncio.run(run_pipeline(repo_url))
+        asyncio.run(run_pipeline(repo_url, resume_from=resume_from))
     except Exception as e:
         print(f"\nPipeline error: {e}")
         raise
