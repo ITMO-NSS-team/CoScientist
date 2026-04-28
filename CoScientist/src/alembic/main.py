@@ -63,69 +63,6 @@ def _repo_name(repo_url: str) -> str:
     return repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
 
 
-def _make_report_guard(required_report: str):
-    """Return an after_agent_callback that re-prompts the agent if it forgot write_report.
-
-    Scans session events for the current invocation. If no FunctionResponse from
-    write_report with the expected report name is found, returns a Content that
-    tells the agent to call write_report before finishing.
-    """
-    def _guard(callback_context) -> types.Content | None:
-        inv_id = callback_context.invocation_id
-        for event in callback_context.session.events:
-            if event.invocation_id != inv_id:
-                continue
-            if not event.content or not event.content.parts:
-                continue
-            for part in event.content.parts:
-                fr = getattr(part, "function_response", None)
-                if fr and fr.name == "write_report":
-                    report_path = str((fr.response or {}).get("report_path", ""))
-                    if required_report in report_path:
-                        return None  # report was written — all good
-        # Report missing: instruct the agent to write it now.
-        print(f"  [guard] write_report('{required_report}') not found — prompting agent.")
-        return types.Content(
-            role="user",
-            parts=[types.Part(text=(
-                f"IMPORTANT: You have not called write_report with "
-                f"report_name='{required_report}' yet. "
-                f"You MUST call write_report now to save your report before finishing."
-            ))],
-        )
-
-    return _guard
-
-
-def _make_venv_guard(venv_python_path: str):
-    """Return an after_agent_callback that re-prompts when the venv Python doesn't exist."""
-    def _guard(callback_context) -> types.Content | None:
-        if Path(venv_python_path).exists():
-            return None
-        print(f"  [guard] venv not found at {venv_python_path} — prompting agent.")
-        return types.Content(
-            role="user",
-            parts=[types.Part(text=(
-                f"IMPORTANT: The virtual environment was not successfully created. "
-                f"Expected Python binary at: {venv_python_path}. "
-                f"You MUST set up the environment (using setup_venv or bash_env) "
-                f"before finishing."
-            ))],
-        )
-
-    return _guard
-
-
-def _chain_guards(*guards):
-    """Combine multiple after_agent_callbacks into one, stopping at the first non-None result."""
-    def _combined(callback_context) -> types.Content | None:
-        for g in guards:
-            result = g(callback_context)
-            if result is not None:
-                return result
-        return None
-    return _combined
-
 
 def _trunc(text: str, n: int = TRUNC) -> str:
     text = str(text).replace("\n", " ")
@@ -155,8 +92,70 @@ def _log_event(agent_name: str, event) -> None:
             print(f"  [{agent_name}] RESP  {fr.name} → {resp_str}")
 
 
-MAX_TOOL_REPEATS = 3   # abort if same tool+args combo is called this many times
-MAX_STEPS        = 60  # hard ceiling on total events per agent
+MAX_TOOL_REPEATS  = 3   # abort if same tool+args combo is called this many times
+MAX_STEPS         = 60  # hard ceiling on total events per agent
+MAX_GUARD_RETRIES = 3   # re-invoke agent at most this many times when guard fires
+
+
+async def _run_agent_once(
+    agent,
+    runner: "Runner",
+    session_id: str,
+    message: str,
+    required_report: str | None,
+) -> tuple[str, bool]:
+    """Run one invocation. Returns (final_text, wrote_report)."""
+    content      = types.Content(role="user", parts=[types.Part(text=message)])
+    final        = "Agent did not produce a final response."
+    wrote_report = False
+    step         = 0
+    last_call    = None
+    tool_repeats = 0
+
+    try:
+        async for event in runner.run_async(
+            user_id=USER_ID, session_id=session_id, new_message=content
+        ):
+            step += 1
+            _log_event(agent.name, event)
+
+            if event.content:
+                for part in event.content.parts:
+                    if hasattr(part, "function_call") and part.function_call:
+                        fc       = part.function_call
+                        call_key = (fc.name, str(fc.args))
+                        tool_repeats = tool_repeats + 1 if call_key == last_call else 1
+                        last_call    = call_key
+                        if tool_repeats >= MAX_TOOL_REPEATS:
+                            print(f"  [{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
+                                  f"called {tool_repeats}x with identical args — breaking loop.")
+                            return final, wrote_report
+
+                    fr = getattr(part, "function_response", None)
+                    if fr and fr.name == "write_report" and required_report:
+                        report_path = str((fr.response or {}).get("report_path", ""))
+                        if required_report in report_path:
+                            wrote_report = True
+
+            if step >= MAX_STEPS:
+                print(f"  [{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
+                return final, wrote_report
+
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    final = event.content.parts[0].text or final
+                elif event.actions and event.actions.escalate:
+                    final = f"Agent escalated: {event.error_message or 'No message.'}"
+                break
+
+    except json.JSONDecodeError as e:
+        print(f"\n  [{agent.name}] WARN: invalid JSON in tool call (char {e.pos}): {e.msg}")
+
+    except Exception:
+        print(f"\n  [{agent.name}] ERROR in event loop:")
+        traceback.print_exc()
+
+    return final, wrote_report
 
 
 async def run_agent(
@@ -167,80 +166,38 @@ async def run_agent(
     required_report: str | None = None,
     venv_guard_path: str | None = None,
 ) -> str:
-    """Run a single agent turn, log every event, return final response text.
+    """Run an agent, retrying if guards (write_report / venv) are not satisfied."""
+    runner = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
+    final  = "Agent did not produce a final response."
 
-    Guards installed via after_agent_callback re-prompt the agent if it finishes
-    without satisfying requirements (venv existence and/or write_report).
-    """
-    # ── install guards ────────────────────────────────────────────────────
-    _original_cb = agent.after_agent_callback
-    active_guards = []
-    if venv_guard_path is not None:
-        active_guards.append(_make_venv_guard(venv_guard_path))
-    if required_report is not None:
-        active_guards.append(_make_report_guard(required_report))
-    if active_guards:
-        agent.after_agent_callback = (
-            active_guards[0] if len(active_guards) == 1
-            else _chain_guards(*active_guards)
+    current_message = message
+    for attempt in range(MAX_GUARD_RETRIES + 1):
+        final, wrote_report = await _run_agent_once(
+            agent, runner, session_id, current_message, required_report
         )
-    # ──────────────────────────────────────────────────────────────────────
 
-    runner  = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
-    content = types.Content(role="user", parts=[types.Part(text=message)])
-    final   = "Agent did not produce a final response."
+        nudges = []
+        if required_report and not wrote_report:
+            nudges.append(
+                f"You have not called write_report with report_name='{required_report}' yet. "
+                f"You MUST call write_report now to save your findings."
+            )
+        if venv_guard_path and not Path(venv_guard_path).exists():
+            nudges.append(
+                f"The virtual environment was not created. "
+                f"Expected Python binary at: {venv_guard_path}. "
+                f"You MUST set up the environment before finishing."
+            )
 
-    step          = 0
-    last_call     = None   # (tool_name, frozen_args) of previous call
-    tool_repeats  = 0
+        if not nudges:
+            break
 
-    try:
-        async for event in runner.run_async(
-            user_id=USER_ID, session_id=session_id, new_message=content
-        ):
-            step += 1
-            _log_event(agent.name, event)
+        if attempt >= MAX_GUARD_RETRIES:
+            print(f"  [guard] Max retries ({MAX_GUARD_RETRIES}) reached — giving up.")
+            break
 
-            # ── loop / runaway detection ───────────────────────────────────
-            if event.content:
-                for part in event.content.parts:
-                    if hasattr(part, "function_call") and part.function_call:
-                        fc        = part.function_call
-                        call_key  = (fc.name, str(fc.args))
-                        tool_repeats = tool_repeats + 1 if call_key == last_call else 1
-                        last_call    = call_key
-                        if tool_repeats >= MAX_TOOL_REPEATS:
-                            print(f"  [{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
-                                  f"called {tool_repeats}x with identical args — breaking loop.")
-                            return final
-
-            if step >= MAX_STEPS:
-                print(f"  [{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
-                return final
-
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    final = event.content.parts[0].text or final
-                elif event.actions and event.actions.escalate:
-                    final = f"Agent escalated: {event.error_message or 'No message.'}"
-                break
-
-    except json.JSONDecodeError as e:
-        # Model returned a tool-call with invalid JSON arguments (e.g. raw
-        # control characters in a long string argument).  Log concisely and
-        # continue — the pipeline should not crash over a single bad response.
-        print(f"\n  [{agent.name}] WARN: model returned invalid JSON in tool "
-              f"call arguments (char {e.pos}): {e.msg} — skipping event.")
-        print()
-
-    except Exception as e:
-        # Print full traceback so nothing is hidden, then continue pipeline.
-        print(f"\n  [{agent.name}] ERROR in event loop:")
-        traceback.print_exc()
-        print()
-
-    finally:
-        agent.after_agent_callback = _original_cb
+        current_message = "IMPORTANT: " + " ".join(nudges)
+        print(f"  [guard] Retry {attempt + 1}/{MAX_GUARD_RETRIES}: {current_message[:120]}")
 
     return final
 
