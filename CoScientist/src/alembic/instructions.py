@@ -414,7 +414,14 @@ The report must contain:
     `pyproject.toml`) with its repo-relative path, or "none found".
   - **Python version**: if specified, plain or as a part of command
   - **Key dependencies**: bullet list of runtime package names (and pinned
-    versions where specified).
+    versions where specified). For packages installed from git repositories,
+    copy the EXACT install string from setup.py/pyproject.toml, including any
+    commit hash (e.g. `MolScribe @ git+https://github.com/org/MolScribe.git@250f683`).
+    Do NOT paraphrase or guess git URLs — they must match the file exactly.
+  - **System dependencies**: list any non-Python system libraries required
+    (e.g. `libpoppler-cpp-dev` for pdftotext, `libGL` for opencv). Look for
+    hints in build errors, README "OS dependencies" sections, or C extension
+    packages.
   - **Install command**: the exact command from the README, or the recommended
     one you derived (e.g. `pip install -e .` or `uv pip install -r requirements.txt`).
 
@@ -439,9 +446,8 @@ needed to run the generated MCP server. The venv Python must exist at
 .alembic/<repo-name>/output/.venv/bin/python when you finish.
 
 ## Tools available — use ONLY these exact names
-- read_report — read the explorer\'s analysis
-- setup_venv  — create a venv and install packages (preferred)
-- bash_env    — run pip/uv/conda commands for complex or fallback setups
+- read_report  — read the explorer\'s analysis
+- bash_env     — run uv/pip/conda commands to create and populate the venv
 - write_report — save your result
 
 ## Workflow
@@ -452,43 +458,56 @@ needed to run the generated MCP server. The venv Python must exist at
 Focus on the **Environment Setup** section. Note:
 - Which requirement files exist (requirements.txt, pyproject.toml, setup.py)
 - Python version if specified
-- Key runtime dependencies and their pinned versions
+- Key runtime dependencies — use the EXACT git install strings listed
+  (e.g. `MolScribe @ git+https://github.com/org/repo.git@abc1234`). Never
+  paraphrase or substitute git URLs; wrong URLs cause 404 failures.
+- Any system dependencies (C libraries, etc.)
 - Any special install command in the README
 
 ### Step 2 — Set up the virtual environment
+Use `bash_env` with `uv` (preferred) to create the venv and install packages.
+Always create the venv at `.alembic/<repo>/output/.venv`.
+
+Always make sure to add pytest and mcp packages.
+
 Try strategies in order, stopping at the first success.
 After each failure read the error carefully and pick the next strategy.
 
-**Strategy 1 — Full project install**
-    setup_venv(repo_url, pyproject_toml="pyproject.toml")
-    # or
-    setup_venv(repo_url, pyproject_toml="setup.py")
+**Strategy 1 — Install from the local clone (preferred when setup.py / pyproject.toml exists)**
+This uses the exact dependency URLs already recorded in the project file:
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.9")
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python -e .alembic/<repo>/repos")
 
 **Strategy 2 — Requirements file**
-    setup_venv(repo_url, requirements_file="requirements.txt")
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.9")
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python -r .alembic/<repo>/repos/requirements.txt")
 
 **Strategy 3 — Key packages only (when project install fails due to conflicts)**
-Install only the runtime packages actually needed, not the full tree:
-    setup_venv(repo_url, packages=["torch", "torchvision", "timm", "numpy"])
+Use only the exact git install strings from the exploration report plus core
+packages. Do NOT invent git URLs — copy them verbatim from the report:
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python "
+             "torch transformers 'MolScribe @ git+https://github.com/org/MolScribe.git@abc123'")
 
 **Strategy 4 — Relaxed version pins (when pinned versions fail on current Python)**
 Drop or loosen version constraints for conflicting packages:
-    setup_venv(repo_url, packages=["torch", "torchvision", "timm>=0.9", "numpy"])
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python "
+             "torch torchvision 'timm>=0.9' numpy")
 
 **Strategy 5 — Different Python version**
-If the error mentions ABI or Python version incompatibility:
-    setup_venv(repo_url, pyproject_toml="pyproject.toml", python_version="3.10")
-
-**Strategy 6 — Manual bash_env (for conda envs or multi-step installs)**
-If the README specifies a conda env or custom sequence:
-    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.11")
+If the error mentions ABI or Python version incompatibility, recreate the venv:
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.10")
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python <packages>")
 
-Retry up to 5 times with different strategies. Common failure patterns:
-- "no wheels with matching Python ABI" → try Strategy 4 (relax versions) or Strategy 5 (older Python)
-- "no solution found" due to transitive conflict → try Strategy 3 (key packages only)
+Retry up to 5 times. Common failure patterns and responses:
+- "Repository not found" on a git URL → the URL is wrong; use only URLs from
+  the exploration report or setup.py — never guess
+- C extension build failure ("fatal error: some/header.h: No such file") →
+  a system library is missing; try installing it via conda:
+      bash_env("conda install -c conda-forge <package-name> -y")
+  then retry the pip install
+- "no wheels with matching Python ABI" → try Strategy 4 or Strategy 5
+- "no solution found" due to transitive conflict → try Strategy 3
 - "package not found" → check the package name spelling; try without it
-- Repository-specific build error → skip installing the repo itself, install only its deps
 
 ### Step 3 — Write environment report
     write_report(repo_url, "environment", <content>)
