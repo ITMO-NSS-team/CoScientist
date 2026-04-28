@@ -111,7 +111,7 @@ written by the explorer agent.
 Every server you write must follow this pattern exactly:
 
 ```python
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 import subprocess, os
 from pathlib import Path
 
@@ -468,18 +468,19 @@ Focus on the **Environment Setup** section. Note:
 Use `bash_env` with `uv` (preferred) to create the venv and install packages.
 Always create the venv at `.alembic/<repo>/output/.venv`.
 
-Always make sure to add pytest and mcp packages.
+Always make sure to add pytest and fastmcp packages.
+Use at least python 3.10 as fastmcp depends on it.
 
 Try strategies in order, stopping at the first success.
 After each failure read the error carefully and pick the next strategy.
 
 **Strategy 1 — Install from the local clone (preferred when setup.py / pyproject.toml exists)**
 This uses the exact dependency URLs already recorded in the project file:
-    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.9")
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.10")
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python -e .alembic/<repo>/repos")
 
 **Strategy 2 — Requirements file**
-    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.9")
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.10")
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python -r .alembic/<repo>/repos/requirements.txt")
 
 **Strategy 3 — Key packages only (when project install fails due to conflicts)**
@@ -495,7 +496,7 @@ Drop or loosen version constraints for conflicting packages:
 
 **Strategy 5 — Different Python version**
 If the error mentions ABI or Python version incompatibility, recreate the venv:
-    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.10")
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.11")
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python <packages>")
 
 Retry up to 5 times. Common failure patterns and responses:
