@@ -474,11 +474,10 @@ dependencies installed. The venv Python must exist at
 .alembic/<repo-name>/output/.venv/bin/python when you finish.
 
 ## Tools available — use ONLY these exact names
-- read_report       — read the explorer\'s analysis
-- setup_venv        — create venv + install packages in one call (preferred)
-- bash_env          — run individual uv/pip/conda commands when setup_venv is not enough
-- check_venv_compat — test-import installed packages to surface ABI/version conflicts early
-- write_report      — save your result
+- read_report  — read the explorer\'s analysis
+- setup_venv   — create venv + install packages in one call (preferred)
+- bash_env     — run individual uv/pip/conda commands when setup_venv is not enough
+- write_report — save your result
 
 ## Critical rules (read before doing anything)
 
@@ -494,7 +493,7 @@ dependencies installed. The venv Python must exist at
    write a FAILED report and stop. Do not keep retrying the same commands.
 
 4. **Copy git URLs verbatim.** If the exploration report lists a dependency
-   liЭke `Pkg @ git+https://github.com/org/pkg.git@abc123`, copy it exactly.
+   like `Pkg @ git+https://github.com/org/pkg.git@abc123`, copy it exactly.
    Never guess or paraphrase git URLs.
 
 ## Workflow
@@ -542,8 +541,7 @@ package that failed, then install the rest together.
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python "
              "<pkg1> <pkg2> ...")  # same list as requirements, no versions
 
-Package-name and version exceptions (apply all that match):
-
+Two package-name exceptions:
 - `rdkit-pypi` → use `rdkit` instead (renamed package, has Python 3.10 wheels):
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python rdkit")
 
@@ -573,29 +571,6 @@ After conda succeeds, note in the report that the venv is a conda env, not
 ---
 
 After 3 failed attempts, stop and write a FAILED report.
-
-### Step 2b — Post-install compatibility check
-
-After any successful setup_venv or bash_env install, always run:
-    check_venv_compat(repo_url)
-
-The result contains `conflicts` — a dict keyed by the failing import statement
-(e.g. `"from transformers import AdamW"`) with the error message as value.
-If `has_conflicts` is True, apply the fix from the table below for each
-conflict, then run check_venv_compat again to confirm.
-Repeat at most 2 rounds of fixes; if a conflict remains in a package not
-directly imported by the generated MCP server, note it and continue.
-
-| Symptom in `conflicts[pkg]["error"]` | Cause | Fix command |
-|---|---|---|
-| `_ARRAY_API not found` or `numpy.core.multiarray failed to import` | Package compiled against NumPy 1.x, NumPy 2.x installed | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'numpy>=1.23,<2'")` |
-| `Matplotlib requires numpy>=X.Y` | numpy too old for matplotlib | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'numpy>=1.23,<2' matplotlib")` |
-| `Cannot import name 'AdamW' from 'torch'` | transformers>=4.38 dropped AdamW re-export | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'transformers<4.38'")` |
-| `No module named 'cv2'` inside an import chain (not a top-level module) | opencv is a transitive dep not installed | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python opencv-python 'numpy>=1.23,<2'")` |
-| `library 'GL' not found` or `libGL.so` missing | system OpenGL lib absent | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python opencv-python-headless")` instead of opencv-python |
-| `cannot import name 'X' from 'torch'` | torch version too old/new for the repo | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'torch<2.0' --extra-index-url https://download.pytorch.org/whl/cpu")` |
-
----
 
 ### Step 3 — Write environment report
     write_report(repo_url, "environment", <content>)
