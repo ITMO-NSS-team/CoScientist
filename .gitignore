@@ -176,7 +176,6 @@ PaperAnalysis/
 
 .DS_Store
 
-
 tools/models
 
 *.tif
@@ -209,3 +208,7 @@ trace_manifest.jsonl
 
 # Auxiliary test scaffolding for ported features (not architecture)
 CoScientist/tests/unit/test_llm_repair.py
+
+# Alembic output & testing
+.alembic
+.test
