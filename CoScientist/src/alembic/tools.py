@@ -47,9 +47,13 @@ def _reports_dir(repo_url: str) -> Path:
 
 
 def _venv_python(out_dir: Path) -> str:
-    """Return the venv python path if it exists, else fall back to 'python'."""
+    """Return the venv python path if it exists, else fall back to 'python'.
+
+    Uses the venv symlink path directly — do NOT resolve(), as that follows
+    the symlink to the bare uv Python binary which lacks the venv site-packages.
+    """
     candidate = out_dir / ".venv" / "bin" / "python"
-    return str(candidate.resolve()) if candidate.exists() else "python"
+    return str(candidate.absolute()) if candidate.exists() else "python"
 
 
 def clone_repo(repo_url: str) -> dict:
@@ -351,7 +355,7 @@ def setup_venv(repo_url: str, packages: list[str] | None = None,
         else:
             errors.append(f"pyproject.toml not found: {proj_path}")
 
-    install_pkgs = ["mcp", "pytest"] + (packages or [])
+    install_pkgs = ["fastmcp", "pytest", "mcp"] + (packages or [])
     try:
         if use_uv:
             subprocess.run(
@@ -414,7 +418,7 @@ def run_tests(repo_url: str) -> dict:
     Example:
         run_tests("https://github.com/Roestlab/massformer")
     """
-    out_dir  = _output_dir(repo_url)
+    out_dir  = _output_dir(repo_url).resolve()
     test_dir = out_dir / "tests"
     python   = _venv_python(out_dir)
     if not test_dir.exists():

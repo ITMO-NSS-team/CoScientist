@@ -138,8 +138,10 @@ async def _run_agent_once(
                         tool_repeats = tool_repeats + 1 if call_key == last_call else 1
                         last_call    = call_key
                         if tool_repeats >= MAX_TOOL_REPEATS:
-                            print(f"  [{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
-                                  f"called {tool_repeats}x with identical args — breaking loop.")
+                            logger.warning(
+                                f"[{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
+                                f"called {tool_repeats}x with identical args — breaking loop."
+                            )
                             return final, wrote_report
 
                     fr = getattr(part, "function_response", None)
@@ -149,7 +151,7 @@ async def _run_agent_once(
                             wrote_report = True
 
             if step >= MAX_STEPS:
-                print(f"  [{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
+                logger.warning(f"[{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
                 return final, wrote_report
 
             if event.is_final_response():
@@ -160,11 +162,10 @@ async def _run_agent_once(
                 break
 
     except json.JSONDecodeError as e:
-        print(f"\n  [{agent.name}] WARN: invalid JSON in tool call (char {e.pos}): {e.msg}")
+        logger.warning(f"[{agent.name}] invalid JSON in tool call (char {e.pos}): {e.msg} — skipping event.")
 
     except Exception:
-        print(f"\n  [{agent.name}] ERROR in event loop:")
-        traceback.print_exc()
+        logger.exception(f"[{agent.name}] ERROR in event loop:")
 
     return final, wrote_report
 
@@ -204,11 +205,11 @@ async def run_agent(
             break
 
         if attempt >= MAX_GUARD_RETRIES:
-            print(f"  [guard] Max retries ({MAX_GUARD_RETRIES}) reached — giving up.")
+            logger.warning(f"[guard] Max retries ({MAX_GUARD_RETRIES}) reached — giving up.")
             break
 
         current_message = "IMPORTANT: " + " ".join(nudges)
-        print(f"  [guard] Retry {attempt + 1}/{MAX_GUARD_RETRIES}: {current_message[:120]}")
+        logger.warning(f"[guard] Retry {attempt + 1}/{MAX_GUARD_RETRIES}: {current_message[:120]}")
 
     return final
 
