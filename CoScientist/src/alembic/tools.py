@@ -377,7 +377,7 @@ def validate_syntax(repo_url: str) -> dict:
     Example:
         validate_syntax("https://github.com/Roestlab/massformer")
     """
-    out_dir = _output_dir(repo_url)
+    out_dir = _output_dir(repo_url).resolve()
     server  = out_dir / "server.py"
     python  = _venv_python(out_dir)
     if not server.exists():
@@ -392,7 +392,7 @@ def validate_syntax(repo_url: str) -> dict:
 
     load_snippet = (
         "import importlib.util as _u, sys as _s; "
-        f"_s.path.insert(0, '{server.parent}'); "
+        f"_s.path.insert(0, r'{server.parent}'); "
         f"_spec=_u.spec_from_file_location('server', r'{server}'); "
         "_mod=_u.module_from_spec(_spec); "
         "_spec.loader.exec_module(_mod)"
