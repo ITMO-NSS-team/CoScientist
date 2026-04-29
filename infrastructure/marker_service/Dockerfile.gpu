@@ -19,8 +19,7 @@ RUN pip3 install --upgrade pip && \
     pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 RUN pip install \
-    marker-pdf==1.6.2 \
-    transformers==4.48.2 \
+    marker-pdf==1.8.2 \
     fastapi \
     uvicorn[standard] \
     python-multipart

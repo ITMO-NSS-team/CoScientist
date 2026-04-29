@@ -1,11 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
 import time
-import threading
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from marker.models import create_model_dict
 
 from CoScientist.papers_processing_refactoring.app.config_loader import get_settings
 from CoScientist.papers_processing_refactoring.etl import *
@@ -71,7 +69,7 @@ def build_state_store(etl_settings):
         raise ValueError("State store configuration must be provided")
 
 
-def process_single_article(article, app_settings, shared_models, parse_lock):
+def process_single_article(article, app_settings):
     print(f"[{article.name}] Thread started...")
     
     state_manager = build_state_store(app_settings)
@@ -96,7 +94,7 @@ def process_single_article(article, app_settings, shared_models, parse_lock):
     pipeline = ETLPipeline(
         steps=[
             FetchStep(source=local_source),
-            ParseStep(shared_models=shared_models, parse_lock=parse_lock),
+            ParseStep(),
             HtmlCleaningStep(),
             ImageFilteringStep(),
             ImageCaptioningStep(),
@@ -128,12 +126,12 @@ def process_single_article(article, app_settings, shared_models, parse_lock):
         return f"[{article.id}] Failed: {str(e)} in {end - start:.2f}s"
 
 
-def handle_articles_batch(articles, shared_models, parse_lock):
+def handle_articles_batch(articles):
     print(f"Scheduler found {len(articles)} articles. Starting parallel processing...")
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_article = {
-            executor.submit(process_single_article, art, settings, shared_models, parse_lock): art
+            executor.submit(process_single_article, art, settings): art
             for art in articles
         }
         
@@ -149,13 +147,10 @@ def main():
         print("Cleaning up hanging tasks...")
         state_manager.reset_running_states()
     
-    shared_parser_models = create_model_dict()
-    parse_lock = threading.Lock()
-    
     local_source = LocalSource(settings.files.directory)
     
     scheduler = IngestionScheduler(
-        on_batch=lambda batch: handle_articles_batch(batch, shared_parser_models, parse_lock)
+        on_batch=lambda batch: handle_articles_batch(batch)
     )
     scheduler.register(local_source, Schedule(timedelta(minutes=1)))
     
