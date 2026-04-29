@@ -13,13 +13,20 @@ load_dotenv()
 import asyncio
 from typing import Optional
 
-from dotenv import load_dotenv
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.agents.agents import orchestrator_agent
+from CoScientist.hitl import (
+    AbstractHITLHandler,
+    HITLRequest,
+    HITLResponse,
+)
+
+settings = get_settings()
+
 
 class CoScientistManager:
     """
@@ -31,6 +38,7 @@ class CoScientistManager:
         app_name: str = "coscientist_app",
         user_id: str = "user_1",
         session_id: str = "session_001",
+        hitl_handler: Optional[AbstractHITLHandler] = None,
     ):
         self.app_name = app_name
         self.user_id = user_id
@@ -40,11 +48,16 @@ class CoScientistManager:
         self.runner: Optional[Runner] = None
         self._initialized = False
 
+        # HITL setup
+        self._hitl_handler = hitl_handler
+        self._agents = None
+
+
     async def initialize(self):
         """Initialize session + runner."""
         if self._initialized:
             return
-
+    
         # Session service
         self.session_service = InMemorySessionService()
 
@@ -95,10 +108,10 @@ class CoScientistManager:
 
             if event.is_final_response():
                 if event.content and event.content.parts:
-                    final_response = event.content.parts[0].text
+                    final_response = event.content.parts[0].text or ""
                 elif event.actions and event.actions.escalate:
                     final_response = f"Escalation: {event.error_message or 'Unknown error'}"
-                
+
 
         return final_response
 
