@@ -124,10 +124,12 @@ Every server you write must follow this pattern exactly:
 
 ```python
 from fastmcp import FastMCP
-import subprocess, os
+import subprocess, os, json
 from pathlib import Path
 
-REPO_PATH = Path(".alembic/<repo-name>/repos")  # cloned repo location
+REPO_PATH = Path(__file__).parent.parent / "repos"  # cloned repo location
+HELPERS_PATH = Path(__file__).parent / "helpers"
+PYTHON = Path(__file__).parent / ".venv" / "bin" / "python"
 
 mcp = FastMCP("<repo-name>")
 
@@ -146,7 +148,7 @@ def tool_name(param: type) -> return_type:
         RuntimeError: When the underlying command fails.
     """
     # implementation: call subprocess / read files from REPO_PATH
-    result = subprocess.run([...], capture_output=True, text=True, check=True)
+    result = subprocess.run([str(PYTHON), ...], capture_output=True, text=True, check=True)
     return result.stdout
 
 if __name__ == "__main__":
@@ -165,13 +167,15 @@ Rules:
 
 ### Pattern B — Subprocess CLI call (when the repo has a CLI entry point)
 Call the repo's command-line script directly with arguments. No string building.
+Always use `str(PYTHON)` — never the bare string `"python"`, which resolves to
+whatever is on PATH and likely does not have the repo's dependencies installed.
 
 ```python
 @mcp.tool()
 def run_training(config_path: str, output_dir: str) -> str:
     """..."""
     result = subprocess.run(
-        ["python", str(REPO_PATH / "train.py"),
+        [str(PYTHON), str(REPO_PATH / "train.py"),
          "--config", config_path, "--output", output_dir],
         cwd=str(REPO_PATH),
         capture_output=True, text=True, check=True,
@@ -210,14 +214,11 @@ print(json.dumps(result))
 
 Step 2 — call it from server.py:
 ```python
-HELPERS = REPO_PATH.parent / "output" / "helpers"
-
 @mcp.tool()
 def run_analysis(image_path: str, model_path: str = "models/best.pth") -> dict:
     """..."""
-    import json
     result = subprocess.run(
-        ["python", str(HELPERS / "run_analysis.py"),
+        [str(PYTHON), str(HELPERS_PATH / "run_analysis.py"),
          str(REPO_PATH), image_path, "--model", model_path],
         cwd=str(REPO_PATH),
         capture_output=True, text=True, check=True,
@@ -302,7 +303,17 @@ This gives you the description, key files, main workflows, and MCP usage scenari
 The environment agent is setting up the venv in parallel — you do not need to
 install anything.
 
-### Step 2 — Write helper scripts (one per tool that calls repo Python API)
+### Step 2 — Verify API signatures before writing helpers
+Before writing any helper script, confirm the exact parameter names of every
+method you plan to call by reading the source:
+    bash("grep -n 'def <method_name>' .alembic/<repo>/repos/<module>/interface.py")
+    # or read the relevant source file directly
+
+Do NOT guess parameter names from the method name or docs — they may differ
+from what you expect (e.g. `pdf` instead of `pdf_path`, `image` instead of
+`image_path`). A wrong keyword argument causes a TypeError at runtime.
+
+### Step 3 — Write helper scripts (one per tool that calls repo Python API)
 For each tool that needs to call the repo's Python classes or functions,
 write a standalone helper script BEFORE writing server.py:
 
@@ -315,20 +326,20 @@ The helper must:
 - Print a single JSON object to stdout and exit
 - Contain NO runtime-interpolated values — it is a static file
 
-### Step 3 — Write the MCP server
+### Step 4 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
 
 Each @mcp.tool() must call its corresponding helper via subprocess.run,
 passing all parameters as command-line arguments. No tool may build or
 write Python source code at runtime — use the pre-written helpers instead.
 
-### Step 4 — Write the tests
+### Step 5 — Write the tests
     write_file(repo_url, "tests/test_server.py", <content>)
 
 Cover each tool with at least a success and a failure case.
 Follow the test standard above precisely.
 
-### Step 5 — Write the server report
+### Step 6 — Write the server report
     write_report(repo_url, "server", <content>)
 
 The report must contain:
@@ -463,10 +474,11 @@ dependencies installed. The venv Python must exist at
 .alembic/<repo-name>/output/.venv/bin/python when you finish.
 
 ## Tools available — use ONLY these exact names
-- read_report  — read the explorer\'s analysis
-- setup_venv   — create venv + install packages in one call (preferred)
-- bash_env     — run individual uv/pip/conda commands when setup_venv is not enough
-- write_report — save your result
+- read_report       — read the explorer\'s analysis
+- setup_venv        — create venv + install packages in one call (preferred)
+- bash_env          — run individual uv/pip/conda commands when setup_venv is not enough
+- check_venv_compat — test-import installed packages to surface ABI/version conflicts early
+- write_report      — save your result
 
 ## Critical rules (read before doing anything)
 
@@ -482,7 +494,7 @@ dependencies installed. The venv Python must exist at
    write a FAILED report and stop. Do not keep retrying the same commands.
 
 4. **Copy git URLs verbatim.** If the exploration report lists a dependency
-   like `Pkg @ git+https://github.com/org/pkg.git@abc123`, copy it exactly.
+   liЭke `Pkg @ git+https://github.com/org/pkg.git@abc123`, copy it exactly.
    Never guess or paraphrase git URLs.
 
 ## Workflow
@@ -530,7 +542,8 @@ package that failed, then install the rest together.
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python "
              "<pkg1> <pkg2> ...")  # same list as requirements, no versions
 
-Two package-name exceptions:
+Package-name and version exceptions (apply all that match):
+
 - `rdkit-pypi` → use `rdkit` instead (renamed package, has Python 3.10 wheels):
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python rdkit")
 
@@ -560,6 +573,29 @@ After conda succeeds, note in the report that the venv is a conda env, not
 ---
 
 After 3 failed attempts, stop and write a FAILED report.
+
+### Step 2b — Post-install compatibility check
+
+After any successful setup_venv or bash_env install, always run:
+    check_venv_compat(repo_url)
+
+The result contains `conflicts` — a dict keyed by the failing import statement
+(e.g. `"from transformers import AdamW"`) with the error message as value.
+If `has_conflicts` is True, apply the fix from the table below for each
+conflict, then run check_venv_compat again to confirm.
+Repeat at most 2 rounds of fixes; if a conflict remains in a package not
+directly imported by the generated MCP server, note it and continue.
+
+| Symptom in `conflicts[pkg]["error"]` | Cause | Fix command |
+|---|---|---|
+| `_ARRAY_API not found` or `numpy.core.multiarray failed to import` | Package compiled against NumPy 1.x, NumPy 2.x installed | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'numpy>=1.23,<2'")` |
+| `Matplotlib requires numpy>=X.Y` | numpy too old for matplotlib | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'numpy>=1.23,<2' matplotlib")` |
+| `Cannot import name 'AdamW' from 'torch'` | transformers>=4.38 dropped AdamW re-export | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'transformers<4.38'")` |
+| `No module named 'cv2'` inside an import chain (not a top-level module) | opencv is a transitive dep not installed | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python opencv-python 'numpy>=1.23,<2'")` |
+| `library 'GL' not found` or `libGL.so` missing | system OpenGL lib absent | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python opencv-python-headless")` instead of opencv-python |
+| `cannot import name 'X' from 'torch'` | torch version too old/new for the repo | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'torch<2.0' --extra-index-url https://download.pytorch.org/whl/cpu")` |
+
+---
 
 ### Step 3 — Write environment report
     write_report(repo_url, "environment", <content>)

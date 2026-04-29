@@ -7,7 +7,7 @@ from alembic.tools import (
     clone_repo, read_file, bash, bash_env, search,
     read_report, write_report,
     write_file, read_output_file, update_file,
-    validate_syntax, run_tests, setup_venv,
+    validate_syntax, run_tests, setup_venv, check_venv_compat,
 )
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
@@ -30,7 +30,7 @@ environment_agent = Agent(
     model=LiteLlm(model=MODEL),
     description="Reads the explorer report and sets up the Python virtual environment for the repository, retrying until successful.",
     instruction=environment_instruction,
-    tools=[read_report, setup_venv, bash_env, write_report],
+    tools=[read_report, setup_venv, bash_env, check_venv_compat, write_report],
 )
 
 coder_agent = Agent(
