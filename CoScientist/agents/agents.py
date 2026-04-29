@@ -15,6 +15,10 @@ from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance
 from CoScientist.storage import RetrievalFinalResult, ToolRanking
 from CoScientist.logging import multi_agent_tracer
 from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent
+from CoScientist.agents.critic_agent import (
+    pre_action_critique,
+    post_action_critique,
+)
 
 from opik.integrations.adk import track_adk_agent_recursive
 
@@ -102,6 +106,8 @@ orchestrator_agent = LlmAgent(
     instruction=orchestrator_instruction,
     description="Main Orchestrator Agent",
     tools=[AgentTool(agent=hypotheses_agent), AgentTool(agent=research_agent), AgentTool(agent=task_execution_agent)],
+    after_model_callback=pre_action_critique,
+    after_tool_callback=post_action_critique,
 )
 
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
