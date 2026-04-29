@@ -160,7 +160,14 @@ def smiles2name(smiles: Annotated[str, "SMILES of a molecule"]):
         response = requests.get(url, timeout=60)
         if response.status_code == 200:
             data = response.json()
-            return data["PropertyTable"]["Properties"][0]["IUPACName"]
+            properties = data.get("PropertyTable", {}).get("Properties", [])
+            if not properties:
+                return 'Could not find such IUPAC'  # or raise, or return a sentinel
+            prop = properties[0]
+            # CID 0 means PubChem couldn't resolve the SMILES
+            if prop.get("CID", 0) == 0:
+                return 'Could not find such IUPAC'
+            return prop.get("IUPACName", 'Could not find such IUPAC')  # may still be None if name isn't available
         return "I've couldn't get iupac name"
     except requests.RequestException as e:
         return f"Failed to execute. Error: {repr(e)}"

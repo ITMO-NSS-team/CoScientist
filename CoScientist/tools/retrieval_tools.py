@@ -41,7 +41,6 @@ class RetrievalToolSet(BaseToolset):
 
 
     async def retrieve_tools(self, query: str,
-                                    reset: bool = False,
                                     tool_context: ToolContext = None
                                     ) -> Dict[str, Any]:
         """
@@ -49,7 +48,6 @@ class RetrievalToolSet(BaseToolset):
         
         Args:
             query: query to use for tools lookup in database using RAG.
-            reset: If True, clears previously accumulated tools. Default False (accumulates). 
         
         Returns:
             List ot the most relevant tools in db which can be used to solve the task .
@@ -60,9 +58,9 @@ class RetrievalToolSet(BaseToolset):
         reranker = HybridReranker([api_reranker, bm2_reranker], settings.hybrid_reranker)
         manager = await create_manager(settings, embedder, reranker)
 
-        if reset:
-            tool_context.state['accumulated_tools'] = []
-            tool_context.state['retrieval_queries'] = []
+        # if reset:
+        #     tool_context.state['accumulated_tools'] = []
+        #     tool_context.state['retrieval_queries'] = []
             
         retrieved_tools: List[RetrievalResult] = await manager.retrieve_tools(query = query, 
                                                                               top_k = settings.rag.default_top_k,
@@ -83,11 +81,11 @@ class RetrievalToolSet(BaseToolset):
 
         # ACCUMULATE into state 
         accumulated = tool_context.state.get('accumulated_tools', [])
-        existing_ids = {t['server_id'] for t in accumulated}
+        existing_tools = {t['tool'] for t in accumulated}
         last_idx = len(accumulated) + 1
 
         for tool_result in results:
-            if tool_result.server_id not in existing_ids:
+            if tool_result.tool not in existing_tools:
                 accumulated.append({
                     'tool': tool_result.tool,
                     'server_id': tool_result.server_id,

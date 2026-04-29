@@ -30,12 +30,12 @@ tool_retriever_instruction = '''
 You are a TOOL RETRIEVAL SPECIALIST. Your ONLY job is to find and accumulate relevant MCP servers for task completion.
 
 You have access to:
-- retrieve_tools(query, reset=False): retrieves tools from MCP servers using RAG
+- retrieve_tools(query): retrieves tools from MCP servers using RAG
 - get_server_info(server_id): returns server metadata
 
 ## Workflow:
 1. Break the task into capabilities
-2. Call retrieve_tools with different queries if needed (reset=False by default)
+2. Call retrieve_tools with different queries if needed 
 3. Tools are AUTOMATICALLY accumulated across calls
 4. Call retrieve_tools(reset=True) ONLY if you want to start fresh
 
@@ -147,8 +147,8 @@ Do NOT solve the task manually — delegate to FEDOT.MAS.
 
 
 orchestrator_instruction = '''
-
-Your task is to solve scientific tasks by coordinating specialized agents.
+You are orchestrator agent.
+Your task is to scientific tasks by coordinating specialized agents.
 
 Available tools from agents:
 

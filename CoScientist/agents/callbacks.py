@@ -54,4 +54,6 @@ def after_tool_reranker_agent(
         ]
 
     callback_context.state['filtered_tools'] = filtered_tools
+    callback_context.state['accumulated_tools'] = []
+    callback_context.state['retrieval_queries'] = []
     return
