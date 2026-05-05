@@ -1,4 +1,6 @@
+import json as _json
 import subprocess
+import textwrap
 from pathlib import Path
 
 WORKDIR = Path(
@@ -47,9 +49,13 @@ def _reports_dir(repo_url: str) -> Path:
 
 
 def _venv_python(out_dir: Path) -> str:
-    """Return the venv python path if it exists, else fall back to 'python'."""
+    """Return the venv python path if it exists, else fall back to 'python'.
+
+    Uses the venv symlink path directly — do NOT resolve(), as that follows
+    the symlink to the bare uv Python binary which lacks the venv site-packages.
+    """
     candidate = out_dir / ".venv" / "bin" / "python"
-    return str(candidate.resolve()) if candidate.exists() else "python"
+    return str(candidate.absolute()) if candidate.exists() else "python"
 
 
 def clone_repo(repo_url: str) -> dict:
@@ -351,7 +357,7 @@ def setup_venv(repo_url: str, packages: list[str] | None = None,
         else:
             errors.append(f"pyproject.toml not found: {proj_path}")
 
-    install_pkgs = ["mcp", "pytest"] + (packages or [])
+    install_pkgs = ["fastmcp", "pytest", "mcp"] + (packages or [])
     try:
         if use_uv:
             subprocess.run(
@@ -369,6 +375,123 @@ def setup_venv(repo_url: str, packages: list[str] | None = None,
     if errors:
         return {"success": False, "venv": str(venv_dir), "error": "; ".join(errors)}
     return {"success": True, "venv": str(venv_dir), "python": python}
+
+
+def check_venv_compat(repo_url: str) -> dict:
+    """Check compatibility by replaying the repo's own import statements in the venv.
+
+    Scans the cloned repo's Python files with AST, collects every unique
+    `import X` and `from X import Y` where X is an installed package, then
+    executes each statement in the venv.  This catches both ABI conflicts
+    (numpy 1 vs 2) and removed-API errors (e.g. `from transformers import AdamW`
+    removed in transformers>=4.38).
+
+    Returns only failures; successful imports are omitted to keep output small.
+
+    Example:
+        check_venv_compat("https://github.com/Roestlab/massformer")
+        # -> {"has_conflicts": True,
+        #     "conflicts": {"from transformers import AdamW":
+        #                       {"error": "cannot import name 'AdamW' ..."}}}
+    """
+    out_dir  = _output_dir(repo_url).resolve()
+    repo_dir = _repo_path(repo_url).resolve()
+    python   = _venv_python(out_dir)
+
+    script = textwrap.dedent("""\
+        import sys, ast, importlib.metadata, json
+        from pathlib import Path
+
+        repo_path = Path(sys.argv[1])
+
+        # Build the set of top-level module names that are actually installed,
+        # so we skip repo-internal imports and uninstalled optional deps.
+        installed_roots = set()
+        for dist in importlib.metadata.distributions():
+            top = dist.read_text("top_level.txt")
+            if top:
+                for n in top.strip().splitlines():
+                    n = n.strip()
+                    if n and not n.startswith("_"):
+                        installed_roots.add(n)
+            else:
+                record = dist.read_text("RECORD") or ""
+                for line in record.splitlines():
+                    part = line.split(",")[0].strip().split("/")[0]
+                    if (not part
+                            or part.endswith((".dist-info", ".data"))
+                            or part.startswith(("_", "."))
+                            or "." in part):
+                        continue
+                    installed_roots.add(part.removesuffix(".py"))
+
+        # Collect unique import statements from repo source, filtered to
+        # installed packages only (avoids false positives from repo-internal code).
+        stmts = {}  # dedup key -> statement string
+
+        for py_file in repo_path.rglob("*.py"):
+            try:
+                source = py_file.read_text(encoding="utf-8", errors="replace")
+                tree   = ast.parse(source, filename=str(py_file))
+            except Exception:
+                continue
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        root = alias.name.split(".")[0]
+                        if root in installed_roots:
+                            stmt = f"import {alias.name}"
+                            stmts[stmt] = stmt
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module and node.level == 0:
+                        root = node.module.split(".")[0]
+                        if root in installed_roots:
+                            names = ", ".join(a.name for a in node.names)
+                            stmt  = f"from {node.module} import {names}"
+                            key   = node.module + ":" + ",".join(
+                                sorted(a.name for a in node.names)
+                            )
+                            stmts[key] = stmt
+
+        # Execute each statement; sys.modules caches modules so heavy packages
+        # (torch, transformers) are only loaded once.
+        conflicts = {}
+        for stmt in stmts.values():
+            try:
+                exec(stmt)  # noqa: S102
+            except ImportError as e:
+                conflicts[stmt] = {"error": str(e)}
+            except Exception as e:
+                conflicts[stmt] = {"error": type(e).__name__ + ": " + str(e)}
+
+        print(json.dumps({"conflicts": conflicts, "checked": len(stmts)}))
+    """)
+
+    check_file = out_dir / "_compat_check.py"
+    check_file.write_text(script, encoding="utf-8")
+    try:
+        r = subprocess.run(
+            [python, str(check_file), str(repo_dir)],
+            capture_output=True, text=True, timeout=240,
+        )
+    finally:
+        check_file.unlink(missing_ok=True)
+
+    if r.returncode != 0:
+        return {"error": f"compat check script failed: {r.stderr.strip()[:500]}"}
+
+    try:
+        data = _json.loads(r.stdout.strip())
+    except Exception:
+        return {"error": f"could not parse compat output: {r.stdout[:300]}"}
+
+    conflicts = data.get("conflicts", {})
+    return {
+        "conflicts": conflicts,
+        "checked": data.get("checked", 0),
+        "has_conflicts": bool(conflicts),
+    }
 
 
 def validate_syntax(repo_url: str) -> dict:
@@ -414,7 +537,7 @@ def run_tests(repo_url: str) -> dict:
     Example:
         run_tests("https://github.com/Roestlab/massformer")
     """
-    out_dir  = _output_dir(repo_url)
+    out_dir  = _output_dir(repo_url).resolve()
     test_dir = out_dir / "tests"
     python   = _venv_python(out_dir)
     if not test_dir.exists():
