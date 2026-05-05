@@ -98,16 +98,6 @@ class S3Settings(BaseSettings):
         env_prefix="S3_",
         extra="ignore",
     )
-    
-
-class PostgresSettings(BaseSettings):
-
-    dsn: str
-
-    model_config = SettingsConfigDict(
-        env_prefix="POSTGRES_",
-        extra="ignore",
-    )
 
 
 class DatabaseSettings(BaseSettings):
@@ -115,7 +105,10 @@ class DatabaseSettings(BaseSettings):
     type: str = Field(default="sqlite", alias="DATABASE_TYPE")
     sqlite_path: str = Field(default="./data/db.sqlite", alias="SQLITE_PATH")
     
-    postgres: PostgresSettings | None = None
+    postgresql_dsn: str = Field(
+        default="postgresql://[user[:password]@]host[:port][/dbname][?options]",
+        alias="POSTGRESQL_DSN"
+    )
 
     model_config = SettingsConfigDict(
         extra="ignore",

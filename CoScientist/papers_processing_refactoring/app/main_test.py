@@ -10,7 +10,7 @@ from CoScientist.papers_processing_refactoring.etl import *
 from CoScientist.papers_processing_refactoring.embeddings import *
 from CoScientist.papers_processing_refactoring.scheduling.scheduler import IngestionScheduler, Schedule
 from CoScientist.papers_processing_refactoring.sources.local import LocalSource
-from CoScientist.papers_processing_refactoring.storage.state.state_db import SQLiteStateManager
+from CoScientist.papers_processing_refactoring.storage.state import *
 from CoScientist.papers_processing_refactoring.storage.artifacts import *
 from CoScientist.papers_processing_refactoring.storage.vector import *
 from CoScientist.papers_processing_refactoring.definitions import CONFIG_PATH
@@ -63,8 +63,8 @@ def build_artifacts_stores(etl_settings):
 def build_state_store(etl_settings):
     if etl_settings.database.type == "sqlite":
         return SQLiteStateManager(etl_settings.database.sqlite_path)
-    # elif etl_settings.database.type == "postgres":
-    #     return PostgreSQLStateManager(etl_settings.database.postgres.dsn)
+    elif etl_settings.database.type == "postgres":
+        return PostgreSQLStateManager(etl_settings.database.postgresql_dsn)
     else:
         raise ValueError("State store configuration must be provided")
 
