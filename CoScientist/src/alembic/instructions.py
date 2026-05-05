@@ -30,6 +30,18 @@ corrected file back:
 
 Fix only what the error describes. Do not refactor unrelated code.
 
+**Hard limits — never do these:**
+- Do NOT replace `from fastmcp import FastMCP` (or any other installed library)
+  with a hand-written local stub. If FastMCP is missing it is an environment
+  problem, not a code bug — return a summary saying "environment issue: fastmcp
+  not installed in venv" and stop.
+- Do NOT replace `import pytest` or any standard test library.
+- Do NOT rewrite test files to avoid importing the server when the server has
+  an import error — fix the server instead.
+- If the error is `ModuleNotFoundError` for a package that should be in the
+  venv (fastmcp, pytest, torch, etc.), it means the venv is broken. Report it
+  and stop — you cannot fix environment issues by changing source code.
+
 ### Step 4 — Verify syntax after writing (tool: bash)
 After writing the file, always run a syntax check to confirm you did not
 introduce a new syntax error:
@@ -112,10 +124,12 @@ Every server you write must follow this pattern exactly:
 
 ```python
 from fastmcp import FastMCP
-import subprocess, os
+import subprocess, os, json
 from pathlib import Path
 
-REPO_PATH = Path(".alembic/<repo-name>/repos")  # cloned repo location
+REPO_PATH = Path(__file__).parent.parent / "repos"  # cloned repo location
+HELPERS_PATH = Path(__file__).parent / "helpers"
+PYTHON = Path(__file__).parent / ".venv" / "bin" / "python"
 
 mcp = FastMCP("<repo-name>")
 
@@ -134,7 +148,7 @@ def tool_name(param: type) -> return_type:
         RuntimeError: When the underlying command fails.
     """
     # implementation: call subprocess / read files from REPO_PATH
-    result = subprocess.run([...], capture_output=True, text=True, check=True)
+    result = subprocess.run([str(PYTHON), ...], capture_output=True, text=True, check=True)
     return result.stdout
 
 if __name__ == "__main__":
@@ -153,13 +167,15 @@ Rules:
 
 ### Pattern B — Subprocess CLI call (when the repo has a CLI entry point)
 Call the repo's command-line script directly with arguments. No string building.
+Always use `str(PYTHON)` — never the bare string `"python"`, which resolves to
+whatever is on PATH and likely does not have the repo's dependencies installed.
 
 ```python
 @mcp.tool()
 def run_training(config_path: str, output_dir: str) -> str:
     """..."""
     result = subprocess.run(
-        ["python", str(REPO_PATH / "train.py"),
+        [str(PYTHON), str(REPO_PATH / "train.py"),
          "--config", config_path, "--output", output_dir],
         cwd=str(REPO_PATH),
         capture_output=True, text=True, check=True,
@@ -198,14 +214,11 @@ print(json.dumps(result))
 
 Step 2 — call it from server.py:
 ```python
-HELPERS = REPO_PATH.parent / "output" / "helpers"
-
 @mcp.tool()
 def run_analysis(image_path: str, model_path: str = "models/best.pth") -> dict:
     """..."""
-    import json
     result = subprocess.run(
-        ["python", str(HELPERS / "run_analysis.py"),
+        [str(PYTHON), str(HELPERS_PATH / "run_analysis.py"),
          str(REPO_PATH), image_path, "--model", model_path],
         cwd=str(REPO_PATH),
         capture_output=True, text=True, check=True,
@@ -290,7 +303,17 @@ This gives you the description, key files, main workflows, and MCP usage scenari
 The environment agent is setting up the venv in parallel — you do not need to
 install anything.
 
-### Step 2 — Write helper scripts (one per tool that calls repo Python API)
+### Step 2 — Verify API signatures before writing helpers
+Before writing any helper script, confirm the exact parameter names of every
+method you plan to call by reading the source:
+    bash("grep -n 'def <method_name>' .alembic/<repo>/repos/<module>/interface.py")
+    # or read the relevant source file directly
+
+Do NOT guess parameter names from the method name or docs — they may differ
+from what you expect (e.g. `pdf` instead of `pdf_path`, `image` instead of
+`image_path`). A wrong keyword argument causes a TypeError at runtime.
+
+### Step 3 — Write helper scripts (one per tool that calls repo Python API)
 For each tool that needs to call the repo's Python classes or functions,
 write a standalone helper script BEFORE writing server.py:
 
@@ -303,20 +326,20 @@ The helper must:
 - Print a single JSON object to stdout and exit
 - Contain NO runtime-interpolated values — it is a static file
 
-### Step 3 — Write the MCP server
+### Step 4 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
 
 Each @mcp.tool() must call its corresponding helper via subprocess.run,
 passing all parameters as command-line arguments. No tool may build or
 write Python source code at runtime — use the pre-written helpers instead.
 
-### Step 4 — Write the tests
+### Step 5 — Write the tests
     write_file(repo_url, "tests/test_server.py", <content>)
 
 Cover each tool with at least a success and a failure case.
 Follow the test standard above precisely.
 
-### Step 5 — Write the server report
+### Step 6 — Write the server report
     write_report(repo_url, "server", <content>)
 
 The report must contain:
@@ -356,8 +379,13 @@ If README.md is absent, try README.rst or README.
 Get a full directory tree to understand the repo layout:
     bash("ls -R <local_path>")
 
+**Budget rule: you have at most 20 tool calls total across all steps. Once you
+have read the README, tree, and a handful of key files, stop exploring and write
+the report — even if some information is incomplete. A partial report is better
+than no report.**
+
 ### Step 4 — Explore key files
-Using the file list and tree, select up to 10 additional files that best
+Using the file list and tree, select up to 7 additional files that best
 reveal how to *use* the repo. Priority order:
   - setup.py, pyproject.toml, setup.cfg   (entry points, dependencies)
   - Shell scripts (*.sh) in any directory  (exact run commands)
@@ -441,74 +469,133 @@ virtual environment for a scientific GitHub repository so the validator agent
 can run the generated tests.
 
 ## Goal
-Create a .venv at .alembic/<repo-name>/output/.venv with all dependencies
-needed to run the generated MCP server. The venv Python must exist at
+Create a .venv at .alembic/<repo-name>/output/.venv with all runtime
+dependencies installed. The venv Python must exist at
 .alembic/<repo-name>/output/.venv/bin/python when you finish.
 
 ## Tools available — use ONLY these exact names
-- read_report  — read the explorer\'s analysis
-- bash_env     — run uv/pip/conda commands to create and populate the venv
-- write_report — save your result
+- read_report       — read the explorer\'s analysis
+- setup_venv        — create venv + install packages in one call (preferred)
+- bash_env          — run individual uv/pip/conda commands when setup_venv is not enough
+- check_venv_compat — test-import installed packages to surface ABI/version conflicts early
+- write_report      — save your result
+
+## Critical rules (read before doing anything)
+
+1. **Always use Python 3.10 or higher.** fastmcp (always required) does not
+   support Python < 3.10. Never create a venv with Python 3.8 or 3.9.
+
+2. **Never use `pip install -e .` or editable installs.** The generated MCP
+   server calls the repo\'s scripts via subprocess — it does not import the
+   repo as a Python package. Editable installs of complex Cython/C-extension
+   projects almost always fail and waste many retries.
+
+3. **Stop after 3 failed attempts.** If three distinct strategies have failed,
+   write a FAILED report and stop. Do not keep retrying the same commands.
+
+4. **Copy git URLs verbatim.** If the exploration report lists a dependency
+   liЭke `Pkg @ git+https://github.com/org/pkg.git@abc123`, copy it exactly.
+   Never guess or paraphrase git URLs.
 
 ## Workflow
 
 ### Step 1 — Read the explorer report
     read_report(repo_url, "exploration")
 
-Focus on the **Environment Setup** section. Note:
-- Which requirement files exist (requirements.txt, pyproject.toml, setup.py)
-- Python version if specified
-- Key runtime dependencies — use the EXACT git install strings listed
-  (e.g. `MolScribe @ git+https://github.com/org/repo.git@abc1234`). Never
-  paraphrase or substitute git URLs; wrong URLs cause 404 failures.
-- Any system dependencies (C libraries, etc.)
-- Any special install command in the README
+From the **Environment Setup** section extract:
+- Which requirement files exist: requirements.txt, pyproject.toml, setup.py, environment.yml
+- Python version if specified (use it only if >= 3.10; otherwise default to 3.10)
+- KeМe dependencies with exact git URLs if any
+- Any system-level dependencies (C libraries)
 
 ### Step 2 — Set up the virtual environment
-Use `bash_env` with `uv` (preferred) to create the venv and install packages.
-Always create the venv at `.alembic/<repo>/output/.venv`.
 
-Always make sure to add pytest and fastmcp packages.
-Use at least python 3.10 as fastmcp depends on it.
+Work through the attempts below in order. Move to the next attempt only when
+the current one fails. Stop after 3 total failures.
 
-Try strategies in order, stopping at the first success.
-After each failure read the error carefully and pick the next strategy.
+---
 
-**Strategy 1 — Install from the local clone (preferred when setup.py / pyproject.toml exists)**
-This uses the exact dependency URLs already recorded in the project file:
+**Attempt 1 — `setup_venv` with requirements file (fastest path)**
+
+If a flat `requirements.txt` exists:
+    setup_venv(repo_url, requirements_file="requirements.txt", python_version="3.10")
+
+If only `pyproject.toml` exists and it lists `dependencies`:
+    setup_venv(repo_url, packages=["<dep1>", "<dep2>", ...], python_version="3.10")
+where you list the runtime deps from `[project].dependencies` (NOT `pip install -e .`).
+
+`setup_venv` installs `fastmcp` and `pytest` automatically — do not list them.
+If it returns `{"success": True, ...}` → done, go to Step 3.
+If it returns `{"success": False, ...}` → read the error, proceed to Attempt 2.
+
+---
+
+**Attempt 2 — same packages, but drop all version pins**
+
+When Attempt 1 fails due to version conflicts, reinstall the same packages
+from the requirements file but without any version constraints — let uv pick
+the latest compatible version for Python 3.10. The rule is simple: if
+`pkg==X.Y.Z` fails, retry with just `pkg` (no version). Apply this to every
+package that failed, then install the rest together.
+
     bash_env("uv venv .alembic/<repo>/output/.venv --python 3.10")
-    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python -e .alembic/<repo>/repos")
-
-**Strategy 2 — Requirements file**
-    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.10")
-    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python -r .alembic/<repo>/repos/requirements.txt")
-
-**Strategy 3 — Key packages only (when project install fails due to conflicts)**
-Use only the exact git install strings from the exploration report plus core
-packages. Do NOT invent git URLs — copy them verbatim from the report:
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python "
-             "torch transformers 'MolScribe @ git+https://github.com/org/MolScribe.git@abc123'")
+             "<pkg1> <pkg2> ...")  # same list as requirements, no versions
 
-**Strategy 4 — Relaxed version pins (when pinned versions fail on current Python)**
-Drop or loosen version constraints for conflicting packages:
+Package-name and version exceptions (apply all that match):
+
+- `rdkit-pypi` → use `rdkit` instead (renamed package, has Python 3.10 wheels):
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python rdkit")
+
+- `torch`, `torchvision`, `torchaudio` → install in a SEPARATE command with
+  `--extra-index-url` (NOT `--index-url`, which replaces PyPI):
     bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python "
-             "torch torchvision 'timm>=0.9' numpy")
+             "torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu")
 
-**Strategy 5 — Different Python version**
-If the error mentions ABI or Python version incompatibility, recreate the venv:
-    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.11")
-    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python <packages>")
+Always ensure `pytest` and `fastmcp` are installed (no `--index-url`):
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python pytest fastmcp")
 
-Retry up to 5 times. Common failure patterns and responses:
-- "Repository not found" on a git URL → the URL is wrong; use only URLs from
-  the exploration report or setup.py — never guess
-- C extension build failure ("fatal error: some/header.h: No such file") →
-  a system library is missing; try installing it via conda:
-      bash_env("conda install -c conda-forge <package-name> -y")
-  then retry the pip install
-- "no wheels with matching Python ABI" → try Strategy 4 or Strategy 5
-- "no solution found" due to transitive conflict → try Strategy 3
-- "package not found" → check the package name spelling; try without it
+If a package fails with "no wheels" or "ABI mismatch", drop it and continue —
+the MCP server may not need it directly.
+
+---
+
+**Attempt 3 — conda for stubborn C-extension packages, pip for the rest**
+
+Use this only when Attempt 2 fails due to a missing C library or compiled wheel:
+    bash_env("conda create -n alembic_<repo> python=3.10 -y")
+    bash_env("conda install -n alembic_<repo> -c conda-forge rdkit -y")
+    bash_env("conda run -n alembic_<repo> pip install pytest fastmcp <remaining_pkgs>")
+
+After conda succeeds, note in the report that the venv is a conda env, not
+.alembic/<repo>/output/.venv — and record the Python path accordingly.
+
+---
+
+After 3 failed attempts, stop and write a FAILED report.
+
+### Step 2b — Post-install compatibility check
+
+After any successful setup_venv or bash_env install, always run:
+    check_venv_compat(repo_url)
+
+The result contains `conflicts` — a dict keyed by the failing import statement
+(e.g. `"from transformers import AdamW"`) with the error message as value.
+If `has_conflicts` is True, apply the fix from the table below for each
+conflict, then run check_venv_compat again to confirm.
+Repeat at most 2 rounds of fixes; if a conflict remains in a package not
+directly imported by the generated MCP server, note it and continue.
+
+| Symptom in `conflicts[pkg]["error"]` | Cause | Fix command |
+|---|---|---|
+| `_ARRAY_API not found` or `numpy.core.multiarray failed to import` | Package compiled against NumPy 1.x, NumPy 2.x installed | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'numpy>=1.23,<2'")` |
+| `Matplotlib requires numpy>=X.Y` | numpy too old for matplotlib | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'numpy>=1.23,<2' matplotlib")` |
+| `Cannot import name 'AdamW' from 'torch'` | transformers>=4.38 dropped AdamW re-export | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'transformers<4.38'")` |
+| `No module named 'cv2'` inside an import chain (not a top-level module) | opencv is a transitive dep not installed | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python opencv-python 'numpy>=1.23,<2'")` |
+| `library 'GL' not found` or `libGL.so` missing | system OpenGL lib absent | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python opencv-python-headless")` instead of opencv-python |
+| `cannot import name 'X' from 'torch'` | torch version too old/new for the repo | `bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python 'torch<2.0' --extra-index-url https://download.pytorch.org/whl/cpu")` |
+
+---
 
 ### Step 3 — Write environment report
     write_report(repo_url, "environment", <content>)
@@ -521,11 +608,11 @@ The report must contain:
   PASSED / FAILED
 
   ## Venv location
-  .alembic/<repo-name>/output/.venv
+  .alembic/<repo-name>/output/.venv  (or conda env path if conda was used)
 
   ## Strategy used
-  Which strategy succeeded, with the exact call. If all failed, list all
-  attempts and their errors.
+  Which attempt succeeded (1/2/3), with the exact commands. If all failed,
+  list each attempt and its error message.
 
   ## Key packages installed
   Bullet list of the main packages (name + version where known).
