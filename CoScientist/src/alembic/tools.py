@@ -8,11 +8,11 @@ DOCKER_IMAGE_MARKER = ".docker_image"
 DOCKER_BUILD_FAIL_COUNTER = ".docker_build_failures"
 DOCKER_BUILD_MAX_ATTEMPTS = 5
 
-_ALEMBIC_BASE = Path(
-    os.environ.get("ALEMBIC_WORKDIR", "/var/tmp/alembic")
+WORKDIR = Path(
+    os.environ.get("ALEMBIC_WORKDIR", ".alembic")
 )
-REPO_DIR    = _ALEMBIC_BASE / "repos"
-REPORTS_DIR = _ALEMBIC_BASE / "reports"
+REPO_DIR    = WORKDIR / "repos"
+REPORTS_DIR = WORKDIR / "reports"
 MAX_BYTES = 40_000
 
 IGNORE = {
@@ -33,14 +33,31 @@ def _path_part_ignored(part: str) -> bool:
 
 
 _ALLOWED_CMDS = ("ls", "grep", "head", "glob")
+_ENV_ALLOWED_CMDS = (*_ALLOWED_CMDS, "pip", "pip3", "uv", "conda", "python", "python3", "which")
 
 
 def _repo_name(repo_url: str) -> str:
     return repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
 
 
+def _repo_base(repo_url: str) -> Path:
+    """Root dir for everything related to this repo: <WORKDIR>/<repo-name>/"""
+    return WORKDIR / _repo_name(repo_url)
+
+
 def _repo_path(repo_url: str) -> Path:
-    return REPO_DIR / _repo_name(repo_url)
+    """Where the repo is cloned: <WORKDIR>/<repo-name>/repos/"""
+    return _repo_base(repo_url) / "repos"
+
+
+def _output_dir(repo_url: str) -> Path:
+    """Where server.py, tests, .venv live: <WORKDIR>/<repo-name>/output/"""
+    return _repo_base(repo_url) / "output"
+
+
+def _reports_dir(repo_url: str) -> Path:
+    """Where .md reports live: <WORKDIR>/<repo-name>/reports/"""
+    return _repo_base(repo_url) / "reports"
 
 
 def _docker_safe_image_component(name: str) -> str:
@@ -75,11 +92,11 @@ def clone_repo(repo_url: str) -> dict:
 
     Example:
         clone_repo("https://github.com/Roestlab/massformer")
-        # -> {"local_path": "/tmp/repos/massformer", "files": [...]}
+        # -> {"local_path": ".alembic/massformer/repos", "files": [...]}
     """
     dest = _repo_path(repo_url)
     if not dest.exists():
-        REPO_DIR.mkdir(parents=True, exist_ok=True)
+        dest.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["git", "clone", "--depth=1", repo_url, str(dest)],
             check=True, capture_output=True,
@@ -92,27 +109,23 @@ def clone_repo(repo_url: str) -> dict:
             if not any(_path_part_ignored(part) for part in rel.parts):
                 files.append(str(rel))
 
-    return {"local_path": str(dest), 
-            "files": sorted(files)
-            }
+    return {"local_path": str(dest), "files": sorted(files)}
 
 
 def read_file(repo_url: str, path: str) -> dict:
     """Read a text file from the locally cloned repository.
 
     Returns up to 40 KB of content. Do NOT use this on data files (.csv,
-    .parquet, .tsv, .json arrays) — use bash("head -n 20 <path>") instead
-    to peek at their structure.
+    .parquet, .tsv, .json arrays) — use bash("head -n 20 <path>") instead.
 
     Example:
         read_file("https://github.com/Roestlab/massformer", "README.md")
-        read_file("https://github.com/Roestlab/massformer", "src/train.py")
     """
     full = _repo_path(repo_url) / path
     if not full.exists():
-        return {"error": f"File not found: {path}. It may be a data file not included in the shallow clone."}
+        return {"error": f"File not found: {path}."}
     if full.suffix in IGNORE_EXTS:
-        return {"error": f"Binary/data file skipped: {path}. Use bash('head -n 20 {full}') to peek if it is text-based."}
+        return {"error": f"Binary/data file skipped: {path}."}
     raw = full.read_bytes()[:MAX_BYTES]
     return {"path": path, "content": raw.decode("utf-8", errors="replace")}
 
@@ -120,33 +133,26 @@ def read_file(repo_url: str, path: str) -> dict:
 def bash(command: str) -> dict:
     """Run a restricted shell command. Only ls, grep, head, and glob are supported.
 
-    - ls   : list directory contents
-    - grep : search file contents
-    - head : preview first N lines of a file
-    - glob : list files matching a shell glob pattern (Python-interpreted)
-
     Examples:
-        bash("ls /tmp/repos/massformer")
-        bash("ls -la /tmp/repos/massformer/src")
-        bash("ls -R /tmp/repos/massformer")                          # full tree
-        bash("grep -r 'def train' /tmp/repos/massformer -l")         # find files containing pattern
-        bash("grep -n 'ArgumentParser' /tmp/repos/massformer/train.py")
-        bash("head -n 30 /tmp/repos/massformer/README.md")
-        bash("head -n 5 /tmp/repos/massformer/data/sample.csv")      # peek data files
-        bash("glob /tmp/repos/massformer/**/*.yaml")                  # find all yaml files
-        bash("glob /tmp/repos/massformer/**/config*")
+        bash("ls .alembic/massformer/repos")
+        bash("grep -r 'def train' .alembic/massformer/repos -l")
+        bash("head -n 30 .alembic/massformer/repos/README.md")
+        bash("glob .alembic/massformer/repos/**/*.yaml")
+        bash("python -m py_compile .alembic/massformer/output/server.py && echo OK")
     """
     stripped = command.strip()
     cmd_name = stripped.split()[0] if stripped else ""
 
     if cmd_name not in _ALLOWED_CMDS:
-        return {
-            "error": f"Command '{cmd_name}' is not allowed. "
-                     f"Only {_ALLOWED_CMDS} are supported."
-        }
+        # Allow "python -m py_compile ..." for syntax checks
+        if not (cmd_name == "python" and "-m" in stripped and "py_compile" in stripped):
+            return {
+                "error": f"Command '{cmd_name}' is not allowed. "
+                         f"Only {_ALLOWED_CMDS} are supported, plus "
+                         f"'python -m py_compile <file> && echo OK'."
+            }
 
     if cmd_name == "glob":
-        # glob <pattern>
         parts = stripped.split(None, 1)
         if len(parts) < 2:
             return {"error": "glob requires a pattern argument."}
@@ -154,7 +160,6 @@ def bash(command: str) -> dict:
         matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
         return {"matches": matched}
 
-    # For ls, grep, head — run via subprocess with a timeout
     try:
         result = subprocess.run(
             stripped,
@@ -171,16 +176,57 @@ def bash(command: str) -> dict:
         return {"error": "Command timed out after 15 seconds."}
 
 
+def bash_env(command: str) -> dict:
+    """Run an environment setup command (pip, uv, conda, python, etc.).
+
+    Extends bash with package-manager commands. Timeout is 300 s to
+    accommodate slow installs.
+
+    Examples:
+        bash_env("uv venv .alembic/massformer/output/.venv --python 3.11")
+        bash_env("uv pip install --python .alembic/massformer/output/.venv/bin/python torch torchvision")
+        bash_env("pip install -r .alembic/massformer/repos/requirements.txt")
+        bash_env("which python3")
+    """
+    stripped = command.strip()
+    cmd_name = stripped.split()[0] if stripped else ""
+
+    if cmd_name not in _ENV_ALLOWED_CMDS:
+        return {
+            "error": f"Command '{cmd_name}' is not allowed. "
+                     f"Supported: {sorted(_ENV_ALLOWED_CMDS)}."
+        }
+
+    if cmd_name == "glob":
+        parts = stripped.split(None, 1)
+        if len(parts) < 2:
+            return {"error": "glob requires a pattern argument."}
+        pattern = parts[1]
+        matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
+        return {"matches": matched}
+
+    try:
+        result = subprocess.run(
+            stripped,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        output = result.stdout
+        if result.returncode != 0 and result.stderr:
+            output += "\n[stderr] " + result.stderr
+        return {"output": output[:MAX_BYTES]}
+    except subprocess.TimeoutExpired:
+        return {"error": "Command timed out after 300 seconds."}
+
+
 def search(repo_url: str, pattern: str) -> dict:
     """Find files in the cloned repo matching a glob pattern.
 
-    Pattern is relative to the repo root. Ignores binary and generated files.
-
     Examples:
         search("https://github.com/Roestlab/massformer", "**/*.yaml")
-        search("https://github.com/Roestlab/massformer", "**/config*")
         search("https://github.com/Roestlab/massformer", "*.sh")
-        search("https://github.com/Roestlab/massformer", "**/*train*")
     """
     dest = _repo_path(repo_url)
     matched = []
@@ -192,17 +238,19 @@ def search(repo_url: str, pattern: str) -> dict:
     return {"pattern": pattern, "matches": sorted(matched)}
 
 
-def read_report(report_name: str) -> dict:
-    """Read a Markdown report from the shared reports directory (/tmp/alembic_reports/).
+def read_report(repo_url: str, report_name: str) -> dict:
+    """Read a Markdown report from this repo's reports directory.
 
     Args:
-        report_name: Filename without the .md extension, e.g. "massformer_exploration".
+        repo_url:    Repository URL.
+        report_name: Filename without the .md extension: "exploration", "server",
+                     or "validation".
 
     Example:
-        read_report("massformer_exploration")
-        # -> {"report_path": "/tmp/alembic_reports/massformer_exploration.md", "content": "..."}
+        read_report("https://github.com/Roestlab/massformer", "exploration")
+        # -> {"report_path": ".alembic/massformer/reports/exploration.md", ...}
     """
-    path = REPORTS_DIR / f"{report_name}.md"
+    path = _reports_dir(repo_url) / f"{report_name}.md"
     if not path.exists():
         return {"error": f"No report found at {path}."}
     return {"report_path": str(path), "content": path.read_text(encoding="utf-8")}
@@ -216,6 +264,7 @@ def write_file(repo_url: str, relative_path: str, content: str) -> dict:
     Examples:
         write_file("https://github.com/Roestlab/massformer", "server.py", "...")
         write_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
+        write_file("https://github.com/Roestlab/massformer", "helpers/run_analysis.py", "...")
     """
     dest = _repo_path(repo_url) / Path((relative_path or "").strip())
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -364,14 +413,6 @@ def build_docker_image(repo_url: str) -> dict:
 def validate_syntax(repo_url: str) -> dict:
     """Check server.py for syntax errors and failed imports.
 
-    Runs two checks in sequence:
-      1. py_compile  — catches SyntaxError before any code runs
-      2. module load — imports the file to surface missing packages or
-                       top-level NameError / ImportError
-
-    Returns {"passed": True} on success, or
-            {"passed": False, "stage": "syntax"|"imports", "error": "<traceback>"}
-
     Example:
         validate_syntax("https://github.com/Roestlab/massformer")
     """
@@ -415,7 +456,6 @@ def run_tests(repo_url: str) -> dict:
 
     Example:
         run_tests("https://github.com/Roestlab/massformer")
-        # -> {"passed": True/False, "output": "...pytest output..."}
     """
     workspace = _repo_path(repo_url)
     test_dir = workspace / "tests"
@@ -444,18 +484,21 @@ def run_tests(repo_url: str) -> dict:
     return {"passed": r.returncode == 0, "output": output}
 
 
-def write_report(report_name: str, content: str) -> dict:
-    """Write a Markdown report to the shared reports directory (/tmp/alembic_reports/).
+def write_report(repo_url: str, report_name: str, content: str) -> dict:
+    """Write a Markdown report to this repo's reports directory.
 
     Args:
-        report_name: Filename without the .md extension, e.g. "massformer_exploration".
+        repo_url:    Repository URL.
+        report_name: Filename without the .md extension: "exploration", "server",
+                     or "validation".
         content:     Full Markdown content to write.
 
     Example:
-        write_report("massformer_exploration", "# massformer\\n\\n## Description\\n...")
-        # -> {"report_path": "/tmp/alembic_reports/massformer_exploration.md"}
+        write_report("https://github.com/Roestlab/massformer", "exploration", "# massformer...")
+        # -> {"report_path": ".alembic/massformer/reports/exploration.md"}
     """
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = REPORTS_DIR / f"{report_name}.md"
+    reports = _reports_dir(repo_url)
+    reports.mkdir(parents=True, exist_ok=True)
+    out = reports / f"{report_name}.md"
     out.write_text(content, encoding="utf-8")
     return {"report_path": str(out)}

@@ -15,6 +15,7 @@ from alembic.tools import (
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
     debugger_instruction, validator_instruction,
+    environment_instruction,
 )
 
 MODEL = os.environ.get("MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
@@ -27,6 +28,14 @@ explorer_agent = Agent(
     tools=[clone_repo, read_file, bash, search, write_report],
 )
 
+environment_agent = Agent(
+    name="environment",
+    model=LiteLlm(model=MODEL),
+    description="Reads the explorer report, writes a Dockerfile at the clone root, builds the Docker image, and records the result for pytest-in-container.",
+    instruction=environment_instruction,
+    tools=[read_report, write_file, build_docker_image, write_report],
+)
+
 coder_agent = Agent(
     name="coder",
     model=LiteLlm(model=MODEL),
@@ -35,8 +44,6 @@ coder_agent = Agent(
     tools=[
         read_report,
         validate_syntax,
-        run_tests,
-        build_docker_image,
         bash,
         read_file,
         write_file,

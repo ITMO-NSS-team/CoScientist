@@ -176,7 +176,6 @@ PaperAnalysis/
 
 .DS_Store
 
-
 tools/models
 
 *.tif
@@ -187,3 +186,7 @@ logs
 ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
 *db.json
+
+#alembic output & testing
+.alembic
+.test
