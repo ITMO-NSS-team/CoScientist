@@ -1,7 +1,5 @@
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field, model_validator
-
-from rag_tools import MCPServer
+from pydantic import BaseModel, Field
 
 class RetrievalFinalResult(BaseModel):
     """Result from a retrieval query."""
