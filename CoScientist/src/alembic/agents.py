@@ -7,17 +7,16 @@ from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.agent_tool import AgentTool
 from alembic.tools import (
-    clone_repo, read_file, bash, bash_env, search,
+    clone_repo, read_file, bash, search,
     read_report, write_report,
-    write_file, read_output_file, update_file,
+    write_file, update_file,
     validate_syntax, run_tests,
-    setup_venv, check_venv_compat,
-    build_docker_image,
+    build_docker_image, test_mcp_launch,
 )
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
     debugger_instruction, validator_instruction,
-    environment_instruction, docker_instruction,
+    docker_instruction,
 )
 
 MODEL = os.environ.get("MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
@@ -30,21 +29,10 @@ explorer_agent = Agent(
     tools=[clone_repo, read_file, bash, search, write_report],
 )
 
-environment_agent = Agent(
-    name="environment",
-    model=LiteLlm(model=MODEL),
-    description=(
-        "Reads the explorer report, creates a local virtual environment with all repo "
-        "dependencies installed, and writes an environment report documenting the result."
-    ),
-    instruction=environment_instruction,
-    tools=[read_report, setup_venv, bash_env, check_venv_compat, write_report],
-)
-
 coder_agent = Agent(
     name="coder",
     model=LiteLlm(model=MODEL),
-    description="Reads explorer and environment reports and implements a FastMCP server with pytest tests for the repository.",
+    description="Reads the explorer report and implements a FastMCP server with pytest tests for the repository.",
     instruction=coder_instruction,
     tools=[
         read_report,
@@ -68,18 +56,34 @@ docker_agent = Agent(
     name="docker",
     model=LiteLlm(model=MODEL),
     description=(
-        "Reads the environment and server reports, writes a Dockerfile at the clone root, "
-        "builds the Docker image, and records the image tag so the validator can run pytest "
-        "inside the container."
+        "Reads the explorer and coder reports, analyses repository dependencies, fixes "
+        "requirements files if necessary, writes a Dockerfile, builds the Docker image, "
+        "and verifies the MCP server launches successfully inside the container."
     ),
     instruction=docker_instruction,
-    tools=[read_report, read_file, write_file, build_docker_image, write_report],
+    tools=[
+        read_report, read_file, write_file, update_file,
+        bash, search,
+        build_docker_image, test_mcp_launch,
+        write_report,
+    ],
 )
 
 validator_agent = Agent(
     name="validator",
     model=LiteLlm(model=MODEL),
-    description="Validates the generated MCP server via syntax checks and pytest inside Docker, calling the debugger agent on failures, then writes a validation report.",
+    description=(
+        "Validates the generated MCP server via syntax checks and pytest inside Docker. "
+        "Calls the debugger agent for Python code bugs and the docker agent for "
+        "environment/dependency issues. Task is complete only when both MCP launches "
+        "and all tests pass."
+    ),
     instruction=validator_instruction,
-    tools=[read_report, validate_syntax, run_tests, write_report, AgentTool(agent=debugger_agent)],
+    tools=[
+        read_report, read_file,
+        validate_syntax, run_tests,
+        write_report,
+        AgentTool(agent=debugger_agent),
+        AgentTool(agent=docker_agent),
+    ],
 )

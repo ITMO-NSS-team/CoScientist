@@ -4,11 +4,13 @@ import os
 import re
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 DOCKER_IMAGE_MARKER = ".docker_image"
+MCP_VERIFIED_MARKER = ".mcp_verified"
 DOCKER_BUILD_FAIL_COUNTER = ".docker_build_failures"
-DOCKER_BUILD_MAX_ATTEMPTS = 5
+DOCKER_BUILD_MAX_ATTEMPTS = int(os.environ.get("DOCKER_BUILD_MAX_ATTEMPTS", "5"))
 
 WORKDIR = Path(os.environ.get("ALEMBIC_WORKDIR", ".alembic"))
 REPO_DIR    = WORKDIR / "repos"
@@ -639,6 +641,65 @@ def build_docker_image(repo_url: str) -> dict:
         "build_log": build_log[:MAX_BYTES],
         "python":    run_hint,
     }
+
+
+def test_mcp_launch(repo_url: str) -> dict:
+    """Start the MCP server container briefly to verify it launches without crashing.
+
+    Requires a Docker image (output/.docker_image). Runs the container detached,
+    waits 5 seconds, checks it is still running, captures logs, then stops it.
+
+    Returns:
+        {"success": True,  "logs": "<stdout+stderr>"}
+        {"success": False, "error": "<reason>", "logs": "<stdout+stderr>"}
+
+    Example:
+        test_mcp_launch("https://github.com/Roestlab/massformer")
+    """
+    out_dir = _output_dir(repo_url)
+    marker  = out_dir / DOCKER_IMAGE_MARKER
+    if not marker.exists():
+        return {"success": False, "error": "No Docker image found. Run build_docker_image first."}
+
+    image     = marker.read_text(encoding="utf-8").strip()
+    repo_root = _repo_path(repo_url)
+    cname     = f"alembic-test-{_docker_safe_image_component(_repo_name(repo_url))}"
+
+    subprocess.run(["docker", "rm", "-f", cname], capture_output=True)
+
+    start = subprocess.run(
+        [
+            "docker", "run", "--rm", "-d", "--name", cname,
+            "-v", f"{repo_root.resolve()}:/app",
+            "-w", "/app",
+            "-p", "8000:8000",
+            image, "python", "server.py",
+        ],
+        capture_output=True, text=True,
+    )
+    verified_path = out_dir / MCP_VERIFIED_MARKER
+    verified_path.unlink(missing_ok=True)
+
+    if start.returncode != 0:
+        return {"success": False, "error": f"Failed to start container: {start.stderr.strip()}"}
+
+    time.sleep(5)
+
+    inspect = subprocess.run(
+        ["docker", "inspect", "--format", "{{.State.Status}}", cname],
+        capture_output=True, text=True,
+    )
+    status = inspect.stdout.strip()
+
+    logs_proc = subprocess.run(["docker", "logs", cname], capture_output=True, text=True)
+    logs      = (logs_proc.stdout + logs_proc.stderr)[:MAX_BYTES]
+
+    subprocess.run(["docker", "stop", cname], capture_output=True)
+
+    if status == "running":
+        verified_path.write_text("ok\n", encoding="utf-8")
+        return {"success": True, "logs": logs}
+    return {"success": False, "error": f"Container exited (status: {status})", "logs": logs}
 
 
 def validate_syntax(repo_url: str) -> dict:

@@ -17,8 +17,8 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
-from alembic.agents import explorer_agent, environment_agent, coder_agent, docker_agent, validator_agent
-from alembic.tools import WORKDIR
+from alembic.agents import explorer_agent, coder_agent, docker_agent, validator_agent
+from alembic.tools import WORKDIR, MCP_VERIFIED_MARKER
 
 # ── Loguru: terminal sink ──────────────────────────────────────────────────────
 logger.remove()
@@ -227,7 +227,7 @@ def _clean_workdir(name: str) -> None:
         logger.debug(f"[clean] removed {repo_dir}")
 
 
-STAGES = ("explorer", "environment", "coder", "docker", "validator")
+STAGES = ("explorer", "coder", "docker", "validator")
 
 
 async def run_pipeline(repo_url: str, resume_from: str | None = None):
@@ -243,8 +243,7 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
         logger.info(f"[Resume] starting from stage: {resume_from}  (workdir preserved)")
 
     base = WORKDIR / name
-    venv_guard      = str((base / "output" / ".venv" / "bin" / "python").resolve())
-    docker_guard    = str((base / "output" / ".docker_image").resolve())
+    docker_guard = str((base / "output" / MCP_VERIFIED_MARKER).resolve())
 
     # ── per-run file sink ──────────────────────────────────────────────────
     log_file = base / "pipeline.log"
@@ -259,7 +258,7 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
     # ──────────────────────────────────────────────────────────────────────
 
     for sid in (
-        f"{name}_explorer", f"{name}_environment",
+        f"{name}_explorer",
         f"{name}_coder", f"{name}_docker", f"{name}_validator",
     ):
         await session_service.create_session(
@@ -281,20 +280,9 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             )
             logger.info(f"[Explorer done]     report → {base}/reports/exploration.md")
 
-        # ── Stage 2: Environment (local venv) ─────────────────────────────
-        if _should_run("environment"):
-            _banner(2, f"Environment ({repo_url})")
-            await run_agent(
-                environment_agent, session_service, f"{name}_environment", repo_url,
-                required_report="environment",
-                artifact_guard_path=venv_guard,
-            )
-            logger.info(f"[Environment done]  report → {base}/reports/environment.md")
-            logger.info(f"                    venv   → {base}/output/.venv/")
-
-        # ── Stage 3: Coder ────────────────────────────────────────────────
+        # ── Stage 2: Coder ────────────────────────────────────────────────
         if _should_run("coder"):
-            _banner(3, f"Coder  ({repo_url})")
+            _banner(2, f"Coder  ({repo_url})")
             await run_agent(
                 coder_agent, session_service, f"{name}_coder", repo_url,
                 required_report="server",
@@ -303,9 +291,9 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             logger.info(f"                    tests  → {base}/repos/tests/test_server.py")
             logger.info(f"                    report → {base}/reports/server.md")
 
-        # ── Stage 4: Docker (Dockerfile + image) ──────────────────────────
+        # ── Stage 3: Docker (env setup + Dockerfile + image + MCP launch) ─
         if _should_run("docker"):
-            _banner(4, f"Docker  ({repo_url})")
+            _banner(3, f"Docker  ({repo_url})")
             await run_agent(
                 docker_agent, session_service, f"{name}_docker", repo_url,
                 required_report="docker",
@@ -314,9 +302,9 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             logger.info(f"[Docker done]       report → {base}/reports/docker.md")
             logger.info(f"                    marker → {base}/output/.docker_image")
 
-        # ── Stage 5: Validator (calls Debugger internally on failures) ────
+        # ── Stage 4: Validator (calls Debugger internally on failures) ────
         if _should_run("validator"):
-            _banner(5, f"Validator  ({repo_url})")
+            _banner(4, f"Validator  ({repo_url})")
             validator_response = await run_agent(
                 validator_agent, session_service, f"{name}_validator", repo_url,
                 required_report="validation",
