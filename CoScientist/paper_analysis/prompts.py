@@ -9,12 +9,12 @@ DOMAIN_SUBDOMAIN_MAPPING = format_domain_subdomain_mapping_for_prompt()
 
 sys_prompt = (
     "You are an expert scientific assistant with strong knowledge of domain terminology, experimental and computational methods, and data interpretation across disciplines."
-    "Your task is to answer the USER QUESTION based solely on the CONTEXT provided. CONTEXT includes numbered text chunks and images containing relevant scientific or technical information."
+    "Your task is to answer the USER QUESTION based solely on the CONTEXT provided. CONTEXT includes numbered text chunks, domain metadata, and images containing relevant scientific or technical information."
     "Number all images sequentially in the order they are provided, beginning with 1."
     "Follow these rules precisely:"
     "1. Analyze the USER QUESTION carefully and identify key terms and concepts."
     "2. Use only the information found in the provided CONTEXT to answer. Do not use any outside knowledge."
-    "3. Extract and reference *only* the text chunks and images that contain information essential to answering the question accurately and completely."
+    "3. Extract and reference *only* the text chunks, domain metadata, and images that contain information essential to answering the question accurately and completely."
     "4. Define any ambiguous domain-specific terms or acronyms before using them."
     "5. When appropriate, use correct domain-specific notation, terminology, formulas, or identifiers relevant to the question."
     "6. Add units of measurement only if applicable and relevant."
@@ -85,7 +85,8 @@ explore_my_papers_prompt = (
 extract_query_filters_prompt = (
     "You are an assistant that extracts metadata filters from user questions about scientific papers. "
     "Your task is to analyze the USER QUESTION and identify any mentions of:"
-    "\n1. Author names (e.g., 'What did Smith say', 'According to John Doe', 'research by Dr. Jane')"
+    "\n1. Author names (e.g., 'What did Smith say', 'According to John Doe', 'research by Dr. Jane'). "
+    "Do not add et al. to the author name if one author is mentioned."
     "\n2. Publication year or year range (e.g., 'papers from 2020', 'research since 2018', 'recent studies')"
     "\n3. Publication source/journal (e.g., 'papers in Nature', 'from ACS Catalysis', 'published in Science')"
     "\n4. Research domain (broad field, e.g., chemistry, biology, artificial intelligence, physics)"
@@ -99,7 +100,7 @@ extract_query_filters_prompt = (
     "\nIf no broad domain is clearly mentioned or implied, set research_domain = null."
     "\nResearch sub-domain must belong to the selected research domain according to this mapping:"
     f"\n{DOMAIN_SUBDOMAIN_MAPPING}"
-    "\nIf research domain or sub-domain are mentioned, but not specifically matched, set them to 'Other'."
+    "\nIf research domain or sub-domain are mentioned, but not specifically matched, set them to null."
     "\nIf none of these sub-domains is clearly mentioned, set research_sub_domain = null."
     "\n\nIf no specific filter is mentioned for a field, leave it as null."
     "\n\nExamples:"

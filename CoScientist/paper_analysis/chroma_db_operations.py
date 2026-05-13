@@ -524,10 +524,11 @@ class ChromaDBPaperStore:
 
     @staticmethod
     def get_molecule_and_reactions_data(img: dict):
-        if img.get("molecules") is None or img.get("reactions") is None:
-            image_bytes = load_image_as_binary(img["image_path"])
-            img["molecules"] = str(extract_molecules_from_figure(image_bytes))
-            img["reactions"] = str(extract_reactions_from_figure(image_bytes))
+        image_bytes = load_image_as_binary(img["image_path"])
+        molecules_res = extract_molecules_from_figure(image_bytes)
+        img["domain_metadata.molecules"] = str(molecules_res.get("data"))
+        reactions_res = extract_reactions_from_figure(image_bytes)
+        img["domain_metadata.reactions"] = str(reactions_res.get("data"))
 
     def get_image_data_for_chem(self, file_path: str) -> dict:
         image_data = self.client.query_chromadb(
@@ -538,7 +539,7 @@ class ChromaDBPaperStore:
         img = image_data["metadatas"][0][0]
         img_id = image_data["ids"][0][0]
 
-        if "molecules" not in img or "reactions" not in img:
+        if "domain_metadata.molecules" not in img or "domain_metadata.reactions" not in img:
             self.get_molecule_and_reactions_data(img)
             self.img_collection.update(ids=[img_id], metadatas=[img])
         return img

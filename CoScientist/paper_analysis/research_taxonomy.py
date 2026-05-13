@@ -2,12 +2,7 @@ from typing import Literal, TypeAlias
 
 
 ResearchDomain: TypeAlias = Literal[
-    "Chemistry",
-    "Biology",
-    "Artificial Intelligence",
-    "Physics",
-    "Medicine",
-    "Other",
+    "Chemistry"
 ]
 
 
@@ -22,40 +17,8 @@ DOMAIN_TO_SUBDOMAINS: dict[str, list[str]] = {
         "DFT",
         "Biological Macromolecules",
         "Biological Chemistry",
-        "Analytical Chemistry",
-        "Other"
-    ],
-    "Biology": [
-        "Cell Biology",
-        "Genetics",
-        "Microbiology",
-        "Protein Folding",
-        "Other"
-    ],
-    "Artificial Intelligence": [
-        "Machine Learning",
-        "Natural Language Processing",
-        "Computer Vision",
-        "Reinforcement Learning",
-        "Other"
-    ],
-    "Physics": [
-        "Quantum Mechanics",
-        "Thermodynamics",
-        "Condensed Matter Physics",
-        "Astrophysics",
-        "Other"
-    ],
-    "Medicine": [
-        "Cardiology",
-        "Neurology",
-        "Oncology",
-        "Immunology",
-        "Other"
-    ],
-    "Other": [
-        "Other",
-    ],
+        "Analytical Chemistry"
+    ]
 }
 
 

@@ -20,6 +20,7 @@ from CoScientist.paper_analysis.research_taxonomy import (
 from CoScientist.paper_analysis.settings import allowed_providers
 from CoScientist.paper_parser.utils import convert_to_base64, prompt_func, load_image_as_binary
 from CoScientist.chemical_utils.chemical_functions import *
+from CoScientist.paper_analysis.domain_metadata import format_domain_metadata, add_domain_metadata_to_img_info
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
@@ -188,7 +189,7 @@ def query_llm(
 
     img_context = list(map(convert_to_base64, img_paths))
     messages = [
-        SystemMessage(content=sys_prompt),
+        SystemMessage(content=system_prompt),
         prompt_func(
             {
                 "text": f"USER QUESTION: {question}\n\nCONTEXT: {txt_context}",
@@ -318,34 +319,47 @@ def process_question(
     # Combine images for context (from chunk text and fom DB)
     for chunk_meta in [chunk[2] for chunk in txt_data]:
         for img_path in eval(chunk_meta["imgs_in_chunk"]):
-            img_paths.append({
+
+            img_info = {
                 'path': img_path,
                 'Source': chunk_meta['source'],
                 'Paper': chunk_meta['title'],
                 'Year': chunk_meta['year']
-            })
-            if meta_filter.research_domain == ResearchDomain.CHEMISTRY:
-                img = store.get_image_data_for_chem(img_path)
-                img_paths.append({
-                    'Molecules': img['molecules'],
-                    'Reactions': img['reactions']
-                })
+            }
+
+            image_data = store.client.query_chromadb(
+                    store.img_collection,
+                    "",
+                    {"image_path": img_path}
+                )
+            img_meta = image_data["metadatas"][0][0]
+            img_info = add_domain_metadata_to_img_info(meta_filter.research_domain, img_meta, img_info)
+            img_paths.append(img_info)
     
     for img_meta in img_data["metadatas"][0]:
         if img_meta['image_path'] not in [d['path'] for d in img_paths]:
-            img_paths.append({
-                'path': img_meta['image_path'],
-                'source': img_meta['source'],
-                'Paper': img_meta['title'],
-                'Year': img_meta['year'],
-            })
-            if meta_filter.research_domain == ResearchDomain.CHEMISTRY:
-                img = store.get_image_data_for_chem(img_meta['image_path'])
-                img_paths.append({
-                    'Molecules': img['molecules'],
-                    'Reactions': img['reactions']
-                })
-    img_paths_list = [d['path'] for d in img_paths]
+            img_info = {
+                'path': img_path,
+                'Source': chunk_meta['source'],
+                'Paper': chunk_meta['title'],
+                'Year': chunk_meta['year']
+            }
+            image_data = store.client.query_chromadb(
+                    store.img_collection,
+                    "",
+                    {"image_path": img_path}
+                )
+            img_meta = image_data["metadatas"][0][0]
+            img_info = add_domain_metadata_to_img_info(meta_filter.research_domain, img_meta, img_info)
+            img_paths.append(img_info)
+
+    img_paths_list = set([d['path'] for d in img_paths])
+    
+    domain_metadata = format_domain_metadata(meta_filter.research_domain, img_paths)
+    if domain_metadata != "":
+        txt_context += f"Domain metadata\n{domain_metadata}\n\n"
+    else:
+        txt_context += "No domain metadata found for context."
 
     ans = query_llm(VISION_LLM_URL, question, system_prompt, txt_context, list(img_paths_list))
 
@@ -418,8 +432,8 @@ if __name__ == "__main__":
     #######################################################
 
     paper_store = ChromaDBPaperStore()
-    question = 'What are papers since 2023 about analytical chemistry are focused on?'
-      # question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
+    # question = 'What aliphatic hydroxy acids are present in the papers published in 2022? Give me their SMILES.'
+    # question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
     # question = 'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
     # question = 'How does the synthesis of Glionitrin A/B happen?'
 

@@ -11,8 +11,8 @@ load_dotenv(find_dotenv())
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CHEM_SERVICES_HOST = os.getenv("CHEM_SERVICES_HOST")
-CHEM_SERVICES_PORT = os.getenv("CHEM_SERVICES_PORT")
+CHEM_SERVICES_HOST = os.getenv("HOSTS_PORTS__OPENCHEMIE_HOST")
+CHEM_SERVICES_PORT = os.getenv("HOSTS_PORTS__OPENCHEMIE_PORT")
 CHEM_SERVICES_URL = f"http://{CHEM_SERVICES_HOST}:{CHEM_SERVICES_PORT}"
 REQUEST_TIMEOUT = 60
 
@@ -46,7 +46,6 @@ def handle_api_request(endpoint: str, file_param_name: str = None, ):
             try:
                 api_url = f"{CHEM_SERVICES_URL}{endpoint}"
                 logger.info(f"Calling ChemService API: {api_url}")
-                
                 if file_param_name:
                     if args:
                         file_data = args[0]
