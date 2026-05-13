@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Build an isolated MCP tool container from a GitHub repository.
+
+Flow:
+  1. Build ``alembic-base:latest`` (Dockerfile under ``docker/alembic/``)
+     if it is not already present locally.
+  2. Run a *build* container that executes the alembic pipeline against
+     ``<repo_url>``. The pipeline clones, sets up a venv, generates
+     ``server.py`` and validates it — all inside the container.
+  3. On successful exit, ``docker commit`` the container to
+     ``alembic-tool:<repo-name>``. The "improved" image now carries the
+     cloned repo, its venv and the generated FastMCP server.
+  4. Launch the committed image with a random host port mapped to the
+     container's ``$MCP_PORT`` so the MCP server is reachable from the host.
+
+Run from anywhere:
+    python CoScientist/src/alembic/start_chain.py <repo_url>
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import random
+import re
+import secrets
+import subprocess
+import sys
+from pathlib import Path
+
+# /<root>/CoScientist/src/alembic/start_chain.py -> /<root>
+PROJECT_ROOT     = Path(__file__).resolve().parents[3]
+BASE_IMAGE       = "alembic-base:latest"
+BASE_DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
+TOOL_REPO        = "alembic-tool"
+PORT_RANGE       = (20000, 30000)
+DEFAULT_ENV_FILE = PROJECT_ROOT / "CoScientist" / "src" / ".env"
+
+PASSTHROUGH_ENV = (
+    "OPENROUTER_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY",
+    "GOOGLE_API_KEY", "GEMINI_API_KEY",
+    "MODEL", "MCP_URLS", "OR_APP_NAME", "FEDOTMAS_DEFAULT_MODEL",
+)
+
+
+def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    print(f"[start-chain] $ {' '.join(cmd)}", flush=True)
+    return subprocess.run(cmd, **kw)
+
+
+def _repo_name(repo_url: str) -> str:
+    return re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1])
+
+
+def _image_exists(name: str) -> bool:
+    r = subprocess.run(
+        ["docker", "image", "inspect", name],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return r.returncode == 0
+
+
+def _default_platform() -> str | None:
+    """linux/amd64 on Apple Silicon so old x86-only wheels (dgl 0.9, etc.)
+    pull and run via Rosetta. Native everywhere else (None = no flag)."""
+    if sys.platform == "darwin" and platform.machine() in ("arm64", "aarch64"):
+        return "linux/amd64"
+    return None
+
+
+def _ensure_base(rebuild: bool, plat: str | None) -> None:
+    if not rebuild and _image_exists(BASE_IMAGE):
+        print(f"[start-chain] base image {BASE_IMAGE} already present.")
+        return
+    cmd = ["docker", "build"]
+    if plat:
+        cmd += ["--platform", plat]
+    cmd += ["-t", BASE_IMAGE, "-f", str(BASE_DOCKERFILE), str(PROJECT_ROOT)]
+    r = _run(cmd)
+    if r.returncode != 0:
+        sys.exit(r.returncode)
+
+
+def _random_port() -> int:
+    return random.randint(*PORT_RANGE)
+
+
+def _env_args(env_file: Path | None) -> list[str]:
+    args: list[str] = []
+    if env_file and env_file.exists():
+        args += ["--env-file", str(env_file)]
+    for var in PASSTHROUGH_ENV:
+        if var in os.environ:
+            args += ["-e", f"{var}={os.environ[var]}"]
+    return args
+
+
+def build_image(repo_url: str, ns: argparse.Namespace) -> str:
+    repo       = _repo_name(repo_url)
+    cname      = f"alembic-build-{repo}-{secrets.token_hex(3)}"
+    tool_image = f"{TOOL_REPO}:{repo}"
+
+    cmd = ["docker", "run", "--name", cname]
+    if ns.platform:
+        cmd += ["--platform", ns.platform]
+    if ns.gpus:
+        cmd += ["--gpus", ns.gpus]
+    cmd += _env_args(ns.env_file)
+    cmd += [BASE_IMAGE, "build", repo_url]
+    if ns.resume:
+        cmd += ["--resume", ns.resume]
+
+    r = _run(cmd)
+    if r.returncode != 0:
+        sys.stderr.write(
+            f"\n[start-chain] pipeline failed (exit {r.returncode}).\n"
+            f"  Container kept for inspection: {cname}\n"
+            f"  Inspect:  docker logs {cname}\n"
+            f"  Shell:    docker commit {cname} alembic-debug:{repo} "
+            f"&& docker run --rm -it --entrypoint /bin/bash alembic-debug:{repo}\n"
+            f"  Cleanup:  docker rm {cname}\n"
+        )
+        sys.exit(r.returncode)
+
+    print(f"[start-chain] committing {cname} -> {tool_image}")
+    c = _run(["docker", "commit", cname, tool_image])
+    if c.returncode != 0:
+        sys.exit(c.returncode)
+    _run(["docker", "rm", cname],
+         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return tool_image
+
+
+def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
+    repo  = _repo_name(repo_url)
+    port  = _random_port()
+    cname = f"alembic-serve-{repo}-{secrets.token_hex(3)}"
+
+    cmd = ["docker", "run", "-d", "--name", cname, "-p", f"{port}:8000"]
+    if ns.platform:
+        cmd += ["--platform", ns.platform]
+    if ns.gpus:
+        cmd += ["--gpus", ns.gpus]
+    cmd += _env_args(ns.env_file)
+    cmd += [tool_image, "serve", repo_url]
+
+    r = _run(cmd)
+    if r.returncode != 0:
+        sys.exit(r.returncode)
+
+    print(
+        "\n[start-chain] MCP server up.\n"
+        f"  image     : {tool_image}\n"
+        f"  container : {cname}\n"
+        f"  url       : http://localhost:{port}/mcp\n"
+        f"  logs      : docker logs -f {cname}\n"
+        f"  stop      : docker stop {cname} && docker rm {cname}\n"
+        f"  relaunch  : docker run -d -p <port>:8000 {tool_image} serve {repo_url}"
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        prog="start_chain",
+        description="Build a fully isolated MCP tool container from a GitHub repo.",
+    )
+    ap.add_argument("repo_url", help="GitHub repository URL")
+    ap.add_argument("--rebuild-base", action="store_true",
+                    help="Force rebuild of alembic-base:latest")
+    ap.add_argument("--gpus", default=None,
+                    help='Docker --gpus value, e.g. "all". Off by default.')
+    ap.add_argument("--platform", default=None,
+                    help='Docker --platform value, e.g. "linux/amd64". '
+                         'Auto-set to linux/amd64 on Apple Silicon so x86-only '
+                         'wheels (dgl, old torchvision, etc.) run via Rosetta. '
+                         'Pass "native" to force the host architecture.')
+    ap.add_argument("--resume", default=None,
+                    choices=("explorer", "environment", "coder", "validator"),
+                    help="Resume the alembic pipeline from a specific stage")
+    ap.add_argument("--no-serve", action="store_true",
+                    help="Build and commit only; do not launch the MCP server")
+    ap.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE,
+                    help=f"Path to .env to inject (default: {DEFAULT_ENV_FILE})")
+    return ap.parse_args()
+
+
+def main() -> None:
+    ns = parse_args()
+    if ns.platform is None:
+        ns.platform = _default_platform()
+        if ns.platform:
+            print(f"[start-chain] Apple Silicon detected — defaulting to "
+                  f"--platform {ns.platform} (Rosetta). "
+                  f"Pass --platform native to override.")
+    elif ns.platform == "native":
+        ns.platform = None
+    _ensure_base(ns.rebuild_base, ns.platform)
+    image = build_image(ns.repo_url, ns)
+    if not ns.no_serve:
+        serve_image(ns.repo_url, image, ns)
+
+
+if __name__ == "__main__":
+    main()
