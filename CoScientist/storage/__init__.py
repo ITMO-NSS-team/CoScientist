@@ -1,10 +1,12 @@
 """Storage module for CoScientist."""
 from CoScientist.storage.models import (
     RetrievalFinalResult,
-    RetrievalToolResult
+    RetrievalToolResult,
+    ToolRanking
 )
 
 __all__ = [
     "RetrievalFinalResult",
-    "RetrievalToolResult"
+    "RetrievalToolResult",
+    "ToolRanking"
 ]
