@@ -602,12 +602,16 @@ The Dockerfile must be at the clone root:
 Use this template, adapting only the RUN steps:
 
 ```dockerfile
-FROM python:3.10-slim
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies (add only what the repo actually needs)
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-    git \\
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv git \
     && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3 /usr/bin/python && ln -sf /usr/bin/pip3 /usr/bin/pip
 
 WORKDIR /app
 
@@ -616,15 +620,18 @@ COPY . /app
 
 # Install Python dependencies (no editable installs)
 RUN pip install --no-cache-dir fastmcp pytest mcp
-RUN pip install --no-cache-dir <repo_deps_here>
+RUN <exact_install_command_from_exploration_report>
 ```
 
 Rules:
-- Default to ``python:3.10-slim``; go higher only if the repo explicitly requires it.
+- Always use ``nvidia/cuda:11.8.0-runtime-ubuntu22.04`` as the base image.
 - Always install ``fastmcp``, ``pytest``, ``mcp`` first.
-- Install packages that the exploration report lists as key dependencies.
-  Copy git URL strings (``Pkg @ git+...``) verbatim.
-- Never use ``-e .`` (editable installs fail in slim images with no build tools).
+- **For the repo's own dependencies, copy the exact ``Install command`` field from
+  the exploration report verbatim** (e.g. ``pip install -r requirements.txt`` or
+  ``pip install -e .`` replaced with ``pip install .``). Do NOT enumerate packages
+  by hand — use the command the explorer already derived.
+  Copy git URL strings (``Pkg @ git+...``) verbatim if they appear in requirement files.
+- Never use ``-e .`` (editable installs fail without build tools); replace with ``pip install .``.
 - Add system packages (libGL, poppler-utils, libpq-dev, etc.) only when the
   exploration report mentions them or a build failure shows they are missing.
 - Torch/torchvision: add ``--extra-index-url https://download.pytorch.org/whl/cpu``
