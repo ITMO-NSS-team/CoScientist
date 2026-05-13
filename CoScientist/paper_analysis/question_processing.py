@@ -339,7 +339,7 @@ def process_question(
     for img_meta in img_data["metadatas"][0]:
         if img_meta['image_path'] not in [d['path'] for d in img_paths]:
             img_info = {
-                'path': img_path,
+                'path': img_meta['image_path'],
                 'Source': chunk_meta['source'],
                 'Paper': chunk_meta['title'],
                 'Year': chunk_meta['year']
@@ -347,7 +347,7 @@ def process_question(
             image_data = store.client.query_chromadb(
                     store.img_collection,
                     "",
-                    {"image_path": img_path}
+                    {"image_path": img_meta['image_path']}
                 )
             img_meta = image_data["metadatas"][0][0]
             img_info = add_domain_metadata_to_img_info(meta_filter.research_domain, img_meta, img_info)
@@ -433,7 +433,7 @@ if __name__ == "__main__":
 
     paper_store = ChromaDBPaperStore()
     # question = 'What aliphatic hydroxy acids are present in the papers published in 2022? Give me their SMILES.'
-    # question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
+    question = 'What components are involved in the synthesis of BASHY dyes, and what are the uses of these dyes?'
     # question = 'What IC50 values do weakly active and highly active Bruton\'s tyrosine kinase inhibitors have?'
     # question = 'How does the synthesis of Glionitrin A/B happen?'
 
