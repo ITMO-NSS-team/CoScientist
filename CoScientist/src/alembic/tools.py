@@ -20,8 +20,6 @@ IGNORE_EXTS = {
     ".pt", ".pth", ".ckpt", ".pkl", ".npy", ".npz", ".parquet",
 }
 
-_ALLOWED_CMDS = ("ls", "grep", "head", "glob")
-_ENV_ALLOWED_CMDS = (*_ALLOWED_CMDS, "pip", "pip3", "uv", "conda", "python", "python3", "which")
 
 
 def _repo_name(repo_url: str) -> str:
@@ -103,8 +101,25 @@ def read_file(repo_url: str, path: str) -> dict:
     return {"path": path, "content": raw.decode("utf-8", errors="replace")}
 
 
+def _glob_command(stripped: str) -> dict | None:
+    """Handle the custom ``glob <pattern>`` shortcut. Returns None if not glob."""
+    first = stripped.split()[0] if stripped else ""
+    if first != "glob":
+        return None
+    parts = stripped.split(None, 1)
+    if len(parts) < 2:
+        return {"error": "glob requires a pattern argument."}
+    pattern = parts[1]
+    matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
+    return {"matches": matched}
+
+
 def bash(command: str) -> dict:
-    """Run a restricted shell command. Only ls, grep, head, and glob are supported.
+    """Run a shell command with a 15 s timeout.
+
+    The pipeline is intended to run inside an ephemeral container, so any
+    command line is accepted — the container is the security boundary. The
+    custom ``glob <pattern>`` shortcut is still recognised as a convenience.
 
     Examples:
         bash("ls .alembic/massformer/repos")
@@ -114,24 +129,12 @@ def bash(command: str) -> dict:
         bash("python -m py_compile .alembic/massformer/output/server.py && echo OK")
     """
     stripped = command.strip()
-    cmd_name = stripped.split()[0] if stripped else ""
+    if not stripped:
+        return {"error": "empty command"}
 
-    if cmd_name not in _ALLOWED_CMDS:
-        # Allow "python -m py_compile ..." for syntax checks
-        if not (cmd_name == "python" and "-m" in stripped and "py_compile" in stripped):
-            return {
-                "error": f"Command '{cmd_name}' is not allowed. "
-                         f"Only {_ALLOWED_CMDS} are supported, plus "
-                         f"'python -m py_compile <file> && echo OK'."
-            }
-
-    if cmd_name == "glob":
-        parts = stripped.split(None, 1)
-        if len(parts) < 2:
-            return {"error": "glob requires a pattern argument."}
-        pattern = parts[1]
-        matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
-        return {"matches": matched}
+    glob_result = _glob_command(stripped)
+    if glob_result is not None:
+        return glob_result
 
     try:
         result = subprocess.run(
@@ -150,33 +153,26 @@ def bash(command: str) -> dict:
 
 
 def bash_env(command: str) -> dict:
-    """Run an environment setup command (pip, uv, conda, python, etc.).
+    """Run a shell command with a 300 s timeout — for slow installs.
 
-    Extends bash with package-manager commands. Timeout is 300 s to
-    accommodate slow installs.
+    Same semantics as ``bash``, just a longer timeout so package managers
+    (pip / uv / apt-get / conda) have time to download and build.
 
     Examples:
         bash_env("uv venv .alembic/massformer/output/.venv --python 3.11")
         bash_env("uv pip install --python .alembic/massformer/output/.venv/bin/python torch torchvision")
         bash_env("pip install -r .alembic/massformer/repos/requirements.txt")
         bash_env("which python3")
+        # System libs (container only, /var/lib/apt/lists is empty):
+        bash_env("apt-get update && apt-get install -y --no-install-recommends libpoppler-cpp-dev")
     """
     stripped = command.strip()
-    cmd_name = stripped.split()[0] if stripped else ""
+    if not stripped:
+        return {"error": "empty command"}
 
-    if cmd_name not in _ENV_ALLOWED_CMDS:
-        return {
-            "error": f"Command '{cmd_name}' is not allowed. "
-                     f"Supported: {sorted(_ENV_ALLOWED_CMDS)}."
-        }
-
-    if cmd_name == "glob":
-        parts = stripped.split(None, 1)
-        if len(parts) < 2:
-            return {"error": "glob requires a pattern argument."}
-        pattern = parts[1]
-        matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
-        return {"matches": matched}
+    glob_result = _glob_command(stripped)
+    if glob_result is not None:
+        return glob_result
 
     try:
         result = subprocess.run(
@@ -377,8 +373,8 @@ def setup_venv(repo_url: str, packages: list[str] | None = None,
     return {"success": True, "venv": str(venv_dir), "python": python}
 
 
-def check_venv_compat(repo_url: str) -> dict:
-    """Check compatibility by replaying the repo's own import statements in the venv.
+def check_venv_compat(repo_url: str, venv_name: str = ".venv") -> dict:
+    """Check compatibility by replaying the repo's own import statements in a venv.
 
     Scans the cloned repo's Python files with AST, collects every unique
     `import X` and `from X import Y` where X is an installed package, then
@@ -386,17 +382,25 @@ def check_venv_compat(repo_url: str) -> dict:
     (numpy 1 vs 2) and removed-API errors (e.g. `from transformers import AdamW`
     removed in transformers>=4.38).
 
+    Args:
+        repo_url:  Repository URL.
+        venv_name: Directory name of the venv to check, relative to the repo
+                   output dir. Default ".venv" (the server venv). Pass
+                   ".venv-repo" to check the repo-side venv when running the
+                   two-venv layout.
+
     Returns only failures; successful imports are omitted to keep output small.
 
     Example:
         check_venv_compat("https://github.com/Roestlab/massformer")
-        # -> {"has_conflicts": True,
-        #     "conflicts": {"from transformers import AdamW":
-        #                       {"error": "cannot import name 'AdamW' ..."}}}
+        check_venv_compat("https://github.com/Roestlab/massformer", venv_name=".venv-repo")
     """
     out_dir  = _output_dir(repo_url).resolve()
     repo_dir = _repo_path(repo_url).resolve()
-    python   = _venv_python(out_dir)
+    venv_py  = out_dir / venv_name / "bin" / "python"
+    if not venv_py.exists():
+        return {"error": f"venv python not found at {venv_py}"}
+    python   = str(venv_py.absolute())
 
     script = textwrap.dedent("""\
         import sys, ast, importlib.metadata, json
@@ -423,7 +427,7 @@ def check_venv_compat(repo_url: str) -> dict:
                             or part.startswith(("_", "."))
                             or "." in part):
                         continue
-                    installed_roots.add(part.removesuffix(".py"))
+                    installed_roots.add(part[:-3] if part.endswith(".py") else part)
 
         # Collect unique import statements from repo source, filtered to
         # installed packages only (avoids false positives from repo-internal code).
