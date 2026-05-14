@@ -14,3 +14,10 @@ class RetrievalToolResult(BaseModel):
     server_id: str
     description: str
     score: float
+
+class ToolScore(BaseModel):
+    index: int
+    score: float
+
+class ToolRanking(BaseModel):
+    tools: List[ToolScore]

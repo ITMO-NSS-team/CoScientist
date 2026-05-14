@@ -187,3 +187,5 @@ logs
 ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
 *db.json
+
+roadmap.txt
