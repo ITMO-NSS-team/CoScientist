@@ -10,11 +10,13 @@ from marker.config.parser import ConfigParser
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.output import text_from_rendered, save_output
+from protollm.connectors import create_llm_connector
 
 from CoScientist.paper_parser.parser_prompts import cls_prompt, table_extraction_prompt
 from CoScientist.paper_parser.utils import prompt_func, convert_to_base64
 from CoScientist.paper_parser.s3_connection import S3BucketService
 from CoScientist.config import get_settings
+from CoScientist.paper_analysis.settings import allowed_providers
 
 settings = get_settings()
 _log = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ _log = logging.getLogger(__name__)
 ROOT_DIR = settings.storage.root_dir
 PARSE_RESULTS_PATH = os.path.join(ROOT_DIR, settings.storage.parse_results)
 PAPERS_PATH = os.path.join(ROOT_DIR, settings.storage.papers_storage)
+IMAGES_PATH = os.path.join(ROOT_DIR, settings.storage.img_storage)
 VISION_LLM_URL = settings.llm.vision_url
 VISION_LLM_NAME = VISION_LLM_URL.split(';')[1]
 LLM_SERVICE_CC_URL = settings.llm.service_cc_url
@@ -116,7 +119,7 @@ def clean_up_html(
                 if isinstance(element, Tag):
                     element.decompose()
 
-    llm = create_llm_connector(VISION_LLM_URL, extra_body={"provider": {"only": config.llm.allowed_providers}})
+    llm = create_llm_connector(VISION_LLM_URL, extra_body={"provider": {"only": allowed_providers}})
 
     image_url_mapping = {}
 
@@ -220,7 +223,7 @@ def html_chunking(html_string: str, paper_name: str, paper_summary) -> list:
             "publication_year": paper_summary.publication_year,
             "paper_authors": paper_summary.paper_authors,
             "publication_source": paper_summary.publication_source,
-            "research_area": paper_summary.research_area,
+            "research_area": paper_summary.research_domain,
         })
 
     return documents

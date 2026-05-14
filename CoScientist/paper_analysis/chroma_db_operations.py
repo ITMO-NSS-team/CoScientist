@@ -588,8 +588,26 @@ class ChromaDBPaperStore:
         Returns:
             ExpandedSummary: An object containing the paper's structured summary information.
         """
-        expanded_summary: ExpandedSummary = llm.invoke([HumanMessage(content=summarisation_prompt + parsed_paper)])
-        return expanded_summary
+        messages = [HumanMessage(content=summarisation_prompt + parsed_paper)]
+
+        for attempt in range(3):
+            try:
+                expanded_summary: ExpandedSummary = llm.invoke(messages)
+                return expanded_summary
+            except Exception as e:
+                last_error = e
+                messages.append(
+                        HumanMessage(
+                            content="Previous response was invalid JSON. Respond with ONLY valid JSON."
+                        )
+                    )
+                continue
+    
+        raise RuntimeError(
+            f"Failed to get valid structured response after 3 attempts. "
+            f"Last error: {last_error}"
+        ) from last_error
+
 
     def add_paper_summary_to_db(self, paper_name: str, parsed_paper: str, expanded_summary: ExpandedSummary) -> None:
         """
@@ -649,7 +667,7 @@ class ChromaDBPaperStore:
                 " ".join(
                     [
                         "sh",
-                        os.path.join(ROOT_DIR, "ChemCoScientist/paper_analysis/marker_parsing.sh"),
+                        str(Path("CoScientist/paper_analysis/marker_parsing.sh")),
                         str(path_to_docs),
                         str(out_path),
                         str(self.workers)

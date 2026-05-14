@@ -6,7 +6,7 @@ import pikepdf
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from protollm.connectors import create_llm_connector
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 
@@ -30,8 +30,8 @@ VISION_LLM_URL = os.getenv("LLM__VISION_URL")
 
 class QueryFilters(BaseModel):
     """Metadata filters extracted from user question."""
-    paper_authors: str | None = Field(
-        description="Author name(s) mentioned in the question",
+    paper_authors: list[str] | None = Field(
+        description="Author names mentioned in the question",
         default=None
     )
     publication_year_min: int | None = Field(
@@ -50,16 +50,24 @@ class QueryFilters(BaseModel):
         description="Journal or publication source name",
         default=None
     )
-    research_domain: ResearchDomain | None = Field(
-        description="Broad research domain",
+    research_domain: list[ResearchDomain] | None = Field(
+        description="Broad research domains",
         default=None
     )
-    research_sub_domain: str | None = Field(
-        description="Specific research sub-domain within the selected research domain"
+    research_sub_domain: list[str] | None = Field(
+        description="Specific research sub-domains within the selected research domains"
         " Must match the selected research_domain based on this mapping:\n"
         f"{DOMAIN_TO_SUBDOMAINS}\n",
         default=None
     )
+
+    @field_validator("paper_authors", "research_domain", "research_sub_domain", mode="before")
+    def normalize_list_fields(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return v
+        return [v]
 
     @model_validator(mode="after")
     def validate_domain_sub_domain_pair(self):
@@ -69,10 +77,14 @@ class QueryFilters(BaseModel):
         if not self.research_domain:
             raise ValueError("research_domain must be set when research_sub_domain is provided")
 
-        allowed_sub_domains = get_sub_domains_for_domain(self.research_domain)
-        if self.research_sub_domain not in allowed_sub_domains:
+        allowed_sub_domains = []
+        for domain in self.research_domain:
+            allowed_sub_domains.extend(get_sub_domains_for_domain(domain))
+
+        invalid_sub_domains = [sd for sd in self.research_sub_domain if sd not in allowed_sub_domains]
+        if invalid_sub_domains:
             raise ValueError(
-                "research_sub_domain must belong to selected research_domain"
+                "research_sub_domain must belong to one of the selected research_domain values"
             )
         return self
 
@@ -87,18 +99,34 @@ def extract_metadata_filters(question: str) -> QueryFilters:
     Returns:
         QueryFilters: Structured filters including authors, years, source, domain, and sub-domain
     """
-    llm = create_llm_connector(
-        VISION_LLM_URL,
-        extra_body={"provider": {"only": allowed_providers}},
-        temperature=0.0
-    )
+    max_retries = 3
     
-    struct_llm = llm.with_structured_output(schema=QueryFilters)
+    for attempt in range(max_retries):
+        try:
+            llm = create_llm_connector(
+                VISION_LLM_URL,
+                extra_body={"provider": {"only": allowed_providers}},
+                temperature=0.1
+            )
+            
+            struct_llm = llm.with_structured_output(schema=QueryFilters)
+            
+            prompt = extract_query_filters_prompt + f"\n\nUSER QUESTION: {question}"
+            
+            filters: QueryFilters = struct_llm.invoke([HumanMessage(content=prompt)])
+            return filters
+        except Exception as e:
+            print(f"Error extracting metadata filters (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                wait_time = 1.5 ** attempt
+                print(f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"Failed to extract metadata filters for question: {question}")
+                # Return empty QueryFilters on final error to allow pipeline to continue
+                return QueryFilters()
     
-    prompt = extract_query_filters_prompt + f"\n\nUSER QUESTION: {question}"
-    
-    filters: QueryFilters = struct_llm.invoke([HumanMessage(content=prompt)])
-    return filters
+    return QueryFilters()
 
 
 def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
@@ -112,10 +140,10 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
         dict: ChromaDB where clause ready for collection.query(), or None if no filters
         
     Example output:
-        {"paper_authors": {"$eq": "Smith"}}
+        {"paper_authors": {"$in": ["Smith"]}}
         {
             "$and": [
-                {"paper_authors": {"$eq": "Smith"}},
+                {"paper_authors": {"$in": ["Smith"]}},
                 {"publication_year": {"$gte": 2020}}
             ]
         }
@@ -123,7 +151,7 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
     conditions = []
     
     if filters.paper_authors is not None:
-        conditions.append({"paper_authors": {"$eq": filters.paper_authors}})
+        conditions.append({"paper_authors": {"$in": filters.paper_authors}})
     
     if filters.publication_year_exact is not None:
         conditions.append({"publication_year": {"$eq": filters.publication_year_exact}})
@@ -140,10 +168,10 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
         conditions.append({"publication_source": {"$eq": filters.publication_source}})
     
     if filters.research_domain is not None:
-        conditions.append({"research_domain": {"$eq": filters.research_domain}})
+        conditions.append({"research_domain": {"$in": filters.research_domain}})
     
     if filters.research_sub_domain is not None:
-        conditions.append({"research_sub_domain": {"$eq": filters.research_sub_domain}})
+        conditions.append({"research_sub_domain": {"$in": filters.research_sub_domain}})
     
     if not conditions:
         return None
@@ -198,16 +226,32 @@ def query_llm(
         ),
     ]
 
-    res = structured_llm.invoke(messages)
-    content = {
-        'answer': res.answer,
-        'explanation': res.explanation,
-        'chunk_explanation': res.chunk_explanation,
-        'img_explanation': res.img_explanation,
-        'relevant_text': res.relevant_text,
-        'relevant_images': res.relevant_images
-    }
-    return content
+    for attempt in range(3):
+        try:
+            res = structured_llm.invoke(messages)
+            content = {
+                'answer': res.answer,
+                'explanation': res.explanation,
+                'chunk_explanation': res.chunk_explanation,
+                'img_explanation': res.img_explanation,
+                'relevant_text': res.relevant_text,
+                'relevant_images': res.relevant_images
+            }
+            return content
+        except Exception as e:
+            last_error = e
+            messages.append(
+                    HumanMessage(
+                        content="Previous response was invalid JSON. Respond with ONLY valid JSON."
+                    )
+                )
+            continue
+    
+    raise RuntimeError(
+        f"Failed to get valid structured response after 3 attempts. "
+        f"Last error: {last_error}"
+    ) from last_error
+
 
 
 def simple_query_llm(

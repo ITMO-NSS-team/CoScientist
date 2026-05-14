@@ -1,21 +1,23 @@
 import pytest
 import os
 import uuid
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from pathlib import Path
 
-from ChemCoScientist.paper_analysis.chroma_db_operations import ChromaClient, ChromaDBPaperStore, process_all_documents
-from ChemCoScientist.paper_analysis.question_processing import process_question, simple_query_llm
+from CoScientist.chemical_utils.chemical_functions import extract_molecules_from_pdf, extract_reactions_from_pdf, remove_keys
+from CoScientist.paper_analysis.chroma_db_operations import ChromaClient, ChromaDBPaperStore
+from CoScientist.paper_parser.documents_processing import process_all_documents
+from CoScientist.paper_analysis.question_processing import process_question, simple_query_llm
 from CoScientist.paper_parser.s3_connection import s3_service
+from CoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt
 
-from definitions import CONFIG_PATH, ROOT_DIR
+load_dotenv(find_dotenv())
 
-load_dotenv(CONFIG_PATH)
-PAPERS_STORAGE_PATH = os.path.join(ROOT_DIR, "tests/integration/data")
-PARSE_RESULTS_PATH = os.path.join(ROOT_DIR, "tests/integration/parse_results")
+PAPERS_STORAGE_PATH = Path("tests/integration/data")
+PARSE_RESULTS_PATH = Path("tests/integration/parse_results")
 QUESTION_DB = "How are UV-curable monomeric or oligomeric urethane acrylates used in stereolithography?"
 QUESTION_USER = "Who is the author of the article?"
-VISION_LLM_URL = os.environ["VISION_LLM_URL"]
+VISION_LLM_URL = os.getenv("LLM__VISION_URL")
 
 def _unique(name: str) -> str:
     """Generates a unique collection or bucket name by appending a random 8-character UUID suffix."""
@@ -115,26 +117,26 @@ class TestPaperAnalysis:
         txt_collection = client.get_or_create_chroma_collection(collection_names["txt"])
         img_collection = client.get_or_create_chroma_collection(collection_names["img"])
         assert sum_collection.count() == 1
-        assert txt_collection.count() == 9
-        assert img_collection.count() > 9
+        assert txt_collection.count() == 10
+        assert img_collection.count() == 11
         assert not os.listdir(PARSE_RESULTS_PATH)
     
     def test_03_query(self,
                       paper_store: ChromaDBPaperStore,
                       s3_prefix: str) -> None:
         """Test that querying the database with a predefined question returns a valid answer and metadata."""
-        result = process_question(QUESTION_DB, paper_store)
+        result = process_question(QUESTION_DB, sys_prompt, paper_store)
         assert "answer" in result
         assert "metadata" in result
         assert isinstance(result["answer"], str)
         assert result["answer"].strip() != ""
         meta = result["metadata"]
         assert isinstance(meta, dict)
-        for field in ("text_context", "image_context", "metadata"):
+        for field in ("text_context", "image_context"):
             assert field in meta
             assert meta[field] not in (None, "", [], {})
-        assert meta["text_context"].count(". Metadata: ") == 5
-        assert len(meta["image_context"]) > 3
+        assert len(meta["text_context"]) != 0 # chunks that LLM considered to be relevant
+        assert len(meta["image_context"]) != 0 # images that LLM considered to be relevant
         s3_service.download_image_from_s3(f"{s3_prefix}/test_paper/_page_0_Figure_10.jpeg",
                                           f"{PAPERS_STORAGE_PATH}/_page_0_Figure_10.jpeg")
         assert "_page_0_Figure_10.jpeg" in os.listdir(PAPERS_STORAGE_PATH)
@@ -144,7 +146,20 @@ class TestPaperAnalysis:
         pdfs_dirs = [os.path.join(PAPERS_STORAGE_PATH, f)
                      for f in os.listdir(PAPERS_STORAGE_PATH)
                      if f.lower().endswith(".pdf")]
-        result = simple_query_llm(VISION_LLM_URL, QUESTION_USER, pdfs_dirs)
+        
+        img_descriptions = 'This is additional information about the reactions and molecules that are presented' \
+                    'on the images in the paper. They are passed in the same order as papers themselves.' \
+                    'Use them to answer the question.\n\n'
+        for paper in pdfs_dirs:
+            with open(paper, 'rb') as paper_bytes:
+                detected_reactions = remove_keys(extract_reactions_from_pdf(paper_bytes))
+                img_descriptions += f'Reactions: {str(detected_reactions)}\n'
+            with open(paper, 'rb') as paper_bytes:
+                detected_molecules = remove_keys(extract_molecules_from_pdf(paper_bytes))
+                img_descriptions += f'Molecules: {str(detected_molecules)}\n'
+            img_descriptions += '\n\n'
+
+        result = simple_query_llm(VISION_LLM_URL, QUESTION_USER, explore_my_papers_prompt,pdfs_dirs, img_descriptions)
         assert "answer" in result
         assert isinstance(result["answer"], str)
         assert "Norbert Moszner" in result["answer"]

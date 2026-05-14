@@ -20,7 +20,7 @@ from CoScientist.paper_parser.s3_connection import S3BucketService, s3_service a
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
-SUMMARY_LLM_URL = os.getenv("SUMMARY_LLM_URL")
+SUMMARY_LLM_URL = os.getenv("LLM__SUMMARY_URL")
 
 process_local_store: ChromaDBPaperStore = None
 
