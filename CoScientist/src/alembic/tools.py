@@ -560,6 +560,137 @@ def run_tests(repo_url: str) -> dict:
     return {"passed": r.returncode == 0, "output": output}
 
 
+_INVOKER_SCRIPT = textwrap.dedent('''\
+    """Invoke a single tool function from server.py with kwargs and print JSON."""
+    import importlib.util as _u
+    import json as _json
+    import os as _os
+    import sys as _sys
+    import traceback as _tb
+    from pathlib import Path as _P
+
+    _server   = _P(_os.environ["SERVER_PATH"]).resolve()
+    _toolname = _os.environ["TOOL_NAME"]
+    _args     = _json.loads(_os.environ.get("TOOL_ARGS_JSON", "{}"))
+
+    _sys.path.insert(0, str(_server.parent))
+
+    # Prevent server.py's module-level mcp.run() from blocking the import.
+    import fastmcp as _fastmcp
+    _orig_run = _fastmcp.FastMCP.run
+    _fastmcp.FastMCP.run = lambda *a, **k: None
+    try:
+        _spec = _u.spec_from_file_location("server", _server)
+        _mod  = _u.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+    finally:
+        _fastmcp.FastMCP.run = _orig_run
+
+    _fn = getattr(_mod, _toolname, None)
+    if _fn is None:
+        print(_json.dumps({"ok": False, "error": f"Tool {_toolname!r} not found"}))
+        raise SystemExit(0)
+    # FastMCP wraps @mcp.tool() into FunctionTool — unwrap to original callable.
+    for _attr in ("fn", "func", "__wrapped__"):
+        _inner = getattr(_fn, _attr, None)
+        if callable(_inner):
+            _fn = _inner
+            break
+
+    try:
+        _result = _fn(**_args)
+        print(_json.dumps({"ok": True, "result": _result}, default=str))
+    except Exception as _e:
+        print(_json.dumps({
+            "ok": False,
+            "error": f"{type(_e).__name__}: {_e}",
+            "traceback": _tb.format_exc(),
+        }))
+''')
+
+
+def invoke_mcp_tool(repo_url: str, tool_name: str, args: dict | None = None) -> dict:
+    """Actually invoke an @mcp.tool() function from the generated server.py.
+
+    Runs server.py inside the server venv (where fastmcp is installed),
+    looks up ``tool_name``, and calls it with ``args`` as kwargs. The
+    server's module-level ``mcp.run()`` is monkey-patched to a no-op so
+    the import does not block. FastMCP wraps tool functions in a
+    FunctionTool — we unwrap to the original callable before calling.
+
+    Use this in the validator/debugger flow to surface runtime errors
+    that pytest with mocked subprocess cannot catch (missing apt
+    packages, missing pip deps, helper-script bugs, wrong argv).
+
+    Args:
+        repo_url:  Repository URL.
+        tool_name: Exact function name (the @mcp.tool() target).
+        args:      Dict of keyword arguments to pass to the tool.
+
+    Returns:
+        On success: ``{"ok": True, "result": <whatever the tool returned>}``.
+        On error:   ``{"ok": False, "error": "<ExcName: msg>",
+                      "traceback": "<full traceback>",
+                      "stderr": "<tail of stderr>"}``.
+
+    Example:
+        invoke_mcp_tool(
+            "https://github.com/Roestlab/massformer",
+            "run_inference",
+            {"smiles_fp": "predictions/example_smiles.csv",
+             "output_fp": "predictions/demo_out.csv",
+             "custom_fp": "config/demo/demo_eval.yml",
+             "checkpoint_name": "demo",
+             "device": -1},
+        )
+    """
+    out_dir = _output_dir(repo_url).resolve()
+    server  = out_dir / "server.py"
+    venv_py = out_dir / ".venv" / "bin" / "python"
+    if not server.exists():
+        return {"ok": False, "error": f"server.py not found at {server}"}
+    if not Path(venv_py).exists():
+        return {"ok": False, "error": f"server venv python not found at {venv_py}"}
+
+    invoker = out_dir / "_invoke_tool.py"
+    invoker.write_text(_INVOKER_SCRIPT, encoding="utf-8")
+
+    env = __import__("os").environ.copy()
+    env["SERVER_PATH"]    = str(server)
+    env["TOOL_NAME"]      = tool_name
+    env["TOOL_ARGS_JSON"] = _json.dumps(args or {})
+
+    try:
+        r = subprocess.run(
+            [str(venv_py), str(invoker)],
+            capture_output=True, text=True, env=env, timeout=900,
+            cwd=str(out_dir),
+        )
+    except subprocess.TimeoutExpired:
+        invoker.unlink(missing_ok=True)
+        return {"ok": False, "error": "invocation timed out after 900 seconds"}
+    finally:
+        invoker.unlink(missing_ok=True)
+
+    # The invoker prints a single JSON line. If it crashed before printing,
+    # surface stderr so the debugger can see what failed.
+    stdout = r.stdout.strip()
+    last_line = stdout.splitlines()[-1] if stdout else ""
+    try:
+        parsed = _json.loads(last_line)
+        if not parsed.get("ok") and r.stderr:
+            parsed.setdefault("stderr", r.stderr[-2000:])
+        return parsed
+    except Exception:
+        return {
+            "ok": False,
+            "error": "could not parse invoker output",
+            "returncode": r.returncode,
+            "stdout": stdout[-1500:],
+            "stderr": r.stderr[-1500:],
+        }
+
+
 def write_report(repo_url: str, report_name: str, content: str) -> dict:
     """Write a Markdown report to this repo's reports directory.
 
