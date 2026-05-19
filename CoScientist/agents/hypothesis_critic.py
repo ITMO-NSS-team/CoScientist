@@ -52,7 +52,6 @@ class HypothesisInput:
             "strategy_type": self.strategy_type,
         }
 
-
 @dataclass
 class HypothesisCriticResult:
     id: str
