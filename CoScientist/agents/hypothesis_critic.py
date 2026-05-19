@@ -31,7 +31,6 @@ _SYSTEM = (
     "tool_request: if verifiability==0 describe the missing tool in <=15 words, else null."
 )
 
-
 @dataclass
 class HypothesisInput:
     id: str
