@@ -57,3 +57,25 @@ def after_tool_reranker_agent(
     callback_context.state['accumulated_tools'] = []
     callback_context.state['retrieval_queries'] = []
     return
+
+
+def after_fullset_reranker_agent(
+    callback_context: CallbackContext
+) -> None:
+    """Adds ToolReranker output to state"""
+
+    current_state = callback_context.state
+    reranked_mcps: Dict[str, bool] = current_state['reranked_web_servers']['mcp_scores']
+
+    rerank_map: Dict[int, float] = {t['index']: t['score'] for t in reranked_mcps}
+    acc_mcps: List[Dict[str, Any]] = current_state['accumulated_web_mcps']
+
+    filtered_mcps: List[Dict[str, Any]] = [
+        mcp for mcp in acc_mcps
+        if rerank_map.get(mcp['index'], False)
+    ]
+
+    callback_context.state['filtered_mcps'] = filtered_mcps
+    callback_context.state['accumulated_web_mcps'] = []
+    callback_context.state['retrieval_queries_mcp'] = []
+    return

@@ -1,8 +1,10 @@
 import re
 import httpx
 
-from CoScientist.tools_web_search.models import MCPSearchResult, FoundMCPServer, SourceError
-from CoScientist.tools_web_search.adapters import _McpServersCom, _McpServersOrg
+import asyncio
+
+from CoScientist.tools.tools_web_search.models import MCPSearchResult, FoundMCPServer, SourceError
+from CoScientist.tools.tools_web_search.adapters import _McpServersCom, _McpServersOrg
 
 
 class MCPSearchTool:

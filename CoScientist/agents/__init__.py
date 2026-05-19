@@ -7,7 +7,9 @@ from CoScientist.agents.agents import (
     orchestrator_agent,
     tool_retriever_agent,
     tool_reranker_agent,
-    task_execution_agent
+    tool_websearcher_agent,
+    task_execution_agent,
+    tool_agent
 )
 
 __all__ = [
@@ -18,5 +20,7 @@ __all__ = [
     "hypotheses_agent",
     "tool_retriever_agent",
     "tool_reranker_agent",
-    "task_execution_agent"
+    'tool_websearcher_agent',
+    "task_execution_agent",
+    'tool_agent'
 ]

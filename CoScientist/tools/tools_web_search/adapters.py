@@ -8,7 +8,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 
-from CoScientist.tools_web_search.models import FoundMCPServer
+from CoScientist.tools.tools_web_search.models import FoundMCPServer
 
 
 class _Source(ABC):

@@ -56,6 +56,10 @@ class FedotMASToolset(BaseToolset):
 
         servers = [server for server in servers if (server is not None and server.protocol=='http')]
         servers_payload = {server.name: HttpMCPServer(url=server.url, description=server.description) for server in servers}
+
+        web_servers = tool_context.state.get('deployed_mcps', [])
+        web_servers_payload = {server.name: HttpMCPServer(url=server.url, description=server.description) for server in web_servers} 
+        servers_payload.update(web_servers_payload)
         mas = MAS(mcp_servers=servers_payload)
 
 

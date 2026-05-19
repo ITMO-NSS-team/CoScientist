@@ -15,7 +15,9 @@ from CoScientist.agents import (
     research_agent, 
     fedot_agent,
     tool_retriever_agent,
-    task_execution_agent
+    task_execution_agent,
+    tool_websearcher_agent,
+    tool_agent
 )
 
 from CoScientist.storage import RetrievalFinalResult, RetrievalToolResult
@@ -45,7 +47,8 @@ __all__ = [
     "research_agent",
     "fedot_agent",
     "task_execution_agent",
-    "create_agents",
+    'tool_websearcher_agent',
+    "tool_agent",
     # HITL
     "HITLAction",
     "HITLRequest",

@@ -18,7 +18,7 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
-from CoScientist.agents.agents import orchestrator_agent
+from CoScientist.agents import orchestrator_agent
 from CoScientist.hitl import (
     AbstractHITLHandler,
     HITLRequest,

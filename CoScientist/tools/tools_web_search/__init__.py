@@ -1,13 +1,14 @@
 """Web search for tools module."""
 
-from CoScientist.tools_web_search.models import (
-    FoundMCPServer
+from CoScientist.tools.tools_web_search.models import (
+    FoundMCPServer,
     MCPSearchResult
 )
 
-from CoScientist.tools_web_search.engine import (
+from CoScientist.tools.tools_web_search.engine import (
     MCPSearchTool
 )
+
 __all__ = [
     'FoundMCPServer',
     'MCPSearchResult',

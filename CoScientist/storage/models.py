@@ -19,3 +19,12 @@ class ToolScore(BaseModel):
 
 class ToolRanking(BaseModel):
     tools: List[ToolScore]
+
+
+class MCPScore(BaseModel):
+    index: int
+    score: bool
+
+class MCPRanking(BaseModel):
+    mcp_scores: List[MCPScore]
+    reasoning: str

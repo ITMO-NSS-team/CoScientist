@@ -2,11 +2,13 @@
 from CoScientist.storage.models import (
     RetrievalFinalResult,
     RetrievalToolResult,
-    ToolRanking
+    ToolRanking,
+    MCPRanking
 )
 
 __all__ = [
     "RetrievalFinalResult",
     "RetrievalToolResult",
-    "ToolRanking"
+    "ToolRanking",
+    "MCPRanking"
 ]
