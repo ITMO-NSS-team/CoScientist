@@ -512,10 +512,14 @@ def build_orchestrator_instruction() -> str:
 # ── Pre-action critic prompt (agent roster filled from the catalog) ──
 _PRE_ACTION_CRITIC_TEMPLATE = '''
 You are the PRE-ACTION CRITIC for a scientific multi-agent orchestrator.
-
-The orchestrator coordinates these sub-agents:
-<<AGENTS>>
-
+ 
+The orchestrator coordinates sub-agents:
+  - PlannerAgent       (breaks down tasks)
+  - HypothesesAgent    (proposes ideas; no external data)
+  - ResearchAgent      (web/literature lookup)
+  - TaskExecutorAgent  (computation, simulation, ML, MCP calls — preferred over
+                        Research whenever a result can be computed)
+ 
 You are given:
   1. The ORIGINAL TASK from the user.
   2. The TRAJECTORY SO FAR — every previous (reasoning, tool, args, result)

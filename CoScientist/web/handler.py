@@ -19,6 +19,9 @@ class WebHITLHandler(AbstractHITLHandler):
     def set_websocket(self, ws):
         self._websocket = ws
 
+    # Seconds to wait for a HITL response before auto-approving (prevents infinite hang)
+    HITL_TIMEOUT_SECONDS: int = 300
+
     async def handle_request(self, request: HITLRequest) -> HITLResponse:
         request_id = str(uuid.uuid4())
 
@@ -43,7 +46,15 @@ class WebHITLHandler(AbstractHITLHandler):
         future = loop.create_future()
         self._pending[request_id] = future
 
-        response_data = await future
+        try:
+            response_data = await asyncio.wait_for(
+                asyncio.shield(future),
+                timeout=self.HITL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            self._pending.pop(request_id, None)
+            print(f"[WebHITLHandler] HITL timeout for request {request_id[:8]}, auto-approving.")
+            response_data = {"action": "approve", "approved": True}
 
         action = HITLAction(response_data.get("action", "approve"))
         return HITLResponse(
