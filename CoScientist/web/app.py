@@ -1,12 +1,3 @@
-"""
-FastAPI application for CoScientist web interface.
-
-Provides:
-  - HTML UI served from templates
-  - WebSocket for real-time agent events and HITL
-  - REST endpoints for session management
-"""
-
 import asyncio
 import json
 import os
@@ -21,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.main import CoScientistManager
+
+from google.genai import types
 
 # ---------------------------------------------------------------------------
 # Globals
@@ -240,9 +233,6 @@ async def _handle_chat(ws: WebSocket, data: dict):
 
     try:
         manager = await _get_manager()
-
-        # Use ADK runner to stream events
-        from google.genai import types
 
         content = types.Content(
             role="user",
