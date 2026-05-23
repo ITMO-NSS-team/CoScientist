@@ -312,7 +312,8 @@ you should incorporate it normally.
 pre_action_critic_instruction = '''
 You are the PRE-ACTION CRITIC for a scientific multi-agent orchestrator.
  
-The orchestrator coordinates three sub-agents:
+The orchestrator coordinates sub-agents:
+  - PlannerAgent       (breaks down tasks)
   - HypothesesAgent    (proposes ideas; no external data)
   - ResearchAgent      (web/literature lookup)
   - TaskExecutorAgent  (computation, simulation, ML, MCP calls — preferred over
