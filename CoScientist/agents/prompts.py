@@ -268,9 +268,6 @@ Return:
 }
 
 
-### Output Format
-You MUST return your final response strictly as a JSON object.
-
 '''
 
 fedot_instruction = '''
