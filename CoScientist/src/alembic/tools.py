@@ -2,6 +2,8 @@ import fnmatch
 import json as _json
 import os
 import re
+import shlex
+import socket
 import subprocess
 import textwrap
 import time
@@ -39,7 +41,6 @@ def _docker_safe_image_component(name: str) -> str:
 
 
 _ALLOWED_CMDS = ("ls", "grep", "head", "glob")
-_ENV_ALLOWED_CMDS = (*_ALLOWED_CMDS, "pip", "pip3", "uv", "conda", "python", "python3", "which")
 
 
 def _repo_name(repo_url: str) -> str:
@@ -184,65 +185,30 @@ def bash(command: str) -> dict:
         matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
         return {"matches": matched}
 
+    is_py_compile = (cmd_name == "python")
+    run_cmd = stripped
+    if is_py_compile and "&&" in stripped:
+        run_cmd = stripped.split("&&")[0].strip()
+
     try:
+        try:
+            args = shlex.split(run_cmd)
+        except ValueError as e:
+            return {"error": f"Could not parse command: {e}"}
         result = subprocess.run(
-            stripped,
-            shell=True,
+            args,
             capture_output=True,
             text=True,
             timeout=15,
         )
         output = result.stdout
+        if is_py_compile and result.returncode == 0:
+            output = (output + "\nOK").strip()
         if result.returncode != 0 and result.stderr:
             output += "\n[stderr] " + result.stderr
         return {"output": output[:MAX_BYTES]}
     except subprocess.TimeoutExpired:
         return {"error": "Command timed out after 15 seconds."}
-
-
-def bash_env(command: str) -> dict:
-    """Run an environment setup command (pip, uv, conda, python, etc.).
-
-    Extends bash with package-manager commands. Timeout is 300 s to
-    accommodate slow installs.
-
-    Examples:
-        bash_env("uv venv .alembic/massformer/output/.venv --python 3.11")
-        bash_env("uv pip install --python .alembic/massformer/output/.venv/bin/python torch")
-        bash_env("pip install -r .alembic/massformer/repos/requirements.txt")
-        bash_env("which python3")
-    """
-    stripped = command.strip()
-    cmd_name = stripped.split()[0] if stripped else ""
-
-    if cmd_name not in _ENV_ALLOWED_CMDS:
-        return {
-            "error": f"Command '{cmd_name}' is not allowed. "
-                     f"Supported: {sorted(_ENV_ALLOWED_CMDS)}."
-        }
-
-    if cmd_name == "glob":
-        parts = stripped.split(None, 1)
-        if len(parts) < 2:
-            return {"error": "glob requires a pattern argument."}
-        pattern = parts[1]
-        matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
-        return {"matches": matched}
-
-    try:
-        result = subprocess.run(
-            stripped,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        output = result.stdout
-        if result.returncode != 0 and result.stderr:
-            output += "\n[stderr] " + result.stderr
-        return {"output": output[:MAX_BYTES]}
-    except subprocess.TimeoutExpired:
-        return {"error": "Command timed out after 300 seconds."}
 
 
 def search(repo_url: str, pattern: str) -> dict:
@@ -310,226 +276,6 @@ def update_file(repo_url: str, relative_path: str, content: str) -> dict:
         return {"error": f"File not found: {dest}. Cannot update a file that does not exist."}
     dest.write_text(content, encoding="utf-8")
     return {"updated": str(dest)}
-
-
-def setup_venv(
-    repo_url: str,
-    requirements_file: str | None = None,
-    pyproject_toml: str | None = None,
-    packages: list[str] | None = None,
-    python_version: str = "3.10",
-) -> dict:
-    """Create a virtual environment in output/.venv and install dependencies.
-
-    Always installs fastmcp, pytest, and mcp in addition to any specified packages.
-    Uses uv if available, falls back to python -m venv + pip.
-
-    Args:
-        repo_url:          Repository URL.
-        requirements_file: Repo-relative path to requirements.txt, or None.
-        pyproject_toml:    Repo-relative path to pyproject.toml for dep extraction, or None.
-        packages:          Extra package names to install (no version pins needed).
-        python_version:    Python version string, e.g. "3.10". Must be >= 3.10.
-
-    Example:
-        setup_venv("https://github.com/Roestlab/massformer",
-                   requirements_file="requirements.txt", python_version="3.10")
-        setup_venv("https://github.com/Roestlab/massformer",
-                   packages=["torch", "numpy"], python_version="3.11")
-    """
-    out_dir = _output_dir(repo_url)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    venv_dir = out_dir / ".venv"
-    errors: list[str] = []
-    use_uv = subprocess.run(["which", "uv"], capture_output=True).returncode == 0
-
-    # Create venv
-    if use_uv:
-        r = subprocess.run(
-            ["uv", "venv", str(venv_dir), "--python", python_version],
-            capture_output=True, text=True,
-        )
-    else:
-        r = subprocess.run(
-            [f"python{python_version}", "-m", "venv", str(venv_dir)],
-            capture_output=True, text=True,
-        )
-        if r.returncode != 0:
-            r = subprocess.run(
-                ["python3", "-m", "venv", str(venv_dir)],
-                capture_output=True, text=True,
-            )
-    if r.returncode != 0:
-        return {"success": False, "error": f"venv creation failed: {(r.stderr or r.stdout).strip()}"}
-
-    python = _venv_python(out_dir)
-
-    if requirements_file:
-        req_path = _repo_path(repo_url) / requirements_file
-        if req_path.exists():
-            try:
-                if use_uv:
-                    subprocess.run(
-                        ["uv", "pip", "install", "--python", python, "-r", str(req_path)],
-                        check=True, capture_output=True, text=True,
-                    )
-                else:
-                    subprocess.run(
-                        [str(venv_dir / "bin" / "pip"), "install", "-r", str(req_path)],
-                        check=True, capture_output=True, text=True,
-                    )
-            except subprocess.CalledProcessError as e:
-                errors.append(f"requirements install failed: {e.stderr.strip()}")
-        else:
-            errors.append(f"requirements file not found: {req_path}")
-
-    if pyproject_toml:
-        proj_path = _repo_path(repo_url) / pyproject_toml
-        if proj_path.exists():
-            try:
-                if use_uv:
-                    subprocess.run(
-                        ["uv", "pip", "install", "--python", python, "-e", str(proj_path.parent)],
-                        check=True, capture_output=True, text=True,
-                    )
-                else:
-                    subprocess.run(
-                        [str(venv_dir / "bin" / "pip"), "install", "-e", str(proj_path.parent)],
-                        check=True, capture_output=True, text=True,
-                    )
-            except subprocess.CalledProcessError as e:
-                errors.append(f"pyproject.toml install failed: {e.stderr.strip()}")
-        else:
-            errors.append(f"pyproject.toml not found: {proj_path}")
-
-    install_pkgs = ["fastmcp", "pytest", "mcp"] + (packages or [])
-    try:
-        if use_uv:
-            subprocess.run(
-                ["uv", "pip", "install", "--python", python] + install_pkgs,
-                check=True, capture_output=True, text=True,
-            )
-        else:
-            subprocess.run(
-                [str(venv_dir / "bin" / "pip"), "install"] + install_pkgs,
-                check=True, capture_output=True, text=True,
-            )
-    except subprocess.CalledProcessError as e:
-        errors.append(f"package install failed: {e.stderr.strip()}")
-
-    if errors:
-        return {"success": False, "venv": str(venv_dir), "python": python, "error": "; ".join(errors)}
-    return {"success": True, "venv": str(venv_dir), "python": python}
-
-
-def check_venv_compat(repo_url: str) -> dict:
-    """Check compatibility by replaying the repo's own import statements in the venv.
-
-    Scans the cloned repo's Python files with AST, collects every unique
-    `import X` and `from X import Y` where X is an installed package, then
-    executes each statement in the venv.  This catches both ABI conflicts
-    (numpy 1 vs 2) and removed-API errors (e.g. `from transformers import AdamW`
-    removed in transformers>=4.38).
-
-    Returns only failures; successful imports are omitted to keep output small.
-
-    Example:
-        check_venv_compat("https://github.com/Roestlab/massformer")
-        # -> {"has_conflicts": True,
-        #     "conflicts": {"from transformers import AdamW":
-        #                       {"error": "cannot import name 'AdamW' ..."}}}
-    """
-    out_dir  = _output_dir(repo_url).resolve()
-    repo_dir = _repo_path(repo_url).resolve()
-    python   = _venv_python(out_dir)
-
-    script = textwrap.dedent("""\
-        import sys, ast, importlib.metadata, json
-        from pathlib import Path
-
-        repo_path = Path(sys.argv[1])
-
-        installed_roots = set()
-        for dist in importlib.metadata.distributions():
-            top = dist.read_text("top_level.txt")
-            if top:
-                for n in top.strip().splitlines():
-                    n = n.strip()
-                    if n and not n.startswith("_"):
-                        installed_roots.add(n)
-            else:
-                record = dist.read_text("RECORD") or ""
-                for line in record.splitlines():
-                    part = line.split(",")[0].strip().split("/")[0]
-                    if (not part
-                            or part.endswith((".dist-info", ".data"))
-                            or part.startswith(("_", "."))
-                            or "." in part):
-                        continue
-                    installed_roots.add(part.removesuffix(".py"))
-
-        stmts = {}
-        for py_file in repo_path.rglob("*.py"):
-            try:
-                source = py_file.read_text(encoding="utf-8", errors="replace")
-                tree   = ast.parse(source, filename=str(py_file))
-            except Exception:
-                continue
-
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        root = alias.name.split(".")[0]
-                        if root in installed_roots:
-                            stmt = f"import {alias.name}"
-                            stmts[stmt] = stmt
-                elif isinstance(node, ast.ImportFrom):
-                    if node.module and node.level == 0:
-                        root = node.module.split(".")[0]
-                        if root in installed_roots:
-                            names = ", ".join(a.name for a in node.names)
-                            stmt  = f"from {node.module} import {names}"
-                            key   = node.module + ":" + ",".join(
-                                sorted(a.name for a in node.names)
-                            )
-                            stmts[key] = stmt
-
-        conflicts = {}
-        for stmt in stmts.values():
-            try:
-                exec(stmt)  # noqa: S102
-            except ImportError as e:
-                conflicts[stmt] = {"error": str(e)}
-            except Exception as e:
-                conflicts[stmt] = {"error": type(e).__name__ + ": " + str(e)}
-
-        print(json.dumps({"conflicts": conflicts, "checked": len(stmts)}))
-    """)
-
-    check_file = out_dir / "_compat_check.py"
-    check_file.write_text(script, encoding="utf-8")
-    try:
-        r = subprocess.run(
-            [python, str(check_file), str(repo_dir)],
-            capture_output=True, text=True, timeout=240,
-        )
-    finally:
-        check_file.unlink(missing_ok=True)
-
-    if r.returncode != 0:
-        return {"error": f"compat check script failed: {r.stderr.strip()[:500]}"}
-
-    try:
-        data = _json.loads(r.stdout.strip())
-    except Exception:
-        return {"error": f"could not parse compat output: {r.stdout[:300]}"}
-
-    conflicts = data.get("conflicts", {})
-    return {
-        "conflicts": conflicts,
-        "checked": data.get("checked", 0),
-        "has_conflicts": bool(conflicts),
-    }
 
 
 def build_docker_image(repo_url: str) -> dict:
@@ -683,7 +429,19 @@ def test_mcp_launch(repo_url: str) -> dict:
     if start.returncode != 0:
         return {"success": False, "error": f"Failed to start container: {start.stderr.strip()}"}
 
-    time.sleep(5)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        chk = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Status}}", cname],
+            capture_output=True, text=True,
+        )
+        if chk.stdout.strip() not in ("running", ""):
+            break
+        try:
+            with socket.create_connection(("localhost", 8000), timeout=1):
+                break
+        except OSError:
+            time.sleep(1)
 
     inspect = subprocess.run(
         ["docker", "inspect", "--format", "{{.State.Status}}", cname],
@@ -766,16 +524,14 @@ def run_tests(repo_url: str) -> dict:
             ),
         }
 
+    image = marker.read_text(encoding="utf-8").strip()
     try:
         r = subprocess.run(
-            _python_exec_argv(
-                repo_url,
-                ["-m", "pytest", "tests", "-v", "--tb=short", "--no-header"],
-            ),
+            ["docker", "run", "--rm", "-w", "/app", image,
+             "python", "-m", "pytest", "tests", "-v", "--tb=short", "--no-header"],
             capture_output=True,
             text=True,
             timeout=120,
-            cwd=str(repo_root),
         )
     except subprocess.TimeoutExpired:
         return {"passed": False, "output": "pytest timed out after 120 seconds."}

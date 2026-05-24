@@ -142,6 +142,13 @@ The report must contain:
   what was passed to it, and whether it resolved the issue.
   If no fixes were needed: "None required."
 
+  ## How to run
+  ```
+  docker run --rm -p 8000:8000 <image-tag>
+  ```
+  Replace ``<image-tag>`` with the tag from the docker report.
+  The MCP server will be available at ``http://localhost:8000/mcp``.
+
   ## Overall
   PASSED (both stages green) or FAILED (list failing stages)
 '''
@@ -383,9 +390,9 @@ write Python source code at runtime — use the pre-written helpers instead.
 ### Step 5 — Write the tests
     write_file(repo_url, "tests/test_server.py", <content>)
 
-### Step 5 — Syntax check
+### Step 6 — Syntax check
 
-### Step 6 — Write the server report
+### Step 7 — Write the server report
     write_report(repo_url, "server", <content>)
 
 The report must contain:
@@ -568,7 +575,7 @@ Do NOT call write_report in this case — that is the validator's job.
 
 ### Step 1 — Read the exploration and coder reports
     read_report(repo_url, "exploration")   # dependencies, install commands, system libs
-    read_report(repo_url, "coder")         # what server.py imports, helper scripts used
+    read_report(repo_url, "server")         # what server.py imports, helper scripts used
 
 ### Step 2 — Inspect dependency files in the clone
 Read the actual requirement files so you can see exact versions and git URLs:
@@ -599,10 +606,21 @@ Do NOT guess git URLs — copy them verbatim from the file you read.
 The Dockerfile must be at the clone root:
     write_file(repo_url, "Dockerfile", <content>)
 
-Use this template, adapting only the RUN steps:
+Select the base image based on the exploration report's **Key dependencies** and **System dependencies**:
+
+- **CPU-only** (default): use ``ubuntu:22.04``.
+- **GPU required**: use ``nvidia/cuda:11.8.0-runtime-ubuntu22.04`` only when the repo
+  explicitly needs it — ``torch`` installed via a ``cu*`` extra-index URL,
+  ``tensorflow-gpu``, ``cupy``, ``triton``, or CUDA listed as a system dependency.
+
+The two templates differ only in the ``FROM`` line; everything else is identical.
 
 ```dockerfile
-FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+# CPU-only (default):
+FROM ubuntu:22.04
+
+# GPU (replace the FROM line above when CUDA is required):
+# FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -624,7 +642,7 @@ RUN <exact_install_command_from_exploration_report>
 ```
 
 Rules:
-- Always use ``nvidia/cuda:11.8.0-runtime-ubuntu22.04`` as the base image.
+- Default to ``ubuntu:22.04``; switch to ``nvidia/cuda:11.8.0-runtime-ubuntu22.04`` only when GPU is required.
 - Always install ``fastmcp``, ``pytest``, ``mcp`` first.
 - **For the repo's own dependencies, copy the exact ``Install command`` field from
   the exploration report verbatim** (e.g. ``pip install -r requirements.txt`` or

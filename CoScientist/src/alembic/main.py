@@ -18,7 +18,7 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from alembic.agents import explorer_agent, coder_agent, docker_agent, validator_agent
-from alembic.tools import WORKDIR, MCP_VERIFIED_MARKER
+from alembic.tools import WORKDIR, MCP_VERIFIED_MARKER, _repo_name
 
 # ── Loguru: terminal sink ──────────────────────────────────────────────────────
 logger.remove()
@@ -68,10 +68,6 @@ APP_NAME = "alembic_app"
 USER_ID  = "user_1"
 
 TRUNC = 2000  # max chars shown for tool args / responses inline
-
-
-def _repo_name(repo_url: str) -> str:
-    return repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
 
 
 def _trunc(text: str, n: int = TRUNC) -> str:
@@ -196,9 +192,10 @@ async def run_agent(
             )
         if artifact_guard_path and not Path(artifact_guard_path).exists():
             nudges.append(
-                f"A required artifact is missing at: {artifact_guard_path}. "
-                "Ensure all required steps are complete and that this file exists "
-                "before calling write_report."
+                "The MCP server has not been verified yet. "
+                "You MUST call test_mcp_launch(repo_url) to start the container and "
+                "confirm the server launches successfully. "
+                "Only after test_mcp_launch returns success should you call write_report."
             )
 
         if not nudges:
