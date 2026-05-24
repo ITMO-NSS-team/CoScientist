@@ -127,7 +127,7 @@ class MedToolset(BaseToolset):
         super().__init__()
         self.tool_name_prefix = prefix
     
-    async def get_tools(self, readonly_context: Optional[ReadonlyContext]) -> List[BaseTool]:
+    def get_tools(self, readonly_context: Optional[ReadonlyContext]) -> List[BaseTool]:
         return [
             self.search_pubmed,
             self.get_pico,
@@ -335,5 +335,5 @@ class MedToolset(BaseToolset):
         }
 
 
-med_toolset_instance = MedToolset()
-med_toolset_instance = asyncio.run(med_toolset_instance.get_tools(None))
+med_toolset= MedToolset()
+med_toolset_instance = med_toolset.get_tools(None)

@@ -23,7 +23,7 @@ class FedotMASToolset(BaseToolset):
     def __init__(self, prefix: str = "fedot_"):
         self.tool_name_prefix = prefix
 
-    async def get_tools(
+    def get_tools(
         self,
         readonly_context: Optional[ReadonlyContext]
     ) -> List[BaseTool]:
@@ -70,5 +70,5 @@ class FedotMASToolset(BaseToolset):
         }
 
     
-fedot_toolset_instance = FedotMASToolset()
-fedot_toolset_instance = asyncio.run(fedot_toolset_instance.get_tools(None))
+fedot_toolset = FedotMASToolset()
+fedot_toolset_instance = fedot_toolset.get_tools(None)
