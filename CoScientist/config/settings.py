@@ -46,6 +46,19 @@ class ServicesSettings(BaseModel):
 
 
 # =========================
+# MED LLM CONFIG
+# =========================
+class MedLLMSettings(BaseModel):
+    task_url: Optional[str] = None
+    result_url: Optional[str] = None
+
+    login: Optional[str] = None
+    password: Optional[str] = None
+
+    poll_interval: int = 10
+    max_polls: int = 60
+
+# =========================
 # STORAGE
 # =========================
 class StorageSettings(BaseModel):
@@ -130,6 +143,7 @@ class Settings(BaseSettings):
 
     llm: LLMSettings = LLMSettings()
     services: ServicesSettings = ServicesSettings()
+    med_llm: MedLLMSettings = MedLLMSettings()
     storage: StorageSettings = StorageSettings()
     hosts_ports: HostsPortsSettings = HostsPortsSettings()
     collections: CollectionsSettings = CollectionsSettings()

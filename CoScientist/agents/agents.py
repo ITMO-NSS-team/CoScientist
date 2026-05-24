@@ -12,15 +12,16 @@ import litellm
 
 from CoScientist.config import get_settings
 
-from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction
+from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
 from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
 )
 from CoScientist.agents.custom_agents import WebToolsDeployerAgent
+from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model, med_agent_before_model
 
-from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers
+from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance
 from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
 
 
@@ -163,6 +164,16 @@ task_execution_agent = SequentialAgent(
     description="Agent to complete experiments and run calculations. Use it for any computation and idea validation. It can use a lot of MCP tools",
 )
 
+medical_agent = LlmAgent(
+    name="MedicalAgent",
+    model=LiteLlm(model=MODEL),
+    instruction=medical_instruction,
+    description="Agent for medical and clinical questions: PubMed literature search, PICO extraction, study taxonomy, and DICOM image analysis.",
+    output_key="medical_results",
+    tools=_agent_tools([med_toolset_instance], hitl_tools=True),
+    before_model_callback=med_agent_before_model,
+)
+
 #------------------------------------------------------------------
 
 planner = PlanReActPlanner()
@@ -186,13 +197,15 @@ orchestrator_agent = LlmAgent(
     #planner=planner,
     instruction=orchestrator_instruction,
     description="Main Orchestrator Agent",
+    before_model_callback=med_before_model,
     after_model_callback=pre_action_critique,
     after_tool_callback=post_action_critique,
     tools=_agent_tools([
         AgentTool(agent=planner_agent),
         AgentTool(agent=hypotheses_agent), 
         AgentTool(agent=research_agent), 
-        AgentTool(agent=task_execution_agent)
+        AgentTool(agent=task_execution_agent),
+        AgentTool(agent=medical_agent),
     ], hitl_tools=True),
 )
 
