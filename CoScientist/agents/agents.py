@@ -170,7 +170,7 @@ medical_agent = LlmAgent(
     instruction=medical_instruction,
     description="Agent for medical and clinical questions: PubMed literature search, PICO extraction, study taxonomy, and DICOM image analysis.",
     output_key="medical_results",
-    tools=_agent_tools([med_toolset_instance], hitl_tools=True),
+    tools=med_toolset_instance,
     before_model_callback=med_agent_before_model,
 )
 
