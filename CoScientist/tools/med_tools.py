@@ -174,13 +174,21 @@ class MedToolset(BaseToolset):
                     continue
             return articles
 
-        articles = await asyncio.to_thread(_fetch)
-        return {
-            "status": "success",
-            "keyword": keyword,
-            "count": len(articles),
-            "articles": articles,
-        }
+        try:
+            articles = await asyncio.to_thread(_fetch)
+            print(articles)
+            return {
+                "status": "success",
+                "keyword": keyword,
+                "count": len(articles),
+                "articles": articles,
+            }
+        except Exception:
+            return {
+                "status": "failutre",
+                "error": 'Pubmed not reachable'
+            }
+
 
     async def get_pico(
         self,
@@ -203,6 +211,7 @@ class MedToolset(BaseToolset):
         prompt = _PICO_PROMPT.format(title=title, abstract=abstract)
         try:
             result = await _llm_json(prompt)
+            print(result)
             return {"status": "success", "pico": result}
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -271,7 +280,7 @@ class MedToolset(BaseToolset):
                 }
 
             return {"status": "success", "taxonomy": taxonomy}
-
+            print(taxonomy)
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -307,6 +316,10 @@ class MedToolset(BaseToolset):
         file_bytes = artifact.inline_data.data
         filename = artifact_id
 
+        # filename = '/app/dicom.dcm'
+        # with open(filename, 'rb') as f:
+        #     file_bytes = f.read()  # ✅ actual bytes
+
         async with httpx.AsyncClient(auth=_VLM_AUTH, timeout=60.0) as client:
             submit_resp = await client.post(
                 _VLM_TASK_URL,
@@ -321,6 +334,7 @@ class MedToolset(BaseToolset):
                 poll_resp = await client.get(_VLM_RESULT_URL, params={"task_id": task_id})
                 poll_resp.raise_for_status()
                 result = poll_resp.json()
+                print(result)
                 if result.get("status") == "ok":
                     return {
                         "status": "success",

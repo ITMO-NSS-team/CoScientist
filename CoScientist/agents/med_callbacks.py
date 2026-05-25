@@ -82,7 +82,8 @@ async def _process_inline_data(
 
     return [
         Part(text=f"[Uploaded file] artifact_id={artifact_id}"),
-        part,
+        # Raw bytes are stored in the artifact store; do not forward to the LLM.
+        # LiteLLM cannot handle binary MIME types (e.g. application/dicom).
     ]
 
 

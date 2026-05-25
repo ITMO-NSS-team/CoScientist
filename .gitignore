@@ -183,6 +183,7 @@ tools/models
 *.pt
 *.xlsx
 *.csv
+*.adk
 logs
 ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
