@@ -27,7 +27,7 @@ class RetrievalToolSet(BaseToolset):
         self.tool_name_prefix = prefix
         self.wrapper = None
 
-    async def get_tools(
+    def get_tools(
         self,
         readonly_context: Optional[ReadonlyContext]
     ) -> List[BaseTool]:
@@ -132,7 +132,6 @@ class RetrievalToolSet(BaseToolset):
 
 
     
-retrieval_toolset_instance = RetrievalToolSet()
-retrieval_toolset_instance = asyncio.run(retrieval_toolset_instance.get_tools(None))
-
+retrieval_toolset = RetrievalToolSet()
+retrieval_toolset_instance = retrieval_toolset.get_tools(None)
 
