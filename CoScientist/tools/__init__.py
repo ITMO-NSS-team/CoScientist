@@ -4,6 +4,7 @@ from CoScientist.tools.research_tools import websearch_toolset_instance, paper_a
 from CoScientist.tools.retrieval_tools import RetrievalToolSet, retrieval_toolset_instance
 from CoScientist.tools.servers_web_search import search_mcp_servers
 from CoScientist.tools.med_tools import med_toolset_instance
+<<<<<<< HEAD
 from CoScientist.tools.coder_tools import CoderToolset, coder_toolset_instance
 
 __all__ = [
@@ -19,3 +20,13 @@ __all__ = [
     "CoderToolset",
     "coder_toolset_instance",
 ]
+=======
+
+__all__ = ["FedotMASToolset", 
+            "fedot_toolset_instance",
+            'websearch_toolset_instance',
+            'RetrievalToolSet',
+            'retrieval_toolset_instance',
+            'search_mcp_servers',
+            'med_toolset_instance']
+>>>>>>> f913ea8 (Feat/medical agent and adk frontend (#262))
