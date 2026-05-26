@@ -1,4 +1,5 @@
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.tools.tool_context import ToolContext
 from google.adk.models import LlmRequest
 
 from typing import Optional, List, Dict, Any
@@ -79,3 +80,28 @@ def after_fullset_reranker_agent(
     callback_context.state['accumulated_web_mcps'] = []
     callback_context.state['retrieval_queries_mcp'] = []
     return
+
+class SearchLimiter:
+
+    _STATE_KEY = "_search_limiter_count"
+
+    def __init__(self, max_searches: int = 5):
+        self.max_searches = max_searches
+
+    def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
+        if "search" not in tool.name.lower():
+            return None
+
+        count = tool_context.state.get(self._STATE_KEY, 0)
+        count += 1
+        tool_context.state[self._STATE_KEY] = count
+
+        if count > self.max_searches:
+            return {
+                "result": (
+                    f"Search limit reached ({self.max_searches} searches allowed). "
+                    "You MUST now synthesize your answer from the results you already have. "
+                    "Do NOT attempt any more searches."
+                )
+            }
+        return None

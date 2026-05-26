@@ -13,7 +13,7 @@ import litellm
 from CoScientist.config import get_settings
 
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent
+from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, SearchLimiter
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -74,7 +74,7 @@ research_agent = LlmAgent(
     description="Agent to answer questions and knowledge mining using Literature and Web Search.",
     output_key="search_results",
     tools=_agent_tools([websearch_toolset_instance], hitl_tools=True),
-    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
+    before_tool_callback=SearchLimiter(max_searches=2).limit_searches,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
 
@@ -165,19 +165,18 @@ task_execution_agent = SequentialAgent(
 
 #------------------------------------------------------------------
 
-planner = PlanReActPlanner()
 
 planner_agent = SessionAgent(
     name="PlannerAgent",
     model=LiteLlm(model=MODEL),
-    instruction=planner_instruction,
+    #instruction=planner_instruction,
+    static_instruction=planner_instruction,
     description="Generates a roadmap for solving the task",
     output_key="planner_roadmap",
     plan_file_path="roadmap.txt",
-    planner=planner,
+    #planner=PlanReActPlanner(),
     hitl_handler=hitl_handler,
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
-    #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )    
 
 orchestrator_agent = LlmAgent(
@@ -194,6 +193,12 @@ orchestrator_agent = LlmAgent(
         AgentTool(agent=research_agent), 
         AgentTool(agent=task_execution_agent)
     ], hitl_tools=True),
+)
+
+root_agent = SequentialAgent(
+    name="InitAgent",
+    sub_agents=[planner_agent, orchestrator_agent],
+    description="Agent to initialize the session"
 )
 
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)

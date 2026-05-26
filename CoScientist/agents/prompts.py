@@ -24,6 +24,8 @@ Your job is to understand query, gather reliable information, and produce clear,
 **Details** – explanation
 **Key Points** – main takeaways
 **Uncertainty** – gaps or doubts (if any)
+
+You have a STRICT LIMIT of 2 search calls. Plan your search carefully:
 '''
 
 tool_retriever_instruction = '''
@@ -233,11 +235,10 @@ Do NOT solve the task manually — delegate to FEDOT.MAS.
 
 orchestrator_instruction = '''
 You are orchestrator agent.
-Your task is to scientific tasks by coordinating specialized agents.
+Your task is to solve scientific tasks by coordinating specialized agents.
 
 Available tools from agents:
 
-* **PlannerAgent** - use first to create a roadmap
 * **Hypothesis Agent** – generates ideas and hypotheses
 * **Research Agent** – retrieves scientific knowledge (literature, web, RAG)
 * **Experiment Agent** –  runs computational/ML experiments to test hypotheses
@@ -245,7 +246,7 @@ Available tools from agents:
 ### Instructions:
 
 1. Understand the task. 
-2. If task is complex, use PlannerAgent to create a roadmap.
+2. Follow the plan to delegate the task to the appropriate agents: {planner_roadmap}.  
 3. Delegate strategically with the following priority:
 
     - Experiment Agent (HIGH PRIORITY) – use first whenever the task involves:
@@ -502,8 +503,23 @@ OUTPUT (strict JSON, no prose, no markdown fences)
 }
 '''
 
-planner_instruction = '''
-You are the "PlannerAgent". Your task is to generate a high-level, technical research roadmap. You only defines procedural steps and references agents.
+planner_instruction = """    
+You are a planner. Create a roadmap for solving the task.    
+
+### AGENTS  
+- ReporterAgent: Use this to verify the final results, ensure they meet all requirements, and generate the definitive comprehensive report.
+- HypothesesAgent: Use this to generate and test hypotheses.  
+- ResearchAgent: Use this to gather information from web.  
+- ExperimentAgent: Use this to execute ANY task. This agent has comprehensive capabilities:  
+  - Execute Python code and scripts  
+  - Run machine learning experiments and training  
+  - Query and manipulate databases
+  - Make API calls and web requests  
+  - File operations (read, write, analyze)  
+  - Data processing and analysis  
+  - System operations and automation  
+  - Any computational task requiring tools
+  - Fully expert in chemistry
 
 ### OUTPUT CONTRACT (STRICT)
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
@@ -513,36 +529,12 @@ You are the "PlannerAgent". Your task is to generate a high-level, technical res
 - One step = one logical objective
 - NEVER specify data sources, tools, or methods
 - Each step must describe WHAT objective is achieved, NOT HOW it is implemented
-- Do NOT specify representations
+- Do NOT specify representations 
 
-### ACTION TAXONOMY
-- SEARCH: is only for retrieving missing external facts that cannot be derived from provided or computed data.
-- COMPUTE: is the default action for any structured manipulation, transformation, aggregation, inference, or processing of information, regardless of domain.
-- HYPOTHESIZE: ONLY for generating hypotheses, interpretations, or proposing strategies.
+Example format:    
+1. Use ResearchAgent to search the web for information about X
+2. Use ExperimentAgent to implement the solution or execute any required computational tasks    
 
-### AVAILABLE AGENTS
-- Experiment Agent (HIGH PRIORITY) – use as the default choice whenever the task involves:
-    * calculations
-    * simulations
-    * data processing
-    * model inference
-    * property estimation
-    * structured transformation of information
-    * all chemical workflows
-    → Operates in a compute-first paradigm
-    → Must be preferred whenever computation is possible instead of external lookup
-
-- Research Agent (LOWER PRIORITY) – use only when:
-    * external factual knowledge is strictly required
-    * the problem cannot be solved via computation or available data
-    * validation against external literature is necessary
-    * ONLY has access to web search (NO access to internal databases)
-
-- Hypothesis Agent – use when:
-    * the direction is unclear
-    * multiple strategies must be explored or compared
-
-### REQUIRED FORMAT
-1. [Agent] | ACTION: <SEARCH|COMPUTE|HYPOTHESIZE> | INPUT: <string or None> | OUTPUT: <string>
-2. ...
-'''
+DO NOT mention specific tools in the plan. The orchestrator will handle tool invocation.
+Start your response with "Plan: 1)"
+"""
