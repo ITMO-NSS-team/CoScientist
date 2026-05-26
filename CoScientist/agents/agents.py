@@ -9,28 +9,22 @@ import litellm
 
 from CoScientist.config import get_settings
 
-<<<<<<< HEAD
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, build_orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction, coder_instruction
 from CoScientist.agents import catalog
 from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call, SearchLimiter
-=======
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
 from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, SearchLimiter
->>>>>>> f913ea8 (Feat/medical agent and adk frontend (#262))
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
 )
 from CoScientist.agents.custom_agents import WebToolsDeployerAgent
 from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model, med_agent_before_model
-<<<<<<< HEAD
 from CoScientist.agents.research_callbacks import papers_agent_before_model
 
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, coder_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance
-=======
 
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance
->>>>>>> f913ea8 (Feat/medical agent and adk frontend (#262))
 from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
 
 
@@ -208,7 +202,6 @@ medical_agent = LlmAgent(
     before_model_callback=med_agent_before_model,
 )
 
-<<<<<<< HEAD
 coder_agent = LlmAgent(
     name="CoderAgent",
     model=_build_coder_llm(),
@@ -224,8 +217,6 @@ coder_agent = LlmAgent(
     tools=_agent_tools(coder_toolset_instance, hitl_tools=False),
 )
 
-=======
->>>>>>> f913ea8 (Feat/medical agent and adk frontend (#262))
 #------------------------------------------------------------------
 
 
@@ -275,19 +266,8 @@ orchestrator_agent = LlmAgent(
     description="Main Orchestrator Agent",
     before_model_callback=med_before_model,
     after_model_callback=pre_action_critique,
-<<<<<<< HEAD
     # after_tool_callback=post_action_critique,
     tools=_agent_tools(_orchestrator_subagents, hitl_tools=False),
-=======
-    after_tool_callback=post_action_critique,
-    tools=_agent_tools([
-        AgentTool(agent=planner_agent),
-        AgentTool(agent=hypotheses_agent), 
-        AgentTool(agent=research_agent), 
-        AgentTool(agent=task_execution_agent),
-        AgentTool(agent=medical_agent),
-    ], hitl_tools=True),
->>>>>>> f913ea8 (Feat/medical agent and adk frontend (#262))
 )
 
 root_agent = SequentialAgent(
