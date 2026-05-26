@@ -1,9 +1,10 @@
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.tools.tool_context import ToolContext
 from google.adk.models import LlmRequest
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import logging
 logger = logging.getLogger(__name__)
@@ -99,3 +100,28 @@ def print_research_agent_tool_call(
         logger.info(f"[ResearchAgent tool args] {args}")
     except Exception as e:
         logger.error(f"Error in print_research_agent_tool_call: {e}")
+
+class SearchLimiter:
+
+    _STATE_KEY = "_search_limiter_count"
+
+    def __init__(self, max_searches: int = 5):
+        self.max_searches = max_searches
+
+    def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
+        if "search" not in tool.name.lower():
+            return None
+
+        count = tool_context.state.get(self._STATE_KEY, 0)
+        count += 1
+        tool_context.state[self._STATE_KEY] = count
+
+        if count > self.max_searches:
+            return {
+                "result": (
+                    f"Search limit reached ({self.max_searches} searches allowed). "
+                    "You MUST now synthesize your answer from the results you already have. "
+                    "Do NOT attempt any more searches."
+                )
+            }
+        return None

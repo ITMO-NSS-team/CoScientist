@@ -11,6 +11,41 @@ from google.adk.utils.context_utils import Aclosing
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLRequest, HITLAction
 
+
+def cleanup_plan(plan_file_path: str) -> None:
+
+    with open(plan_file_path, "r", encoding="utf-8") as f:
+        plan = f.read()
+
+    # ensure non-empty
+    if not plan or not plan.strip():
+        raise ValueError("Plan cannot be empty.")
+
+    # ensure at least 1 step
+    if "1)" not in plan:
+        raise ValueError("Plan must contain at least one step. Found: \n" + plan)
+
+    # fallback protection: if it contains literally "1)", fix it
+    if "1)" in plan and plan.strip() == "1)":
+        raise ValueError("Plan contains only '1)'. Add a valid step.")
+
+    if " 1)" in plan:
+        plan_idx = plan.find("1)")
+        plan = plan[plan_idx:]
+        print("\n\n\nPlan has been cleaned up. It now starts from step 1.\n\n\n")
+
+    if "ReporterAgent" in plan:
+        report_idx = plan.find("ReporterAgent")
+        plan = plan[:report_idx]
+        last_idx = plan.rfind(")")
+        plan = plan[:last_idx-1]
+        print("\n\n\nPlan has been cleaned up. It doesn't contain ReporterAgent.\n\n\n")
+
+    with open(plan_file_path, "w", encoding="utf-8") as f:
+        f.write(plan)
+
+    return
+
 class SessionAgent(LlmAgent):
     """A planner that generates a roadmap and asks the human.
     If the human requests changes, it automatically feeds the changes back
@@ -60,6 +95,9 @@ class SessionAgent(LlmAgent):
                     message += f"\n\n--> The plan has been recorded to '{self.plan_file_path}'. You can edit it before approving."
                 except Exception as e:
                     message += f"\n\n[Warning] Failed to write plan to {self.plan_file_path}: {e}"
+
+            
+            cleanup_plan(self.plan_file_path)
 
             request = HITLRequest(
                 agent_name=self.name,

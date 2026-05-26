@@ -20,8 +20,12 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
+<<<<<<< HEAD
 from CoScientist.agents.research_callbacks import cleanup_uploaded_papers
 from CoScientist.agents import orchestrator_agent, planner_agent
+=======
+from CoScientist.agents import orchestrator_agent, planner_agent, root_agent
+>>>>>>> a6d2a70 (1) SearchLimiter for ResearchAgent)
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
     AbstractHITLHandler,
@@ -75,7 +79,7 @@ class CoScientistManager:
 
         # Runner
         self.runner = Runner(
-            agent=orchestrator_agent,
+            agent=root_agent,
             app_name=self.app_name,
             session_service=self.session_service,
         )

@@ -9,9 +9,9 @@ import litellm
 
 from CoScientist.config import get_settings
 
-from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, build_orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction, coder_instruction
+from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, build_orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction, coder_instruction
 from CoScientist.agents import catalog
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call
+from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call, SearchLimiter
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -97,6 +97,7 @@ research_agent = LlmAgent(
                                     papers_search_toolset_instance] if t is not None],
                        hitl_tools=True),
     before_model_callback=papers_agent_before_model,
+    before_tool_callback=SearchLimiter(max_searches=2).limit_searches,
     after_tool_callback=print_research_agent_tool_call,
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
@@ -214,19 +215,18 @@ coder_agent = LlmAgent(
 
 #------------------------------------------------------------------
 
-planner = PlanReActPlanner()
 
 planner_agent = SessionAgent(
     name="PlannerAgent",
     model=LiteLlm(model=MODEL),
-    instruction=planner_instruction,
+    #instruction=planner_instruction,
+    static_instruction=planner_instruction,
     description="Generates a roadmap for solving the task",
     output_key="planner_roadmap",
     plan_file_path="roadmap.txt",
-    planner=planner,
+    #planner=PlanReActPlanner(),
     hitl_handler=hitl_handler,
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
-    #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )    
 
 # Orchestrator sub-agents are driven by the agent catalog (single source of truth
@@ -264,6 +264,12 @@ orchestrator_agent = LlmAgent(
     after_model_callback=pre_action_critique,
     # after_tool_callback=post_action_critique,
     tools=_agent_tools(_orchestrator_subagents, hitl_tools=False),
+)
+
+root_agent = SequentialAgent(
+    name="InitAgent",
+    sub_agents=[planner_agent, orchestrator_agent],
+    description="Agent to initialize the session"
 )
 
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
