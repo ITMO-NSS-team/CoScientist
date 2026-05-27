@@ -21,6 +21,18 @@ websearch_toolset_instance = McpToolset(
     ),
 )
 
+paper_analysis_toolset_instance = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="http://10.32.11.45:7334/mcp"
+    ),
+)
+
+papers_search_toolset_instance = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="http://10.32.11.45:7331/mcp"
+    ),
+)
+
 
 # class WebSearchToolset(BaseToolset):
 #     """Toolset for websearch usage"""

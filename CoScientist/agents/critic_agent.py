@@ -341,7 +341,7 @@ def post_action_critique(
     user_prompt = (
         f"TOOL CALLED: {tool.name}\n"
         f"ARGS: {_truncate(args, 800)}\n"
-        f"RESULT: {_truncate(tool_response, 2500)}\n\n"
+        f"RESULT: {_truncate(tool_response, 3000)}\n\n"
         "Evaluate whether this result is sufficient to advance the task, "
         "needs refinement, or is wrong. Respond as strict JSON."
     )

@@ -1,4 +1,3 @@
-
 from google.adk.agents.sequential_agent import SequentialAgent
 from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.llm_agent import LlmAgent
@@ -13,7 +12,7 @@ import litellm
 from CoScientist.config import get_settings
 
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent
+from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -21,7 +20,7 @@ from CoScientist.agents.critic_agent import (
 from CoScientist.agents.custom_agents import WebToolsDeployerAgent
 from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model, med_agent_before_model
 
-from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance
+from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance
 from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
 
 
@@ -74,7 +73,8 @@ research_agent = LlmAgent(
     instruction=research_instruction,
     description="Agent to answer questions and knowledge mining using Literature and Web Search.",
     output_key="search_results",
-    tools=_agent_tools([websearch_toolset_instance], hitl_tools=True),
+    tools=_agent_tools([websearch_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance], hitl_tools=True),
+    after_tool_callback=print_research_agent_tool_call,
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )

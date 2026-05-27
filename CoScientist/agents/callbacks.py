@@ -1,5 +1,7 @@
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest
+from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.tool_context import ToolContext
 
 from typing import Optional, List, Dict, Any
 
@@ -79,3 +81,18 @@ def after_fullset_reranker_agent(
     callback_context.state['accumulated_web_mcps'] = []
     callback_context.state['retrieval_queries_mcp'] = []
     return
+
+
+def print_research_agent_tool_call(
+    tool: BaseTool,
+    args: Dict[str, Any],
+    tool_context: ToolContext,
+    tool_response: Any,
+) -> None:
+    """Print the tool name and args when ResearchAgent invokes a tool."""
+    try:
+        print(f"\n[ResearchAgent tool called] {tool.name}")
+        print(f"[ResearchAgent tool args] {args}")
+    except Exception:
+        pass
+    return None
