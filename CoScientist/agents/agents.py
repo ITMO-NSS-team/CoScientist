@@ -19,6 +19,7 @@ from CoScientist.agents.critic_agent import (
 )
 from CoScientist.agents.custom_agents import WebToolsDeployerAgent
 from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model, med_agent_before_model
+from CoScientist.agents.research_callbacks import papers_agent_before_model
 
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance
 from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
@@ -74,6 +75,7 @@ research_agent = LlmAgent(
     description="Agent to answer questions and knowledge mining using Literature and Web Search.",
     output_key="search_results",
     tools=_agent_tools([websearch_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance], hitl_tools=True),
+    before_model_callback=papers_agent_before_model,
     after_tool_callback=print_research_agent_tool_call,
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,

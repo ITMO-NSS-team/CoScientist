@@ -37,8 +37,10 @@ WORKFLOW
 For scientific questions:
 
 1. If the user asks about their uploaded papers/documents:
-   - use ONLY `explore_my_papers`
-   - do not use any other tools, even if the answer is insufficient
+   - use ONLY `explore_my_papers` if you have actual S3 keys for uploaded papers
+   - do not use `explore_my_papers` when no uploaded papers are available
+   - use the provided S3 keys for uploaded papers when calling `explore_my_papers`
+   - if no S3 keys are given, do not invent or fabricate any S3 keys
 
 2. Otherwise:
    - first use `explore_chemistry_database`
