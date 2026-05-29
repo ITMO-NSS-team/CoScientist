@@ -219,7 +219,7 @@ fedot_agent = LlmAgent(
 task_execution_agent = SequentialAgent(
     name="TaskExecutorAgent",
     sub_agents=[tool_agent, fedot_agent],
-   description="Agent to complete experiments and run calculations. Use it for any computation and idea validation. It can use a lot of MCP tools",
+    description="Agent to complete experiments and run calculations. Use it for any computation and idea validation. It can use a lot of MCP tools",
 )
 
 #task_execution_agent = Workflow(
