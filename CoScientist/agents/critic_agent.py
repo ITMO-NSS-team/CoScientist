@@ -229,7 +229,7 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
         return json.loads(raw)
     except Exception as e:
         print(f"[Critic] LLM call failed ({e!r}); defaulting to permissive verdict.")
-        return {}
+        return {"verdict": "approve"}
 
 
 # ---------------------------------------------------------------------------

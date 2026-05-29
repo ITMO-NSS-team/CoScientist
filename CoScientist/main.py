@@ -85,7 +85,6 @@ class CoScientistManager:
         )
 
         if self._hitl_handler:
-            planner_agent.hitl_handler = self._hitl_handler
             hitl_toolset._handler = self._hitl_handler
 
         self._initialized = True

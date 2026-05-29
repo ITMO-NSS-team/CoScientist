@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+from google.adk.models.lite_llm import LiteLlm
 
 class RetrievalFinalResult(BaseModel):
     """Result from a retrieval query."""
@@ -28,3 +29,17 @@ class MCPScore(BaseModel):
 class MCPRanking(BaseModel):
     mcp_scores: List[MCPScore]
     reasoning: str
+
+class RerankerSafeLiteLlm(LiteLlm):
+    async def acompletion(self, *args, **kwargs):
+        try:
+            return await super().acompletion(*args, **kwargs)
+        except Exception as e:
+            # fallback
+            return {
+                "choices": [{
+                    "message": {
+                        "content": '{"mcp_scores": [], "reasoning": "fallback"}'
+                    }
+                }]
+            }

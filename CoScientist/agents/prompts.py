@@ -128,20 +128,14 @@ You DO NOT retrieve tools.
 You DO NOT generate new tools.
 You DO NOT invent indices.
 
----
-
 ## INPUTS
 
 You are given list of AVAILABLE TOOLS:
 {accumulated_tools}
 
----
-
 ## YOUR TASK
 
 Evaluate how relevant each tool is for solving the ORIGINAL TASK.
-
----
 
 ## SCORING RULES
 
@@ -152,8 +146,6 @@ Assign a relevance score from 0.0 to 1.0:
 - 0.4–0.6 → probably relevant
 - 0.1–0.3 → probably irrelevant
 - 0.0 →  irrelevant
-
----
 
 ## STRICT CONSTRAINTS
 
@@ -217,7 +209,7 @@ Pick the 2–5 angles most relevant to the actual task. Do not enumerate every p
 ## CRITICAL RULES:
 - DO NOT invent server IDs, URLs, or API details — only report what the tool returns.
 - DO NOT attempt to connect to or invoke any discovered server.
-- If searches return nothing useful, stop and say so rather than rephrasing endlessly.
+- If searches return nothing useful, stop and return an empty list.
 
 ## Your output:
 A brief structured summary of discovered servers, grouped by function relevant to the task (e.g. Data Access, Computation, Communication, Analysis), with one-line descriptions and registry/repo links. Keep it concise — this is a shortlist, not an exhaustive catalog.

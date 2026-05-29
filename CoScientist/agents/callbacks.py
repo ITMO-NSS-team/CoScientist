@@ -5,6 +5,12 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
 from typing import List, Dict, Any, Optional
+from google.adk.models.llm_response import LlmResponse  
+from google.genai import types  
+
+from typing import Optional, List, Dict, Any
+import json
+import ast
 
 import logging
 logger = logging.getLogger(__name__)
@@ -125,3 +131,26 @@ class SearchLimiter:
                 )
             }
         return None
+
+def normalize_json_response(  
+    callback_context: CallbackContext,  
+    llm_response: LlmResponse,  
+) -> None:  
+    """Normalize single-quoted Python dict to valid JSON (in-place)."""  
+    if not (llm_response.content and llm_response.content.parts):  
+        return None  
+  
+    for i, part in enumerate(llm_response.content.parts):  
+        if not part.text:  
+            continue  
+        text = part.text.strip()  
+        try:  
+            json.loads(text)  
+        except json.JSONDecodeError:  
+            try:  
+                obj = ast.literal_eval(text)  
+                llm_response.content.parts[i].text = json.dumps(obj)
+            except Exception:
+                pass
+  
+    return None  

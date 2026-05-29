@@ -32,14 +32,14 @@ def cleanup_plan(plan_file_path: str) -> None:
     if " 1)" in plan:
         plan_idx = plan.find("1)")
         plan = plan[plan_idx:]
-        print("\n\n\nPlan has been cleaned up. It now starts from step 1.\n\n\n")
+        print("\nPlan has been cleaned up. It now starts from step 1.")
 
     if "ReporterAgent" in plan:
         report_idx = plan.find("ReporterAgent")
         plan = plan[:report_idx]
         last_idx = plan.rfind(")")
         plan = plan[:last_idx-1]
-        print("\n\n\nPlan has been cleaned up. It doesn't contain ReporterAgent.\n\n\n")
+        print("Plan has been cleaned up. It doesn't contain ReporterAgent.\n")
 
     with open(plan_file_path, "w", encoding="utf-8") as f:
         f.write(plan)

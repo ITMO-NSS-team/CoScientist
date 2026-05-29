@@ -3,7 +3,11 @@ from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.agent_tool import AgentTool
-from google.adk.planners import PlanReActPlanner
+from google.adk.tools import FunctionTool
+from google.adk import Workflow
+from google.adk.workflow import JoinNode
+from google.genai import types
+from google.adk.planners import BasePlanner, BuiltInPlanner, PlanReActPlanner
 
 import litellm
 
@@ -13,7 +17,7 @@ from CoScientist.agents.prompts import hypotheses_instruction, research_instruct
 from CoScientist.agents import catalog
 from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call, SearchLimiter
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, SearchLimiter
+from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, SearchLimiter, normalize_json_response
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -25,12 +29,11 @@ from CoScientist.agents.research_callbacks import papers_agent_before_model
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, coder_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance
 
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance
-from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
-
+from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking, RerankerSafeLiteLlm
 
 from CoScientist.hitl import HITLToolset
 from CoScientist.hitl.session_agent import SessionAgent
-from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
+from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler, DelegatingHITLHandler
 from CoScientist.hitl.callbacks import make_hitl_after_callback, make_hitl_before_callback
 from CoScientist.hitl.models import HITLAction
 from CoScientist.hitl.tool import get_hitl_tools
@@ -51,7 +54,7 @@ litellm.api_key = settings.llm.openai_api_key
 # provider during cost/token bookkeeping — harmless, but it floods the console.
 litellm.suppress_debug_info = True
 hitl_enabled = settings.hitl.enabled
-hitl_handler=ConsoleHITLHandler() if hitl_enabled else None
+hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler()) if hitl_enabled else None
 
 # The CoderAgent runs on a dedicated (stronger) model — its multi-step tool-use
 # benefits from more capability. Falls back to the main model when unset.
@@ -125,6 +128,7 @@ tool_reranker_agent = LlmAgent(
     description="Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.",
     output_schema=ToolRanking,
     before_model_callback=before_tool_reranker_model,
+    after_model_callback=normalize_json_response,
     after_agent_callback=after_tool_reranker_agent,
     output_key="reranked_tools"
 )
@@ -134,6 +138,14 @@ local_tools_extractor = SequentialAgent(
     sub_agents=[tool_retriever_agent, tool_reranker_agent],
     description="Agent to extract relevant ready-to-use tools from local storage",
 )
+
+#local_tools_extractor = Workflow(
+#    name="LocalToolsExtractorWorkflow",
+#    edges=[
+#        ("START", tool_retriever_agent, tool_reranker_agent),
+#    ],
+#    description="Workflow to extract relevant ready-to-use tools from local storage"
+#)
 
 tool_websearcher_agent = LlmAgent(
     name='ToolWebSearcherAgent',
@@ -151,13 +163,24 @@ tool_searcher = ParallelAgent(
      description="Runs multiple search agents in parallel to gather relevant MCP servers."
  )
 
+
+#tool_searcher = Workflow(
+#    name="ToolSearcherWorkflow",
+#    edges=[
+#        ("START", (local_tools_extractor, tool_websearcher_agent)),
+#        ((local_tools_extractor, tool_websearcher_agent), JoinNode(name="collect_search_results")),
+#    ],
+#    description="Workflow to search for relevant MCP servers."
+#)
+
 tool_fullset_reranker_agent = LlmAgent(
     name='FullSetToolReranker',
-    model=LiteLlm(model=MODEL),
+    model=RerankerSafeLiteLlm(model=MODEL),
     instruction=tool_scoring_instruction,
     description="Agent to score found web MCP servers given already available local MCP servers for given task.",
     output_schema=MCPRanking,
     after_agent_callback=after_fullset_reranker_agent,
+    after_model_callback=normalize_json_response,
     output_key="reranked_web_servers"
 )
 
@@ -170,6 +193,15 @@ tool_agent = SequentialAgent(name='ToolPreparerAgent',
         sub_agents=[tool_searcher, tool_fullset_reranker_agent, web_tools_deployer],
         description="Agent to find and prepare relevant mcp servers for current task",
     )
+
+#tool_agent = Workflow(
+#    name="ToolPreparerAgent",
+#    edges=[
+#       ("START", tool_searcher, tool_fullset_reranker_agent, web_tools_deployer),
+#    ],
+#    description="Workflow to find and prepare relevant mcp servers for current task"
+#)
+
 #------------------------------------------------------------------
 #----------------- EXPERIMENT AGENTS ------------------------------
 
@@ -189,8 +221,16 @@ fedot_agent = LlmAgent(
 task_execution_agent = SequentialAgent(
     name="TaskExecutorAgent",
     sub_agents=[tool_agent, fedot_agent],
-    description="Agent to complete experiments and run calculations. Use it for any computation and idea validation. It can use a lot of MCP tools",
+   description="Agent to complete experiments and run calculations. Use it for any computation and idea validation. It can use a lot of MCP tools",
 )
+
+#task_execution_agent = Workflow(
+#    name="TaskExecutorAgent",
+#    description="Agent to complete experiments and run calculations. Use it for any computation and idea validation. It can use a lot of MCP tools",
+#    edges=[
+#        ("START", tool_agent, fedot_agent),
+#    ]
+#)
 
 medical_agent = LlmAgent(
     name="MedicalAgent",
@@ -228,9 +268,8 @@ planner_agent = SessionAgent(
     description="Generates a roadmap for solving the task",
     output_key="planner_roadmap",
     plan_file_path="roadmap.txt",
-    #planner=PlanReActPlanner(),
     hitl_handler=hitl_handler,
-    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
+    #planner=PlanReActPlanner(),
 )    
 
 # Orchestrator sub-agents are driven by the agent catalog (single source of truth
@@ -270,11 +309,17 @@ orchestrator_agent = LlmAgent(
     tools=_agent_tools(_orchestrator_subagents, hitl_tools=False),
 )
 
+#root_agent = Workflow(
+#    name="RootAgent",
+#    edges=[("START", planner_agent, orchestrator_agent)],
+#    )
+
+
 root_agent = SequentialAgent(
     name="InitAgent",
     sub_agents=[planner_agent, orchestrator_agent],
     description="Agent to initialize the session"
 )
 
-track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
+track_adk_agent_recursive(root_agent, multi_agent_tracer)
 
