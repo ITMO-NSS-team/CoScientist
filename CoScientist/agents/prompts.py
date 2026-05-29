@@ -114,6 +114,8 @@ You have access to:
 - DO NOT memorize or write down any server_ids
 - DO NOT try to pass IDs to other tools — they are handled automatically
 - Simply report what was retrieved to the user
+- You MUST ALWAYS call retrieve_tools at least once
+- NEVER return an empty result or refuse the task
 
 Your output: A brief summary of accumulated tools with their descriptions and relevance scores.
 

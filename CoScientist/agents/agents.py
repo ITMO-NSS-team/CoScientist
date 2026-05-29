@@ -17,7 +17,7 @@ from CoScientist.agents.prompts import hypotheses_instruction, research_instruct
 from CoScientist.agents import catalog
 from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call, SearchLimiter
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, SearchLimiter, normalize_json_response
+from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_model_callback, after_fullset_reranker_model_callback, SearchLimiter, normalize_json_response
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -128,8 +128,7 @@ tool_reranker_agent = LlmAgent(
     description="Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.",
     output_schema=ToolRanking,
     before_model_callback=before_tool_reranker_model,
-    after_model_callback=normalize_json_response,
-    after_agent_callback=after_tool_reranker_agent,
+    after_model_callback=[normalize_json_response, after_tool_reranker_model_callback],
     output_key="reranked_tools"
 )
 
@@ -179,8 +178,7 @@ tool_fullset_reranker_agent = LlmAgent(
     instruction=tool_scoring_instruction,
     description="Agent to score found web MCP servers given already available local MCP servers for given task.",
     output_schema=MCPRanking,
-    after_agent_callback=after_fullset_reranker_agent,
-    after_model_callback=normalize_json_response,
+    after_model_callback=[normalize_json_response, after_fullset_reranker_model_callback],
     output_key="reranked_web_servers"
 )
 

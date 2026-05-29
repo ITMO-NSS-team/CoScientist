@@ -12,8 +12,13 @@ from typing import Optional, List, Dict, Any
 import json
 import ast
 
+<<<<<<< HEAD
 import logging
 logger = logging.getLogger(__name__)
+=======
+from CoScientist.storage.models import ToolRanking, MCPRanking
+import re
+>>>>>>> 24906d1 (hotfix)
 
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
@@ -34,20 +39,45 @@ def before_tool_reranker_model(
     return
 
 
-def after_tool_reranker_agent(
-    callback_context: CallbackContext
+def after_tool_reranker_model_callback(
+    callback_context: CallbackContext,
+    llm_response: LlmResponse
 ) -> None:
     """Adds ToolReranker output to state"""
 
     current_state = callback_context.state
+<<<<<<< HEAD
     reranked_tools: Dict[str, float] = (current_state.get('reranked_tools') or {}).get('tools', [])
+=======
+    if not (llm_response.content and llm_response.content.parts and llm_response.content.parts[0].text):
+        return
+
+    text = llm_response.content.parts[0].text.strip()
+    if text.startswith('```json'):
+        text = text[7:]
+    elif text.startswith('```'):
+        text = text[3:]
+    if text.endswith('```'):
+        text = text[:-3]
+    text = text.strip()
+
+    try:
+        reranked_data = json.loads(text)
+    except Exception:
+        try:
+            reranked_data = ast.literal_eval(text)
+        except Exception:
+            reranked_data = {"tools": []}
+
+    reranked_tools = reranked_data.get('tools', [])
+>>>>>>> 24906d1 (hotfix)
 
     rerank_map: Dict[int, float] = {t['index']: t['score'] for t in reranked_tools}
     acc_tools: List[Dict[str, Any]] = current_state.get('accumulated_tools', [])
 
     filtered_tools: List[Dict[str, Any]] = [
         tool for tool in acc_tools
-        if rerank_map.get(tool['tool_index'], 0) >= 0.3
+        if rerank_map.get(tool.get('tool_index', -1), 0) >= 0.3
     ]
 
     if not filtered_tools:
@@ -62,7 +92,7 @@ def after_tool_reranker_agent(
 
         filtered_tools = [
             tool for tool in acc_tools
-            if tool['tool_index'] in top_ids
+            if tool.get('tool_index', -1) in top_ids
         ]
 
     callback_context.state['filtered_tools'] = filtered_tools
@@ -71,21 +101,48 @@ def after_tool_reranker_agent(
     return
 
 
-def after_fullset_reranker_agent(
-    callback_context: CallbackContext
+def after_fullset_reranker_model_callback(
+    callback_context: CallbackContext,
+    llm_response: LlmResponse
 ) -> None:
     """Adds ToolReranker output to state"""
 
     current_state = callback_context.state
+<<<<<<< HEAD
     reranked_mcps: List[Dict[str, Any]] = (current_state.get('reranked_web_servers') or {}).get('mcp_scores', [])
 
     # Binary deploy score (0/1) per MCP index — truthiness selects deploy.
     rerank_map: Dict[int, bool] = {t['index']: t['score'] for t in reranked_mcps}
+=======
+    if not (llm_response.content and llm_response.content.parts and llm_response.content.parts[0].text):
+        return
+
+    text = llm_response.content.parts[0].text.strip()
+    if text.startswith('```json'):
+        text = text[7:]
+    elif text.startswith('```'):
+        text = text[3:]
+    if text.endswith('```'):
+        text = text[:-3]
+    text = text.strip()
+
+    try:
+        reranked_data = json.loads(text)
+    except Exception:
+        try:
+            reranked_data = ast.literal_eval(text)
+        except Exception:
+            reranked_data = {"mcp_scores": []}
+
+    reranked_mcps = reranked_data.get('mcp_scores', [])
+
+    rerank_map: Dict[int, float] = {t['index']: t['score'] for t in reranked_mcps}
+>>>>>>> 24906d1 (hotfix)
     acc_mcps: List[Dict[str, Any]] = current_state.get('accumulated_web_mcps', [])
 
     filtered_mcps: List[Dict[str, Any]] = [
         mcp for mcp in acc_mcps
-        if rerank_map.get(mcp['index'], False)
+        if rerank_map.get(mcp.get('index', -1), False)
     ]
 
     callback_context.state['filtered_mcps'] = filtered_mcps
