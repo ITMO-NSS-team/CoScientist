@@ -228,8 +228,14 @@ If it returns {"passed": False, ...}:
     run_tests(repo_url)
 
 If it returns {"passed": False, ...}:
-  - Call the debugger agent tool, passing: repo_url + the full pytest output
-  - After the debugger returns, call run_tests again
+  - **ALWAYS call the debugger.** Never write `Debugger Actions: None
+    required` in the report when tests fail. Specifically, do NOT reason
+    "the failing tests are named `*_command_failure` so they are supposed
+    to fail" — those tests verify that the tool catches and re-raises
+    `subprocess.CalledProcessError` as `RuntimeError`. If they fail it
+    means the tool is missing the try/except wrapper, which is a real bug.
+    Pass repo_url + the full pytest output to the debugger.
+  - After the debugger returns, call run_tests again.
   - Repeat up to 3 times. Stop early if the failing-test list repeats. If
     still failing, record the error and proceed to Step 5, marking the
     stage as FAILED.
@@ -332,8 +338,12 @@ def tool_name(param: type) -> return_type:
         RuntimeError: When the underlying command fails.
     """
     # implementation: call subprocess / read files from REPO_PATH
-    result = subprocess.run([str(PYTHON), ...], capture_output=True, text=True, check=True)
-    return result.stdout
+    try:
+        result = subprocess.run([str(PYTHON), ...],
+                                capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"<helper-name> failed: {e.stderr}") from e
+    return json.loads(result.stdout)
 
 if __name__ == "__main__":
     mcp.run()
@@ -365,6 +375,39 @@ Rules:
   which is more informative than a generic "File not found".
   Validate only non-path parameters (e.g. `batch_size > 0`, `mode in {...}`).
   Trust the subprocess for path resolution.
+- **Every subprocess.run(..., check=True) call MUST be wrapped in
+  try/except.** Without it, a `subprocess.CalledProcessError` propagates out
+  of the @mcp.tool() function — tests that mock the failure case still see
+  the raw CalledProcessError instead of the documented RuntimeError, and
+  pytest fails them. The wrapper is one short block:
+  ```python
+  try:
+      result = subprocess.run([str(PYTHON), ...],
+                              capture_output=True, text=True, check=True)
+  except subprocess.CalledProcessError as e:
+      raise RuntimeError(f"<helper-name> failed: {e.stderr}") from e
+  ```
+- **Helpers print JSON to stdout — they never persist their result to a
+  file the @mcp.tool() reads back.** Patterns like writing
+  `/tmp/<tool>_output.txt` from the helper and then `Path(...).read_text()`
+  from server.py are forbidden: the helper subprocess can crash before
+  writing the file, the path is stage-coupled and breaks under
+  containerisation, and the validator's invocation surfaces a confusing
+  FileNotFoundError instead of the real error. If you need to expose a
+  persisted artefact (rendered image, large CSV), the helper writes the
+  file inside `REPO_PATH` and prints `{"path": "<rel/path>", ...}` as JSON
+  on stdout — the server.py just `json.loads()`-es the stdout and returns
+  the dict.
+- **No `Optional[str] = None` defaults for path or identifier
+  parameters.** If a tool requires `model_path`, `dataset_dir`,
+  `checkpoint_name`, `model_id`, `input_file`, etc., either:
+  (a) make it required (no default), or
+  (b) provide a real working default — a file shipped with the repo, or
+  a known-good HuggingFace ID that resolves. Never default to `None` for
+  these — `None` silently propagates into downstream code (HF loaders,
+  file opens) and dies with cryptic "None is not a valid path / model
+  identifier" errors that look like environment bugs but are actually
+  bad defaults.
 
 ## How to call repo code — two allowed patterns
 
@@ -377,12 +420,15 @@ whatever is on PATH and likely does not have the repo's dependencies installed.
 @mcp.tool()
 def run_training(config_path: str, output_dir: str) -> str:
     """..."""
-    result = subprocess.run(
-        [str(PYTHON), str(REPO_PATH / "train.py"),
-         "--config", config_path, "--output", output_dir],
-        cwd=str(REPO_PATH),
-        capture_output=True, text=True, check=True,
-    )
+    try:
+        result = subprocess.run(
+            [str(PYTHON), str(REPO_PATH / "train.py"),
+             "--config", config_path, "--output", output_dir],
+            cwd=str(REPO_PATH),
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"train.py failed: {e.stderr}") from e
     return result.stdout
 ```
 
@@ -420,12 +466,15 @@ Step 2 — call it from server.py:
 @mcp.tool()
 def run_analysis(image_path: str, model_path: str = "models/best.pth") -> dict:
     """..."""
-    result = subprocess.run(
-        [str(PYTHON), str(HELPERS_PATH / "run_analysis.py"),
-         str(REPO_PATH), image_path, "--model", model_path],
-        cwd=str(REPO_PATH),
-        capture_output=True, text=True, check=True,
-    )
+    try:
+        result = subprocess.run(
+            [str(PYTHON), str(HELPERS_PATH / "run_analysis.py"),
+             str(REPO_PATH), image_path, "--model", model_path],
+            cwd=str(REPO_PATH),
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"run_analysis.py failed: {e.stderr}") from e
     return json.loads(result.stdout)
 ```
 
