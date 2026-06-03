@@ -1,5 +1,8 @@
 import os
 
+import litellm
+litellm.suppress_debug_info = True
+
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.agent_tool import AgentTool
