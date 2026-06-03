@@ -8,6 +8,7 @@ from alembic.tools import (
     read_report, write_report,
     write_file, read_output_file, update_file,
     validate_syntax, run_tests, setup_venv, check_venv_compat,
+    invoke_mcp_tool,
 )
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
@@ -44,15 +45,15 @@ coder_agent = Agent(
 debugger_agent = Agent(
     name="debugger",
     model=LiteLlm(model=MODEL),
-    description="Receives a repo URL and an error message, reads the offending file, fixes the bug, and returns a summary of what was changed.",
+    description="Receives a repo URL and an error message, fixes the bug — either by installing a missing system/pip dep or by editing server.py/helpers — and re-runs the failing tool to confirm.",
     instruction=debugger_instruction,
-    tools=[read_output_file, update_file, bash],
+    tools=[read_output_file, update_file, bash, bash_env, invoke_mcp_tool],
 )
 
 validator_agent = Agent(
     name="validator",
     model=LiteLlm(model=MODEL),
-    description="Validates the generated MCP server via syntax checks and pytest, calling the debugger agent on failures, then writes a validation report.",
+    description="Validates the generated MCP server via syntax checks, pytest, and real tool invocations, calling the debugger agent on failures, then writes a validation report.",
     instruction=validator_instruction,
-    tools=[read_report, validate_syntax, run_tests, write_report, AgentTool(agent=debugger_agent)],
+    tools=[read_report, validate_syntax, run_tests, invoke_mcp_tool, write_report, AgentTool(agent=debugger_agent)],
 )

@@ -103,9 +103,19 @@ def _log_event(agent_name: str, event) -> None:
             logger.debug(f"[{agent_name}] RESP  {fr.name} → {resp_str}")
 
 
-MAX_TOOL_REPEATS  = 3   # abort if same tool+args combo is called this many times
-MAX_STEPS         = 60  # hard ceiling on total events per agent
-MAX_GUARD_RETRIES = 3   # re-invoke agent at most this many times when guard fires
+MAX_TOOL_REPEATS  = 3    # abort if same tool+args combo is called this many times
+MAX_STEPS         = 120  # hard ceiling on total events per agent (was 60; complex
+                         # debugger fixes routinely need >60 calls)
+MAX_GUARD_RETRIES = 3    # re-invoke agent at most this many times when guard fires
+
+# Per-stage wall-clock budgets (seconds). Caps a hung stage (heavy pip install,
+# stuck network) instead of letting a single repo eat 15+ hours of the bench.
+STAGE_TIMEOUT = {
+    "explorer":    900,    # 15 min — mostly reading + writing the report
+    "environment": 2400,   # 40 min — biggest cost: venv + heavy ML deps
+    "coder":       1500,   # 25 min — generates server.py + helpers + tests
+    "validator":   1800,   # 30 min — syntax + pytest + per-tool invocations
+}
 
 
 async def _run_agent_once(
@@ -268,19 +278,45 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             return True
         return STAGES.index(stage) >= STAGES.index(resume_from)
 
+    async def _run_stage(stage: str, agent, sid_suffix: str, message: str,
+                         **kwargs) -> str:
+        """Wrap run_agent in a wall-clock timeout. Returns final text or
+        an empty string when the stage timed out (pipeline continues)."""
+        try:
+            return await asyncio.wait_for(
+                run_agent(agent, session_service, f"{name}_{sid_suffix}",
+                          message, **kwargs),
+                timeout=STAGE_TIMEOUT[stage],
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[{stage}] STAGE TIMEOUT after {STAGE_TIMEOUT[stage]}s — "
+                f"aborting stage, pipeline continues to next stage."
+            )
+            return ""
+
+    def _coder_artefacts_present() -> tuple[bool, list[str]]:
+        required = [
+            base / "output" / "server.py",
+            base / "output" / "tests" / "test_server.py",
+            base / "reports" / "server.md",
+        ]
+        missing = [str(p.relative_to(base)) for p in required if not p.exists()]
+        return (not missing), missing
+
     try:
         # ── Stage 1: Explorer ──────────────────────────────────────────────
         if _should_run("explorer"):
             _banner(1, f"Explorer  ({repo_url})")
-            await run_agent(explorer_agent, session_service, f"{name}_explorer", repo_url,
-                            required_report="exploration")
+            await _run_stage("explorer", explorer_agent, "explorer", repo_url,
+                             required_report="exploration")
             logger.info(f"[Explorer done] report → {base}/reports/exploration.md")
 
         # ── Stage 2: Environment ───────────────────────────────────────────
         if _should_run("environment"):
             _banner(2, f"Environment ({repo_url})")
-            await run_agent(
-                environment_agent, session_service, f"{name}_environment", repo_url,
+            await _run_stage(
+                "environment", environment_agent, "environment", repo_url,
                 required_report="environment", venv_guard_path=venv_python,
             )
             logger.info(f"[Environment done] report → {base}/reports/environment.md")
@@ -288,8 +324,8 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
         # ── Stage 3: Coder ─────────────────────────────────────────────────
         if _should_run("coder"):
             _banner(3, f"Coder  ({repo_url})")
-            await run_agent(
-                coder_agent, session_service, f"{name}_coder", repo_url,
+            await _run_stage(
+                "coder", coder_agent, "coder", repo_url,
                 required_report="server",
             )
             logger.info(f"[Coder done] server → {base}/output/server.py")
@@ -298,22 +334,29 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
 
         # ── Stage 4: Validator (calls Debugger internally on failures) ─────
         if _should_run("validator"):
-            _banner(4, f"Validator  ({repo_url})")
-            validator_response = await run_agent(
-                validator_agent, session_service, f"{name}_validator", repo_url,
-                required_report="validation",
-            )
-            logger.info(f"[Validator done] report → {base}/reports/validation.md")
+            ok, missing = _coder_artefacts_present()
+            if not ok:
+                logger.error(
+                    f"[validator] required artefacts missing: {missing} — "
+                    f"skipping validator stage (nothing to validate)."
+                )
+            else:
+                _banner(4, f"Validator  ({repo_url})")
+                validator_response = await _run_stage(
+                    "validator", validator_agent, "validator", repo_url,
+                    required_report="validation",
+                )
+                logger.info(f"[Validator done] report → {base}/reports/validation.md")
 
-            sep = "=" * 60
-            logger.success(
-                f"\n{sep}\n  Pipeline complete: {name}\n"
-                f"  Reports : {base}/reports/\n"
-                f"  Output  : {base}/output/\n"
-                f"  Log     : {log_file}\n{sep}\n\n"
-                f"--- Validator summary ---\n\n"
-                + textwrap.indent(validator_response.strip(), "  ")
-            )
+                sep = "=" * 60
+                logger.success(
+                    f"\n{sep}\n  Pipeline complete: {name}\n"
+                    f"  Reports : {base}/reports/\n"
+                    f"  Output  : {base}/output/\n"
+                    f"  Log     : {log_file}\n{sep}\n\n"
+                    f"--- Validator summary ---\n\n"
+                    + textwrap.indent((validator_response or "").strip(), "  ")
+                )
 
     finally:
         logger.remove(_file_sink_id)
