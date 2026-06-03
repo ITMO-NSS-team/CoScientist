@@ -336,6 +336,10 @@ def tool_name(param: type) -> return_type:
     Raises:
         ValueError: When input is invalid.
         RuntimeError: When the underlying command fails.
+
+    Examples:
+        >>> tool_name("real_value_from_explorer_report")
+        {"key": "expected_output"}
     """
     # implementation: call subprocess / read files from REPO_PATH
     try:
@@ -539,6 +543,19 @@ def test_tool_name_command_failure():
 Rules:
 - One test file: tests/test_server.py.
 - At minimum: one success test and one failure/error test per tool.
+- For each concrete example the explorer provided (under "Examples" in each
+  usage scenario), add a dedicated test named test_<tool>_example_<N> that
+  calls the tool with those exact real parameter values. The test must assert
+  that the call succeeds and that the result has the expected structure:
+
+  def test_run_analysis_example_1():
+      fake_output = json.dumps({"smiles": "CCO", "confidence": 0.95})
+      with patch("server.subprocess.run") as mock_run:
+          mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
+          result = run_analysis("data/sample_molecule.png")
+          assert "smiles" in result
+          mock_run.assert_called_once()
+
 - Mock only server.subprocess.run — do NOT patch server.Path, server.os, or
   any repo module. Patching Path globally breaks REPO_PATH which is constructed
   at import time and is already a real Path object.
@@ -554,6 +571,10 @@ The explorer agent wrote the analysis report for this repo. Read it with:
 This gives you the description, key files, main workflows, and MCP usage scenarios.
 The environment agent is setting up the venv in parallel — you do not need to
 install anything.
+
+Pay attention to the **Examples** listed under each usage scenario. Copy those
+exact call signatures and real parameter values into the tool's docstring
+`Examples:` section. If the explorer provided multiple examples, include all.
 
 ### Step 2 — Verify API signatures before writing helpers
 Before writing any helper script, confirm the exact parameter names of every
@@ -589,6 +610,8 @@ write Python source code at runtime — use the pre-written helpers instead.
     write_file(repo_url, "tests/test_server.py", <content>)
 
 Cover each tool with at least a success and a failure case.
+Also add one test_<tool>_example_<N> test per concrete example from the
+explorer report, using those exact parameter values.
 Follow the test standard above precisely.
 
 ### Step 6 — Write the server report
@@ -739,6 +762,14 @@ The report must contain:
   - What input parameters the MCP tool would receive, with types and defaults
   - What command / script it would wrap (direct run or as part of a script)
   - What output it would return
+  - **Examples** — If the repo ships sample data or links to demo inputs, reference those
+    exact paths/URLs in 1-2 concrete call examples using real parameter values found
+    in the repo's README, notebooks, scripts, sample data, or provided links.
+    Use actual file paths, URLs, model names, SMILES strings, image paths, or
+    other real inputs — not generic placeholders like "input.csv".
+    DO NOT MAKE UP EXAMPLES WITH DATA IF IT WAS NOT EXPLICITLY PROVIDED.
+    Format each as a Python function call:
+      tool_name(param1="real_value", param2=42)
 
 Skip: tests, migrations, CI configs, and internal implementation details.
 '''
@@ -801,7 +832,7 @@ must also exist.
 
 5. **Copy git URLs verbatim.** If the exploration report lists a dependency
    like `Pkg @ git+https://github.com/org/pkg.git@abc123`, copy it exactly.
-   Never paraphrase git URLs.
+   Never guess or paraphrase git URLs.
 
 6. **NEVER run a bare `pip install <pkg>` command.** Bare `pip` resolves to
    whatever Python is first on PATH — inside the container that is the
