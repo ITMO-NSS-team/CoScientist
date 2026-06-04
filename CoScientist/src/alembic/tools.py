@@ -153,10 +153,7 @@ def bash(command: str) -> dict:
 
 
 def bash_env(command: str) -> dict:
-    """Run a shell command with a 300 s timeout — for slow installs.
-
-    Same semantics as ``bash``, just a longer timeout so package managers
-    (pip / uv / apt-get / conda) have time to download and build.
+    """Run a shell command with a 1800 s (30 min) timeout — for slow installs.
 
     Examples:
         bash_env("uv venv .alembic/massformer/output/.venv --python 3.11")
@@ -180,14 +177,14 @@ def bash_env(command: str) -> dict:
             shell=True,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=1800,
         )
         output = result.stdout
         if result.returncode != 0 and result.stderr:
             output += "\n[stderr] " + result.stderr
         return {"output": output[:MAX_BYTES]}
     except subprocess.TimeoutExpired:
-        return {"error": "Command timed out after 300 seconds."}
+        return {"error": "Command timed out after 1800 seconds."}
 
 
 def search(repo_url: str, pattern: str) -> dict:

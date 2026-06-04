@@ -268,6 +268,32 @@ If a call returns ``{"ok": False, ...}``:
 
 Tools whose sample is ``SKIP`` are reported as ``skipped`` — not failures.
 
+**Every tool is invoked independently.** Do NOT cascade SKIP across
+sibling tools when one fails. Specifically:
+
+- A tool is marked ``SKIPPED`` ONLY when:
+  (a) its sample entry in ``server.md`` is literally ``SKIP``, OR
+  (b) the debugger explicitly returned a summary saying the tool cannot
+      be fixed and recommended skipping (Class D environment fault, etc.).
+
+- A tool MUST NOT be marked ``SKIPPED`` because:
+  - "an earlier tool in the list failed"
+  - "the failure is probably shared between tools"
+  - "the result depends on output of a previous tool"   ← the dependency
+    might be true, but you still have to try and let the failure speak.
+    Mark it FAILED with the actual error, not SKIPPED with a guess.
+
+Wrong: ``predict_images — SKIPPED (sample not marked SKIP, but not invoked)``
+Right: run `invoke_mcp_tool` for `predict_images` with its own sample
+       args, get its own pass/fail result, report THAT.
+
+Two practical consequences:
+1. Plan to call ``invoke_mcp_tool`` once per non-SKIP sample at minimum,
+   regardless of whether earlier calls succeeded or failed.
+2. If the same underlying bug fails N tools, the debugger's first call
+   on tool #1 may have already fixed it — running tool #2 confirms
+   the fix landed, which is valuable signal you lose by skipping.
+
 ### Step 5 — Write validation report
     write_report(repo_url, "validation", <content>)
 
@@ -627,17 +653,28 @@ The report must contain:
 
   Rules for samples:
   - List EVERY tool you wrote. Skipped ones still need an entry.
-  - Use real files that exist in the cloned repo (e.g.
-    `predictions/example_smiles.csv` if the repo ships one) — paths are
-    resolved relative to `cwd=REPO_PATH`.
+  - **Path-type arguments MUST be absolute container paths**, not relative.
+    For any file shipped in the cloned repo, write the full path:
+    `/work/.alembic/<repo-name>/repos/<rel/path>` (the repo-name is the
+    basename of the repo URL — for `https://github.com/CrystalEye42/OpenChemIE`
+    it is `OpenChemIE`).
+    Wrong:  `pdf_path: "example/foo.pdf"`            ← relative, fragile
+    Right:  `pdf_path: "/work/.alembic/OpenChemIE/repos/example/foo.pdf"`
+    Reason: the value passes through three different working directories
+    (validator → server.py → helper subprocess) and any one link that
+    resolves relative-to-its-own-cwd loses the file — defensive checks,
+    libraries that internally `os.chdir`, helpers that log
+    `Path(x).resolve()` all break the chain. Absolute paths bypass it.
+  - Before writing each sample path, **verify it exists**:
+      bash("ls /work/.alembic/<repo-name>/repos/<rel/path>")
+    If it does not exist, the sample is a SKIP — do not invent paths and
+    do not fabricate fixture files.
   - For tools that need external user input (a user PDF / weights file /
     network resource not bundled in the repo) write `SKIP` and add one
     line under the YAML explaining why.
   - Use the most minimal args you can — small `num_pages`, small
     `batch_size`, `device: -1` for CPU. Validator runs these on a CPU
     container; long inference / GPU calls will time out.
-  - Do NOT invent paths. If the repo does not include sample data,
-    use SKIP.
 '''
 
 explorer_instruction = '''
