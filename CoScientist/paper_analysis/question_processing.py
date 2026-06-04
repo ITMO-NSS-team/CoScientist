@@ -25,12 +25,6 @@ from CoScientist.paper_analysis.domain_metadata import format_domain_metadata, a
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
-if not os.getenv("OPENAI_API_KEY") and os.getenv("LLM__OPENAI_API_KEY"):
-    os.environ["OPENAI_API_KEY"] = os.getenv("LLM__OPENAI_API_KEY")
-
-if not os.getenv("LLM_SERVICE_KEY") and os.getenv("LLM__SERVICE_KEY"):
-    os.environ["LLM_SERVICE_KEY"] = os.getenv("LLM__SERVICE_KEY")
-
 VISION_LLM_URL = os.getenv("LLM__VISION_URL")
 
 

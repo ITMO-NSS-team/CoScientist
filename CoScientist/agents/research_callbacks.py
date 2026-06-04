@@ -57,7 +57,7 @@ async def papers_agent_before_model(
     return None
 
 
-def ensure_local_papers_uploaded(callback_context: CallbackContext) -> None:
+async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> None:
     """Upload local papers to S3 and register their keys in session state."""
     if callback_context.state.get(_PAPER_STATE_KEY):
         return

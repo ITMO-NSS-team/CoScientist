@@ -1,10 +1,8 @@
 import logging
 import os
-import tempfile
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pathlib import Path
 from fastmcp import FastMCP
 from io import BytesIO
 from urllib.parse import urlparse
@@ -88,38 +86,35 @@ def explore_my_papers(task: str, s3_keys: list[str]) -> dict:
 
     logger.info(f'S3 keys for explore_my_papers: {s3_keys}')
 
-    paper_paths: list[str] = []
     client = s3_service.create_s3_client()
 
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for idx, s3_key in enumerate(s3_keys, start=1):
+        paper_buffers: list[BytesIO] = []
+        for s3_key in s3_keys:
+            response = client.get_object(Bucket=s3_service.bucket_name, Key=s3_key)
+            paper_buffers.append(BytesIO(response['Body'].read()))
 
-                response = client.get_object(Bucket=s3_service.bucket_name, Key=s3_key)
-                pdf_bytes = response['Body'].read()
-                paper_path = Path(tmpdir) / (Path(s3_key).name or f'paper_{idx}.pdf')
-                paper_path.write_bytes(pdf_bytes)
-                paper_paths.append(str(paper_path))
+        if not paper_buffers:
+            return {'answer': 'No valid papers could be loaded from S3.'}
 
-            if not paper_paths:
-                return {'answer': 'No valid papers could be loaded from S3.'}
+        logger.info(f'PAPERS from explore_my_papers: {s3_keys}')
 
-            logger.info(f'PAPERS from explore_my_papers: {paper_paths}')
+        logger.info(f'Requesting PDF image description from server...')
+        img_descriptions = 'This is additional information about the reactions and molecules that are presented' \
+                        'on the images in the paper. They are passed in the same order as papers themselves.' \
+                        'Use them to answer the question.\n\n'
+        for buf in paper_buffers:
+            buf.seek(0)
+            detected_reactions = remove_keys(extract_reactions_from_pdf(buf))
+            img_descriptions += f'Reactions: {str(detected_reactions)}\n'
+            buf.seek(0)
+            detected_molecules = remove_keys(extract_molecules_from_pdf(buf))
+            img_descriptions += f'Molecules: {str(detected_molecules)}\n'
+            img_descriptions += '\n\n'
 
-            logger.info(f'Requesting PDF image description from server...')
-            img_descriptions = 'This is additional information about the reactions and molecules that are presented' \
-                            'on the images in the paper. They are passed in the same order as papers themselves.' \
-                            'Use them to answer the question.\n\n'
-            for paper in paper_paths:
-                with open(paper, 'rb') as paper_bytes:
-                    detected_reactions = remove_keys(extract_reactions_from_pdf(paper_bytes))
-                    img_descriptions += f'Reactions: {str(detected_reactions)}\n'
-                with open(paper, 'rb') as paper_bytes:
-                    detected_molecules = remove_keys(extract_molecules_from_pdf(paper_bytes))
-                    img_descriptions += f'Molecules: {str(detected_molecules)}\n'
-                img_descriptions += '\n\n'
-
-            return simple_query_llm(VISION_LLM_URL, task, explore_my_papers_prompt, paper_paths, img_descriptions)
+        for buf in paper_buffers:
+            buf.seek(0)
+        return simple_query_llm(VISION_LLM_URL, task, explore_my_papers_prompt, paper_buffers, img_descriptions)
     except Exception as e:
         logger.error(f'explore_my_papers ERROR: {e}')
         return {'answer': 'Could not extract any data from uploaded papers.'}

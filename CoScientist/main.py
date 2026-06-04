@@ -119,7 +119,7 @@ class CoScientistManager:
     async def close(self):
         """Cleanup session-related resources and uploaded paper artifacts."""
         try:
-            cleanup_uploaded_papers(self.user_id, self.session_id)
+            await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
         except Exception as exc:
             print(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
 

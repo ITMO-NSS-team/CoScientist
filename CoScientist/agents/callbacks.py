@@ -5,6 +5,9 @@ from google.adk.tools.tool_context import ToolContext
 
 from typing import Optional, List, Dict, Any
 
+import logging
+logger = logging.getLogger(__name__)
+
 from CoScientist.storage.models import ToolRanking
 
 def before_tool_reranker_model(
@@ -91,8 +94,7 @@ def print_research_agent_tool_call(
 ) -> None:
     """Print the tool name and args when ResearchAgent invokes a tool."""
     try:
-        print(f"\n[ResearchAgent tool called] {tool.name}")
-        print(f"[ResearchAgent tool args] {args}")
-    except Exception:
-        pass
-    return None
+        logger.info(f"\n[ResearchAgent tool called] {tool.name}")
+        logger.info(f"[ResearchAgent tool args] {args}")
+    except Exception as e:
+        logger.error(f"Error in print_research_agent_tool_call: {e}")
