@@ -51,7 +51,7 @@ class HypothesisLoopCoordinator:
     def __init__(self, model: str, audit: HypothesisAuditLogger):
         self._model = model
         self._audit = audit
-        self._critic = HypothesisCriticAgent(rag_client=RAGClient())
+        self._critic = HypothesisCriticAgent(rag_client=RAGClient(), model=self._model)
 
     async def run_critic_loop(self, hypotheses: HypothesisList, research_question: str) -> HypothesisList:
         refined_list: List[Hypothesis] = []

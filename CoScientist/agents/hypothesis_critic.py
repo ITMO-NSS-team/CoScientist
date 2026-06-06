@@ -71,15 +71,22 @@ class HypothesisCriticAgent:
     def __init__(
         self,
         rag_client: RAGClient,
-        model: str = MODEL,
+        model: Optional[str] = None,
         max_tokens: int = 1024,
         rag_query_fn: Optional[Callable[[HypothesisInput], str]] = None,
     ):
         self._rag = rag_client
-        self._model = model
+        raw_model = model or os.environ.get("LLM__MAIN_MODEL", MODEL)
+        # Strip openrouter/ prefix for direct HTTP requests to OpenRouter
+        if raw_model.startswith("openrouter/"):
+            raw_model = raw_model[len("openrouter/"):]
+        self._model = raw_model
         self._max_tokens = max_tokens
         self._rag_query = rag_query_fn or self._default_query
-        self._api_key = os.environ["OPENROUTER_API_KEY"]
+        self._api_key = os.environ.get(
+            "OPENROUTER_API_KEY", os.environ.get("LLM__OPENAI_API_KEY", "")
+        )
+        self._api_url = os.environ.get("LLM__MAIN_URL", "")
 
     def critique_batch(self, hypotheses: list[HypothesisInput]) -> list[HypothesisCriticResult]:
         results: list[HypothesisCriticResult] = []
@@ -99,8 +106,11 @@ class HypothesisCriticAgent:
             for h, ctx in zip(chunk, contexts)
         ]
 
+        target_url = self._api_url or OPENROUTER_URL
+        if target_url and not target_url.endswith("/chat/completions"):
+            target_url = target_url.rstrip("/") + "/chat/completions"
         response = requests.post(
-            OPENROUTER_URL,
+            target_url,
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
@@ -116,14 +126,43 @@ class HypothesisCriticAgent:
         )
         response.raise_for_status()
 
-        raw = response.json()["choices"][0]["message"]["content"].strip()
+        content = response.json()["choices"][0]["message"]["content"]
+        if content is None:
+            logger.warning("HypothesisCriticAgent: LLM returned null content")
+            return [self._fallback(h) for h in chunk]
+        raw = content.strip()
+        if not raw:
+            logger.warning("HypothesisCriticAgent: LLM returned empty content")
+            return [self._fallback(h) for h in chunk]
         return self._parse(raw, chunk)
 
-    def _parse(self, raw: str, chunk: list[HypothesisInput]) -> list[HypothesisCriticResult]:
+    @staticmethod
+    def _extract_json(text: str) -> Optional[Any]:
+        """Extract JSON from LLM response — strips ``` fences and parses."""
+        t = text.strip()
+        # Remove ``` fences
+        if t.startswith("```"):
+            t = t[3:]
+            if t.startswith("json"):
+                t = t[4:]
+            # Find closing ```
+            fence = t.rfind("```")
+            if fence != -1:
+                t = t[:fence]
+            t = t.strip()
+        # Try direct parse
         try:
-            items: list[dict] = json.loads(raw)
+            return json.loads(t)
         except json.JSONDecodeError:
-            logger.warning("HypothesisCriticAgent: failed to parse response, using fallbacks")
+            return None
+
+    def _parse(self, raw: str, chunk: list[HypothesisInput]) -> list[HypothesisCriticResult]:
+        items = self._extract_json(raw)
+        if items is None or not isinstance(items, list):
+            logger.warning(
+                "HypothesisCriticAgent: failed to parse response as JSON array. "
+                "Raw (first 200 chars): %s", raw[:200]
+            )
             return [self._fallback(h) for h in chunk]
 
         parsed = {item["id"]: item for item in items}

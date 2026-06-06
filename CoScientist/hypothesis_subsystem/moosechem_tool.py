@@ -55,11 +55,9 @@ class _AsyncCorpusBuilder:
         self,
         model: str,
         max_papers_per_query: int = 10,
-        base_url: Optional[str] = None,
     ):
         self._model = model
         self._max_papers = max_papers_per_query
-        self._base_url = base_url or "https://api.openai.com/v1"
 
     # -- Query generation via LLM -------------------------------------------
 
@@ -91,7 +89,6 @@ Example output format:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=500,
                 temperature=0.3,
-                api_base=self._base_url,
             )
             content = resp["choices"][0]["message"]["content"].strip()
             start = content.find("[")
