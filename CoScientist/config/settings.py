@@ -38,7 +38,19 @@ class LLMSettings(BaseModel):
 
 
 # =========================
-# LLM CONFIG
+# HYPOTHESIS AGENT CONFIG
+# =========================
+class HypothesisSettings(BaseModel):
+    """Settings for the hypothesis generation subsystem."""
+    moosechem_model: Optional[str] = None
+    max_papers_per_query: int = 10
+    max_hypotheses: int = 5
+    critic_max_iterations: int = 3
+    default_strategy: str = "MooseChem"
+
+
+# =========================
+# SERVICES CONFIG
 # =========================
 class ServicesSettings(BaseModel):
     tavily_api_key: Optional[str] = None
@@ -129,6 +141,7 @@ class Settings(BaseSettings):
     """Main application settings."""
 
     llm: LLMSettings = LLMSettings()
+    hypothesis: HypothesisSettings = HypothesisSettings()
     services: ServicesSettings = ServicesSettings()
     storage: StorageSettings = StorageSettings()
     hosts_ports: HostsPortsSettings = HostsPortsSettings()

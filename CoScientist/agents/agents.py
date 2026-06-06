@@ -50,16 +50,9 @@ def _agent_tools(base_tools: Any, hitl_tools: bool = False) -> list:
         tools.extend(get_hitl_tools())
     return tools
 
-hypotheses_agent = LlmAgent(
-    name="HypothesesAgent",
-    model=LiteLlm(model=MODEL),
-    instruction=hypotheses_instruction,
-    description="Agent to generate scientific hypotheses and ideas for given task",
-    output_key="hypotheses",
-    tools=_agent_tools([], hitl_tools=True),
-    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
-    #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
-)
+from CoScientist.hypothesis_subsystem import build_hypothesis_subsystem
+
+hypothesis_subsystem = build_hypothesis_subsystem(model=MODEL)
 
 research_agent = LlmAgent(
     name="ResearchAgent",
@@ -137,7 +130,7 @@ orchestrator_agent = LlmAgent(
     after_tool_callback=post_action_critique,
     tools=_agent_tools([
         AgentTool(agent=planner_agent),
-        AgentTool(agent=hypotheses_agent), 
+        hypothesis_subsystem,
         AgentTool(agent=research_agent), 
         AgentTool(agent=task_execution_agent)
     ], hitl_tools=True),

@@ -41,7 +41,7 @@ __all__ = [
     "FedotMASToolset",
     # Agents
     "orchestrator_agent",
-    "hypotheses_agent",
+    "hypothesis_subsystem",
     "research_agent",
     "fedot_agent",
     "task_execution_agent",
