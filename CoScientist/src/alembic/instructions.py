@@ -206,6 +206,31 @@ def tool_name(param: type) -> return_type:
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=8000, path="/mcp")
 ```
+### Model weights / checkpoints (if the repo needs pretrained files)
+
+The finished MCP server must run **out of the box** — the end user never
+supplies a local filesystem path to a model checkpoint, dataset, or any other
+artifact that has to be fetched separately. If the explorer report or README
+mentions pretrained weights, checkpoints, or other large downloadable
+artifacts that are **not** part of the git clone:
+
+- Pick a single fixed location for them inside the clone, e.g.
+  ``REPO_PATH / "weights" / "model.pt"`` (do NOT use ``/tmp``, the user's home
+  directory, or any path outside ``REPO_PATH``).
+- Hardcode that fixed path as the only default in your tools/helpers — never
+  declare a ``model_path: str`` (or similar) parameter that the caller must
+  fill in with a real filesystem location. The tool signature must work with
+  no extra arguments from the user.
+- Add a ``## Model weights`` section to the server report stating the exact
+  expected path(s) and filename(s), and the download source you found in the
+  exploration report/README (URL, ``gdown`` id, Hugging Face repo id,
+  ``git lfs`` pointer, etc.), copied verbatim — do not invent it.
+- Do NOT attempt to download the weights yourself; that happens later, during
+  the Docker build (the docker agent reads your ``## Model weights`` section
+  and fetches the files to the exact path you documented).
+- If no such artifacts are mentioned anywhere in the exploration report or
+  README, write "## Model weights — None required." and move on.
+
 ### Tests (``tests/test_server.py``)
 
 Rules:
@@ -601,6 +626,37 @@ If requirements.txt or pyproject.toml has issues, call:
     update_file(repo_url, "requirements.txt", <corrected full content>)
 Do NOT guess git URLs — copy them verbatim from the file you read.
 
+### Step 3b — Download model weights / checkpoints if required
+
+Read the coder report's ``## Model weights`` section:
+    read_report(repo_url, "server")
+
+If it says "None required", skip this step entirely.
+
+Otherwise it documents a fixed path inside the clone (e.g.
+``REPO_PATH / "weights" / "model.pt"``) and a download source copied from the
+exploration report/README (URL, ``gdown`` id, Hugging Face repo id, git-lfs,
+etc.). The MCP server must work **without any user setup**, so the weights
+have to be fetched **at image-build time** and baked into the image at that
+exact path:
+
+- Add a ``RUN`` step to the Dockerfile that creates the target directory and
+  downloads the file(s) there, using whatever tool matches the source
+  (``wget``/``curl`` for direct URLs, ``pip install gdown && gdown <id> -O
+  <path>``, ``pip install huggingface_hub && python -c "from huggingface_hub
+  import hf_hub_download; ..."``, ``git lfs pull``, etc.).
+- Use the **exact** URL / repo id / command found in the exploration
+  report or README — never invent or guess one. If you cannot find a concrete
+  download source for a checkpoint the coder says is required, note this in
+  the docker report under "Launch verification" / "Result" as a blocker and
+  mark the result FAILED rather than guessing.
+- The final file path inside the image must match the path documented in the
+  coder report's ``## Model weights`` section exactly — the server.py /
+  helpers reference that hardcoded path and will fail to find the file
+  otherwise.
+- Place this RUN step after dependencies are installed (so download tooling
+  like ``gdown``/``huggingface_hub`` is available) and before ``CMD``/entrypoint.
+
 ### Step 4 — Write the Dockerfile
 
 The Dockerfile must be at the clone root:
@@ -697,6 +753,10 @@ The report must contain:
 
   ## Requirements changes
   List any modifications made to requirements.txt / pyproject.toml, or "None."
+
+  ## Model weights
+  "None required" (per coder report), or: source used, exact path baked into
+  the image, and confirmation the download step succeeded during the build.
 
   ## Dockerfile
   (paste the final Dockerfile content)
