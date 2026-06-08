@@ -1,15 +1,16 @@
 """LLM Agents module."""
-from CoScientist.agents.agents import (
-    hypotheses_agent,
-    planner_agent,
-    research_agent,
+from CoScientist.agents.hypotheses_agent import hypotheses_agent
+from CoScientist.agents.medical_agent import medical_agent
+from CoScientist.agents.orchestrator_agent import orchestrator_agent
+from CoScientist.agents.planner_agent import planner_agent
+from CoScientist.agents.research_agent import research_agent
+from CoScientist.agents.task_execution_agent import (
     fedot_agent,
-    orchestrator_agent,
-    tool_retriever_agent,
-    tool_reranker_agent,
-    tool_websearcher_agent,
     task_execution_agent,
-    tool_agent
+    tool_agent,
+    tool_reranker_agent,
+    tool_retriever_agent,
+    tool_websearcher_agent,
 )
 
 __all__ = [
@@ -18,9 +19,10 @@ __all__ = [
     "fedot_agent",
     "research_agent",
     "hypotheses_agent",
+    "medical_agent",
     "tool_retriever_agent",
     "tool_reranker_agent",
-    'tool_websearcher_agent',
+    "tool_websearcher_agent",
     "task_execution_agent",
-    'tool_agent'
+    "tool_agent",
 ]
