@@ -12,7 +12,8 @@ import litellm
 
 from CoScientist.config import get_settings
 
-from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
+from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, build_orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction, coder_instruction
+from CoScientist.agents import catalog
 from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
@@ -21,7 +22,7 @@ from CoScientist.agents.critic_agent import (
 from CoScientist.agents.custom_agents import WebToolsDeployerAgent
 from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model, med_agent_before_model
 
-from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance
+from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, coder_toolset_instance
 from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
 
 
@@ -43,8 +44,25 @@ settings = get_settings()
 
 MODEL = settings.llm.main_model
 litellm.api_key = settings.llm.openai_api_key
+# Silence litellm's "Provider List: https://docs.litellm.ai/docs/providers" spam.
+# It fires when litellm can't map a model prefix (e.g. "qwen/...") to a known
+# provider during cost/token bookkeeping — harmless, but it floods the console.
+litellm.suppress_debug_info = True
 hitl_enabled = settings.hitl.enabled
 hitl_handler=ConsoleHITLHandler() if hitl_enabled else None
+
+# The CoderAgent runs on a dedicated (stronger) model — its multi-step tool-use
+# benefits from more capability. Falls back to the main model when unset.
+#
+# Routing mirrors the other agents exactly: the provider prefix in the model
+# string (e.g. "openrouter/qwen/...") selects the provider/base-URL, and the
+# global `litellm.api_key` (set above) carries the key. We deliberately do NOT
+# pass `api_base` here — doing so makes litellm strip the provider prefix, fail
+# to re-infer the provider, and spam "Provider List: ..." warnings.
+CODER_MODEL = settings.llm.coder_model or settings.llm.main_model
+
+def _build_coder_llm() -> LiteLlm:
+    return LiteLlm(model=CODER_MODEL)
 
 def _agent_tools(base_tools: Any, hitl_tools: bool = False) -> list:
     """Helper to add HITL tools directly if hitl_tools=True and global hitl is enabled."""
@@ -63,7 +81,7 @@ hypotheses_agent = LlmAgent(
     instruction=hypotheses_instruction,
     description="Agent to generate scientific hypotheses and ideas for given task",
     output_key="hypotheses",
-    tools=_agent_tools([], hitl_tools=True),
+    tools=_agent_tools([], hitl_tools=False),
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
@@ -74,7 +92,7 @@ research_agent = LlmAgent(
     instruction=research_instruction,
     description="Agent to answer questions and knowledge mining using Literature and Web Search.",
     output_key="search_results",
-    tools=_agent_tools([websearch_toolset_instance], hitl_tools=True),
+    tools=_agent_tools([websearch_toolset_instance], hitl_tools=False),
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
@@ -151,7 +169,7 @@ fedot_agent = LlmAgent(
     instruction=fedot_instruction,
     description="Agent to invoke MAS for solving given task. Uses MCP tools",
     output_key="fedot_results",
-    tools=_agent_tools(fedot_toolset_instance, hitl_tools=True),
+    tools=_agent_tools(fedot_toolset_instance, hitl_tools=False),
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
@@ -174,6 +192,21 @@ medical_agent = LlmAgent(
     before_model_callback=med_agent_before_model,
 )
 
+coder_agent = LlmAgent(
+    name="CoderAgent",
+    model=_build_coder_llm(),
+    instruction=coder_instruction,
+    description=(
+        "General-purpose coder / sandbox agent. Writes and runs code, executes "
+        "shell and git commands (clone/commit/push), manages files, installs "
+        "dependencies, collects and processes data, and runs long jobs in an "
+        "isolated workspace. Use it whenever a task requires doing software/data "
+        "engineering rather than calling a ready-made service."
+    ),
+    output_key="coder_results",
+    tools=_agent_tools(coder_toolset_instance, hitl_tools=False),
+)
+
 #------------------------------------------------------------------
 
 planner = PlanReActPlanner()
@@ -191,22 +224,32 @@ planner_agent = SessionAgent(
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )    
 
+# Orchestrator sub-agents are driven by the agent catalog (single source of truth
+# for which agents are enabled, their prompt descriptions, and their order). Map
+# each catalog name to its LlmAgent instance and attach the enabled ones.
+_AGENT_INSTANCES = {
+    "PlannerAgent": planner_agent,
+    "HypothesesAgent": hypotheses_agent,
+    "ResearchAgent": research_agent,
+    "TaskExecutorAgent": task_execution_agent,
+    "MedicalAgent": medical_agent,
+    "CoderAgent": coder_agent,
+}
+_orchestrator_subagents = [
+    AgentTool(agent=_AGENT_INSTANCES[spec.name])
+    for spec in catalog.enabled_agents()
+]
+
 orchestrator_agent = LlmAgent(
     name="OrchestratorAgent",
     model=LiteLlm(model=MODEL),
     #planner=planner,
-    instruction=orchestrator_instruction,
+    instruction=build_orchestrator_instruction(),
     description="Main Orchestrator Agent",
     before_model_callback=med_before_model,
     after_model_callback=pre_action_critique,
-    after_tool_callback=post_action_critique,
-    tools=_agent_tools([
-        AgentTool(agent=planner_agent),
-        AgentTool(agent=hypotheses_agent), 
-        AgentTool(agent=research_agent), 
-        AgentTool(agent=task_execution_agent),
-        AgentTool(agent=medical_agent),
-    ], hitl_tools=True),
+    # after_tool_callback=post_action_critique,
+    tools=_agent_tools(_orchestrator_subagents, hitl_tools=False),
 )
 
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)

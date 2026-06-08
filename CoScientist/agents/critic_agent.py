@@ -359,7 +359,6 @@ def post_action_critique(
     state["critic_post_history"] = history
 
     if verdict_raw == PostVerdict.SUFFICIENT.value:
-        print(f'post action critic returned None')
         return None
 
     annotated = (

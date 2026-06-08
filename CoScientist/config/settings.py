@@ -27,6 +27,11 @@ class LLMSettings(BaseModel):
     main_model: Optional[str] = None
     scenario_model: Optional[str] = None
 
+    # Dedicated model for the CoderAgent (a stronger model handles its multi-step
+    # engineering / tool-use better). Falls back to main_model/main_url if unset.
+    coder_model: Optional[str] = None
+    coder_url: Optional[str] = None
+
     service_url: Optional[str] = None
     service_cc_url: Optional[str] = None
 
@@ -136,6 +141,37 @@ class HITLSettings(BaseModel):
     enabled: bool = True
 
 # =========================
+# ORCHESTRATOR
+# =========================
+class OrchestratorSettings(BaseModel):
+    # Whether the orchestrator uses the PlannerAgent. When False, the planner
+    # tool is NOT attached and the orchestrator plans inline. Keep the prompt
+    # (build_orchestrator_instruction) and the attached tools consistent with it.
+    use_planner: bool = False
+
+# =========================
+# CODE EXECUTION
+# =========================
+class CodeExecSettings(BaseModel):
+    """Settings for the remote code-execution MCP server used by the CoderAgent.
+
+    The server is expected to expose an HTTP API:
+      - POST {submit_url}  with JSON {command, workspace_id, timeout} -> {job_id}
+      - GET  {result_url}?job_id=... -> {status, stdout, stderr, exit_code}
+    When `url` is empty the CoderToolset falls back to local subprocess execution.
+    """
+    url: Optional[str] = None             # base url of the code-exec MCP server
+    submit_path: str = "/submit"
+    result_path: str = "/result"
+    poll_interval: int = 5                # seconds between status polls
+    max_polls: int = 360                  # 360 * 5s = 30 min cap for long jobs
+    default_timeout: int = 1800           # per-command timeout (s) for long jobs
+    check_wait: int = 15                  # how long check_job waits inline for a
+                                          # running job before returning (saves
+                                          # repeated LLM-driven polls)
+    workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -150,6 +186,8 @@ class Settings(BaseSettings):
     s3: S3Settings = S3Settings()
     opik: OpikSettings = OpikSettings()
     hitl: HITLSettings = HITLSettings()
+    orchestrator: OrchestratorSettings = OrchestratorSettings()
+    code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
 
     model_config = SettingsConfigDict(
