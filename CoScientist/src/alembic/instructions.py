@@ -23,7 +23,7 @@ Read the error message carefully. Identify:
     read_file(repo_url, "Dockerfile")
 
 Use the bash tool to locate surrounding context if the file is large:
-    bash("grep -n 'ErrorKeyword' .alembic/<repo>/output/server.py")
+    bash("grep -n 'ErrorKeyword' .alembic/<repo>/repos/server.py")
 
 ### Step 3 — Fix and write (tool: update_file)
 Apply the minimal change that resolves the error. Then write the entire
@@ -48,9 +48,9 @@ Fix only what the error describes. Do not refactor unrelated code.
 After writing the file, always run a syntax check to confirm you did not
 introduce a new syntax error:
 
-    bash("python -m py_compile .alembic/<repo>/output/server.py && echo OK")
+    bash("python -m py_compile .alembic/<repo>/repos/server.py && echo OK")
     # or for the test file:
-    bash("python -m py_compile .alembic/<repo>/output/tests/test_server.py && echo OK")
+    bash("python -m py_compile .alembic/<repo>/repos/tests/test_server.py && echo OK")
 
 If the syntax check fails, read the file again, fix the new error, re-write,
 and re-check. Repeat until the syntax check prints "OK" before returning.
@@ -167,6 +167,14 @@ The **docker** agent runs **after** you and installs all dependencies inside the
 Docker image, so you do not set up any local environment. Read only the exploration
 report to understand which packages are available.
 
+## Tools available — use ONLY these exact names
+- read_report    — read the exploration report (and your own server report when revising)
+- read_file      — read a file from the clone (e.g. README, source modules) for context
+- bash           — grep/head/glob to inspect the clone before writing helpers
+- write_file     — write server.py, helpers/*.py, and tests/test_server.py
+- validate_syntax — syntax-check server.py (and the test file) on the host
+- write_report   — save the server report (report_name="server")
+
 ### MCP server
 
 You must implement the scenarios from the explorer report as MCP HTTP server tools. Use this template:
@@ -178,7 +186,7 @@ from fastmcp import FastMCP
 import subprocess, os, json
 from pathlib import Path
 
-REPO_PATH = Path(__file__).parent  # repos/ — same dir as server.py
+REPO_PATH = Path(__file__).parent  # directory containing server.py inside the image
 HELPERS_PATH = Path(__file__).parent / "helpers"
 # All dependencies are installed in the Docker image.
 PYTHON = "python"
@@ -212,7 +220,10 @@ The finished MCP server must run **out of the box** — the end user never
 supplies a local filesystem path to a model checkpoint, dataset, or any other
 artifact that has to be fetched separately. If the explorer report or README
 mentions pretrained weights, checkpoints, or other large downloadable
-artifacts that are **not** part of the git clone:
+artifacts that are **not** part of the git clone, **you** own the download
+logic end-to-end — the docker agent only adds the extra pip/CLI packages your
+download code needs, it never fetches files itself (fewer moving parts in the
+Dockerfile means fewer build failures):
 
 - Pick a single fixed location for them inside the clone, e.g.
   ``REPO_PATH / "weights" / "model.pt"`` (do NOT use ``/tmp``, the user's home
@@ -221,13 +232,40 @@ artifacts that are **not** part of the git clone:
   declare a ``model_path: str`` (or similar) parameter that the caller must
   fill in with a real filesystem location. The tool signature must work with
   no extra arguments from the user.
-- Add a ``## Model weights`` section to the server report stating the exact
-  expected path(s) and filename(s), and the download source you found in the
-  exploration report/README (URL, ``gdown`` id, Hugging Face repo id,
-  ``git lfs`` pointer, etc.), copied verbatim — do not invent it.
-- Do NOT attempt to download the weights yourself; that happens later, during
-  the Docker build (the docker agent reads your ``## Model weights`` section
-  and fetches the files to the exact path you documented).
+- Write a small static download helper, e.g. ``helpers/ensure_weights.py``
+  (write_file, same "no runtime-interpolated values" rule as other helpers),
+  that:
+    - first checks whether the file(s) already exist at the fixed path and
+      returns immediately if so (cheap no-op on every later container start);
+    - otherwise creates the destination directory and fetches the file(s) from
+      the **exact** source copied verbatim from the exploration report/README
+      (URL, ``gdown`` id, Hugging Face repo id, ``git lfs`` pointer, etc.) —
+      never invent or guess one. Use whichever of ``urllib.request``/``requests``
+      (direct URL), ``gdown`` (Google Drive id), or
+      ``huggingface_hub.hf_hub_download`` (HF repo id) matches that source.
+- **Run it synchronously at container startup, before the server binds the
+  port** — call it from the ``if __name__ == "__main__":`` block, *before*
+  ``mcp.run(...)``, e.g.:
+  ```python
+  if __name__ == "__main__":
+      subprocess.run([str(PYTHON), str(HELPERS_PATH / "ensure_weights.py"),
+                      str(REPO_PATH)], check=True)
+      mcp.run(transport="http", host="0.0.0.0", port=8000, path="/mcp")
+  ```
+  This guarantees the weights are already on disk by the time anything (the
+  validator's ``test_mcp_launch``, or a real end user) can reach a tool that
+  needs them — no lazy first-call download that would make that first request
+  hang or time out.
+- Do **NOT** trigger the download at module import time (top-level code runs
+  whenever ``server.py`` is imported, including by pytest — see "Tests" rules
+  below: your test suite must keep mocking ``subprocess.run`` and must pass
+  with nothing downloaded, exactly as if the model were never invoked for real).
+- In the ``## Model weights`` section of the server report, state: the exact
+  expected path(s)/filename(s), the download source copied verbatim, the helper
+  file that performs the download, and every extra Python/CLI package that
+  helper needs (e.g. ``gdown``, ``huggingface_hub``) — that is the only thing
+  the docker agent needs from you; it adds those packages to the Dockerfile
+  and does not fetch any files at build time.
 - If no such artifacts are mentioned anywhere in the exploration report or
   README, write "## Model weights — None required." and move on.
 
@@ -237,7 +275,9 @@ Rules:
 - Import only stdlib + the repo\'s own installed packages (check pyproject.toml/setup.py).
 - Each @mcp.tool() must have full type annotations and a docstring with Args/Returns/Raises.
 - Use subprocess.run(..., check=True) for CLI tools; catch CalledProcessError and re-raise as RuntimeError.
-- Never hardcode secrets or absolute user-specific paths other than REPO_PATH = .alembic/<name>/repos.
+- Never hardcode secrets, host-side paths (e.g. ``.alembic/<name>/repos``), or any
+  other absolute user-specific paths. Inside the image the only valid base path is
+  ``REPO_PATH = Path(__file__).parent``, exactly as defined in the server template above.
 - Keep each tool focused on one operation. Do not combine unrelated functionality.
 - Return plain Python types (str, dict, list) — FastMCP serialises them to JSON automatically.
 
@@ -369,7 +409,11 @@ Rules:
   any repo module. Patching Path globally breaks REPO_PATH which is constructed
   at import time and is already a real Path object.
 - The mocked subprocess.run stdout must be valid JSON matching the tool's return type.
-- Tests must pass without the repo cloned and without any GPU or model files.
+- Tests must pass without the repo cloned and without any GPU or model files —
+  this still holds even when server.py has a "## Model weights" download
+  helper: that helper only runs from the ``if __name__ == "__main__":`` guard
+  (see "Model weights" above), so importing server.py for tests never triggers
+  it and the suite needs no real download or mock for it.
 - Use descriptive test names: test_<tool>_<scenario>.
 
 ## Workflow — do these steps in order (only listed tools)
@@ -416,6 +460,11 @@ write Python source code at runtime — use the pre-written helpers instead.
     write_file(repo_url, "tests/test_server.py", <content>)
 
 ### Step 6 — Syntax check
+    validate_syntax(repo_url)
+
+If {"passed": False}, read the file again, fix the reported error, re-write it
+with write_file, and re-run validate_syntax. Repeat until it passes — the report
+in Step 7 must state that this check PASSED on the host.
 
 ### Step 7 — Write the server report
     write_report(repo_url, "server", <content>)
@@ -446,6 +495,13 @@ repository well enough to write a concise Markdown report describing its
 functionality and **between 1 and 5** MCP usage scenarios — only as many as the
 repo genuinely supports (one scenario is enough when there is effectively a single
 user-facing capability).
+
+## Tools available — use ONLY these exact names
+- clone_repo    — clone the repo (returns local_path and file list)
+- read_file     — read a file from the clone
+- bash          — ls/grep/head/glob to inspect the clone
+- search        — glob-search for files inside the clone (e.g. "**/*.yaml")
+- write_report  — save the exploration report (report_name="exploration")
 
 ## Workflow — follow these steps in order
 
@@ -582,8 +638,16 @@ environment problem. In that case:
 4. Write the updated Dockerfile with write_file.
 5. Rebuild: build_docker_image(repo_url).
 6. Verify the MCP server still launches: test_mcp_launch(repo_url).
-7. Return a short summary: what you changed and whether MCP now launches.
-Do NOT call write_report in this case — that is the validator's job.
+7. Update the existing docker report so it stays accurate: read it with
+   read_report(repo_url, "docker"), then call write_report(repo_url, "docker", <content>)
+   with the same sections as Step 7 of the normal workflow below, reflecting the
+   *current* Dockerfile and adding a short "## Fix applied during validation" note
+   describing what changed and why. Do not leave the report describing a stale
+   Dockerfile or image tag.
+8. Return a short summary: what you changed and whether MCP now launches.
+
+Do NOT call write_report(repo_url, "validation", ...) — writing the *validation*
+report is the validator's job, not yours.
 
 ## Tools available — use ONLY these exact names
 - read_report        — read the exploration and coder reports
@@ -626,36 +690,33 @@ If requirements.txt or pyproject.toml has issues, call:
     update_file(repo_url, "requirements.txt", <corrected full content>)
 Do NOT guess git URLs — copy them verbatim from the file you read.
 
-### Step 3b — Download model weights / checkpoints if required
+### Step 3b — Add model-weight download dependencies if required
 
 Read the coder report's ``## Model weights`` section:
     read_report(repo_url, "server")
 
 If it says "None required", skip this step entirely.
 
-Otherwise it documents a fixed path inside the clone (e.g.
-``REPO_PATH / "weights" / "model.pt"``) and a download source copied from the
-exploration report/README (URL, ``gdown`` id, Hugging Face repo id, git-lfs,
-etc.). The MCP server must work **without any user setup**, so the weights
-have to be fetched **at image-build time** and baked into the image at that
-exact path:
+Otherwise the **coder** has already written a static helper (e.g.
+``helpers/ensure_weights.py``) that downloads the weights to a fixed path
+**at container startup**, before the MCP server binds its port — see the
+coder report for the helper name, the exact target path, and the list of
+extra packages it needs. You do **not** download or bake in any files
+yourself; your only job is to make sure that helper can run inside the image:
 
-- Add a ``RUN`` step to the Dockerfile that creates the target directory and
-  downloads the file(s) there, using whatever tool matches the source
-  (``wget``/``curl`` for direct URLs, ``pip install gdown && gdown <id> -O
-  <path>``, ``pip install huggingface_hub && python -c "from huggingface_hub
-  import hf_hub_download; ..."``, ``git lfs pull``, etc.).
-- Use the **exact** URL / repo id / command found in the exploration
-  report or README — never invent or guess one. If you cannot find a concrete
-  download source for a checkpoint the coder says is required, note this in
-  the docker report under "Launch verification" / "Result" as a blocker and
-  mark the result FAILED rather than guessing.
-- The final file path inside the image must match the path documented in the
-  coder report's ``## Model weights`` section exactly — the server.py /
-  helpers reference that hardcoded path and will fail to find the file
-  otherwise.
-- Place this RUN step after dependencies are installed (so download tooling
-  like ``gdown``/``huggingface_hub`` is available) and before ``CMD``/entrypoint.
+- Add every package the coder listed (e.g. ``gdown``, ``huggingface_hub``,
+  ``requests``) to the ``pip install`` line in the Dockerfile.
+- If the coder's helper shells out to a CLI tool (``wget``, ``curl``,
+  ``git lfs``) instead of a Python library, install that tool via ``apt-get``
+  in the system-dependencies ``RUN`` step instead.
+- Do **NOT** add a ``RUN`` step that fetches the weights at build time —
+  that responsibility now lives in the coder's runtime helper; baking large
+  model files into the image only adds slow, flaky build steps and bloats
+  the image.
+- If the coder report is missing a concrete download source or helper name
+  for a checkpoint it says is required, note this under "Launch verification"
+  / "Result" as a blocker and mark the result FAILED — that is a coder-side
+  gap, do not try to guess a source and download it yourself.
 
 ### Step 4 — Write the Dockerfile
 
@@ -755,8 +816,10 @@ The report must contain:
   List any modifications made to requirements.txt / pyproject.toml, or "None."
 
   ## Model weights
-  "None required" (per coder report), or: source used, exact path baked into
-  the image, and confirmation the download step succeeded during the build.
+  "None required" (per coder report), or: name of the coder's runtime download
+  helper and the extra packages/CLI tools you added to the Dockerfile for it —
+  note that the actual download happens at container startup (coder's
+  responsibility, see server report), not during this build.
 
   ## Dockerfile
   (paste the final Dockerfile content)
