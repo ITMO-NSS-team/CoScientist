@@ -374,48 +374,110 @@ Use Pattern B or Pattern C instead.
 
 ## Test standard
 
-When server.py uses Pattern C (all tools call subprocess.run to invoke a helper
-script), tests only need to mock subprocess.run — no repo needs to be cloned,
-no real imports from the repo are needed, and no filesystem paths need to exist.
+server.py uses Pattern C: each tool calls a helper script via subprocess.run.
+Write two layers of tests — fast unit tests that mock subprocess (covering the
+wrapper logic) and optional contract/integration tests (covering the real script
+and the MCP layer). A test is only worth writing if a plausible bug would make it
+fail. "Mock it and assert what came back" tests that pass no matter what are not
+acceptable.
+
+### Unit layer — tool logic in isolation
 
 ```python
 import json, subprocess, pytest
 from unittest.mock import patch, MagicMock
 <tool imports here>
 
-def test_tool_name_success():
+def test_tool_name_success_returns_parsed_output():
     fake_output = json.dumps({"result": "ok", "value": 42})
     with patch("server.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout=fake_output, returncode=0)
         result = tool_name("valid_input")
         assert result["value"] == 42
-        mock_run.assert_called_once()
+        # Check HOW the command was built, not just that it ran
+        args, kwargs = mock_run.call_args
+        cmd = args[0]
+        assert "valid_input" in cmd
+        assert kwargs.get("timeout") is not None
 
-def test_tool_name_invalid_input():
+def test_tool_name_rejects_empty_input():
     with pytest.raises(ValueError):
         tool_name("")
 
-def test_tool_name_command_failure():
+def test_tool_name_raises_on_command_failure():
     with patch("server.subprocess.run",
                side_effect=subprocess.CalledProcessError(1, "cmd", stderr="oops")):
+        with pytest.raises(RuntimeError, match="oops"):
+            tool_name("valid_input")
+
+def test_tool_name_raises_on_malformed_json():
+    with patch("server.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="not json{", returncode=0)
+        with pytest.raises((ValueError, RuntimeError)):
+            tool_name("valid_input")
+
+def test_tool_name_raises_on_timeout():
+    with patch("server.subprocess.run",
+               side_effect=subprocess.TimeoutExpired("cmd", 30)):
         with pytest.raises(RuntimeError):
             tool_name("valid_input")
 ```
 
-Rules:
-- One test file: tests/test_server.py.
-- At minimum: one success test and one failure/error test per tool.
-- Mock only server.subprocess.run — do NOT patch server.Path, server.os, or
-  any repo module. Patching Path globally breaks REPO_PATH which is constructed
-  at import time and is already a real Path object.
-- The mocked subprocess.run stdout must be valid JSON matching the tool's return type.
-- Tests must pass without the repo cloned and without any GPU or model files —
-  this still holds even when server.py has a "## Model weights" download
-  helper: that helper only runs from the ``if __name__ == "__main__":`` guard
-  (see "Model weights" above), so importing server.py for tests never triggers
-  it and the suite needs no real download or mock for it.
-- Use descriptive test names: test_<tool>_<scenario>.
+Unit rules:
+- One file: tests/test_server.py.
+- Per tool, at minimum: success (with call_args check), invalid input, command
+  failure, and malformed/non-JSON stdout. Add a timeout test wherever a timeout
+  is set.
+- In the success test, assert on mock_run.call_args — the right script is
+  invoked, the input is passed and escaped correctly, and a timeout is set.
+  assert_called_once() alone proves nothing.
+- Mock stdout as valid JSON matching the return type, but ALWAYS also include a
+  negative test with invalid stdout — otherwise parsing is never exercised.
+- Mock only server.subprocess.run. Do NOT patch server.Path, server.os, or any
+  repo module — REPO_PATH is built at import time as a real Path object and a
+  global Path patch breaks it.
+- Assert on the error message (match=...), not just the type, so stderr/context
+  isn't silently dropped.
+- The unit suite must pass with no repo cloned and no GPU/model files. The
+  "Model weights" download helper only runs from the
+  `if __name__ == "__main__":` guard, so importing server.py never triggers it —
+  no mock or download needed.
 
+### Contract/integration layer — real behavior
+
+These catch what unit tests structurally cannot: the server and the helper
+script drifting out of sync, and broken MCP protocol/schema handling.
+
+```python
+@pytest.mark.integration
+def test_helper_script_output_matches_expected_schema():
+    # run the real helper on a small fixture input,
+    # assert its stdout parses into the type the tool expects
+    ...
+
+@pytest.mark.integration
+def test_mcp_list_and_call_tool():
+    # start the server, exercise list_tools / call_tool over the protocol,
+    # assert input/output JSON Schemas are valid and the response serializes
+    ...
+```
+
+Integration rules:
+- Mark these @pytest.mark.integration and run them as a separate CI stage; keep
+  the unit suite fast and dependency-free.
+- At least one contract test per tool, verifying the REAL script output format
+  matches what the unit mocks assume. This is the only thing that catches "the
+  script changed its format and the server broke silently."
+- At least one MCP smoke test: list_tools + call_tool over the protocol, with
+  schema and serialization checks.
+- Do not use images, files, or other data fixtures in tests unless they are 
+  already provided in the repo; if a test needs such data and it is not present, 
+  generate it programmatically within the test or skip the test with a clear reason 
+  rather than referencing a path that does not exist.
+
+### Naming
+test_<tool>_<scenario> with a verb in the scenario:
+test_predict_rejects_empty_input, test_predict_raises_on_malformed_json.
 ## Workflow — do these steps in order (only listed tools)
 
 ### Step 1 — Read the exploration report
