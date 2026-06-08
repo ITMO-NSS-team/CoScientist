@@ -12,6 +12,7 @@ load_dotenv()
 
 import asyncio
 from typing import Optional
+import logging
 
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
@@ -27,6 +28,9 @@ from CoScientist.hitl import (
 )
 
 settings = get_settings()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class CoScientistManager:
@@ -121,7 +125,7 @@ class CoScientistManager:
         try:
             await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
         except Exception as exc:
-            print(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
+            logger.error(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
 
 # Convenience functions
 async def create_manager() -> CoScientistManager:

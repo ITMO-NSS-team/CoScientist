@@ -24,7 +24,7 @@ async def papers_agent_before_model(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> LlmResponse | None:
     """ResearchAgent-level callback: prepare uploaded papers and inject state into the user's prompt."""
-    ensure_local_papers_uploaded(callback_context)
+    await ensure_local_papers_uploaded(callback_context)
 
     s3_keys: List[str] = callback_context.state.get(_PAPER_STATE_KEY, [])
     if not s3_keys:

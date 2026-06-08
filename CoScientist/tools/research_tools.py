@@ -14,9 +14,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnecti
 
 
 settings = get_settings()
-print(settings.mcp)
 PAPER_ANALYSIS_URL = settings.mcp.paper_analysis_url
-print(PAPER_ANALYSIS_URL)
 PAPERS_SEARCH_URL = settings.mcp.papers_search_url
 
 websearch_toolset_instance = McpToolset(
