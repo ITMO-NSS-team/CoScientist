@@ -2,6 +2,7 @@
 
 import logging
 import os
+import asyncio
 from pathlib import Path
 from typing import List, Optional
 
@@ -18,6 +19,8 @@ _USER_ID_ENV = "USER_ID"
 _SESSION_ID_ENV = "SESSION_ID"
 _UPLOADED_PAPERS_PATH_ENV = "STORAGE__UPLOADED_PAPERS"
 _DEFAULT_LOCAL_PAPERS_ROOT = Path(__file__).resolve().parents[2] / "local_papers"
+
+_upload_locks: dict[str, asyncio.Lock] = {}
 
 
 async def papers_agent_before_model(
@@ -59,60 +62,64 @@ async def papers_agent_before_model(
 
 async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> None:
     """Upload local papers to S3 and register their keys in session state."""
-    if callback_context.state.get(_PAPER_STATE_KEY):
-        return
+    session_key = f"{_get_user_id()}:{_get_session_id()}"
+    _upload_locks.setdefault(session_key, asyncio.Lock())
 
-    papers_dir = _resolve_local_papers_dir()
-    if papers_dir is None or not papers_dir.exists() or not papers_dir.is_dir():
-        logger.debug("No local papers directory found for uploaded papers.")
-        return
+    async with _upload_locks[session_key]:
+        if callback_context.state.get(_PAPER_STATE_KEY):
+            return
 
-    pdf_files = [
-        path
-        for path in sorted(papers_dir.iterdir())
-        if path.is_file() and path.suffix.lower() == ".pdf"
-    ]
+        papers_dir = _resolve_local_papers_dir()
+        if papers_dir is None or not papers_dir.exists() or not papers_dir.is_dir():
+            logger.debug("No local papers directory found for uploaded papers.")
+            return
 
-    if not pdf_files:
-        logger.debug("Local uploaded papers directory is empty: %s", papers_dir)
-    else:
-        logger.info("Found %d local PDF(s) for upload in %s", len(pdf_files), papers_dir)
+        pdf_files = [
+            path
+            for path in sorted(papers_dir.iterdir())
+            if path.is_file() and path.suffix.lower() == ".pdf"
+        ]
 
-    prefix = f"{_get_user_id()}/{_get_session_id()}/uploaded_papers"
-    uploaded_keys: List[str] = []
-
-    if pdf_files:
-        for pdf_path in pdf_files:
-            try:
-                s3_service.upload_file_object(prefix, pdf_path.name, str(pdf_path))
-                s3_key = f"{prefix}/{pdf_path.name}"
-                uploaded_keys.append(s3_key)
-                logger.info("Uploaded local paper to S3: %s", s3_key)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to upload local paper %s to S3: %s",
-                    pdf_path,
-                    exc,
-                )
-
-    if not uploaded_keys:
-        existing_keys = s3_service.list_objects(prefix)
-        if existing_keys:
-            uploaded_keys = existing_keys
-            logger.info(
-                "No new uploads; found existing S3 keys under prefix %s: %s",
-                prefix,
-                existing_keys,
-            )
+        if not pdf_files:
+            logger.debug("Local uploaded papers directory is empty: %s", papers_dir)
         else:
-            logger.debug("No S3 keys found under prefix %s", prefix)
+            logger.info("Found %d local PDF(s) for upload in %s", len(pdf_files), papers_dir)
 
-    if uploaded_keys:
-        callback_context.state[_PAPER_STATE_KEY] = uploaded_keys
-        logger.info(
-            "Registered uploaded paper S3 keys in session state: %s",
-            uploaded_keys,
-        )
+        prefix = f"{_get_user_id()}/{_get_session_id()}/uploaded_papers"
+        uploaded_keys: List[str] = []
+
+        if pdf_files:
+            for pdf_path in pdf_files:
+                try:
+                    s3_service.upload_file_object(prefix, pdf_path.name, str(pdf_path))
+                    s3_key = f"{prefix}/{pdf_path.name}"
+                    uploaded_keys.append(s3_key)
+                    logger.info("Uploaded local paper to S3: %s", s3_key)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to upload local paper %s to S3: %s",
+                        pdf_path,
+                        exc,
+                    )
+
+        if not uploaded_keys:
+            existing_keys = s3_service.list_objects(prefix)
+            if existing_keys:
+                uploaded_keys = existing_keys
+                logger.info(
+                    "No new uploads; found existing S3 keys under prefix %s: %s",
+                    prefix,
+                    existing_keys,
+                )
+            else:
+                logger.debug("No S3 keys found under prefix %s", prefix)
+
+        if uploaded_keys:
+            callback_context.state[_PAPER_STATE_KEY] = uploaded_keys
+            logger.info(
+                "Registered uploaded paper S3 keys in session state: %s",
+                uploaded_keys,
+            )
 
 
 def cleanup_uploaded_papers(user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
@@ -149,6 +156,11 @@ def _resolve_local_papers_dir() -> Optional[Path]:
         resolved = Path(custom_path)
         if resolved.exists() and resolved.is_dir():
             return resolved
+        logger.warning(
+            "Configured %s=%r does not exist or is not a directory; falling back to default.",
+            _UPLOADED_PAPERS_PATH_ENV,
+            custom_path,
+        )
 
     if _DEFAULT_LOCAL_PAPERS_ROOT.exists() and _DEFAULT_LOCAL_PAPERS_ROOT.is_dir():
         return _DEFAULT_LOCAL_PAPERS_ROOT
