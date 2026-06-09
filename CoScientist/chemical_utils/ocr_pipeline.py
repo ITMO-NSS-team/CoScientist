@@ -220,7 +220,6 @@ def render_molecule_detections(images: list, bboxes_list: list, res_path: str | 
     """
 
     rendered_files = []
-
     for i, img_bytes in enumerate(images):
 
         page_results = bboxes_list[i] if i < len(bboxes_list) else []
