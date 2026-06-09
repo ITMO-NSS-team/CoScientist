@@ -235,8 +235,17 @@ _AGENT_INSTANCES = {
     "MedicalAgent": medical_agent,
     "CoderAgent": coder_agent,
 }
+def _resolve_agent(name: str):
+    inst = _AGENT_INSTANCES.get(name)
+    if inst is None:
+        raise ValueError(
+            f"Catalog agent {name!r} has no instance in _AGENT_INSTANCES "
+            "(agents.py). Add it there or fix the catalog name."
+        )
+    return inst
+
 _orchestrator_subagents = [
-    AgentTool(agent=_AGENT_INSTANCES[spec.name])
+    AgentTool(agent=_resolve_agent(spec.name))
     for spec in catalog.enabled_agents()
 ]
 

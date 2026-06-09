@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -86,11 +85,25 @@ class Job:
 class JobRunner:
     """In-memory job registry backed by on-disk per-workspace directories."""
 
-    def __init__(self, workspace_root: str = "./workspace", max_output_bytes: int = 1_000_000):
+    def __init__(self, workspace_root: str = "./workspace", max_output_bytes: int = 1_000_000,
+                 max_jobs: int = 1000):
         self.workspace_root = Path(workspace_root).resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.max_output_bytes = max_output_bytes
+        self.max_jobs = max_jobs
         self._jobs: Dict[str, Job] = {}
+
+    def _evict_finished(self) -> None:
+        """Drop oldest finished jobs so the registry doesn't grow unbounded."""
+        overflow = len(self._jobs) - self.max_jobs
+        if overflow <= 0:
+            return
+        for job_id, job in list(self._jobs.items()):
+            if overflow <= 0:
+                break
+            if job.status != JobStatus.RUNNING:
+                del self._jobs[job_id]
+                overflow -= 1
 
     def _workspace_dir(self, workspace_id: str) -> Path:
         if not _WS_RE.match(workspace_id):
@@ -106,6 +119,7 @@ class JobRunner:
             command=command,
             timeout=int(timeout),
         )
+        self._evict_finished()
         self._jobs[job.job_id] = job
 
         blocked_by = _is_dangerous(command)

@@ -1,18 +1,20 @@
 """Tools for the CoderAgent: bash/code execution, file I/O, package install.
 
-Execution is routed to a remote code-execution MCP server (submit + poll), which
-gives the agent a real sandbox for long-running work — cloning repos, generating optimization-history datasets, and training models —
-without blocking on a short subprocess timeout. Each ADK session gets its own
-workspace id so concurrent sessions don't clobber each other's files.
+Execution is routed to a remote code-execution server (submit + poll), giving the
+agent a real sandbox for long-running work — cloning repos, running scripts and
+git, building/processing data — without blocking on a short subprocess timeout.
+Each session gets its own workspace id so concurrent sessions don't clobber each
+other's files.
 
 If no code-exec server is configured (settings.code_exec.url is empty), the
-toolset transparently falls back to local subprocess execution in a per-session
-workspace directory.
+toolset transparently falls back to local subprocess execution (background
+threads) in a per-session workspace directory.
 """
 
 import asyncio
 import os
 import re
+import shlex
 import subprocess
 import threading
 import uuid
@@ -33,6 +35,24 @@ _CFG = settings.code_exec
 # Process-wide registry of background jobs for the local-fallback execution path
 # (keyed by job_id). The remote path keeps job state on the code-exec server.
 _LOCAL_JOBS: Dict[str, Dict[str, Any]] = {}
+_MAX_LOCAL_JOBS = 500  # cap registry size; evict oldest finished jobs past this
+
+
+def _evict_finished_jobs() -> None:
+    """Drop oldest finished job records so _LOCAL_JOBS doesn't grow unbounded.
+
+    Dicts preserve insertion order, so the front holds the oldest jobs. Running
+    jobs are never evicted (their threads still write to the record).
+    """
+    overflow = len(_LOCAL_JOBS) - _MAX_LOCAL_JOBS
+    if overflow <= 0:
+        return
+    for job_id, rec in list(_LOCAL_JOBS.items()):
+        if overflow <= 0:
+            break
+        if rec.get("status") != "running":
+            del _LOCAL_JOBS[job_id]
+            overflow -= 1
 
 
 # ─── Safety blocklist ────────────────────────────────────────────────────────
@@ -367,12 +387,16 @@ class CoderToolset(BaseToolset):
         job_id = started.get("job_id")
         if not job_id:
             return started  # error/blocked — nothing to poll
-        deadline = max(1, max_wait // max(_CFG.poll_interval, 1)) + 2
-        for _ in range(deadline):
+        # Tight ramping interval (like check_job) so fast file ops return almost
+        # immediately instead of waiting a full poll_interval.
+        elapsed, interval = 0.0, 0.25
+        while elapsed < max_wait:
             res = await self._check_remote(job_id)
             if res["status"] != "running":
                 return res
-            await asyncio.sleep(_CFG.poll_interval)
+            await asyncio.sleep(interval)
+            elapsed += interval
+            interval = min(interval * 1.5, 3.0)
         return {"status": "timeout", "job_id": job_id,
                 "stderr": f"Internal command did not finish within {max_wait}s.",
                 "exit_code": -1}
@@ -394,6 +418,7 @@ class CoderToolset(BaseToolset):
             "job_id": job_id, "workspace_id": workspace_id, "status": "running",
             "stdout": "", "stderr": "", "exit_code": None,
         }
+        _evict_finished_jobs()
         _LOCAL_JOBS[job_id] = record
 
         def _run() -> None:
@@ -414,7 +439,14 @@ class CoderToolset(BaseToolset):
                            "exit_code": -1}
             except Exception as e:  # pragma: no cover - defensive
                 outcome = {"status": "error", "stderr": str(e), "exit_code": -1}
-            record.update(outcome)
+            # Write status LAST: a reader that sees a terminal status is then
+            # guaranteed to see the other fields already set (avoids a race where
+            # check_job reads status="success" but exit_code is still None and
+            # mis-normalizes it to "error").
+            record["stdout"] = outcome.get("stdout", "")
+            record["stderr"] = outcome.get("stderr", "")
+            record["exit_code"] = outcome.get("exit_code")
+            record["status"] = outcome["status"]
 
         threading.Thread(target=_run, daemon=True).start()
         return {
@@ -455,7 +487,7 @@ class CoderToolset(BaseToolset):
         # In remote-exec mode, read via the sandbox so paths match where commands run.
         if _CFG.url:
             res = await self._run_sync(
-                f"sed -n '{(start_line or 1)},{end_line or '$'}p' {file_path}",
+                f"sed -n '{(start_line or 1)},{end_line or '$'}p' {shlex.quote(file_path)}",
                 self._workspace_id(tool_context),
             )
             if res["status"] == "success":
@@ -477,12 +509,8 @@ class CoderToolset(BaseToolset):
                 total = len(lines)
                 lo = max((start_line or 1) - 1, 0)
                 hi = min(end_line or total, total)
-                return {
-                    "status": "success",
-                    "content": "".join(lines[lo:hi]),
-                    "total_lines": total,
-                    "returned_lines": f"{lo + 1}–{hi}",
-                }
+                # Keep the success shape identical to the remote path: {status, content}.
+                return {"status": "success", "content": "".join(lines[lo:hi])}
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
@@ -508,13 +536,14 @@ class CoderToolset(BaseToolset):
         Returns:
             Dict with status and bytes_written.
         """
-        # In remote-exec mode, write via the sandbox using a heredoc.
+        # In remote-exec mode, write via the sandbox using a base64 payload.
         if _CFG.url:
             import base64
             b64 = base64.b64encode(content.encode()).decode()
+            qpath = shlex.quote(file_path)
             cmd = (
-                f"mkdir -p \"$(dirname {file_path})\" && "
-                f"echo {b64} | base64 -d > {file_path}"
+                f"mkdir -p \"$(dirname {qpath})\" && "
+                f"echo {b64} | base64 -d > {qpath}"
             )
             res = await self._run_sync(cmd, self._workspace_id(tool_context))
             if res["status"] == "success":
@@ -562,21 +591,33 @@ class CoderToolset(BaseToolset):
         Returns:
             Dict with stdout listing of the directory.
         """
-        flag = "-Ra" if recursive else "-la"
-        cmd = f"ls {flag} {path}"
+        # Remote: list via the sandbox so the view matches where commands run.
         if _CFG.url:
+            flag = "-Ra" if recursive else "-la"
+            cmd = f"ls {flag} {shlex.quote(path)}"
             res = await self._run_sync(cmd, self._workspace_id(tool_context))
             return {"status": res["status"], "listing": res.get("stdout", ""),
                     "stderr": res.get("stderr", "")}
 
-        cwd = str(self._local_workspace(tool_context))
+        # Local: walk the filesystem directly (no shell — avoids path injection).
+        ws = self._local_workspace(tool_context)
 
         def _ls() -> Dict[str, Any]:
+            base = Path(path)
+            if not base.is_absolute():
+                base = ws / base
+            if not base.exists():
+                return {"status": "error", "listing": "", "stderr": f"Path not found: {path}"}
+            if not base.is_dir():
+                return {"status": "error", "listing": "", "stderr": f"Not a directory: {path}"}
             try:
-                r = subprocess.run(cmd, shell=True, capture_output=True,
-                                   text=True, timeout=60, cwd=cwd)
-                return {"status": "success" if r.returncode == 0 else "error",
-                        "listing": r.stdout, "stderr": r.stderr}
+                entries = base.rglob("*") if recursive else base.iterdir()
+                lines = []
+                for p in sorted(entries):
+                    kind = "d" if p.is_dir() else "f"
+                    size = p.stat().st_size if p.is_file() else "-"
+                    lines.append(f"{kind} {size}\t{p.relative_to(base)}")
+                return {"status": "success", "listing": "\n".join(lines), "stderr": ""}
             except Exception as e:
                 return {"status": "error", "listing": "", "stderr": str(e)}
 
@@ -607,8 +648,10 @@ class CoderToolset(BaseToolset):
         Returns:
             Dict with `job_id` and status "running" (or "blocked"/"denied").
         """
-        # Basic package name validation — reject shell injection attempts
-        if not re.match(r'^[\w\-\.\[\]<>=!,;~ ]+$', package_name):
+        # Basic package name validation — reject shell injection attempts.
+        # Note: ';' is intentionally NOT allowed (it would enable command
+        # chaining once interpolated into the shell command below).
+        if not re.match(r'^[\w\-\.\[\]<>=!,~ ]+$', package_name):
             return {
                 "status": "error",
                 "error": f"Invalid package name: {package_name!r}",
