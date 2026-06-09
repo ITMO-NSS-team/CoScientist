@@ -149,6 +149,9 @@ def cleanup_uploaded_papers(user_id: Optional[str] = None, session_id: Optional[
             exc,
         )
 
+    session_key = f"{user_id}:{session_id}"
+    _upload_locks.pop(session_key, None)
+
 
 def _resolve_local_papers_dir() -> Optional[Path]:
     custom_path = os.getenv(_UPLOADED_PAPERS_PATH_ENV)
