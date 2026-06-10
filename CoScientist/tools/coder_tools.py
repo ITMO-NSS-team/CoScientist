@@ -154,6 +154,17 @@ class CoderToolset(BaseToolset):
         workspaces. Falls back to a cached/random id only when no session is
         available (e.g. direct unit-test use).
         """
+        # A2A delegations arrive as separate messages → separate ADK sessions,
+        # so the per-session anchor below would land each step in a fresh empty
+        # workspace (clone in one call, `cd repo` in the next → fails). When the
+        # CoderAgent runs as a standalone A2A service we therefore pin a single
+        # shared workspace via CODER_WORKSPACE_ID so state persists across the
+        # whole run. Read at call time so it doesn't depend on import order.
+        fixed = os.getenv("CODER_WORKSPACE_ID")
+        if fixed:
+            safe = re.sub(r"[^A-Za-z0-9_\-]", "", fixed)[:48] or "shared"
+            return f"ws_{safe}"
+
         if tool_context is None:
             return "default"
 

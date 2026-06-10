@@ -1,4 +1,11 @@
 """A2A server for CoderAgent."""
+import os
+
+# Over A2A each orchestrator delegation is a separate session; pin one shared
+# sandbox workspace so multi-step work (clone, then build on it) persists across
+# calls. Override CODER_WORKSPACE_ID to isolate concurrent runs.
+os.environ.setdefault("CODER_WORKSPACE_ID", "a2a_shared")
+
 import uvicorn
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
