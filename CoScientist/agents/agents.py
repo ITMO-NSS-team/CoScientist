@@ -3,6 +3,7 @@ from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.agent_tool import AgentTool
+from google.adk.tools import FunctionTool
 from google.adk.planners import PlanReActPlanner
 
 import litellm
@@ -11,7 +12,7 @@ from CoScientist.config import get_settings
 
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, build_orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction, coder_instruction
 from CoScientist.agents import catalog
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call
+from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, before_fullset_reranker_agent, print_research_agent_tool_call
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -21,6 +22,7 @@ from CoScientist.agents.med_callbacks import before_model_modifier as med_before
 from CoScientist.agents.research_callbacks import papers_agent_before_model
 
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, coder_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance
+from CoScientist.tools.retrieval_tools import list_available_tools
 from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
 
 
@@ -178,6 +180,7 @@ tool_fullset_reranker_agent = LlmAgent(
     instruction=tool_scoring_instruction,
     description="Agent to score found web MCP servers given already available local MCP servers for given task.",
     output_schema=MCPRanking,
+    before_agent_callback=before_fullset_reranker_agent,
     after_agent_callback=after_fullset_reranker_agent,
     output_key="reranked_web_servers"
 )
@@ -286,7 +289,7 @@ orchestrator_agent = LlmAgent(
     before_model_callback=med_before_model,
     after_model_callback=pre_action_critique,
     # after_tool_callback=post_action_critique,
-    tools=_agent_tools(_orchestrator_subagents, hitl_tools=False),
+    tools=_agent_tools([FunctionTool(list_available_tools)] + _orchestrator_subagents, hitl_tools=False),
 )
 
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)

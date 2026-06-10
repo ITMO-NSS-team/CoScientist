@@ -138,6 +138,52 @@ class RetrievalToolSet(BaseToolset):
 
 
     
+async def list_available_tools(query: str) -> Dict[str, Any]:
+    """Search the MCP tool registry for ready-to-use tools relevant to a task.
+
+    Call this EARLY to learn which capabilities ALREADY EXIST as MCP tools, then
+    analyze the returned list to decide how to proceed: if the tools you need are
+    present, run the experiment via TaskExecutorAgent (it executes these tools
+    through FEDOT.MAS); if the needed capability is missing, gather more context
+    first (research / hypotheses) or write code (CoderAgent).
+
+    Args:
+        query: a short description of the capability/task you need tools for, e.g.
+            "generate candidate molecules and predict their activity against a protein".
+
+    Returns:
+        dict: {"status": "success", "count": <int>,
+               "tools": [{"name", "server_id", "description", "score"}]}  sorted by relevance.
+    """
+    embedder = APIEmbedder(settings.api_embedding)
+    reranker = HybridReranker(
+        [APIReranker(settings.api_reranker), BM25Reranker(settings.bm_reranker)],
+        settings.hybrid_reranker,
+    )
+    manager = await create_manager(settings, embedder, reranker)
+    try:
+        retrieved: List[RetrievalResult] = await manager.retrieve_tools(
+            query=query,
+            top_k=settings.rag.default_top_k,
+            rerank=True,
+            rerank_top_k=settings.rag.rerank_top_k,
+            min_score=settings.rag.min_relevance_score,
+        )
+        tools = [
+            {
+                "name": r.name,
+                "server_id": r.server_id,
+                "description": (r.description or "").strip()[:200],
+                "score": round(float(r.rerank_score or 0.0), 3),
+            }
+            for r in retrieved
+        ]
+    finally:
+        await manager.close()
+
+    return {"status": "success", "count": len(tools), "tools": tools}
+
+
 retrieval_toolset = RetrievalToolSet()
 retrieval_toolset_instance = retrieval_toolset.get_tools(None)
 

@@ -19,13 +19,17 @@ ROOT_DIR = Path(__file__).parent.parent.absolute()
 class LLMSettings(BaseModel):
     allowed_providers: List[str] = ["google-vertex", "azure"]
 
-    # OpenRouter provider routing for the agentic LLM (main_model). gpt-oss-120b
-    # is served by many providers on OpenRouter; some intermittently return
-    # finish_reason='error' with empty content, which surfaces as an empty agent
-    # response (e.g. a blank PlannerAgent roadmap). Restrict routing to a
-    # known-good set; fallbacks stay enabled but only within this set. Set to an
-    # empty list to disable pinning and use OpenRouter's default routing.
-    pinned_providers: List[str] = ["deepinfra", "groq", "together", "fireworks"]
+    # OpenRouter provider routing for the agentic LLM (main_model). Restrict
+    # routing to a known-good provider set for the CURRENT model, to dodge flaky
+    # providers (empty content / 429 / 500). IMPORTANT: this list must match the
+    # model in `main_model` — providers that serve one model may not serve
+    # another. Empty list = disable pinning and use OpenRouter's default routing.
+    #
+    # NOTE: the gpt-oss-120b set ["deepinfra","groq","together","fireworks"] is
+    # WRONG for qwen3-235b (only DeepInfra overlaps -> 429/500). qwen3 routes
+    # cleanly on its own providers (Alibaba/WandB), so pinning is disabled here.
+    # For gpt-oss-120b, restore the four-provider set above.
+    pinned_providers: List[str] = []
     provider_allow_fallbacks: bool = True
 
     service_key: Optional[str] = None

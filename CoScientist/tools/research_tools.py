@@ -24,12 +24,18 @@ def _http_mcp_toolset(url: Optional[str]) -> Optional[McpToolset]:
     return McpToolset(connection_params=StreamableHTTPConnectionParams(url=url))
 
 
-# Tavily websearch is always available (the key is interpolated into the URL).
-websearch_toolset_instance = McpToolset(
-    connection_params=StreamableHTTPConnectionParams(
-        url=f"https://mcp.tavily.com/mcp/?tavilyApiKey={settings.services.tavily_api_key}"
-    ),
-)
+# Tavily websearch MCP — DISABLED. The lab VPN breaks the external TLS/SSE stream
+# to mcp.tavily.com: the streamable-HTTP session negotiates but `list_tools` never
+# returns, so ADK raises ConnectionError and kills the entire ResearchAgent run
+# (every benchmark request failed at step 1 because of this). Re-enable once
+# Tavily traffic bypasses the VPN (route mcp.tavily.com direct). When None, the
+# ResearchAgent relies on the literature MCP tools (paper_analysis / papers_search).
+websearch_toolset_instance: Optional[McpToolset] = None
+# websearch_toolset_instance = McpToolset(
+#     connection_params=StreamableHTTPConnectionParams(
+#         url=f"https://mcp.tavily.com/mcp/?tavilyApiKey={settings.services.tavily_api_key}"
+#     ),
+# )
 
 # Optional paper-analysis / paper-search MCP servers — only built when configured
 # (MCP__PAPER_ANALYSIS_URL / MCP__PAPERS_SEARCH_URL in .env).

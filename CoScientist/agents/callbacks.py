@@ -64,6 +64,25 @@ def after_tool_reranker_agent(
     return
 
 
+def before_fullset_reranker_agent(
+    callback_context: CallbackContext, llm_request=None
+):
+    """Seed the state vars the FullSetToolReranker instruction interpolates.
+
+    The instruction template references {filtered_tools} and {accumulated_web_mcps}.
+    `accumulated_web_mcps` is only written when ToolWebSearcher actually calls
+    `search_mcp_servers`; if it didn't (e.g. the model skipped the web search),
+    the key is absent and ADK raises "Context variable not found". Default both
+    to [] so the prompt always renders.
+    """
+    state = callback_context.state
+    if state.get('accumulated_web_mcps') is None:
+        state['accumulated_web_mcps'] = []
+    if state.get('filtered_tools') is None:
+        state['filtered_tools'] = []
+    return None
+
+
 def after_fullset_reranker_agent(
     callback_context: CallbackContext
 ) -> None:
