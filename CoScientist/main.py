@@ -12,6 +12,7 @@ load_dotenv()
 
 import asyncio
 from typing import Optional
+import logging
 
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
@@ -19,6 +20,7 @@ from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.agents import orchestrator_agent
+from CoScientist.agents.research_callbacks import cleanup_uploaded_papers
 from CoScientist.hitl import (
     AbstractHITLHandler,
     HITLRequest,
@@ -26,6 +28,9 @@ from CoScientist.hitl import (
 )
 
 settings = get_settings()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class CoScientistManager:
@@ -115,9 +120,11 @@ class CoScientistManager:
         return final_response
 
     async def close(self):
-        """Cleanup (placeholder)."""
-        # If you switch to persistent sessions later, close here
-        pass
+        """Cleanup session-related resources and uploaded paper artifacts."""
+        try:
+            await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
+        except Exception as exc:
+            logger.error(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
 
 # Convenience functions
 async def create_manager() -> CoScientistManager:

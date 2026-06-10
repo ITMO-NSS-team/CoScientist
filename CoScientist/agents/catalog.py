@@ -47,9 +47,12 @@ ORCHESTRATOR_AGENTS: List[AgentSpec] = [
     ),
     AgentSpec(
         name="ResearchAgent",
-        description="retrieves scientific knowledge (literature, web, RAG).",
-        routing="only when external knowledge is strictly required, the problem cannot be "
-                "solved computationally, or literature validation is needed.",
+        description="retrieves scientific knowledge and searches/downloads literature "
+                    "(web, RAG, paper search).",
+        routing="when external knowledge or literature is required, the problem cannot be "
+                "solved computationally, or claims need literature validation. If it returns "
+                "no/empty/insufficient results, escalate by reformulating into "
+                '"find and download papers about <expanded topic>".',
     ),
     AgentSpec(
         name="TaskExecutorAgent",

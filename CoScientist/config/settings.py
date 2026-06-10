@@ -136,6 +136,14 @@ class OpikSettings(BaseModel):
 
 
 # =========================
+# MCP
+# =========================
+class MCPSettings(BaseModel):
+    paper_analysis_url: Optional[str] = None
+    papers_search_url: Optional[str] = None
+
+
+# =========================
 # HITL (Human-in-the-Loop)
 # =========================
 class HITLSettings(BaseModel):
@@ -189,6 +197,7 @@ class Settings(BaseSettings):
     orchestrator: OrchestratorSettings = OrchestratorSettings()
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
+    mcp: MCPSettings = MCPSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

@@ -205,22 +205,25 @@ def render_molecule_detections(images: list, bboxes_list: list, res_path: str | 
     bboxes_list: list
         Coordinates of boxes.
 
-    res_path: str
-        Path to resulting images.
+    res_path: str | None
+        Optional path to resulting images.
 
     Returns
     -------
-        None
+        list[tuple[str, bytes]]
+        List of tuples with (file_name, annotated_image_bytes).
 
     Side Effects
     ------------
-    - Saves an annotated image for each input image as <original_name>_annotated.jpg,
-      containing bounding boxes around detected molecules.
+    - If res_path is provided, saves an annotated image for each input image as
+      <original_name>_annotated.jpg containing bounding boxes around detected molecules.
     """
 
+    rendered_files = []
     for i, img_bytes in enumerate(images):
 
-        entries = bboxes_list[i][0].get('bboxes')
+        page_results = bboxes_list[i] if i < len(bboxes_list) else []
+        entries = page_results[0].get("bboxes") if page_results else []
 
         if entries:
             bboxes = []

@@ -3,16 +3,27 @@ import os
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pathlib import Path
 from fastmcp import FastMCP
+from io import BytesIO
+from urllib.parse import urlparse
+from pprint import pprint
 
 from CoScientist.chemical_utils.chemical_functions import extract_reactions_from_pdf, extract_molecules_from_pdf, remove_keys
 from CoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
 from CoScientist.paper_analysis.question_processing import process_question, simple_query_llm
+from CoScientist.paper_parser.s3_connection import S3BucketService
+from CoScientist.paper_parser.utils import extract_s3_bucket_and_key
+
+s3_service = S3BucketService(
+    endpoint=os.getenv("S3__ENDPOINT_URL"),
+    access_key=os.getenv("S3__ACCESS_KEY"),
+    secret_key=os.getenv("S3__SECRET_KEY"),
+    bucket_name=os.getenv("S3__BUCKET_NAME"),
+)
 
 from prompts import explore_my_papers_prompt, sys_prompt
 
-VISION_LLM_URL = os.getenv("VISION_LLM_URL")
+VISION_LLM_URL = os.getenv("LLM__VISION_URL")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,7 +58,7 @@ def explore_chemistry_database(task: str) -> dict:
 
 
 @mcp.tool()
-def explore_my_papers(task: str, papers_path: Path) -> dict:
+def explore_my_papers(task: str, s3_keys: list[str]) -> dict:
     """
     Answers questions based on the content of user-provided scientific papers. 
     This tool allows users to query specific documents they've uploaded, retrieving insights 
@@ -58,7 +69,7 @@ def explore_my_papers(task: str, papers_path: Path) -> dict:
     
     Args:
         task (str): The user's question about the uploaded papers.
-        papers_path (Path): The path to the directory containing the uploaded papers.
+        s3_keys (list[str]): The list of S3 keys for the uploaded papers.
         config (RunnableConfig): The configuration for the runnable.
 
 
@@ -70,28 +81,40 @@ def explore_my_papers(task: str, papers_path: Path) -> dict:
     logger.info('Running explore_my_papers tool...')
     logger.info(f'task: {task}')
 
-    papers = [str(f.resolve()) for f in papers_path.iterdir() if f.is_file() and f.suffix.lower() == '.pdf']
-
-    if not papers:
+    if not s3_keys:
         return {'answer': 'No papers provided for search.'}
-    
-    logger.info(f'PAPERS from explore_my_papers: {papers}')
 
-    logger.info(f'Requesting PDF image description from server...')
-    img_descriptions = 'This is additional information about the reactions and molecules that are presented' \
-                    'on the images in the paper. They are passed in the same order as papers themselves.' \
-                    'Use them to answer the question.\n\n'
-    for paper in papers:
-        with open(paper, 'rb') as paper_bytes:
-            detected_reactions = remove_keys(extract_reactions_from_pdf(paper_bytes))
-            img_descriptions += f'Reactions: {str(detected_reactions)}\n'
-        with open(paper, 'rb') as paper_bytes:
-            detected_molecules = remove_keys(extract_molecules_from_pdf(paper_bytes))
-            img_descriptions += f'Molecules: {str(detected_molecules)}\n'
-        img_descriptions += '\n\n'
+    logger.info(f'S3 keys for explore_my_papers: {s3_keys}')
+
+    client = s3_service.create_s3_client()
 
     try:
-        return simple_query_llm(VISION_LLM_URL, task, explore_my_papers_prompt, papers, img_descriptions)
+        paper_buffers: list[BytesIO] = []
+        for s3_key in s3_keys:
+            response = client.get_object(Bucket=s3_service.bucket_name, Key=s3_key)
+            paper_buffers.append(BytesIO(response['Body'].read()))
+
+        if not paper_buffers:
+            return {'answer': 'No valid papers could be loaded from S3.'}
+
+        logger.info(f'PAPERS from explore_my_papers: {s3_keys}')
+
+        logger.info(f'Requesting PDF image description from server...')
+        img_descriptions = 'This is additional information about the reactions and molecules that are presented' \
+                        'on the images in the paper. They are passed in the same order as papers themselves.' \
+                        'Use them to answer the question.\n\n'
+        for buf in paper_buffers:
+            buf.seek(0)
+            detected_reactions = remove_keys(extract_reactions_from_pdf(buf))
+            img_descriptions += f'Reactions: {str(detected_reactions)}\n'
+            buf.seek(0)
+            detected_molecules = remove_keys(extract_molecules_from_pdf(buf))
+            img_descriptions += f'Molecules: {str(detected_molecules)}\n'
+            img_descriptions += '\n\n'
+
+        for buf in paper_buffers:
+            buf.seek(0)
+        return simple_query_llm(VISION_LLM_URL, task, explore_my_papers_prompt, paper_buffers, img_descriptions)
     except Exception as e:
         logger.error(f'explore_my_papers ERROR: {e}')
         return {'answer': 'Could not extract any data from uploaded papers.'}
