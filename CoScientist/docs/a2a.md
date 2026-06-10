@@ -197,6 +197,12 @@ if __name__ == "__main__":
 
 `make_a2a_app()` handles the Runner, A2A executor, and Opik tracing for you.
 
+> **Note on imports:** splitting agents into per-file modules is for code
+> organisation. It does **not** currently give import-time isolation between
+> servers — the top-level `CoScientist/__init__.py` eagerly imports the full
+> agent tree (incl. the RAG/FEDOT stack), so every server transitively loads
+> all agents at startup. Making that lazy is a possible follow-up.
+
 ### Step 4 — Register with the orchestrator
 
 In `a2a/orchestrator.py`, add a `RemoteA2aAgent` inside `_build_tools()`:

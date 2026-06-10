@@ -88,16 +88,19 @@ def _render_parts(parts: list[dict], indent: str = "    ") -> None:
                 print(f"{indent}{GREEN}🗎 text:{RESET} {text}")
 
         elif kind == "data":
-            # ADK encodes function calls / responses as data parts.
+            # ADK encodes function calls/responses as data parts, tagged via
+            # metadata "adk_type" (function_call | function_response).
             data = part.get("data", {})
+            adk_type = meta.get("adk_type")
             blob = json.dumps(data, ensure_ascii=False)
             if len(blob) > 600:
                 blob = blob[:600] + " …"
-            label = "🔧 data"
-            if "name" in data and "args" in data:
+            if adk_type == "function_call":
                 label = f"🔧 tool call: {BOLD}{data.get('name')}{RESET}"
-            elif "name" in data and "response" in data:
+            elif adk_type == "function_response":
                 label = f"📥 tool result: {BOLD}{data.get('name')}{RESET}"
+            else:
+                label = "🔧 data"
             print(f"{indent}{YELLOW}{label}{RESET} {DIM}{blob}{RESET}")
 
         elif kind == "file":

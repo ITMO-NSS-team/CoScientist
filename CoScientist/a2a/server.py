@@ -1,7 +1,6 @@
 """Reusable factory for wrapping any ADK agent as an A2A FastAPI application."""
 import os
-import warnings
-from typing import Optional
+from typing import Any, Optional
 
 # ADK marks its A2A executor as experimental; suppress unless the caller opted in.
 if not os.getenv("ADK_A2A_EXPERIMENTAL_WARNINGS"):
@@ -17,6 +16,27 @@ from google.adk.agents.base_agent import BaseAgent
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+
+
+# Substrings that mark a settings key as sensitive; matched case-insensitively.
+_SECRET_HINTS = ("key", "password", "secret", "token", "login", "credential")
+_REDACTED = "***redacted***"
+
+
+def _redact(value: Any) -> Any:
+    """Recursively mask values whose key looks like a secret.
+
+    Used so we never ship API keys / passwords to the Opik dashboard as trace
+    metadata. Matches by key name, so it also covers nested third-party settings.
+    """
+    if isinstance(value, dict):
+        return {
+            k: (_REDACTED if any(h in k.lower() for h in _SECRET_HINTS) else _redact(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
 
 
 def _attach_opik_tracer(agent: BaseAgent, app_name: str) -> None:
@@ -35,7 +55,7 @@ def _attach_opik_tracer(agent: BaseAgent, app_name: str) -> None:
         settings = get_settings()
         tracer = OpikTracer(
             name=f"a2a-{app_name}",
-            metadata=settings.model_dump(),
+            metadata=_redact(settings.model_dump()),
             project_name="adk-coscientist",
         )
         track_adk_agent_recursive(agent, tracer)

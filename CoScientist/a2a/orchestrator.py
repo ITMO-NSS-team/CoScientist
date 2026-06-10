@@ -10,7 +10,6 @@ from CoScientist.agents.critic_agent import post_action_critique, pre_action_cri
 from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model
 from CoScientist.agents.prompts import orchestrator_instruction
 from CoScientist.config import get_settings
-from CoScientist.hitl.handler import ConsoleHITLHandler
 from CoScientist.hitl.tool import get_hitl_tools
 
 settings = get_settings()

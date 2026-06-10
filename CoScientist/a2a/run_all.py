@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 
 import uvicorn
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
@@ -55,28 +56,44 @@ def _build_orchestrator_app():
     return make_a2a_app(orchestrator_a2a_agent, card, "orchestrator")
 
 
-async def _serve(app, port: int, label: str) -> None:
+def _make_server(app, port: int) -> uvicorn.Server:
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
-    logger.info("Starting %s on port %d", label, port)
-    await server.serve()
+    # We install a single shared signal handler below, so disable uvicorn's
+    # per-server handlers (six servers each grabbing SIGINT shut down messily).
+    server.config.install_signal_handlers = False
+    return server
 
 
 async def main() -> None:
     orchestrator_app = _build_orchestrator_app()
-    tasks = [
-        _serve(app, port, label)
-        for label, app, port in _SERVERS
-    ]
-    tasks.append(_serve(orchestrator_app, AGENT_PORTS["orchestrator"], "OrchestratorAgent"))
+
+    specs = [
+        (label, app, port) for label, app, port in _SERVERS
+    ] + [("OrchestratorAgent", orchestrator_app, AGENT_PORTS["orchestrator"])]
+
+    servers = [_make_server(app, port) for _, app, port in specs]
+
+    # One shared shutdown path: signal all servers to exit gracefully.
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown() -> None:
+        logger.info("Shutdown requested; stopping all A2A servers...")
+        for server in servers:
+            server.should_exit = True
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_shutdown)
+        except NotImplementedError:  # e.g. on Windows
+            signal.signal(sig, lambda *_: _request_shutdown())
 
     print("Starting CoScientist A2A agents:")
-    for label, _, port in _SERVERS:
+    for label, _, port in specs:
         print(f"  {label:<22} → http://localhost:{port}/")
-    print(f"  {'OrchestratorAgent':<22} → http://localhost:{AGENT_PORTS['orchestrator']}/")
     print()
 
-    await asyncio.gather(*tasks)
+    await asyncio.gather(*(server.serve() for server in servers))
 
 
 if __name__ == "__main__":
