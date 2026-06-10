@@ -1,9 +1,19 @@
-"""Re-export shim for PlannerAgent.
+"""PlannerAgent — generates a research roadmap with optional HITL review."""
+from google.adk.planners import PlanReActPlanner
 
-The agent is defined in :mod:`CoScientist.agents.agents` (single source of
-truth, driven by the agent catalog). This module keeps the per-agent import
-path stable for the A2A servers.
-"""
-from CoScientist.agents.agents import planner_agent
+from CoScientist.agents.common import hitl_handler, make_llm
+from CoScientist.agents.prompts import planner_instruction
+from CoScientist.hitl.session_agent import SessionAgent
+
+planner_agent = SessionAgent(
+    name="PlannerAgent",
+    model=make_llm(),
+    instruction=planner_instruction,
+    description="Generates a roadmap for solving the task",
+    output_key="planner_roadmap",
+    plan_file_path="roadmap.txt",
+    planner=PlanReActPlanner(),
+    hitl_handler=hitl_handler,
+)
 
 __all__ = ["planner_agent"]

@@ -127,50 +127,52 @@ curl -X POST http://localhost:8002/ -H "Content-Type: application/json" -d '{
 
 ## 4. Adding a new agent
 
-Agents are defined in `agents/agents.py` (single source of truth) and the
-orchestrator's roster is driven by `agents/catalog.py`. The A2A layer then
-exposes each agent as its own server. Steps 1–2 are the normal (non-A2A) way
-to add an agent; steps 3–6 expose it over A2A.
+Each agent is defined in its own module under `agents/` and the orchestrator's
+roster is driven by `agents/catalog.py`. The A2A layer then exposes each agent
+as its own server. Steps 1–2 are the normal (non-A2A) way to add an agent;
+steps 3–5 expose it over A2A.
 
-### Step 1 — Define the agent
+### Step 1 — Define the agent in its own module
 
-In `agents/agents.py`, add the `LlmAgent` next to the others:
+Create `agents/my_agent.py`:
 
 ```python
+from google.adk.agents.llm_agent import LlmAgent
+from CoScientist.agents.common import agent_tools, make_llm
+from CoScientist.agents.prompts import my_instruction
+
 my_agent = LlmAgent(
     name="MyAgent",
-    model=LiteLlm(model=MODEL),
-    instruction=my_instruction,        # from agents/prompts.py
+    model=make_llm(),                  # make_coder_llm() for a coder-style agent
+    instruction=my_instruction,
     description="What this agent does.",
     output_key="my_results",
-    tools=_agent_tools(my_toolset, hitl_tools=False),
+    tools=agent_tools(my_toolset, hitl=False),
 )
+
+__all__ = ["my_agent"]
 ```
+
+`agents/common.py` provides `make_llm()`, `make_coder_llm()`, `agent_tools()`
+and the shared settings so every agent shares one config load. Re-export it from
+`agents/__init__.py` if other in-process code imports it.
 
 ### Step 2 — Register it in the catalog
 
 In `agents/catalog.py`, add an `AgentSpec` to `ORCHESTRATOR_AGENTS` (name MUST
-match the `LlmAgent`'s `name=`), and in `agents/agents.py` map the name to the
-instance in `_AGENT_INSTANCES`. The orchestrator prompt, the critic roster, and
-the attached tools are all rendered from the catalog — nothing is duplicated.
+match the `LlmAgent`'s `name=`), and in `agents/orchestrator_agent.py` map the
+name to the instance in `_AGENT_INSTANCES`. The orchestrator prompt, the critic
+roster, and the attached tools are all rendered from the catalog — nothing is
+duplicated.
 
 ```python
 # catalog.py
 AgentSpec(name="MyAgent", description="...", routing="when to pick it.")
-# agents.py
+# orchestrator_agent.py
 _AGENT_INSTANCES = { ..., "MyAgent": my_agent }
 ```
 
-### Step 3 — Add a re-export shim
-
-Create `agents/my_agent.py` so the A2A server has a stable import path:
-
-```python
-from CoScientist.agents.agents import my_agent
-__all__ = ["my_agent"]
-```
-
-### Step 4 — Add a port
+### Step 3 — Add a port
 
 In `a2a/config.py`, add to `AGENT_PORTS` (`AGENT_URLS`/`AGENT_CARD_URLS` derive
 automatically), and add the catalog name → key mapping in `a2a/orchestrator.py`
@@ -183,7 +185,7 @@ automatically), and add the catalog name → key mapping in `a2a/orchestrator.py
 "MyAgent": "my_agent",
 ```
 
-### Step 5 — Create the server module
+### Step 4 — Create the server module
 
 Create `a2a/servers/my_agent.py` (copy an existing one):
 
@@ -210,7 +212,7 @@ if __name__ == "__main__":
 
 `make_a2a_app()` handles the Runner, A2A executor, and Opik tracing for you.
 
-### Step 6 — Add it to `run_all.py`
+### Step 5 — Add it to `run_all.py`
 
 Import its `app` and add a `(label, app, port)` tuple to `_SERVERS`. The
 orchestrator picks the agent up automatically from the catalog (step 2) — no
@@ -219,9 +221,8 @@ edit to its tool list needed.
 That's it. Run `run_all`, then
 `python -m CoScientist.a2a.benchmark --agent my_agent --text "..."`.
 
-> **Note on imports:** the per-agent modules under `agents/` are thin
-> re-export shims; the real definitions live in `agents/agents.py`. They do
-> **not** give import-time isolation between servers — the top-level
+> **Note on imports:** each agent lives in its own module under `agents/`, but
+> this is code organisation, not import-time isolation — the top-level
 > `CoScientist/__init__.py` eagerly imports the full agent tree, so every
 > server transitively loads all agents at startup.
 

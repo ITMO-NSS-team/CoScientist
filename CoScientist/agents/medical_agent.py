@@ -1,9 +1,22 @@
-"""Re-export shim for MedicalAgent.
+"""MedicalAgent — PubMed search, PICO, study taxonomy, DICOM analysis."""
+from google.adk.agents.llm_agent import LlmAgent
 
-The agent is defined in :mod:`CoScientist.agents.agents` (single source of
-truth, driven by the agent catalog). This module keeps the per-agent import
-path stable for the A2A servers.
-"""
-from CoScientist.agents.agents import medical_agent
+from CoScientist.agents.common import make_llm
+from CoScientist.agents.med_callbacks import med_agent_before_model
+from CoScientist.agents.prompts import medical_instruction
+from CoScientist.tools import med_toolset_instance
+
+medical_agent = LlmAgent(
+    name="MedicalAgent",
+    model=make_llm(),
+    instruction=medical_instruction,
+    description=(
+        "Agent for medical and clinical questions: PubMed literature search, "
+        "PICO extraction, study taxonomy, and DICOM image analysis."
+    ),
+    output_key="medical_results",
+    tools=med_toolset_instance,
+    before_model_callback=med_agent_before_model,
+)
 
 __all__ = ["medical_agent"]

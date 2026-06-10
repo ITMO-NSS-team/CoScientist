@@ -8,10 +8,12 @@ flag. From this list we render:
   * the orchestrator prompt's "available agents" + routing sections,
   * the pre-action critic prompt's agent roster,
 
-and, in agents.py, we attach the enabled agents as tools (mapping name -> the
-LlmAgent instance). Nothing about an agent is duplicated across prompts.
+and, in orchestrator_agent.py, we attach the enabled agents as tools (mapping
+name -> the LlmAgent instance). Nothing about an agent is duplicated across
+prompts.
 
-`name` MUST match the corresponding LlmAgent's `name=` in agents.py.
+`name` MUST match the corresponding LlmAgent's `name=` (defined in that agent's
+module under CoScientist/agents/).
 """
 
 from dataclasses import dataclass

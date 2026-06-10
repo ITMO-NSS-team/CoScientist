@@ -1,9 +1,16 @@
-"""Re-export shim for HypothesesAgent.
+"""HypothesesAgent — generates scientific hypotheses for a given task."""
+from google.adk.agents.llm_agent import LlmAgent
 
-The agent is defined in :mod:`CoScientist.agents.agents` (single source of
-truth, driven by the agent catalog). This module keeps the per-agent import
-path stable for the A2A servers.
-"""
-from CoScientist.agents.agents import hypotheses_agent
+from CoScientist.agents.common import agent_tools, make_llm
+from CoScientist.agents.prompts import hypotheses_instruction
+
+hypotheses_agent = LlmAgent(
+    name="HypothesesAgent",
+    model=make_llm(),
+    instruction=hypotheses_instruction,
+    description="Agent to generate scientific hypotheses and ideas for given task",
+    output_key="hypotheses",
+    tools=agent_tools([], hitl=False),
+)
 
 __all__ = ["hypotheses_agent"]
