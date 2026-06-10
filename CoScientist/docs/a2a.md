@@ -106,7 +106,7 @@ python -m CoScientist.a2a.benchmark --agent research \
 ```
 
 `--agent` accepts: `orchestrator`, `planner`, `hypotheses`, `research`,
-`task_execution`, `medical`.
+`task_execution`, `medical`, `coder`.
 
 Traces also appear in the **Opik dashboard** under project `adk-coscientist`.
 
@@ -127,45 +127,63 @@ curl -X POST http://localhost:8002/ -H "Content-Type: application/json" -d '{
 
 ## 4. Adding a new agent
 
-The workflow is the same as before — **define the agent in `agents/`** — plus
-two small steps to expose it over A2A.
+Agents are defined in `agents/agents.py` (single source of truth) and the
+orchestrator's roster is driven by `agents/catalog.py`. The A2A layer then
+exposes each agent as its own server. Steps 1–2 are the normal (non-A2A) way
+to add an agent; steps 3–6 expose it over A2A.
 
-### Step 1 — Define the agent (as usual)
+### Step 1 — Define the agent
 
-Create `agents/my_agent.py`:
+In `agents/agents.py`, add the `LlmAgent` next to the others:
 
 ```python
-from google.adk.agents.llm_agent import LlmAgent
-from CoScientist.agents.common import agent_tools, make_llm
-from CoScientist.agents.prompts import my_instruction
-
 my_agent = LlmAgent(
     name="MyAgent",
-    model=make_llm(),                 # shared model/config from common.py
-    instruction=my_instruction,       # your prompt
-    description="What this agent does — the orchestrator reads this to route.",
+    model=LiteLlm(model=MODEL),
+    instruction=my_instruction,        # from agents/prompts.py
+    description="What this agent does.",
     output_key="my_results",
-    tools=agent_tools(my_toolset, hitl=True),  # hitl=True adds approval tools
+    tools=_agent_tools(my_toolset, hitl_tools=False),
 )
 ```
 
-`agents/common.py` gives you `make_llm()`, `agent_tools()`, `MODEL`,
-`hitl_enabled` so every agent shares one settings load.
+### Step 2 — Register it in the catalog
 
-(Optional) re-export it from `agents/__init__.py` and `agents/agents.py` for
-in-process use.
-
-### Step 2 — Add a port
-
-In `a2a/config.py`, add an entry to `AGENT_PORTS`:
+In `agents/catalog.py`, add an `AgentSpec` to `ORCHESTRATOR_AGENTS` (name MUST
+match the `LlmAgent`'s `name=`), and in `agents/agents.py` map the name to the
+instance in `_AGENT_INSTANCES`. The orchestrator prompt, the critic roster, and
+the attached tools are all rendered from the catalog — nothing is duplicated.
 
 ```python
-"my_agent": int(os.getenv("MY_AGENT_PORT", "8006")),
+# catalog.py
+AgentSpec(name="MyAgent", description="...", routing="when to pick it.")
+# agents.py
+_AGENT_INSTANCES = { ..., "MyAgent": my_agent }
 ```
 
-`AGENT_URLS` and `AGENT_CARD_URLS` are derived automatically.
+### Step 3 — Add a re-export shim
 
-### Step 3 — Create the server module
+Create `agents/my_agent.py` so the A2A server has a stable import path:
+
+```python
+from CoScientist.agents.agents import my_agent
+__all__ = ["my_agent"]
+```
+
+### Step 4 — Add a port
+
+In `a2a/config.py`, add to `AGENT_PORTS` (`AGENT_URLS`/`AGENT_CARD_URLS` derive
+automatically), and add the catalog name → key mapping in `a2a/orchestrator.py`
+(`_NAME_TO_KEY`):
+
+```python
+# config.py
+"my_agent": int(os.getenv("MY_AGENT_PORT", "8007")),
+# orchestrator.py  _NAME_TO_KEY
+"MyAgent": "my_agent",
+```
+
+### Step 5 — Create the server module
 
 Create `a2a/servers/my_agent.py` (copy an existing one):
 
@@ -177,18 +195,13 @@ from CoScientist.a2a.server import make_a2a_app
 from CoScientist.agents.my_agent import my_agent
 
 PORT = AGENT_PORTS["my_agent"]
-
 _card = AgentCard(
-    name="MyAgent",
-    description="What this agent does",
-    url=AGENT_URLS["my_agent"],
-    version="1.0.0",
+    name="MyAgent", description="What this agent does",
+    url=AGENT_URLS["my_agent"], version="1.0.0",
     capabilities=AgentCapabilities(streaming=True),
-    defaultInputModes=["text/plain"],
-    defaultOutputModes=["text/plain"],
+    defaultInputModes=["text/plain"], defaultOutputModes=["text/plain"],
     skills=[AgentSkill(id="do", name="Do", description="...", tags=["..."])],
 )
-
 app = make_a2a_app(my_agent, _card, "my_agent")
 
 if __name__ == "__main__":
@@ -197,30 +210,20 @@ if __name__ == "__main__":
 
 `make_a2a_app()` handles the Runner, A2A executor, and Opik tracing for you.
 
-> **Note on imports:** splitting agents into per-file modules is for code
-> organisation. It does **not** currently give import-time isolation between
-> servers — the top-level `CoScientist/__init__.py` eagerly imports the full
-> agent tree (incl. the RAG/FEDOT stack), so every server transitively loads
-> all agents at startup. Making that lazy is a possible follow-up.
+### Step 6 — Add it to `run_all.py`
 
-### Step 4 — Register with the orchestrator
-
-In `a2a/orchestrator.py`, add a `RemoteA2aAgent` inside `_build_tools()`:
-
-```python
-RemoteA2aAgent(
-    name="MyAgent",
-    agent_card=AGENT_CARD_URLS["my_agent"],
-    description="What this agent does — the orchestrator routes on this.",
-),
-```
-
-### Step 5 — Add it to `run_all.py`
-
-Import its `app` and add a `(label, app, port)` tuple to `_SERVERS`.
+Import its `app` and add a `(label, app, port)` tuple to `_SERVERS`. The
+orchestrator picks the agent up automatically from the catalog (step 2) — no
+edit to its tool list needed.
 
 That's it. Run `run_all`, then
 `python -m CoScientist.a2a.benchmark --agent my_agent --text "..."`.
+
+> **Note on imports:** the per-agent modules under `agents/` are thin
+> re-export shims; the real definitions live in `agents/agents.py`. They do
+> **not** give import-time isolation between servers — the top-level
+> `CoScientist/__init__.py` eagerly imports the full agent tree, so every
+> server transitively loads all agents at startup.
 
 ---
 

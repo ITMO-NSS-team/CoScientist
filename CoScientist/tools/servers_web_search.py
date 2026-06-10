@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 from CoScientist.tools.tools_web_search.engine import MCPSearchTool
 from CoScientist.tools.tools_web_search.models import MCPSearchResult
 
@@ -8,7 +10,7 @@ _tool = MCPSearchTool()  # share across calls
 
 
 async def search_mcp_servers(query: str,
-                            tool_context: ToolContext = None) -> str:
+                            tool_context: ToolContext = None) -> Dict[str, Any]:
     """
     Search public MCP server registries for servers matching the query.
 
@@ -31,8 +33,17 @@ async def search_mcp_servers(query: str,
     async with _tool:
         result: MCPSearchResult = await _tool.search(query)
 
+    if tool_context is None:
+        # No session to accumulate into — still return the search result.
+        return {
+            "status": "success",
+            "result": result.to_agent_text(limit=15),
+            "accumulated_count": len(result.servers),
+            "message": f"Retrieved {result.total_found} mcp servers (no session accumulation).",
+        }
 
-    accumulated = tool_context.state.get('accumulated_web_mcp', [])
+    # Read/write the SAME key so accumulation persists across calls.
+    accumulated = tool_context.state.get('accumulated_web_mcps', [])
     existing_mcps = {t['name'] for t in accumulated}
     last_idx = len(accumulated) + 1
 

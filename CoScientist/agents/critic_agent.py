@@ -105,7 +105,11 @@ def _extract_completed_trajectory(
         for p in c.parts:
             fr = getattr(p, "function_response", None)
             if fr is not None:
-                responses_by_id[getattr(fr, "id", "")] = getattr(fr, "response", None)
+                fr_id = getattr(fr, "id", "")
+                # Skip responses without an id — otherwise they all collapse to
+                # the "" key and overwrite each other, mis-pairing calls.
+                if fr_id:
+                    responses_by_id[fr_id] = getattr(fr, "response", None)
 
     trajectory: List[Dict[str, Any]] = []
     pending_thought: Optional[str] = None
@@ -205,10 +209,14 @@ def _format_pending_calls(calls: List[Dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 # LLM critic invocation
 # ---------------------------------------------------------------------------
-def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
-    """Returns parsed JSON dict; on any failure returns {} (permissive default)."""
+async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+    """Returns parsed JSON dict; on any failure returns {} (permissive default).
+
+    Uses the async litellm API so the critic's network call does not block the
+    orchestrator's event loop (the callbacks run inside it).
+    """
     try:
-        resp = litellm.completion(
+        resp = await litellm.acompletion(
             model=_CRITIC_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -219,7 +227,7 @@ def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         )
         raw = resp["choices"][0]["message"]["content"]
         return json.loads(raw)
-    except Exception as e:  
+    except Exception as e:
         print(f"[Critic] LLM call failed ({e!r}); defaulting to permissive verdict.")
         return {}
 
@@ -272,8 +280,18 @@ def _apply_revisions(
             except Exception:
                 pass
 
+def _first_text(content) -> str:
+    """First text part of a Content, or '' if none (e.g. an image-only message)."""
+    if content is None or not getattr(content, "parts", None):
+        return ""
+    for p in content.parts:
+        if getattr(p, "text", None):
+            return p.text
+    return ""
+
+
 @track(name="pre_action_critique")
-def pre_action_critique(
+async def pre_action_critique(
     callback_context: CallbackContext, llm_response: LlmResponse
 ) -> Optional[LlmResponse]:
     """after_model_callback for the OrchestratorAgent."""
@@ -284,7 +302,8 @@ def pre_action_critique(
         return None
 
     contents = _session_contents(callback_context)
-    user_task = callback_context.user_content.parts[0].text
+    # user_content may be absent or start with a non-text part (image/DICOM upload).
+    user_task = _first_text(getattr(callback_context, "user_content", None))
     trajectory = _extract_completed_trajectory(contents)
 
     user_prompt = (
@@ -297,7 +316,7 @@ def pre_action_critique(
 
     print(f"pre action critic invoked with such prompt: {user_prompt}")
 
-    payload = _invoke_critic_llm(pre_action_critic_instruction, user_prompt)
+    payload = await _invoke_critic_llm(pre_action_critic_instruction, user_prompt)
     verdict_raw = (payload.get("verdict") or "approve").lower().strip()
     feedback = (payload.get("feedback") or "").strip()
     revised_calls = payload.get("revised_calls") or []
@@ -349,7 +368,7 @@ def pre_action_critique(
 # Post-action critic  (after_tool_callback)
 # ---------------------------------------------------------------------------
 @track(name="post_action_critique")
-def post_action_critique(
+async def post_action_critique(
     tool: BaseTool,
     args: Dict[str, Any],
     tool_context: ToolContext,
@@ -359,13 +378,13 @@ def post_action_critique(
     user_prompt = (
         f"TOOL CALLED: {tool.name}\n"
         f"ARGS: {_truncate(args, 800)}\n"
-        f"RESULT: {_truncate(tool_response, 2500)}\n\n"
+        f"RESULT: {_truncate(tool_response, 3000)}\n\n"
         "Evaluate whether this result is sufficient to advance the task, "
         "needs refinement, or is wrong. Respond as strict JSON."
     )
 
     print(f'Post action critic invoked with {user_prompt}')
-    payload = _invoke_critic_llm(post_action_critic_instruction, user_prompt)
+    payload = await _invoke_critic_llm(post_action_critic_instruction, user_prompt)
     verdict_raw = (payload.get("verdict") or "sufficient").lower().strip()
     feedback = (payload.get("feedback") or "").strip()
     print(f'Post action critic returned with {payload}')
@@ -377,7 +396,6 @@ def post_action_critique(
     state["critic_post_history"] = history
 
     if verdict_raw == PostVerdict.SUFFICIENT.value:
-        print(f'post action critic returned None')
         return None
 
     annotated = (

@@ -18,6 +18,7 @@ from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 from CoScientist.a2a.config import AGENT_PORTS, AGENT_URLS
 from CoScientist.a2a.orchestrator import orchestrator_a2a_agent
 from CoScientist.a2a.server import make_a2a_app
+from CoScientist.a2a.servers.coder import app as coder_app
 from CoScientist.a2a.servers.hypotheses import app as hypotheses_app
 from CoScientist.a2a.servers.medical import app as medical_app
 from CoScientist.a2a.servers.planner import app as planner_app
@@ -32,6 +33,7 @@ _SERVERS: list[tuple[str, object, int]] = [
     ("ResearchAgent",     research_app,       AGENT_PORTS["research"]),
     ("TaskExecutorAgent", task_execution_app, AGENT_PORTS["task_execution"]),
     ("MedicalAgent",      medical_app,        AGENT_PORTS["medical"]),
+    ("CoderAgent",        coder_app,          AGENT_PORTS["coder"]),
 ]
 
 

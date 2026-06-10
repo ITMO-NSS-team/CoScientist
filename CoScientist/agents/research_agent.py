@@ -1,15 +1,9 @@
-"""ResearchAgent — literature and web search for scientific questions."""
-from google.adk.agents.llm_agent import LlmAgent
+"""Re-export shim for ResearchAgent.
 
-from CoScientist.agents.common import agent_tools, make_llm
-from CoScientist.agents.prompts import research_instruction
-from CoScientist.tools import websearch_toolset_instance
+The agent is defined in :mod:`CoScientist.agents.agents` (single source of
+truth, driven by the agent catalog). This module keeps the per-agent import
+path stable for the A2A servers.
+"""
+from CoScientist.agents.agents import research_agent
 
-research_agent = LlmAgent(
-    name="ResearchAgent",
-    model=make_llm(),
-    instruction=research_instruction,
-    description="Agent to answer questions and knowledge mining using Literature and Web Search.",
-    output_key="search_results",
-    tools=agent_tools(websearch_toolset_instance, hitl=True),
-)
+__all__ = ["research_agent"]

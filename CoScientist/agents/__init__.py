@@ -1,4 +1,5 @@
 """LLM Agents module."""
+from CoScientist.agents.coder_agent import coder_agent
 from CoScientist.agents.hypotheses_agent import hypotheses_agent
 from CoScientist.agents.medical_agent import medical_agent
 from CoScientist.agents.orchestrator_agent import orchestrator_agent
@@ -20,6 +21,7 @@ __all__ = [
     "research_agent",
     "hypotheses_agent",
     "medical_agent",
+    "coder_agent",
     "tool_retriever_agent",
     "tool_reranker_agent",
     "tool_websearcher_agent",

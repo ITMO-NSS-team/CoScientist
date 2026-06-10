@@ -9,6 +9,7 @@ AGENT_PORTS: dict[str, int] = {
     "research":       int(os.getenv("RESEARCH_PORT",       "8003")),
     "task_execution": int(os.getenv("TASK_EXECUTION_PORT", "8004")),
     "medical":        int(os.getenv("MEDICAL_PORT",        "8005")),
+    "coder":          int(os.getenv("CODER_PORT",          "8006")),
 }
 
 AGENT_URLS: dict[str, str] = {
