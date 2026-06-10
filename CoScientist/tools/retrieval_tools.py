@@ -1,21 +1,19 @@
 """Tools for fedotmas inference"""
 
 import asyncio
-import inspect
 from typing import List, Optional, Dict, Any
 
-from google.adk.tools import FunctionTool, BaseTool, ToolContext
+from google.adk.tools import BaseTool, ToolContext
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
-from CoScientist.tools.utils import tool
 from CoScientist.storage import RetrievalToolResult
 
 from rag_tools import create_manager, MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
 from rag_tools.retrieval import APIEmbedder, APIReranker, BM25Reranker, HybridReranker
-from rag_tools.storage.models import RetrievalResult, MCPServer
+from rag_tools.storage.models import RetrievalResult
 
 settings = get_settings()
 
@@ -58,17 +56,15 @@ class RetrievalToolSet(BaseToolset):
         reranker = HybridReranker([api_reranker, bm2_reranker], settings.hybrid_reranker)
         manager = await create_manager(settings, embedder, reranker)
 
-        # if reset:
-        #     tool_context.state['accumulated_tools'] = []
-        #     tool_context.state['retrieval_queries'] = []
-            
-        retrieved_tools: List[RetrievalResult] = await manager.retrieve_tools(query = query, 
-                                                                              top_k = settings.rag.default_top_k,
-                                                                              rerank = True,
-                                                                              rerank_top_k = settings.rag.rerank_top_k,
-                                                                              min_score = settings.rag.min_relevance_score)
+        try:
+            retrieved_tools: List[RetrievalResult] = await manager.retrieve_tools(
+                query=query,
+                top_k=settings.rag.default_top_k,
+                rerank=True,
+                rerank_top_k=settings.rag.rerank_top_k,
+                min_score=settings.rag.min_relevance_score)
 
-        results = [
+            results = [
                 RetrievalToolResult(
                     tool=r.name,
                     server_id=r.server_id,
@@ -77,9 +73,19 @@ class RetrievalToolSet(BaseToolset):
                 )
                 for r in retrieved_tools
             ]
-        await manager.close()
+        finally:
+            # Always release the manager's DB/HTTP connections, even on error.
+            await manager.close()
 
-        # ACCUMULATE into state 
+        if tool_context is None:
+            return {
+                "status": "success",
+                "result": [r.model_dump() for r in results],
+                "accumulated_count": len(results),
+                "message": f"Retrieved {len(results)} tools (no session accumulation).",
+            }
+
+        # ACCUMULATE into state
         accumulated = tool_context.state.get('accumulated_tools', [])
         existing_tools = {t['tool'] for t in accumulated}
         last_idx = len(accumulated) + 1
@@ -101,7 +107,7 @@ class RetrievalToolSet(BaseToolset):
 
         return {
             "status": "success",
-            "result": results,
+            "result": [r.model_dump() for r in results],
             "accumulated_count": len(accumulated),
             "message": f"Retrieved {len(results)} tools. Total accumulated: {len(accumulated)}."
         }
