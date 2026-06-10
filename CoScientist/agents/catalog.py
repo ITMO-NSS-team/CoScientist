@@ -50,11 +50,13 @@ ORCHESTRATOR_AGENTS: List[AgentSpec] = [
     AgentSpec(
         name="ResearchAgent",
         description="retrieves scientific knowledge and searches/downloads literature "
-                    "(web, RAG, paper search).",
-        routing="when external knowledge or literature is required, the problem cannot be "
-                "solved computationally, or claims need literature validation. If it returns "
-                "no/empty/insufficient results, escalate by reformulating into "
-                '"find and download papers about <expanded topic>".',
+                    "(web, RAG, paper search). Open-ended search only — it cannot read "
+                    "a specific code repository.",
+        routing="when OPEN-ENDED external knowledge or literature is required, the problem "
+                "cannot be solved computationally, or claims need literature validation. If "
+                "it returns no/empty/insufficient results, escalate by reformulating into "
+                '"find and download papers about <expanded topic>". Do NOT use it to read a '
+                "specific repository or URL the user named — that goes to CoderAgent.",
     ),
     AgentSpec(
         name="TaskExecutorAgent",
@@ -73,8 +75,10 @@ ORCHESTRATOR_AGENTS: List[AgentSpec] = [
                     "workspace.",
         routing="when the task requires DOING engineering work: writing/running code, "
                 "shell/git operations, building or processing data, environment setup, or "
-                'any multi-step build/run no existing tool provides. Hallmark: "write code '
-                '/ run a script / clone a repo / assemble a dataset."',
+                "any multi-step build/run no existing tool provides. ALSO when the user "
+                "names a specific repository or URL to inspect — clone/read it here rather "
+                'than web-searching for it. Hallmark: "write code / run a script / clone '
+                'and read repo X / assemble a dataset."',
     ),
     AgentSpec(
         name="MedicalAgent",

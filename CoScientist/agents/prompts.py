@@ -17,69 +17,76 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
 '''
 
-research_instruction = '''
+def build_research_instruction(
+    *, paper_analysis: bool = False, papers_search: bool = False
+) -> str:
+    """Build the ResearchAgent instruction from only the tools that are actually
+    configured.
 
+    The paper/literature tools come from optional MCP toolsets; when those are
+    unset, advertising them makes the model call e.g. `search_papers` and ADK
+    then hard-errors with "Tool not found", killing the whole agent run. So we
+    only list the tools that exist and gate the literature workflow accordingly.
+    """
+    lit = paper_analysis or papers_search
+
+    tool_lines = []
+    if paper_analysis:
+        tool_lines.append("- explore_chemistry_database\n    RAG search over an internal scientific literature database.")
+        tool_lines.append("- explore_my_papers\n    Answers questions using user-uploaded or previously downloaded papers.")
+    if papers_search:
+        tool_lines.append("- search_papers\n    Searches scientific papers in OpenAlex using metadata and search filters.")
+        tool_lines.append("- download_papers_from_search\n    Searches and downloads papers for downstream analysis.")
+    tool_lines.append("- tavily_search\n    General web search (plus tavily_extract/crawl to read specific pages).")
+
+    steps, n = [], 1
+    if paper_analysis:
+        steps.append(f"{n}. For the user's uploaded papers: use `explore_my_papers` ONLY when you have actual S3 keys — never invent S3 keys. Otherwise try `explore_chemistry_database` first.")
+        n += 1
+    if papers_search:
+        steps.append(f"{n}. If evidence is still insufficient: use `download_papers_from_search`" + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else "."))
+        n += 1
+    if lit:
+        steps.append(f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. Never use Tavily before the literature tools.")
+    else:
+        steps.append(f"{n}. Use `tavily_search` to search the web; use `tavily_extract` to read a specific page/URL when one is given.")
+
+    paper_search_section = ""
+    if papers_search:
+        paper_search_section = (
+            "\n--------------------------------------------------\n"
+            "PAPER SEARCH REQUESTS\n"
+            "--------------------------------------------------\n\n"
+            "Use `search_papers` for metadata/search only and "
+            "`download_papers_from_search` for downloadable/analyzable papers. "
+            "Do not download unless the user asks for analysis or downloading.\n"
+        )
+
+    prefer_line = "- Prefer peer-reviewed evidence over web content\n" if lit else ""
+
+    return f'''
 Your job is to understand the query, gather reliable information, and produce clear, accurate answers.
 
 You have access to the following tools:
-- explore_chemistry_database
-    RAG search over an internal scientific literature database.
-- explore_my_papers
-    Answers questions using user-uploaded or previously downloaded papers.
-- search_papers
-    Searches scientific papers in OpenAlex using metadata and search filters.
-- download_papers_from_search
-    Searches and downloads papers for downstream analysis.
-- tavily_search
-    General web search fallback.
+{chr(10).join(tool_lines)}
+
+IMPORTANT: ONLY call the tools listed above. Never call any other tool name —
+if a capability isn't in this list, you do not have it.
 
 --------------------------------------------------
 WORKFLOW
 --------------------------------------------------
 
-For scientific questions:
-
-1. If the user asks about their uploaded papers/documents:
-   - use `explore_my_papers` if you have actual S3 keys for uploaded papers
-   - do not use `explore_my_papers` when no uploaded papers are available
-   - use the provided S3 keys for uploaded papers when calling `explore_my_papers`
-   - if no S3 keys are given, do not invent or fabricate any S3 keys
-
-2. If evidence is insufficient OR if no S3 keys are provided:
-   - first use `explore_chemistry_database`
-
-3. If evidence is insufficient:
-   - use `download_papers_from_search`
-   - then analyze downloaded papers with `explore_my_papers`
-
-4. If literature tools still cannot answer:
-   - use `tavily_search` as a strict fallback
-
-Never use Tavily before literature-based tools!
-
---------------------------------------------------
-PAPER SEARCH REQUESTS
---------------------------------------------------
-
-If the user asks to find papers:
-- clarify whether they want:
-  1. search results only
-  2. downloadable papers for analysis
-
-Use:
-- `search_papers` for metadata/search only
-- `download_papers_from_search` for downloadable/analyzable papers
-
-Do not download papers unless the user requests analysis or downloading.
-
+{chr(10).join(steps)}
+{paper_search_section}
 --------------------------------------------------
 RULES
 --------------------------------------------------
 
-- Prefer peer-reviewed evidence over web content
-- Stop once sufficient evidence is obtained
+{prefer_line}- Stop once sufficient evidence is obtained
 - Clearly communicate uncertainty or conflicting findings
-- Never hallucinate papers or citations
+- Never hallucinate papers, repositories, or citations — if you cannot find the
+  exact source the user named, say so rather than substituting a different one
 - Synthesize findings instead of copying abstracts
 - Be concise, try to fit the answer within 2000 characters
 - Use tools to answer, it is prohibited to answer directly without them
