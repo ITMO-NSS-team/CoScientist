@@ -4,9 +4,7 @@ from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.agent_tool import AgentTool
-from google.adk.tools import FunctionTool
-from google.genai import types
-from google.adk.planners import BasePlanner, BuiltInPlanner, PlanReActPlanner
+from google.adk.planners import PlanReActPlanner
 
 import litellm
 
@@ -23,7 +21,7 @@ from CoScientist.agents.custom_agents import WebToolsDeployerAgent
 from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model, med_agent_before_model
 
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, coder_toolset_instance
-from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
+from CoScientist.storage import ToolRanking, MCPRanking
 
 
 from CoScientist.hitl import HITLToolset
@@ -37,7 +35,7 @@ from CoScientist.logging import multi_agent_tracer
 
 from opik.integrations.adk import track_adk_agent_recursive
 
-from typing import Dict, Any, Optional
+from typing import Any
 
 
 settings = get_settings()

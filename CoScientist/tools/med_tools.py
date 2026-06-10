@@ -176,17 +176,16 @@ class MedToolset(BaseToolset):
 
         try:
             articles = await asyncio.to_thread(_fetch)
-            print(articles)
             return {
                 "status": "success",
                 "keyword": keyword,
                 "count": len(articles),
                 "articles": articles,
             }
-        except Exception:
+        except Exception as e:
             return {
-                "status": "failutre",
-                "error": 'Pubmed not reachable'
+                "status": "failure",
+                "error": f"PubMed not reachable: {e}",
             }
 
 
@@ -211,7 +210,6 @@ class MedToolset(BaseToolset):
         prompt = _PICO_PROMPT.format(title=title, abstract=abstract)
         try:
             result = await _llm_json(prompt)
-            print(result)
             return {"status": "success", "pico": result}
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -280,7 +278,6 @@ class MedToolset(BaseToolset):
                 }
 
             return {"status": "success", "taxonomy": taxonomy}
-            print(taxonomy)
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -309,6 +306,9 @@ class MedToolset(BaseToolset):
         Returns:
             Full medical analysis text from the VLM pipeline, including differential diagnosis.
         """
+        if tool_context is None:
+            return {"status": "error", "error": "No tool context available to load the artifact."}
+
         artifact = await tool_context.load_artifact(filename=artifact_id)
         if artifact is None:
             return {"status": "error", "error": f"Artifact '{artifact_id}' not found."}
@@ -334,7 +334,6 @@ class MedToolset(BaseToolset):
                 poll_resp = await client.get(_VLM_RESULT_URL, params={"task_id": task_id})
                 poll_resp.raise_for_status()
                 result = poll_resp.json()
-                print(result)
                 if result.get("status") == "ok":
                     return {
                         "status": "success",

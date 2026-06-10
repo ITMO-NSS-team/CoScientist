@@ -46,6 +46,7 @@ __all__ = [
     "hypotheses_agent",
     "research_agent",
     "fedot_agent",
+    "tool_retriever_agent",
     "task_execution_agent",
     'tool_websearcher_agent',
     "tool_agent",

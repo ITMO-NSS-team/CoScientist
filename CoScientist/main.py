@@ -50,7 +50,6 @@ class CoScientistManager:
 
         # HITL setup
         self._hitl_handler = hitl_handler
-        self._agents = None
 
 
     async def initialize(self):
@@ -110,7 +109,7 @@ class CoScientistManager:
                 if event.content and event.content.parts:
                     final_response = event.content.parts[0].text or ""
                 elif event.actions and event.actions.escalate:
-                    final_response = f"Escalation: {event.error_message or 'Unknown error'}"
+                    final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
 
 
         return final_response
