@@ -139,14 +139,25 @@ curl -X POST http://localhost:8002/ -H "Content-Type: application/json" -d '{
 
 ## 4. Adding a new agent
 
-Each agent is defined in its own module under `agents/` and the orchestrator's
-roster is driven by `agents/catalog.py`. The A2A layer then exposes each agent
-as its own server. Steps 1–2 are the normal (non-A2A) way to add an agent;
-steps 3–5 expose it over A2A.
+The `agents/` package is organised into subpackages:
 
-### Step 1 — Define the agent in its own module
+```
+agents/
+  common.py            # make_llm(), make_coder_llm(), agent_tools(), settings
+  catalog.py           # orchestrator's delegatable-agent registry
+  definitions/         # the agents themselves (one module each)
+  callbacks/           # tool_callbacks, critic, med_callbacks, research_callbacks
+  prompts/             # instructions.py (prompt strings) + builder.py
+```
 
-Create `agents/my_agent.py`:
+Each agent is defined in `agents/definitions/`, and the orchestrator's roster is
+driven by `agents/catalog.py`. Steps 1–2 are the normal (non-A2A) way to add an
+agent; steps 3–5 expose it over A2A.
+
+### Step 1 — Define the agent
+
+Add its prompt to `agents/prompts/instructions.py`, then create
+`agents/definitions/my_agent.py`:
 
 ```python
 from google.adk.agents.llm_agent import LlmAgent
@@ -166,21 +177,22 @@ __all__ = ["my_agent"]
 ```
 
 `agents/common.py` provides `make_llm()`, `make_coder_llm()`, `agent_tools()`
-and the shared settings so every agent shares one config load. Re-export it from
-`agents/__init__.py` if other in-process code imports it.
+and the shared settings so every agent shares one config load. Re-export the
+agent from `agents/definitions/__init__.py` and `agents/__init__.py` so callers
+can do `from CoScientist.agents import my_agent`.
 
 ### Step 2 — Register it in the catalog
 
 In `agents/catalog.py`, add an `AgentSpec` to `ORCHESTRATOR_AGENTS` (name MUST
-match the `LlmAgent`'s `name=`), and in `agents/orchestrator_agent.py` map the
-name to the instance in `_AGENT_INSTANCES`. The orchestrator prompt, the critic
-roster, and the attached tools are all rendered from the catalog — nothing is
-duplicated.
+match the `LlmAgent`'s `name=`), and in `agents/definitions/orchestrator_agent.py`
+map the name to the instance in `_AGENT_INSTANCES`. The orchestrator prompt, the
+critic roster, and the attached tools are all rendered from the catalog —
+nothing is duplicated.
 
 ```python
 # catalog.py
 AgentSpec(name="MyAgent", description="...", routing="when to pick it.")
-# orchestrator_agent.py
+# definitions/orchestrator_agent.py
 _AGENT_INSTANCES = { ..., "MyAgent": my_agent }
 ```
 
@@ -206,7 +218,7 @@ import uvicorn
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 from CoScientist.a2a.config import AGENT_PORTS, AGENT_URLS
 from CoScientist.a2a.server import make_a2a_app
-from CoScientist.agents.my_agent import my_agent
+from CoScientist.agents import my_agent
 
 PORT = AGENT_PORTS["my_agent"]
 _card = AgentCard(
@@ -233,7 +245,8 @@ edit to its tool list needed.
 That's it. Run `run_all`, then
 `python -m CoScientist.a2a.benchmark --agent my_agent --text "..."`.
 
-> **Note on imports:** each agent lives in its own module under `agents/`, but
+> **Note on imports:** each agent lives in its own module under
+> `agents/definitions/`, but
 > this is code organisation, not import-time isolation — the top-level
 > `CoScientist/__init__.py` eagerly imports the full agent tree, so every
 > server transitively loads all agents at startup.
