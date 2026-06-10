@@ -103,7 +103,20 @@ class OpenAlexClient:
         
         params["per-page"] = limit
 
-        return self.request_with_retry(endpoint="works", params=params).json()
+        response = self.request_with_retry(endpoint="works", params=params).json()
+
+        _keyword_filter_prefixes = ("title.search:", "title_and_abstract.search:", "fulltext.search:")
+        for next_prefix in ("title_and_abstract.search", "fulltext.search"):
+            if not (keywords and not response.get("results")):
+                break
+            logging.info("No results; retrying with %s.", next_prefix)
+            print("No results; retrying with %s.", next_prefix)
+            filters = [f for f in filters if not f.startswith(_keyword_filter_prefixes)]
+            filters.append(f"{next_prefix}:{keywords.replace(' ', '+')}")
+            params["filter"] = ",".join(filters)
+            response = self.request_with_retry(endpoint="works", params=params).json()
+
+        return response
 
     def search_entity(
         self,

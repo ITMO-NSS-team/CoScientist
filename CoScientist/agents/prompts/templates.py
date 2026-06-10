@@ -84,7 +84,11 @@ def research(ctx: PromptContext) -> str:
     if papers_search:
         steps.append(
             f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+        + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+        + " When calling `download_papers_from_search`, aim to find at least *10* "
+        "papers that might contain the answer. Choose keywords likely to "
+        "appear verbatim in the title or abstract of papers that directly "
+        "address the question."
         )
         n += 1
     if lit:
@@ -100,14 +104,14 @@ def research(ctx: PromptContext) -> str:
 
     paper_search_section = ""
     if papers_search:
-        paper_search_section = (
-            "\n--------------------------------------------------\n"
-            "PAPER SEARCH REQUESTS\n"
-            "--------------------------------------------------\n\n"
-            "Use `search_papers` for metadata/search only and "
-            "`download_papers_from_search` for downloadable/analyzable papers. "
-            "Do not download unless the user asks for analysis or downloading.\n"
-        )
+      paper_search_section = (
+        "\n--------------------------------------------------\n"
+        "PAPER SEARCH REQUESTS\n"
+        "--------------------------------------------------\n\n"
+        "Use `search_papers` for metadata/search only and "
+        "`download_papers_from_search` for downloadable/analyzable papers. "
+        "Do not download unless the user asks for analysis or downloading.\n"
+      )
 
     prefer_line = "- Prefer peer-reviewed evidence over web content\n" if lit else ""
 
