@@ -234,6 +234,13 @@ def _apply_revisions(
     Mutate the LlmResponse's function_call parts in place using the critic's
     revised args. Match by index — the critic is told to return one entry
     per proposed action in the same order.
+
+    The critic may only override the VALUES of args the orchestrator already
+    chose; it cannot drop existing keys or introduce new ones. Every sub-agent
+    is an ``AgentTool`` that requires a ``request`` key, so a naive replace
+    would let the critic strip it (KeyError at call time) or inject keys the
+    tool does not accept. We therefore keep the original args and apply only
+    overrides for keys that already exist.
     """
     for i, call in enumerate(pending):
         if i >= len(revised_calls):
@@ -246,12 +253,23 @@ def _apply_revisions(
         fc = getattr(part, "function_call", None)
         if fc is None:
             continue
+        original = dict(getattr(fc, "args", {}) or {})
+        overrides = {k: v for k, v in new_args.items() if k in original}
+        ignored = [k for k in new_args if k not in original]
+        if ignored:
+            print(
+                f"[Critic] ignoring revision keys not in original args for "
+                f"{call.get('tool')}: {ignored}"
+            )
+        safe_args = {**original, **overrides}
+        if safe_args == original:
+            continue
         try:
-            fc.args = new_args
-        except Exception:  
+            fc.args = safe_args
+        except Exception:
             try:
-                object.__setattr__(fc, "args", new_args)
-            except Exception:  
+                object.__setattr__(fc, "args", safe_args)
+            except Exception:
                 pass
 
 @track(name="pre_action_critique")
