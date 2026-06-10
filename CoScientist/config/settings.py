@@ -174,6 +174,10 @@ class CodeExecSettings(BaseModel):
     result_path: str = "/result"
     poll_interval: int = 5                # seconds between status polls
     default_timeout: int = 1800           # per-command timeout (s) for long jobs
+    exec_wait: int = 180                  # how long execute_bash waits inline for
+                                          # the command to finish before handing
+                                          # back a job_id — so the model gets the
+                                          # result in ONE call instead of polling
     check_wait: int = 15                  # how long check_job waits inline for a
                                           # running job before returning (saves
                                           # repeated LLM-driven polls)

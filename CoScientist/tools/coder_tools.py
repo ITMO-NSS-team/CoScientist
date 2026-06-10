@@ -245,14 +245,16 @@ class CoderToolset(BaseToolset):
         tool_context: ToolContext = None,
     ) -> Dict[str, Any]:
         """
-        Start a shell command in this session's isolated sandbox workspace.
+        Run a shell command in this session's isolated sandbox workspace and
+        return its result.
 
-        This is FIRE-AND-FORGET: the command is launched in the background and
-        this call returns immediately with a `job_id` and status "running". It
-        does NOT wait for the command to finish — so long jobs (a heavy
-        `git clone`, a build, a training run) never block you. Poll the job with
-        `check_job(job_id)` when you want its result. You may start several jobs
-        and let them run concurrently, then check each.
+        This WAITS for the command to finish and returns its stdout, stderr and
+        exit_code directly — for almost everything (git clone, pip install, a
+        script, data processing) you get the result in this single call and do
+        NOT need check_job. Only if the command is still running after an inline
+        wait (a genuinely long build or training run) does it return status
+        "running" with a `job_id`; call `check_job(job_id)` ONCE later for it —
+        never poll in a tight loop, that just wastes turns.
 
         Use this to run scripts, build and test code, run git commands (clone,
         commit, push), and process data.
@@ -271,8 +273,10 @@ class CoderToolset(BaseToolset):
                 (default: server's long-job timeout, ~30 min).
 
         Returns:
-            Dict with `job_id`, status ("running", or "blocked"/"denied" if the
-            command never started), workspace_id, and a hint to call check_job.
+            Dict with status ("success" | "error" | "timeout" | "blocked"),
+            stdout, stderr, exit_code, and workspace_id. For a long job that
+            outlives the inline wait: status "running" with a `job_id` to
+            check_job later.
         """
         blocked_by = _is_dangerous(command)
         if blocked_by:
@@ -293,18 +297,54 @@ class CoderToolset(BaseToolset):
         workspace_id = self._workspace_id(tool_context)
 
         if _CFG.url:
-            return await self._submit_remote(command, timeout, workspace_id)
-        return await self._submit_local(command, timeout, workspace_id, tool_context)
+            started = await self._submit_remote(command, timeout, workspace_id)
+        else:
+            started = await self._submit_local(command, timeout, workspace_id, tool_context)
+
+        job_id = started.get("job_id")
+        if not job_id or started.get("status") != "running":
+            return started  # blocked / denied / submit error — nothing to await
+
+        # Wait for the command INSIDE the tool (a Python poll loop, no LLM
+        # round-trips) so the common case returns its result in a single call.
+        # Only a job that outlives exec_wait comes back as "running" + job_id.
+        res = await self._await_job(job_id, _CFG.exec_wait)
+        if res.get("status") == "running":
+            res = dict(res)
+            res["job_id"] = job_id
+            res["message"] = (
+                f"Still running after {_CFG.exec_wait}s — this is a long job. "
+                f"Do other work and call check_job('{job_id}') once later; "
+                "do NOT poll it in a tight loop."
+            )
+        return res
+
+    async def _await_job(self, job_id: str, max_wait: float) -> Dict[str, Any]:
+        """Poll a job internally until it finishes or `max_wait` seconds elapse.
+
+        No LLM involvement — this is a Python loop. Returns the final result, or
+        the last "running" status if the job is still going when max_wait is hit.
+        """
+        elapsed = 0.0
+        interval = 0.25
+        while True:
+            res = await self._check_remote(job_id) if _CFG.url else self._check_local(job_id)
+            if res["status"] != "running" or elapsed >= max_wait:
+                return res
+            await asyncio.sleep(interval)
+            elapsed += interval
+            interval = min(interval * 1.5, 3.0)
 
     async def check_job(self, job_id: str, tool_context: ToolContext = None) -> Dict[str, Any]:
         """
-        Check the status and output of a job started by execute_bash.
+        Check a long job that execute_bash handed back as still "running".
 
-        Call this after execute_bash to get the command's result. It waits briefly
-        (a few seconds) for a still-running job to finish before returning, so you
-        usually get the final result in one call instead of polling repeatedly. If
-        the job is genuinely long and is still running when this returns, you'll
-        get status "running" — call check_job again to keep waiting.
+        You normally do NOT need this: execute_bash already waits for the command
+        and returns its result directly. Use check_job ONLY when execute_bash
+        returned status "running" with a job_id (a long build/training run). It
+        waits inline for the job to finish before returning; if it is still
+        running you get status "running" — call check_job again, but do not poll
+        in a tight loop.
 
         Args:
             job_id: The id returned by execute_bash.
@@ -313,18 +353,7 @@ class CoderToolset(BaseToolset):
             Dict with status ("running" | "success" | "error" | "timeout" |
             "blocked"), stdout, stderr, exit_code, and workspace_id.
         """
-        async def _poll() -> Dict[str, Any]:
-            return await self._check_remote(job_id) if _CFG.url else self._check_local(job_id)
-
-        elapsed = 0.0
-        interval = 0.25
-        while True:
-            res = await _poll()
-            if res["status"] != "running" or elapsed >= _CFG.check_wait:
-                return res
-            await asyncio.sleep(interval)
-            elapsed += interval
-            interval = min(interval * 1.5, 3.0)
+        return await self._await_job(job_id, _CFG.check_wait)
 
     # ── remote (code-exec server) ──────────────────────────────────────────────
 
