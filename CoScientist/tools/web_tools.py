@@ -17,7 +17,14 @@ settings = get_settings()
 
 websearch_toolset_instance = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
-        url=f"https://mcp.tavily.com/mcp/?tavilyApiKey={settings.services.tavily_api_key}"
+        url=f"https://mcp.tavily.com/mcp/?tavilyApiKey={settings.services.tavily_api_key}",
+        # Default ADK timeout is 5s — too short for Tavily MCP's list_tools /
+        # search cold-start latency ("Failed to get tools from MCP server:
+        # TimeoutError"). 90s is ample for the cold start, while bounding how
+        # long a genuinely stuck MCP call can hang the whole request (300s
+        # caused 5-minute hangs in batch runs).
+        timeout=90.0,
+        sse_read_timeout=120.0,
     ),
 )
 

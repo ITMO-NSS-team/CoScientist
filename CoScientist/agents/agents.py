@@ -46,6 +46,33 @@ litellm.api_key = settings.llm.openai_api_key
 hitl_enabled = settings.hitl.enabled
 hitl_handler=ConsoleHITLHandler() if hitl_enabled else None
 
+
+def provider_routing() -> Optional[dict]:
+    """OpenRouter provider-routing payload for `extra_body`, or None if disabled.
+
+    Pins the agent LLM to a known-good set of providers so a flaky provider in
+    OpenRouter's pool can't surface as an empty/`finish_reason=error` response.
+    """
+    provs = settings.llm.pinned_providers
+    if not provs:
+        return None
+    return {"provider": {"only": list(provs),
+                         "allow_fallbacks": settings.llm.provider_allow_fallbacks}}
+
+
+def make_llm(model: str = MODEL) -> LiteLlm:
+    """Build a LiteLlm for the agents with provider pinning + retries applied.
+
+    `num_retries` makes litellm retry transient OpenRouter errors (notably 429
+    upstream rate-limits) with exponential backoff, so a momentary rate-limit
+    doesn't kill the whole request.
+    """
+    routing = provider_routing()
+    kwargs: Dict[str, Any] = {"num_retries": 4, "timeout": 120}
+    if routing:
+        kwargs["extra_body"] = routing
+    return LiteLlm(model=model, **kwargs)
+
 def _agent_tools(base_tools: Any, hitl_tools: bool = False) -> list:
     """Helper to add HITL tools directly if hitl_tools=True and global hitl is enabled."""
     if isinstance(base_tools, list):
@@ -59,7 +86,7 @@ def _agent_tools(base_tools: Any, hitl_tools: bool = False) -> list:
 
 hypotheses_agent = LlmAgent(
     name="HypothesesAgent",
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=hypotheses_instruction,
     description="Agent to generate scientific hypotheses and ideas for given task",
     output_key="hypotheses",
@@ -70,7 +97,7 @@ hypotheses_agent = LlmAgent(
 
 research_agent = LlmAgent(
     name="ResearchAgent",
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=research_instruction,
     description="Agent to answer questions and knowledge mining using Literature and Web Search.",
     output_key="search_results",
@@ -83,7 +110,7 @@ research_agent = LlmAgent(
 
 tool_retriever_agent = LlmAgent(
     name='ToolRetrieverAgent',
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=tool_retriever_instruction,
     description="Agent to retrieve relevant MCP servers from RAG database of MCP tools for given task.",
     tools=retrieval_toolset_instance,
@@ -92,7 +119,7 @@ tool_retriever_agent = LlmAgent(
 
 tool_reranker_agent = LlmAgent(
     name='ToolReranker',
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=tool_reranker_instruction,
     description="Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.",
     output_schema=ToolRanking,
@@ -109,7 +136,7 @@ local_tools_extractor = SequentialAgent(
 
 tool_websearcher_agent = LlmAgent(
     name='ToolWebSearcherAgent',
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=tool_websearcher_instruction,
     description="Agent to web-search relevant MCP servers from public web storages.",
     # output_schema=RetrievalFinalResult,
@@ -125,7 +152,7 @@ tool_searcher = ParallelAgent(
 
 tool_fullset_reranker_agent = LlmAgent(
     name='FullSetToolReranker',
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=tool_scoring_instruction,
     description="Agent to score found web MCP servers given already available local MCP servers for given task.",
     output_schema=MCPRanking,
@@ -147,7 +174,7 @@ tool_agent = SequentialAgent(name='ToolPreparerAgent',
 
 fedot_agent = LlmAgent(
     name="ExperimentAgent",
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=fedot_instruction,
     description="Agent to invoke MAS for solving given task. Uses MCP tools",
     output_key="fedot_results",
@@ -166,7 +193,7 @@ task_execution_agent = SequentialAgent(
 
 medical_agent = LlmAgent(
     name="MedicalAgent",
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=medical_instruction,
     description="Agent for medical and clinical questions: PubMed literature search, PICO extraction, study taxonomy, and DICOM image analysis.",
     output_key="medical_results",
@@ -176,16 +203,13 @@ medical_agent = LlmAgent(
 
 #------------------------------------------------------------------
 
-planner = PlanReActPlanner()
-
 planner_agent = SessionAgent(
     name="PlannerAgent",
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     instruction=planner_instruction,
     description="Generates a roadmap for solving the task",
     output_key="planner_roadmap",
     plan_file_path="roadmap.txt",
-    planner=planner,
     hitl_handler=hitl_handler,
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
@@ -193,7 +217,7 @@ planner_agent = SessionAgent(
 
 orchestrator_agent = LlmAgent(
     name="OrchestratorAgent",
-    model=LiteLlm(model=MODEL),
+    model=make_llm(),
     #planner=planner,
     instruction=orchestrator_instruction,
     description="Main Orchestrator Agent",

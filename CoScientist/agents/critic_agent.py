@@ -49,6 +49,15 @@ _settings = get_settings()
 _CRITIC_MODEL = _settings.llm.main_model
 
 
+def _provider_routing() -> Optional[Dict[str, Any]]:
+    """OpenRouter provider-routing for the critic LLM, mirroring the agents."""
+    provs = _settings.llm.pinned_providers
+    if not provs:
+        return None
+    return {"provider": {"only": list(provs),
+                         "allow_fallbacks": _settings.llm.provider_allow_fallbacks}}
+
+
 # ---------------------------------------------------------------------------
 # Verdict enums
 # ---------------------------------------------------------------------------
@@ -208,6 +217,7 @@ def _format_pending_calls(calls: List[Dict[str, Any]]) -> str:
 def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
     """Returns parsed JSON dict; on any failure returns {} (permissive default)."""
     try:
+        routing = _provider_routing()
         resp = litellm.completion(
             model=_CRITIC_MODEL,
             messages=[
@@ -216,6 +226,9 @@ def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
+            num_retries=4,
+            timeout=120,
+            **({"extra_body": routing} if routing else {}),
         )
         raw = resp["choices"][0]["message"]["content"]
         return json.loads(raw)

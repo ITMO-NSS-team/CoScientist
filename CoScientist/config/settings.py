@@ -19,6 +19,15 @@ ROOT_DIR = Path(__file__).parent.parent.absolute()
 class LLMSettings(BaseModel):
     allowed_providers: List[str] = ["google-vertex", "azure"]
 
+    # OpenRouter provider routing for the agentic LLM (main_model). gpt-oss-120b
+    # is served by many providers on OpenRouter; some intermittently return
+    # finish_reason='error' with empty content, which surfaces as an empty agent
+    # response (e.g. a blank PlannerAgent roadmap). Restrict routing to a
+    # known-good set; fallbacks stay enabled but only within this set. Set to an
+    # empty list to disable pinning and use OpenRouter's default routing.
+    pinned_providers: List[str] = ["deepinfra", "groq", "together", "fireworks"]
+    provider_allow_fallbacks: bool = True
+
     service_key: Optional[str] = None
     openai_api_key: Optional[str] = None
 
