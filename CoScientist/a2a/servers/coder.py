@@ -6,6 +6,12 @@ import os
 # calls. Override CODER_WORKSPACE_ID to isolate concurrent runs.
 os.environ.setdefault("CODER_WORKSPACE_ID", "a2a_shared")
 
+# Fail fast on a stalled git clone/fetch (flaky network) instead of blocking for
+# minutes: abort if the transfer stays under ~1 KB/s for 20s. The agent then
+# gets a clear error and can retry, rather than appearing hung.
+os.environ.setdefault("GIT_HTTP_LOW_SPEED_LIMIT", "1000")
+os.environ.setdefault("GIT_HTTP_LOW_SPEED_TIME", "20")
+
 import uvicorn
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 

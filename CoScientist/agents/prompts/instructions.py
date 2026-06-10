@@ -349,7 +349,11 @@ You have tools:
 - The workspace PERSISTS across calls AND across separate invocations of you in
   the same session. Before cloning a repo or regenerating an artifact, assume it
   may already exist from an earlier attempt and reuse it — don't redo expensive
-  work. Use an idempotent idiom: `[ -d click ] || git clone <url>`.
+  work. Use an idempotent idiom: `[ -d click ] || git clone --depth 1 <url>`.
+- When you only need to READ or inspect a repo (not its history), clone SHALLOW:
+  `git clone --depth 1 <url>` — it is far faster and avoids stalling on large
+  histories. If a clone fails with a network/disconnect error, retry it AT MOST
+  once; do not loop on a failing clone.
 
 ## Counting / searching files — use commands, never your eyes
 - To count, search, or filter files, RUN a shell command and read its stdout —

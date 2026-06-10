@@ -38,6 +38,9 @@ from CoScientist.a2a.config import AGENT_PORTS
 
 A2A_HOST = "127.0.0.1"
 
+# Print a "still working" line if no stream event arrives for this many seconds.
+_HEARTBEAT_SECS = 15.0
+
 # ── ANSI colors ──────────────────────────────────────────────────────────────
 DIM = "\033[2m"
 BOLD = "\033[1m"
@@ -157,23 +160,68 @@ async def _stream_call(client: httpx.AsyncClient, url: str, text: str, timeout: 
         headers={"Accept": "text/event-stream"}, timeout=timeout,
     ) as resp:
         resp.raise_for_status()
-        async for line in resp.aiter_lines():
-            line = line.strip()
-            if not line or not line.startswith("data:"):
-                continue
-            data = line[len("data:"):].strip()
+        # A background task reads SSE lines into a queue; the main loop pulls
+        # with a short timeout so it can emit a heartbeat when the stream goes
+        # quiet — over A2A a delegated sub-agent's internal steps don't reach this
+        # stream, so a long CoderAgent/Research call would otherwise look frozen.
+        # (We can't wrap aiter_lines().__anext__() in wait_for directly: a timeout
+        # cancels the pending read and corrupts the httpx line iterator.)
+        # Silence is measured since the last RENDERED event, so SSE keep-alive
+        # pings (~every 15s) don't reset the timer.
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def _reader() -> None:
             try:
-                envelope = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if "error" in envelope:
-                print(f"{RED}✖ error: {json.dumps(envelope['error'])}{RESET}")
-                continue
-            result = envelope.get("result")
-            if result is None:
-                continue
-            n_events += 1
-            _handle_stream_event(result, t0)
+                async for ln in resp.aiter_lines():
+                    await queue.put(("line", ln))
+            except Exception as exc:  # noqa: BLE001
+                await queue.put(("err", exc))
+            finally:
+                await queue.put(("end", None))
+
+        reader = asyncio.create_task(_reader())
+        last_event = time.perf_counter()
+        last_beat = last_event
+        try:
+            while True:
+                try:
+                    kind, payload = await asyncio.wait_for(queue.get(), timeout=4.0)
+                except asyncio.TimeoutError:
+                    kind, payload = "tick", None
+                now = time.perf_counter()
+                if now - last_event >= _HEARTBEAT_SECS and now - last_beat >= _HEARTBEAT_SECS:
+                    print(
+                        f"{DIM}… still working ({now - t0:.0f}s; a delegated agent is busy — "
+                        f"watch the run_all console for its live steps){RESET}",
+                        flush=True,
+                    )
+                    last_beat = now
+                if kind in ("tick",):
+                    continue
+                if kind == "end":
+                    break
+                if kind == "err":
+                    print(f"{RED}✖ stream error: {payload}{RESET}")
+                    break
+                line = payload.strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                try:
+                    envelope = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if "error" in envelope:
+                    print(f"{RED}✖ error: {json.dumps(envelope['error'])}{RESET}")
+                    continue
+                result = envelope.get("result")
+                if result is None:
+                    continue
+                n_events += 1
+                last_event = now
+                _handle_stream_event(result, t0)
+        finally:
+            reader.cancel()
     elapsed = time.perf_counter() - t0
     print(f"\n{DIM}── {n_events} events in {elapsed:.2f}s ──{RESET}")
     return elapsed
