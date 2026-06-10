@@ -110,6 +110,18 @@ python -m CoScientist.a2a.benchmark --agent research \
 
 Traces also appear in the **Opik dashboard** under project `adk-coscientist`.
 
+**Per-agent inner activity.** Each server logs its agent's thoughts, tool calls,
+and tool results to its own stdout (aggregated in the `run_all` console),
+labeled by agent name — so when the orchestrator delegates to e.g. `CoderAgent`
+you see the coder's own `execute_bash`/`check_job` calls, not just the final
+result that comes back over A2A. The benchmark client only streams the agent it
+hits directly; watch the `run_all` console for the full picture. Disable with
+`A2A_LOG_EVENTS=0`.
+
+**Stopping the stack.** Ctrl+C (SIGINT/SIGTERM) stops all servers gracefully;
+a second Ctrl+C forces an immediate exit. An in-flight request can't block
+shutdown past `A2A_SHUTDOWN_TIMEOUT` seconds (default 8).
+
 ### Raw protocol check
 
 ```bash

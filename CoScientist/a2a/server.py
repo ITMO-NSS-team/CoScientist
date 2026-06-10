@@ -86,11 +86,14 @@ def make_a2a_app(
         A FastAPI application implementing the A2A JSON-RPC protocol.
     """
     _attach_opik_tracer(agent, app_name)
+    from CoScientist.a2a.event_logger import EventLoggerPlugin
+
     runner = Runner(
         agent=agent,
         app_name=app_name,
         session_service=session_service or InMemorySessionService(),
         artifact_service=InMemoryArtifactService(),
+        plugins=[EventLoggerPlugin()],
     )
     executor = A2aAgentExecutor(runner=runner)
     handler = DefaultRequestHandler(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 
 import uvicorn
@@ -58,13 +59,17 @@ def _build_orchestrator_app():
     return make_a2a_app(orchestrator_a2a_agent, card, "orchestrator")
 
 
+# How long graceful shutdown waits for an in-flight request (e.g. a long
+# orchestrator LLM chain) before the serve loop stops anyway.
+_SHUTDOWN_TIMEOUT = int(os.getenv("A2A_SHUTDOWN_TIMEOUT", "8"))
+
+
 def _make_server(app, port: int) -> uvicorn.Server:
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
-    server = uvicorn.Server(config)
-    # We install a single shared signal handler below, so disable uvicorn's
-    # per-server handlers (six servers each grabbing SIGINT shut down messily).
-    server.config.install_signal_handlers = False
-    return server
+    config.install_signal_handlers = False  # one shared handler is installed below
+    # Don't let a long in-flight request block Ctrl+C forever.
+    config.timeout_graceful_shutdown = _SHUTDOWN_TIMEOUT
+    return uvicorn.Server(config)
 
 
 async def main() -> None:
@@ -76,13 +81,25 @@ async def main() -> None:
 
     servers = [_make_server(app, port) for _, app, port in specs]
 
-    # One shared shutdown path: signal all servers to exit gracefully.
+    # Shared shutdown path: first Ctrl+C asks every server to stop gracefully;
+    # a second one forces an immediate exit (skips waiting for in-flight work).
     loop = asyncio.get_running_loop()
+    _signalled = {"n": 0}
 
     def _request_shutdown() -> None:
-        logger.info("Shutdown requested; stopping all A2A servers...")
-        for server in servers:
-            server.should_exit = True
+        _signalled["n"] += 1
+        if _signalled["n"] == 1:
+            logger.info(
+                "Shutdown requested; stopping all A2A servers "
+                "(Ctrl+C again to force immediate exit)..."
+            )
+            for server in servers:
+                server.should_exit = True
+        else:
+            logger.info("Forcing immediate shutdown...")
+            for server in servers:
+                server.should_exit = True
+                server.force_exit = True
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
