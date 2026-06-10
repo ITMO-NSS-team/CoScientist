@@ -4,7 +4,7 @@ from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
 from CoScientist.a2a.config import AGENT_PORTS, AGENT_URLS
 from CoScientist.a2a.server import make_a2a_app
-from CoScientist.agents.task_execution_agent import task_execution_agent
+from CoScientist.agents import task_execution_agent
 
 PORT = AGENT_PORTS["task_execution"]
 

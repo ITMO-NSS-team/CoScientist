@@ -19,7 +19,7 @@ from CoScientist.agents.callbacks import (
     before_tool_reranker_model,
 )
 from CoScientist.agents.common import agent_tools, make_llm
-from CoScientist.agents.custom_agents import WebToolsDeployerAgent
+from CoScientist.agents.definitions.custom_agents import WebToolsDeployerAgent
 from CoScientist.agents.prompts import (
     fedot_instruction,
     tool_reranker_instruction,

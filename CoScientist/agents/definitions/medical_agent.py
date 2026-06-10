@@ -2,7 +2,7 @@
 from google.adk.agents.llm_agent import LlmAgent
 
 from CoScientist.agents.common import make_llm
-from CoScientist.agents.med_callbacks import med_agent_before_model
+from CoScientist.agents.callbacks import med_agent_before_model
 from CoScientist.agents.prompts import medical_instruction
 from CoScientist.tools import med_toolset_instance
 

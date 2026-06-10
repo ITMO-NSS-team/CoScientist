@@ -4,7 +4,7 @@ from google.adk.agents.llm_agent import LlmAgent
 from CoScientist.agents.callbacks import print_research_agent_tool_call
 from CoScientist.agents.common import agent_tools, make_llm
 from CoScientist.agents.prompts import build_research_instruction
-from CoScientist.agents.research_callbacks import papers_agent_before_model
+from CoScientist.agents.callbacks import papers_agent_before_model
 from CoScientist.tools import (
     paper_analysis_toolset_instance,
     papers_search_toolset_instance,

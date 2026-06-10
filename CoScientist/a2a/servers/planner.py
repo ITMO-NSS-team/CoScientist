@@ -4,7 +4,7 @@ from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
 from CoScientist.a2a.config import AGENT_PORTS, AGENT_URLS
 from CoScientist.a2a.server import make_a2a_app
-from CoScientist.agents.planner_agent import planner_agent
+from CoScientist.agents import planner_agent
 
 PORT = AGENT_PORTS["planner"]
 

@@ -20,7 +20,7 @@ from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.agents import orchestrator_agent
-from CoScientist.agents.research_callbacks import cleanup_uploaded_papers
+from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl import (
     AbstractHITLHandler,
     HITLRequest,

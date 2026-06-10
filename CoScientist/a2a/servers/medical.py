@@ -4,7 +4,7 @@ from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
 from CoScientist.a2a.config import AGENT_PORTS, AGENT_URLS
 from CoScientist.a2a.server import make_a2a_app
-from CoScientist.agents.medical_agent import medical_agent
+from CoScientist.agents import medical_agent
 
 PORT = AGENT_PORTS["medical"]
 

@@ -1,6 +1,6 @@
 """Instructions for agents"""
 
-from CoScientist.agents.prompt_builder import render_template
+from CoScientist.agents.prompts.builder import render_template
 from CoScientist.agents import catalog
 
 hypotheses_instruction = '''

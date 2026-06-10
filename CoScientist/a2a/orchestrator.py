@@ -12,8 +12,8 @@ from google.adk.tools.agent_tool import AgentTool
 
 from CoScientist.a2a.config import AGENT_CARD_URLS
 from CoScientist.agents import catalog
-from CoScientist.agents.critic_agent import pre_action_critique
-from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model
+from CoScientist.agents.callbacks import pre_action_critique
+from CoScientist.agents.callbacks import before_model_modifier as med_before_model
 from CoScientist.agents.prompts import build_orchestrator_instruction
 from CoScientist.config import get_settings
 

@@ -12,17 +12,17 @@ from google.adk.agents.llm_agent import LlmAgent
 from google.adk.tools.agent_tool import AgentTool
 
 from CoScientist.agents import catalog
-from CoScientist.agents.coder_agent import coder_agent
+from CoScientist.agents.definitions.coder_agent import coder_agent
 from CoScientist.agents.common import agent_tools, make_llm
 # post_action_critique is intentionally not wired (after_tool_callback disabled below).
-from CoScientist.agents.critic_agent import pre_action_critique
-from CoScientist.agents.hypotheses_agent import hypotheses_agent
-from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model
-from CoScientist.agents.medical_agent import medical_agent
-from CoScientist.agents.planner_agent import planner_agent
+from CoScientist.agents.callbacks import pre_action_critique
+from CoScientist.agents.definitions.hypotheses_agent import hypotheses_agent
+from CoScientist.agents.callbacks import before_model_modifier as med_before_model
+from CoScientist.agents.definitions.medical_agent import medical_agent
+from CoScientist.agents.definitions.planner_agent import planner_agent
 from CoScientist.agents.prompts import build_orchestrator_instruction
-from CoScientist.agents.research_agent import research_agent
-from CoScientist.agents.task_execution_agent import task_execution_agent
+from CoScientist.agents.definitions.research_agent import research_agent
+from CoScientist.agents.definitions.task_execution_agent import task_execution_agent
 from CoScientist.logging import multi_agent_tracer
 from opik.integrations.adk import track_adk_agent_recursive
 
