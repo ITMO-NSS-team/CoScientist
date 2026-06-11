@@ -1,3 +1,6 @@
+
+from CoScientist.agents.prompts import coder_instruction
+from CoScientist.agents.coder_agent import run_openhands_sandbox
 from google.adk.agents.sequential_agent import SequentialAgent
 from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.llm_agent import LlmAgent
@@ -256,7 +259,14 @@ coder_agent = LlmAgent(
 )
 
 #------------------------------------------------------------------
-
+coder_agent = LlmAgent(
+    name="CoderAgent",
+    model=LiteLlm(model=MODEL),
+    instruction=coder_instruction,
+    description="Agent for writing and executing code. Has access to workspace",
+    output_key="coder_results",
+    tools=_agent_tools(run_openhands_sandbox),
+)
 
 planner_agent = SessionAgent(
     name="PlannerAgent",

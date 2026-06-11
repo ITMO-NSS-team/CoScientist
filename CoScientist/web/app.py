@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 def create_app() -> FastAPI:
+    os.environ["COSCIENTIST_WEB_MODE"] = "true"
     app = FastAPI(
         title="CoScientist Web UI",
         version="1.0.0",

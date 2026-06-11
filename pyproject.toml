@@ -9,6 +9,10 @@ dependencies = [
     "google-adk[extensions]>=2.1.0",
     "langchain-text-splitters>=1.1.2",
     "metapub>=0.7.4",
+    "openhands-agent-server>=1.24.0",
+    "openhands-sdk>=1.24.0",
+    "openhands-tools>=1.24.0",
+    "openhands-workspace>=1.24.0",
     "opik>=2.0.49",
     "rag-tools",
     "rank-bm25>=0.2.2",
@@ -16,7 +20,7 @@ dependencies = [
 
 [tool.uv.sources]
 rag-tools = { git = "https://github.com/fiestaxxl/rag_tools.git" }
-fedotmas = { git = "ssh://git@github.com/ITMO-NSS-team/FEDOT.MAS.git", subdirectory = "packages/fedotmas" }
+fedotmas = { git = "https://github.com//ITMO-NSS-team/FEDOT.MAS.git", subdirectory = "packages/fedotmas" }
 
 [tool.setuptools]
 packages = ["CoScientist"]
