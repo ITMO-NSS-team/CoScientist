@@ -75,8 +75,14 @@ backend-unavailable, the timeout-guarded probe, and the enriched index represent
 - [ ] Timeout-guarded reachability probe; threshold calibrated vs distractors; bench on dataset_S (F015h).
 - [ ] **Sufficiency must cover ASSETS, not just tools/servers (from the false-success trace, F015h):**
       a parameterized step needs a real **case / dataset / model** to exist (e.g. a generator's
-      `case=…`). A tool being present ≠ the asset it needs is present. List the tool's real cases
-      (e.g. `list_generative_train_cases`) and treat a missing/assumed asset as a gap.
+      `case=…`). A tool being present ≠ the asset it needs is present. Two sources for the real
+      options: (a) the tool **description** — already visible at plan time via `list_available_tools`
+      (`retrieval_tools.py` returns `{name, server_id, description, score}`), **but truncated to 200
+      chars** (`retrieval_tools.py:216`) so a long case list is cut → F015c's inventory index must
+      carry the **full, untruncated** description; (b) the **live** list (e.g.
+      `list_generative_train_cases`) which is only reachable by *executing* the tool
+      (orchestrator → TaskExecutorAgent → FEDOT.MAS; the orchestrator can't call MCP tools directly).
+      Treat a missing/assumed asset (only existing-asset *selectors*, not free caller-defined args) as a gap.
 - [ ] **Semantic bridging via Research/Hypotheses (no hardcoded maps):** when a request names a
       target the tools don't index by (GSK-3β is a *protein*; cases are by *disease*, e.g. Alzheimer),
       resolve the link by delegating to Research (literature) / Hypotheses — never hardcode

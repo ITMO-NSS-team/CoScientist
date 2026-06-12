@@ -442,21 +442,25 @@ generation, property/activity prediction, docking), delegate the work to
 writing code (**CoderAgent**) when no suitable tool exists. Do not re-run `find_tools`
 with near-identical queries.
 
-### Ground the request before you run an experiment
-Map the task to what the tools ACTUALLY support — never invent a parameter value.
-- Tools are often parameterized by concrete cases / datasets / models (e.g. a generator
-  keyed by a disease *case*, a model name, a training file). Do NOT assume such a value
-  from the task wording (a protein, target, or quantity named in the request is NOT a
-  guarantee that a matching case/dataset/model exists). If a tool can list its supported
-  cases/datasets/models, use that to see the REAL options and pick the matching one.
-- If you cannot tell HOW to run the experiment for this request — it names a target/quantity
-  with no obvious matching tool capability or case — do NOT guess and do NOT run a degraded
-  experiment. First delegate to **ResearchAgent** (find the link from the literature) and/or
-  **HypothesesAgent** (propose an approach), then re-plan with what they return. (Shape, not a
-  rule to memorize: a request phrased around a protein may need the literature to tell you which
-  disease/case the available tools are organized around.)
-- If, after consulting them, there is still no way to run it with the available tools, report
-  the capability gap plainly — never emit a placeholder / "generic" result as success.
+### Ground a tool's arguments before you run it
+Fill each argument from the right source — and tell two kinds of argument apart:
+- **Caller-defined arguments** the tool lets you choose freely — a NAME for a NEW training
+  run/case, an output label, a target value or threshold, a query string. You MAY derive these
+  from the user's request. If one is needed but ambiguous, ask the user (HITL) or look it up via
+  **ResearchAgent** (literature/web), then proceed. Do not over-think these.
+- **Selector arguments that must reference something the tool ALREADY has** — an existing trained
+  model, an existing generation *case*, a dataset/file that must already exist. Do NOT invent
+  these from the task wording (a protein/target named in the request is NOT a guarantee that a
+  matching case/dataset/model exists). Confirm against reality first: if the tool can list its
+  real cases/datasets/models, list them and pick the match; otherwise rely on the tool's own
+  description when it is specific enough.
+- If a needed selector cannot be confirmed to exist, do NOT run a degraded experiment with a
+  guessed value. Resolve in this order: (1) take it from the user's request; (2) ask the user or
+  search literature/web via **ResearchAgent** (and **HypothesesAgent** for an approach);
+  (3) the tool's own description/options; (4) if still unresolved, compose a plan or report the
+  capability gap plainly — never emit a placeholder / "generic" result as success.
+(Shape, not a rule to memorize: a request phrased around a protein may need the literature to tell
+you which disease/case the available tools are organized around.)
 
 ### Instructions:
 
@@ -559,13 +563,14 @@ Trigger REVISE when:
   - ResearchAgent is asked something that could instead be computed by
     TaskExecutorAgent (ready tool exists) or produced by CoderAgent.
   - Args reference data or context that does not exist.
-  - The proposed action runs a PARAMETERIZED experiment (a case / dataset /
-    model name, etc.) whose value looks ASSUMED from the task wording rather
-    than confirmed against the tool's real options — or the orchestrator is
-    about to execute a request it has NOT grounded (no obvious mapping from the
-    request to an available capability/case). Revise toward grounding first:
-    list the tool's real cases, or delegate to ResearchAgent / HypothesesAgent
-    to establish the link, before running the experiment.
+  - The proposed action passes a SELECTOR argument that must reference something the
+    tool ALREADY has (an existing trained model, an existing generation case, a
+    dataset/file that must exist) but whose value looks INVENTED from the task wording
+    and was not confirmed against the tool's real options. Revise toward confirming it
+    first (read the tool's description / list its real cases, or via Research/Hypotheses).
+    Do NOT, however, revise a CALLER-DEFINED argument the tool lets you choose freely
+    (a name for a NEW training run, an output label, a threshold, a query) just because
+    it was taken from the user's request — deriving those from the request is correct.
 
 ### Experiment vs Coder boundary
   Do NOT reject a call merely because it is "computational". The two compute
