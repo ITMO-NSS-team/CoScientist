@@ -8,12 +8,14 @@ from collections import Counter
 sys.path.insert(0, "scripts/opik_eval")
 from opik_client import get_client          # noqa: E402
 from metrics import search_spans_retry      # noqa: E402
+from trace_locator import resolve_traces    # noqa: E402
 
 
 def analyze(prefix: str, limit: int = 40):
     client, project = get_client()
-    traces = client.search_traces(project_name=project, max_results=limit)
-    sel = [t for t in traces if str(getattr(t, "thread_id", "") or "").startswith(prefix)]
+    # Server-side thread_id filter — reliable no matter how many other traces exist
+    # (the old "fetch last N, filter on client" dropped runs once N was exceeded).
+    sel = resolve_traces(prefix=prefix, client=client, project=project, limit=limit)
     rows = []
     for t in sel:
         spans = search_spans_retry(client, project, t.id, max_results=700)

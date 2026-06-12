@@ -70,6 +70,22 @@ resolve a local papers dir and clean up uploaded papers per user/session
   3-paper answer); direct `McpToolset.get_tools()` listed the tools; memories
   [[itmo-mcp-endpoints]], [[opik-tracing-access]].
 - **Next:** see the `has_pdf` TODO; chem DB needs populating for `explore_chemistry_database`.
+### F003.A4 — ResearchAgent STOP / anti-thrash instruction · 2026-06-13 · outcome: success
+- **Method:** ResearchAgent ran away INSIDE its own loop on a CRISPR literature query — the
+  orchestrator delegated to it ONCE, then ResearchAgent called `explore_chemistry_database`
+  **6×** (always empty, "Could not extract any data from DB") plus repeated
+  `search_papers`/`download`, never finalizing → hit the 360s cap. The orchestrator's pre/post
+  critic governs only the orchestrator's delegations, NOT a sub-agent's internal loop, and
+  there is no `max_iterations`. Fix: STOP rules in `research_instruction` — (a) call
+  `explore_chemistry_database` at most ONCE; if empty, do NOT re-call it this task; (b)
+  anti-loop: never call the same tool >2× with similar input; once `search_papers`/`download`/
+  `explore_my_papers` give enough, STOP and write the answer.
+- **Result:** ResearchAgent should stop thrashing the empty chem DB and finalize sooner.
+- **Evidence:** Opik trace `019ebd28` (1 delegation → 6× empty `explore_chemistry_database`
+  + re-search → timeout); fix in `prompts.py:research_instruction` ("STOP CONDITION" rules).
+  See [[opik-tracing-access]]. Verification (re-run) in flight.
+- **Next:** WHY the chem DB is empty (`explore_chemistry_database` returns no data) is F007/F011
+  (DB population) — separate from this anti-thrash guard.
 
 ## ✅ TODO
 - [ ] No eval of retrieval quality / escalation success — add a small QA set.

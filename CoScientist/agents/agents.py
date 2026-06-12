@@ -306,11 +306,12 @@ _orchestrator_subagents = [
 orchestrator_agent = LlmAgent(
     name="OrchestratorAgent",
     model=make_llm(),
+    planner=PlanReActPlanner(),  # ReAct plan→act→replan scaffold (chosen over the separate PlannerAgent; A/B F000.A4)
     instruction=build_orchestrator_instruction(),
     description="Main Orchestrator Agent",
     before_model_callback=upload_intake_before_model,
     after_model_callback=pre_action_critique,
-    # after_tool_callback=post_action_critique,
+    # after_tool_callback=post_action_critique,  # finalize-critic: REJECTED (A/B doubled LLM calls → timeouts, F000.A4)
     tools=_agent_tools([FunctionTool(list_available_tools), FunctionTool(list_server_tools)] + _orchestrator_subagents, hitl_tools=False),
 )
 

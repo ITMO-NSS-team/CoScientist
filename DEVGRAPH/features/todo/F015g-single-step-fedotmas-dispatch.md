@@ -83,6 +83,15 @@ subset** — replacing the current single overloaded query (the F014 runaway roo
   `run_params`/`required_tools` — diff actual-vs-declared after each step and flag mismatch.
 - **Empty-response false "completed":** back the success signal with deterministic
   `expected_artifacts` checks (F014's empty-response mode).
+- **⚠ Worker paraphrase DROPS the S3 artifact link & HALLUCINATES (CONFIRMED, F010.A3):** the
+  `molecule_generator` sub-agent returned 15 fabricated SMILES while the real `generate_mols`
+  result was a presigned S3 CSV URL (`results_presigned_url`) that ADK never persisted — `output_key`
+  holds only the sub-agent's `part.text` (`llm_agent.py:837-851`), not the raw `function_response`.
+  Concrete proof that (1) success MUST be `expected_artifacts` materialized in S3, NOT the
+  sub-agent's text, and (2) F015g's dispatch must CAPTURE the tool's structured S3 result
+  (`skip_summarization` / `after_tool_callback` lifting `results_presigned_url` into state) rather
+  than trust the LLM paraphrase. The experiments orchestrator then downloads the CSV (or via `vault`
+  MCP) to judge completion.
 - **Overlap with F006:** the existing critic already mutates/blocks tool calls — decide whether
   F015g's guards live in / replace the F006 path or sit alongside (avoid two competing critics).
 
@@ -93,6 +102,22 @@ subset** — replacing the current single overloaded query (the F014 runaway roo
 - [ ] Config-verify safety net: `generate_config` → check per-worker `tools` covers the step's
       `required_tools`' servers → patch/retry → `build_and_run`.
 - [ ] Non-LLM scheduler (placeholder→S3, one ready step at a time).
+- [ ] **Capture the tool's structured S3 result, not the sub-agent paraphrase (F010.A3):** lift
+      `results_presigned_url`/`results_s3_key` from the raw `function_response` (via `skip_summarization`
+      or an `after_tool_callback`) so the orchestrator gets the real artifact link, not the
+      `molecule_generator` sub-agent's (lossy, hallucination-prone) text.
+      **HOW — no fedotmas fork needed (verified 2026-06-13):** `MAS(plugins=[...])` is a public kwarg
+      threaded to the ADK `Runner` (`core/base.py:174` `App(plugins=…)` → `_adk_runner.py:189`
+      `Runner(plugins=…)`). Inject an ADK `BasePlugin.after_tool_callback` from `fedot_tool`
+      (`fedotmas_tools.py:71`) that stashes `results_presigned_url` into `tool_context.state['fedot_artifacts']`
+      — it runs at the tool-call boundary (inside the run), so the key survives into `mas.run()`'s
+      returned state. **Must happen inside the run:** `fedot_tool` only sees the final state, where the
+      link is already gone. ⚠ Passing `plugins=` **REPLACES** the defaults (`MAS.__init__`:
+      `if plugins is not None: self._plugins = list(plugins)`; default = `[LoggingPlugin(),
+      WebSearchLimitPlugin(...)]`) — re-include them or lose web-search limit + finalize-mode
+      (`runner.py:_enter_finalize_mode` keys on `WebSearchLimitPlugin`). Prefer `after_tool_callback`
+      over `skip_summarization` (the latter drops the worker's final text turn → empties `output_key`,
+      breaks multi-step workers).
 - [ ] Generalize Alembic's guards into the АМ executor (+NFKC dedup, artifact-completion check,
       Opik-wired caps); actual-vs-declared diff after each step.
 

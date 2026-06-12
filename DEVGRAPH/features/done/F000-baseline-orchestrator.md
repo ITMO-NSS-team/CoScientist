@@ -94,10 +94,50 @@ Starting symbols this node anchors:
   the experiment, not a plan"; (3) **per-step pre-action critic ~doubles LLM calls** (latency);
   (4) FEDOT-internal crashes (STAT3 ExceptionGroup). Cross-ref: F014 (dataset_S reliability),
   F017 (the staged flow is the near-term slice of the meta-model), F015a planner (parallel session).
+### F000.A4 — Orchestrator prompt: callable-names + explicit PLAN step (folds the tool-not-found fix) · 2026-06-13 · outcome: success
+- **Method:** two additions to `prompts.py:ORCHESTRATOR_TEMPLATE` (on top of F000.A3):
+  (1) **"CALLABLE NAMES — STRICT"** block — the orchestrator's ONLY callable tools are the
+  catalog agents (EXACT CamelCase) + `list_available_tools`/`list_server_tools`; the `name`
+  field INSIDE a registry result (`search_papers`, `generate_case_mols`, …) is a LEAF MCP
+  tool and is NOT callable → delegate. Targets the two observed not-found crashes: a leaf
+  call (`search_papers`) and a casing slip (`research_agent` vs registered `ResearchAgent`;
+  ADK lookup is exact & case-sensitive, `functions.py:997-1010`).
+  (2) **"PLAN" stage** — after grounding the real tools, build a short ordered plan on the
+  tools that ACTUALLY exist, THEN delegate ("ground → plan → delegate" — the F015a direction,
+  done inline in the orchestrator).
+- **Result:** a runtime 3×3 A/B of the same block (before committing it to the prompt)
+  eliminated tool-not-found **0/9**; `none` 0→2/3 (avg n_llm 12.3→5.3); PlanReAct 2→3/3. The
+  name-normalizer (`research_agent`→`ResearchAgent`) **never fired** — the prompt alone
+  sufficed, so it was NOT committed.
+- **Evidence:** `prompts.py:ORCHESTRATOR_TEMPLATE` (CALLABLE NAMES + PLAN); runtime traces
+  `019ebd19/1f/21/25/26/28/32/35/37` (0/9 not-found); plan_2 trace `019ebcc5` (orchestrator
+  emitted `search_papers` directly). See [[opik-tracing-access]].
+- **4-variant A/B done (n=3, in-code fixes, CRISPR literature):** finish / avg n_llm —
+  **none (inline PLAN): 3/3, 4.3** · **PlanReAct: 3/3, 5.3** · PlannerAgent: 2/3, 6.0 (avg 219s) ·
+  **post_action_critique: 1/3, 9.0** (2 timeouts). **0 tool-not-found in all 12.** Earlier
+  no-fix `none` was 0/3 (all timeout) → now 3/3: the combined fixes (callable-names + PLAN +
+  ResearchAgent STOP [F003.A4]) fixed convergence. Traces `019ebd63..8e`.
+- **Decisions (this A/B):** (1) **Separate free-form PlannerAgent — DROPPED** (worse on every
+  axis; `use_planner=False`). (2) **`post_action_critique` — REJECTED as a finalizer** (doubles
+  LLM calls → timeouts; left commented at `agents.py:313`). (3) **PlanReAct — committed**
+  (`agents.py:306` `planner=PlanReActPlanner()`): equal to inline on reliability, chosen for the
+  explicit plan-act-replan structure; *note the data slightly favored plain inline (cheaper)* —
+  being validated on the harder **dataset_L** (multi-target molecule gen) before final commit.
+- **Next:** dataset_L A/B (PlanReAct vs inline) with per-subtask completion grading; if inline
+  wins there too, revert PlanReAct (1 line). Finalization without the LLM post-critic = the
+  prompt STOP/PLAN rules (already 3/3) + a future cheap deterministic gate.
 
 ## ✅ TODO
 - [ ] No eval harness exists for the baseline — add one (shared with project card gap).
 - [ ] Orchestrator: **finalize after a substantive result**; **must run** the experiment (not a plan) — top fixes from F000.A3.
+      NB `post_action_critique` (SUFFICIENT/INSUFFICIENT/WRONG vs the trajectory) is BUILT but
+      **COMMENTED** at `agents.py:313` — enabling it is the obvious finalize signal (cost: +LLM calls);
+      4-variant A/B (F000.A4) tests it. Termination is otherwise purely "LLM stops emitting tool calls"
+      (no `max_iterations`; ADK default `max_llm_calls=500` ≈ unbounded).
+- [ ] **Sub-agents have NO internal loop-guard** — the orchestrator critic governs only the
+      orchestrator's delegations, not a sub-agent's own loop. ResearchAgent ran away internally
+      (6× empty `explore_chemistry_database`); patched via prompt (F003.A4). Generalize (prompt
+      STOP rules and/or `max_iterations`) to other sub-agents.
 
 ## ⚠ Pitfalls / Known problems
 - Upstream OpenRouter providers are flaky → **do not** remove provider pinning /

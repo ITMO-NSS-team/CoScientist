@@ -21,6 +21,8 @@ import time
 os.environ.setdefault("LLM__MAIN_MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "scripts/opik_eval"))
+from trace_locator import record_run  # noqa: E402  (durable session_id -> trace_id)
 
 # Verbatim dataset_S drug-design tasks — first 4 are ONE PER DOMAIN (used for --limit 4):
 #   GSK-3β/Alzheimer, KRAS-G12C/cancer, BTK/sclerosis, STAT3/drug-resistance.
@@ -80,6 +82,12 @@ async def main() -> None:
         print(f"[{i + 1}/{args.limit}] sid={sid} :: {q[:60]}", flush=True)
         r = await run_one(q, sid, args.cap)
         print(f"    -> {r['duration_s']}s len={r['resp_len']} err={r['error']}", flush=True)
+        # Durable session_id -> trace_id mapping (best-effort; waits for Opik to index).
+        entry = await asyncio.to_thread(
+            record_run, sid, query=q, condition=args.condition,
+            model=os.environ["LLM__MAIN_MODEL"])
+        r["trace_id"] = entry["trace_id"] if entry else None
+        print(f"    trace={r['trace_id']}", flush=True)
         runs.append(r)
 
     outdir = REPO / "scripts/experiments/results"

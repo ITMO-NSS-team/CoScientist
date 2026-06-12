@@ -5,7 +5,7 @@
 
 **Project card:** [project_card.md](./project_card.md) — what the system can do today.
 **Roadmap:** [ROADMAP.md](./ROADMAP.md) — ordered work + execution state (R-steps). Read for "what to build next".
-**Last graph update:** 2026-06-12 · **Branch when seeded:** `refactoring_full_pipe`
+**Last graph update:** 2026-06-13 · **Branch when seeded:** `refactoring_full_pipe`
 
 ## Features
 
@@ -18,16 +18,16 @@ inbound links). Within a section, ordered by ID.
 
 | ID | Title | Updated | Derives | Now (one line) |
 |----|-------|---------|---------|----------------|
-| [F000](./features/done/F000-baseline-orchestrator.md) | Baseline orchestrator + agents | 2026-06-12 | — | ADK orchestrator/RAG/FEDOT.MAS/paper pipeline; +`ResilientAgentTool` & CLI answer-extraction fixes (F000.A2). |
+| [F000](./features/done/F000-baseline-orchestrator.md) | Baseline orchestrator + agents | 2026-06-13 | — | +`ResilientAgentTool`/CLI fixes (A2), staged prompt (A3), **callable-names + PLAN-step** (A4: tool-not-found 0/9, ground→plan→delegate). Planner/finalization A/B in flight. |
 | [F002](./features/done/F002-coder-agent.md) | CoderAgent + sandbox exec | 2026-06-11 | F000 | Sandbox coder/git engineer shipped (#268); no benchmark yet. |
-| [F003](./features/done/F003-research-agent-workflow.md) | ResearchAgent workflow | 2026-06-12 | F000 | Literature pipeline **verified e2e** (F003.A3); `MCP__*` paper URLs added to .env. **Tavily web search DISABLED** (F003.A2). |
+| [F003](./features/done/F003-research-agent-workflow.md) | ResearchAgent workflow | 2026-06-13 | F000 | Pipeline verified e2e (A3); +`MCP__*` URLs; **STOP/anti-thrash** rule (A4: stop re-calling empty `explore_chemistry_database`). **Tavily DISABLED** (A2). |
 | [F004](./features/done/F004-medical-agent-frontend.md) | Medical agent + ADK frontend | 2026-06-12 | F000 | PubMed/PICO/DICOM + web UI (#262); upload intake renamed `upload_intake_before_model` (F004.A2); answers clinically unvalidated. |
 | [F005](./features/done/F005-tool-web-search.md) | Tool web search (MCP-registry discovery) | 2026-06-11 | F000 | Discover MCP servers via public registries (#260); NOT Tavily. Adapters brittle. |
 | [F006](./features/done/F006-critic-executor-refinement.md) | Pre/post critic + executor | 2026-06-12 | F000 | Self-correction loop (#249); fixed delegation-arg clobber → `KeyError: 'request'` (F006.A3); no over-block eval. |
 | [F007](./features/done/F007-paper-analysis-pipeline.md) | Paper analysis & parsing | 2026-06-11 | F000 | Marker→Chroma→S3 + QA + MCP (#204/#239/#256); PDF extraction gap. |
-| [F008](./features/done/F008-observability-opik.md) | Observability — Opik tracer | 2026-06-11 | F000 | Opik tracing + orchestrator prompt fix (#225); enablement undocumented. |
+| [F008](./features/done/F008-observability-opik.md) | Observability — Opik tracer | 2026-06-13 | F000 | Opik tracing + orchestrator prompt fix (#225); **F008.A2** reliable run→trace correlation (server-side `thread_id` filter + `trace_locator.py` manifest); enablement undocumented. |
 | [F009](./features/done/F009-rag-tool-retrieval.md) | RAG tool/MCP retrieval (DB) | 2026-06-12 | F000 | Hybrid RAG-DB retrieval + rerank (#212); now **degrades gracefully** when DB down (F009.A2); hard dep on rag_tools + Postgres. (≠ F005.) |
-| [F010](./features/done/F010-fedotmas-integration.md) | FEDOT.MAS integration | 2026-06-11 | F000 | Text→ML pipelines (#211, fix #224); needs SSH `fedotmas` install. |
+| [F010](./features/done/F010-fedotmas-integration.md) | FEDOT.MAS integration | 2026-06-13 | F000 | Text→ML pipelines (#211, fix #224); needs SSH `fedotmas` install. **⚠ F010.A3: `molecule_generator` sub-agent returns an LLM paraphrase — drops the tool's S3 link & hallucinates SMILES; real molecules lost in S3. Fix→F015g.** |
 | [F011](./features/done/F011-dataset-collection-mcp.md) | Dataset-collection MCP | 2026-06-11 | F000 | Build datasets from papers (#196, fix #269); coverage unchecked. |
 | [F012](./features/done/F012-papers-search-mcp.md) | Papers-search MCP (OpenAlex) | 2026-06-11 | F000 | OpenAlex search/download (#196); needs API key, wiring unconfirmed. |
 | [F013](./features/done/F013-chemical-mcp-docker.md) | Chemical MCP + docker | 2026-06-11 | F000 | Dockerized chemistry tools (#187, S3 #197); most verified capabilities. |
@@ -58,6 +58,15 @@ inbound links). Within a section, ordered by ID.
 Legend: `proposed` · `in_progress` (=TODO) · `blocked` · `done` (=CLOSE) · `rejected` (=REJECT) · `superseded`.
 
 ## Hot / attention
+- **⚠ FEDOT.MAS sub-agent fabricates molecules & drops the S3 result link (F010.A3, 2026-06-13).**
+  Empirically confirmed: `generate_mols` (GenerativeMoleculeModels MCP) returns a **presigned S3 URL**
+  to a results CSV — no inline SMILES. The `molecule_generator` sub-agent (ADK `LlmAgent`) returns
+  the LLM's **paraphrase** (state `output_key` = `part.text`, not the raw `function_response`,
+  `llm_agent.py:837-851`), so it **dropped the S3 link and hallucinated 15 SMILES**. Master
+  orchestrator then drops even that in final synthesis (defect B, cross-ref F000). The real molecules
+  never reach the orchestrator/chat → reactplan-vs-inline planner A/B is **moot** until fixed.
+  **Fix lives in F015g** (capture the structured S3 artifact; success = `expected_artifacts` in S3,
+  not the LLM summary). Evidence: live MCP call, Opik trace `019ebdab-…`, workflow `fedot-s3-link-trace`.
 - **F001 HITL** — still `in_progress`. Live path now **confirmed** (F001.A2): fires
   via **callback** on the CoderAgent's outward-facing-command approval; the console
   handler now auto-rejects with no TTY (headless-safe). Still open: tool/internal_loop
