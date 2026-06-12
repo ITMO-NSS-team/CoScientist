@@ -91,11 +91,11 @@ adopted best practices + sources). Decomposition refined by an adversarial revie
 
 | Sub | Title | Status | Note |
 |-----|-------|--------|------|
-| [F015a](./F015a-experiment-planner.md) | Planner — JSON step-plan DAG + bounded loop | proposed | needs F015c's live inventory at plan time |
+| [F015a](../in_progress/F015a-experiment-planner.md) | Planner — JSON step-plan DAG + bounded loop | proposed | needs F015c's live inventory at plan time |
 | [F015b](./F015b-plan-critic-loop.md) | Plan-critic loop (deterministic-first, bounded) | proposed | its hard gate **folds in F015c** (don't duplicate) |
 | [F015c](./F015c-tool-sufficiency-check.md) | MCP inventory + tool-sufficiency callable | proposed | **shared substrate; build FIRST**; fail-closed on backend-down |
 | [F015d](./F015d-repo-search-agent.md) | Repo-search (literature-first) | proposed | feeds F015e; provenance carry-through |
-| [F015e](./F015e-alembic-repo-to-mcp.md) | Alembic repo→MCP pipeline | **in_progress** | mostly built on branches; integrate, don't extend inline |
+| [F015e](../in_progress/F015e-alembic-repo-to-mcp.md) | Alembic repo→MCP pipeline | **in_progress** | mostly built on branches; integrate, don't extend inline |
 | [F015f](./F015f-tool-deploy-registration.md) | Deploy + register/reuse + sandbox | proposed | build+serve already in F015e; scope = register+reuse+sandbox |
 | [F015g](./F015g-single-step-fedotmas-dispatch.md) | Single-step FEDOT.MAS dispatch | proposed | gated on **F015g.D1** (dispatch granularity) |
 | [F015h](./F015h-am-eval-harness.md) | Eval harness on dataset_S | proposed | acceptance gate; proves the fix (anti-entrenchment) |

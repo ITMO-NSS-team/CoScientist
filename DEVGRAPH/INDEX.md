@@ -9,32 +9,51 @@
 
 ## Features
 
-| ID | Title | Status | Updated | Derives | Now (one line) |
-|----|-------|--------|---------|---------|----------------|
-| [F000](./features/F000-baseline-orchestrator.md) | Baseline orchestrator + agents | done | 2026-06-12 | — | ADK orchestrator/RAG/FEDOT.MAS/paper pipeline; +`ResilientAgentTool` & CLI answer-extraction fixes (F000.A2). |
-| [F001](./features/F001-hitl.md) | Human-in-the-Loop (HITL) | **in_progress** | 2026-06-12 | F000 | Live path **confirmed**: callback on CoderAgent outward-facing cmds (F001.A2) + headless auto-reject; edit/tool paths still TODO. |
-| [F002](./features/F002-coder-agent.md) | CoderAgent + sandbox exec | done | 2026-06-11 | F000 | Sandbox coder/git engineer shipped (#268); no benchmark yet. |
-| [F003](./features/F003-research-agent-workflow.md) | ResearchAgent workflow | done | 2026-06-12 | F000 | Literature pipeline **verified e2e** (F003.A3); `MCP__*` paper URLs added to .env. **Tavily web search DISABLED** (F003.A2). |
-| [F004](./features/F004-medical-agent-frontend.md) | Medical agent + ADK frontend | done | 2026-06-11 | F000 | PubMed/PICO/DICOM + web UI (#262); answers clinically unvalidated. |
-| [F005](./features/F005-tool-web-search.md) | Tool web search (MCP-registry discovery) | done | 2026-06-11 | F000 | Discover MCP servers via public registries (#260); NOT Tavily. Adapters brittle. |
-| [F006](./features/F006-critic-executor-refinement.md) | Pre/post critic + executor | done | 2026-06-12 | F000 | Self-correction loop (#249); fixed delegation-arg clobber → `KeyError: 'request'` (F006.A3); no over-block eval. |
-| [F007](./features/F007-paper-analysis-pipeline.md) | Paper analysis & parsing | done | 2026-06-11 | F000 | Marker→Chroma→S3 + QA + MCP (#204/#239/#256); PDF extraction gap. |
-| [F008](./features/F008-observability-opik.md) | Observability — Opik tracer | done | 2026-06-11 | F000 | Opik tracing + orchestrator prompt fix (#225); enablement undocumented. |
-| [F009](./features/F009-rag-tool-retrieval.md) | RAG tool/MCP retrieval (DB) | done | 2026-06-12 | F000 | Hybrid RAG-DB retrieval + rerank (#212); now **degrades gracefully** when DB down (F009.A2); hard dep on rag_tools + Postgres. (≠ F005.) |
-| [F010](./features/F010-fedotmas-integration.md) | FEDOT.MAS integration | done | 2026-06-11 | F000 | Text→ML pipelines (#211, fix #224); needs SSH `fedotmas` install. |
-| [F011](./features/F011-dataset-collection-mcp.md) | Dataset-collection MCP | done | 2026-06-11 | F000 | Build datasets from papers (#196, fix #269); coverage unchecked. |
-| [F012](./features/F012-papers-search-mcp.md) | Papers-search MCP (OpenAlex) | done | 2026-06-11 | F000 | OpenAlex search/download (#196); needs API key, wiring unconfirmed. |
-| [F013](./features/F013-chemical-mcp-docker.md) | Chemical MCP + docker | done | 2026-06-11 | F000 | Dockerized chemistry tools (#187, S3 #197); most verified capabilities. |
-| [F014](./features/F014-benchmark-reliability-dataset-s.md) | Benchmark reliability (dataset_S) | **in_progress** | 2026-06-11 | F000 | All 3 errors confirmed via **Opik** (yesterday=qwen3): empties+APIErrors, tool-name hallucination, runaways (≤81 LLM calls). Live test: **pinning routes deterministically**, qwen ≠ flakiness fix. Fix dir = F015 (D1) + re-pin. |
-| [F015](./features/F015-experiments-orchestration-module.md) | Experiments orchestration module (АМ) — **epic** | **proposed** | 2026-06-11 | F010, F006 | Designed in approved ТП (S009). Decomposed into F015a–F015h (below). The orchestration fix for F014's loops & tool-not-found, w/o touching MCP tools. |
-| [F015a](./features/F015a-experiment-planner.md) | АМ: experiment planner (JSON step-plan DAG) | **in_progress** | 2026-06-12 | F015, F006 | **R05 done** (F015a.A1): `CoScientist/experiments/` plan-DAG schema + strict-JSON gen w/ repair; 3/3 dataset_S plans, surfaced capability gaps. Next: live inventory + ADK wiring (R09). |
-| [F015b](./features/F015b-plan-critic-loop.md) | АМ: plan-critic loop (bounded) | proposed | 2026-06-11 | F015, F006 | Deterministic gate first (folds F015c), LLM critic advisory; self-critique unreliable. |
-| [F015c](./features/F015c-tool-sufficiency-check.md) | АМ: tool-sufficiency / capability-gap (shared) | proposed | 2026-06-11 | F015 | **Build first.** MCP-Zero/RAG-MCP/AnyTool. Re-scoped: ensures right *servers*, not full fix (see F015g.D1). Fail-closed on backend-down. |
-| [F015d](./features/F015d-repo-search-agent.md) | АМ: repo-search (literature-first) | proposed | 2026-06-11 | F015 | AutoSOTA/SUPER; "no repo found" → HITL. |
-| [F015e](./features/F015e-alembic-repo-to-mcp.md) | АМ: Alembic repo→MCP pipeline | **in_progress** | 2026-06-11 | F015, F002 | Mostly **built on branches** (5-agent chain + docker). Integrate; packaging/import-path blocker. |
-| [F015f](./features/F015f-tool-deploy-registration.md) | АМ: deploy + register/reuse + sandbox | proposed | 2026-06-11 | F015, F015e | ScaleMCP/AutoMCP; the missing registration seam + tool-poisoning security. |
-| [F015g](./features/F015g-single-step-fedotmas-dispatch.md) | АМ: single-step FEDOT.MAS dispatch | proposed | 2026-06-12 | F015, F010 | **D1 RESOLVED**: per-step server filter (existing RAG seam) + tool details in task text + `generate_config`→verify→`build_and_run` net. Reuse Alembic guards. |
-| [F015h](./features/F015h-am-eval-harness.md) | АМ: eval harness on dataset_S | proposed | 2026-06-11 | F015, F014 | Acceptance gate; proves the fix via Opik (anti-entrenchment). |
+Grouped by **status**. Feature files live in `features/{done,in_progress,todo}/`.
+Changing a feature's status = move its row to the matching section here **and**
+`git mv` the file to the matching folder (keep the file's `status:` in sync, fix
+inbound links). Within a section, ordered by ID.
+
+### ✅ Done
+
+| ID | Title | Updated | Derives | Now (one line) |
+|----|-------|---------|---------|----------------|
+| [F000](./features/done/F000-baseline-orchestrator.md) | Baseline orchestrator + agents | 2026-06-12 | — | ADK orchestrator/RAG/FEDOT.MAS/paper pipeline; +`ResilientAgentTool` & CLI answer-extraction fixes (F000.A2). |
+| [F002](./features/done/F002-coder-agent.md) | CoderAgent + sandbox exec | 2026-06-11 | F000 | Sandbox coder/git engineer shipped (#268); no benchmark yet. |
+| [F003](./features/done/F003-research-agent-workflow.md) | ResearchAgent workflow | 2026-06-12 | F000 | Literature pipeline **verified e2e** (F003.A3); `MCP__*` paper URLs added to .env. **Tavily web search DISABLED** (F003.A2). |
+| [F004](./features/done/F004-medical-agent-frontend.md) | Medical agent + ADK frontend | 2026-06-12 | F000 | PubMed/PICO/DICOM + web UI (#262); upload intake renamed `upload_intake_before_model` (F004.A2); answers clinically unvalidated. |
+| [F005](./features/done/F005-tool-web-search.md) | Tool web search (MCP-registry discovery) | 2026-06-11 | F000 | Discover MCP servers via public registries (#260); NOT Tavily. Adapters brittle. |
+| [F006](./features/done/F006-critic-executor-refinement.md) | Pre/post critic + executor | 2026-06-12 | F000 | Self-correction loop (#249); fixed delegation-arg clobber → `KeyError: 'request'` (F006.A3); no over-block eval. |
+| [F007](./features/done/F007-paper-analysis-pipeline.md) | Paper analysis & parsing | 2026-06-11 | F000 | Marker→Chroma→S3 + QA + MCP (#204/#239/#256); PDF extraction gap. |
+| [F008](./features/done/F008-observability-opik.md) | Observability — Opik tracer | 2026-06-11 | F000 | Opik tracing + orchestrator prompt fix (#225); enablement undocumented. |
+| [F009](./features/done/F009-rag-tool-retrieval.md) | RAG tool/MCP retrieval (DB) | 2026-06-12 | F000 | Hybrid RAG-DB retrieval + rerank (#212); now **degrades gracefully** when DB down (F009.A2); hard dep on rag_tools + Postgres. (≠ F005.) |
+| [F010](./features/done/F010-fedotmas-integration.md) | FEDOT.MAS integration | 2026-06-11 | F000 | Text→ML pipelines (#211, fix #224); needs SSH `fedotmas` install. |
+| [F011](./features/done/F011-dataset-collection-mcp.md) | Dataset-collection MCP | 2026-06-11 | F000 | Build datasets from papers (#196, fix #269); coverage unchecked. |
+| [F012](./features/done/F012-papers-search-mcp.md) | Papers-search MCP (OpenAlex) | 2026-06-11 | F000 | OpenAlex search/download (#196); needs API key, wiring unconfirmed. |
+| [F013](./features/done/F013-chemical-mcp-docker.md) | Chemical MCP + docker | 2026-06-11 | F000 | Dockerized chemistry tools (#187, S3 #197); most verified capabilities. |
+
+### 🔧 In progress
+
+| ID | Title | Updated | Derives | Now (one line) |
+|----|-------|---------|---------|----------------|
+| [F001](./features/in_progress/F001-hitl.md) | Human-in-the-Loop (HITL) | 2026-06-12 | F000 | Live path **confirmed**: callback on CoderAgent outward-facing cmds (F001.A2) + headless auto-reject; edit/tool paths still TODO. |
+| [F014](./features/in_progress/F014-benchmark-reliability-dataset-s.md) | Benchmark reliability (dataset_S) | 2026-06-12 | F000 | **F014.A4** full-pipeline A/B (n=5) **contradicts** earlier claims: qwen **0 empties**, gpt-oss 3-4 (`finish=None`), **pinning didn't reduce them** (4→3). Re-pin now wired via `.env` (variant 1). Larger provider-logged A/B still needed. |
+| [F015a](./features/in_progress/F015a-experiment-planner.md) | АМ: experiment planner (JSON step-plan DAG) | 2026-06-12 | F015, F006 | **R05 done** (F015a.A1): `CoScientist/experiments/` plan-DAG schema + strict-JSON gen w/ repair; 3/3 dataset_S plans, surfaced capability gaps. Next: live inventory + ADK wiring (R09). |
+| [F015e](./features/in_progress/F015e-alembic-repo-to-mcp.md) | АМ: Alembic repo→MCP pipeline | 2026-06-11 | F015, F002 | Mostly **built on branches** (5-agent chain + docker). Integrate; packaging/import-path blocker. |
+
+### 📋 To do (proposed)
+
+| ID | Title | Updated | Derives | Now (one line) |
+|----|-------|---------|---------|----------------|
+| [F015](./features/todo/F015-experiments-orchestration-module.md) | Experiments orchestration module (АМ) — **epic** | 2026-06-11 | F010, F006 | Designed in approved ТП (S009). Decomposed into F015a–F015h (below). The orchestration fix for F014's loops & tool-not-found, w/o touching MCP tools. |
+| [F015b](./features/todo/F015b-plan-critic-loop.md) | АМ: plan-critic loop (bounded) | 2026-06-11 | F015, F006 | Deterministic gate first (folds F015c), LLM critic advisory; self-critique unreliable. |
+| [F015c](./features/todo/F015c-tool-sufficiency-check.md) | АМ: tool-sufficiency / capability-gap (shared) | 2026-06-11 | F015 | **Build first.** MCP-Zero/RAG-MCP/AnyTool. Re-scoped: ensures right *servers*, not full fix (see F015g.D1). Fail-closed on backend-down. |
+| [F015d](./features/todo/F015d-repo-search-agent.md) | АМ: repo-search (literature-first) | 2026-06-11 | F015 | AutoSOTA/SUPER; "no repo found" → HITL. |
+| [F015f](./features/todo/F015f-tool-deploy-registration.md) | АМ: deploy + register/reuse + sandbox | 2026-06-11 | F015, F015e | ScaleMCP/AutoMCP; the missing registration seam + tool-poisoning security. |
+| [F015g](./features/todo/F015g-single-step-fedotmas-dispatch.md) | АМ: single-step FEDOT.MAS dispatch | 2026-06-12 | F015, F010 | **D1 RESOLVED**: per-step server filter (existing RAG seam) + tool details in task text + `generate_config`→verify→`build_and_run` net. Reuse Alembic guards. |
+| [F015h](./features/todo/F015h-am-eval-harness.md) | АМ: eval harness on dataset_S | 2026-06-11 | F015, F014 | Acceptance gate; proves the fix via Opik (anti-entrenchment). |
+| [F016](./features/todo/F016-benchmark-evaluation.md) | Benchmark evaluation (external science-agent benchmarks) | 2026-06-12 | F000 | Maps ~30 survey benchmarks → capability; ✅ MCP-Bench/LitQA2/HypoBench/ChemBench runnable; needs an adapter harness. |
+| [F017](./features/todo/F017-scientific-process-metamodel.md) | Scientific-process meta-model + runtime research graph | 2026-06-12 | F000, F015 | Ontology (6 layers) + per-study research graph the orchestrator **queries** (S033 docx). Module I/O contracts + validation. Epic; near-term slice = structured hypothesis(required_tools)+tool-status+"run only if tools available". ≠ DEVGRAPH. |
 
 Legend: `proposed` · `in_progress` (=TODO) · `blocked` · `done` (=CLOSE) · `rejected` (=REJECT) · `superseded`.
 
@@ -82,5 +101,5 @@ Registry: [sources/INDEX.md](./sources/INDEX.md). Trust values change as ideas a
 tried — check before relying on a cited idea.
 
 ## ID counters (next free)
-- Features: **F016** (top-level). F015 sub-features use letter suffixes F015a–F015h; next free **F015i**.
+- Features: **F018** (top-level). F015 sub-features use letter suffixes F015a–F015h; next free **F015i**.
 - Sources: **S033**

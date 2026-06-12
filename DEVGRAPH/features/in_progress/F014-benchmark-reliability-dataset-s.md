@@ -4,7 +4,7 @@ title: Benchmark reliability on dataset_S.xlsx (drug-design molecule generation)
 type: feature
 status: in_progress
 created: 2026-06-11
-updated: 2026-06-11
+updated: 2026-06-12
 owners: [SoloWayG]
 derives_from: [F000]
 depends_on: [F000, F003, F006, F010]
@@ -153,18 +153,54 @@ which corrected an earlier wrong inference:
     `finish=stop` + near-zero `ctok` (DekaLLM) is a genuine provider near-empty.
 - **Evidence:** `/tmp/microtest.out` this session; rerun the saved script to reproduce.
 
+### F014.A4 — Full-pipeline model A/B (qwen vs gpt-oss) + pinning re-test · 2026-06-12 · outcome: partial
+- **Method:** with **Bug D fixed** (the `accumulated_tools` guard, see [[F009]].A3) so
+  dataset_S runs no longer crash early on the TaskExecutor path, ran the **actual
+  orchestrator** on **5 dataset_S queries** (GSK-3β, KRAS, STAT3, BTK, multi-target)
+  per condition; model swapped via `os.environ['LLM__MAIN_MODEL']`; each trace scored
+  with `scripts/opik_eval/metrics.py`. Conditions: gpt-oss-120b **unpinned**,
+  gpt-oss-120b **pinned** (deepinfra/groq/together/fireworks), qwen3-235b.
+- **Result (n=5 each):**
+  - **qwen3-235b: 0 empties** (all `finish=STOP`), 0 errors, 1 runaway; but **~2×
+    slower** (avg 324s vs 172s) and chattier (avg 17 vs 11.6 LLM calls).
+  - **gpt-oss UNPINNED: 4 empties** (`finish=None`, genuinely empty output `{}` —
+    inspected: `content=None`, no `reasoning`/`tool_calls`, so NOT a reasoning/length
+    artifact), 1 ValueError, 1 runaway.
+  - **gpt-oss PINNED: 3 empties** (`finish=None`), 1 JSONDecodeError, 0 runaways →
+    **pinning did NOT reduce full-pipeline empties (4→3, within noise).**
+- **Interpretation — two prior F014 claims NOT supported by this run:** (1) "qwen is
+  the empty-prone one / qwen worse" — here **qwen had 0 empties** vs gpt-oss's 3-4.
+  (2) "re-pin gpt-oss fixes the empties" — pinning confined *routing* in the raw
+  micro-test (A3) but **did not remove full-pipeline empties** (A4). So the gpt-oss
+  empties are not (only) provider-routing flakiness fixable by `provider.only`; open
+  question — a specific agent turn? the pinned providers themselves under agentic load?
+- **Evidence:** Opik traces — gpt-oss unpinned `019ebc31/37/3d/44/4f`, qwen
+  `019ebc32/38/3e/49/55`, gpt-oss pinned `019ebc75/78/7e/84/87`; empty-span inspection
+  (`output={}`, `finish=None`). See [[opik-tracing-access]].
+- **⚠ Caveats (anti-entrenchment):** n=5/condition is noisy; Opik logs
+  `provider=openrouter` only, so traces can't confirm `provider.only` engaged for the
+  pinned arm (A2/A3 limitation) — pinning may have routed correctly yet those providers
+  still empty under load, OR not engaged. Does NOT flip F014's conclusion; recorded as
+  **counter-evidence** to re-test with a larger, provider-logged run.
+- **Config fix applied (variant 1):** `.env` now sets `LLM__PINNED_PROVIDERS`
+  (previously only the dead `LLM__ALLOWED_PROVIDERS`); `provider_routing()` reads
+  `pinned_providers`, so gpt-oss is now pinned **by default**. Closes the config-drift gap.
+
 ## ✅ TODO
-- [ ] **Re-pin gpt-oss-120b** (`pinned_providers=["deepinfra","groq","together","fireworks"]`)
-      OR pick one model+pin pair and commit to it — pinning is the right lever and is
-      currently off (F014.A3 + F000 drift pitfall).
+- [x] **Re-pin gpt-oss-120b** — DONE (F014.A4, variant 1): `.env` now sets
+      `LLM__PINNED_PROVIDERS=["deepinfra","groq","together","fireworks"]` and
+      `provider_routing()` reads it. BUT the full-pipeline A/B showed pinning did **not**
+      reduce empties (4→3) — so pinning is engaged but is **not** the empties fix.
 - [ ] **Persist run logs to file per benchmark run** — superseded in practice by Opik
       (A2), but a local file log still helps when Opik/network is down.
 - [ ] **Full controlled A/B re-run on real infra** (needs Postgres + VPN — i.e. the
       Windows box, not this Mac): arm (a) gpt-oss-120b + pinning; arm (b) qwen3 main +
       pinning off. Measure empty-rate, tool-not-found count, loop size, `is_correct`/case.
       Drive it with a per-run runner; read results from Opik (A2 scripts).
-- [ ] **Fix config drift:** make (`main_model`, `pinned_providers`) a single coherent
-      choice; have settings warn/raise on a known-bad pairing (e.g. gpt-oss-120b + []).
+- [~] **Fix config drift:** PARTLY done (F014.A4) — `.env` now drives `pinned_providers`
+      via `LLM__PINNED_PROVIDERS`; the dead `allowed_providers` is marked legacy. Still
+      TODO: have settings warn/raise on a known-bad pairing (e.g. gpt-oss-120b + []), and
+      decide one coherent (`main_model`, pin) choice (qwen needs pin=[]).
 - [ ] **Fix via the experiments module F015, not by touching tools (decision F014.D1):**
       the `molecule_generator` tool-roster mismatch is resolved by F015's per-step
       **tool-sufficiency check** (don't dispatch a step whose tools are absent; build
@@ -193,6 +229,11 @@ which corrected an earlier wrong inference:
 - **Pinning is the right lever, but qwen is not a flakiness fix** (F014.A3): qwen
   scatters across *more* providers; its real benchmark still had empties + APIErrors
   and the worst runaways.
+  **⚠ Counter-evidence (F014.A4):** in a fresh full-pipeline A/B (n=5/condition) the
+  *opposite* showed — **qwen had 0 empties**, gpt-oss had 3-4 (pinned OR unpinned), and
+  **pinning did not reduce them**. So neither "qwen worse" nor "pinning fixes empties"
+  is settled. Conditions differ (A3 = raw litellm, trivial prompt; A4 = full agentic
+  load) and n is small — do a larger provider-logged A/B before trusting either.
 - **The "non-existent tools" bug is tool-name hallucination**, not server
   reachability — fix by constraining the exposed/registered toolset.
 - **Loop dedup must NFKC-normalize** — a live loop slipped a duplicate past on a

@@ -51,7 +51,9 @@
 | S031 | paper | CodeAct — Executable Code Actions (Wang, ICML 2024) | F015a, F015g | arxiv.org/abs/2402.01030 |
 | S032 | paper | FrugalGPT (model cascades / tiering for cost) | F015 | arxiv.org/abs/2305.05176 |
 
-Next free ID: **S033**.
+| S033 | internal | Мета-модель научного процесса (ontology: 6 layers + runtime research graph + module I/O) | unverified | F017 | `CoScientist/Мета-модель научного процесса.docx` |
+
+Next free ID: **S034**.
 
 ## Notes
 - **S008 is a placeholder.** Whoever continues F001 should replace it with the

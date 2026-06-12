@@ -85,6 +85,22 @@ RAG retrieval over the `rag_tools` DB. Backed by the external `rag_tools` packag
 - **Finding:** the ~500-char limit is an **embedding-text** cap (for vector search), not the
   stored description — full grounding info IS available at plan time via `get_tools_by_server`;
   RAG snippets are only for ranking.
+### F009.A5 — Guard `{accumulated_tools}` in the ToolReranker instruction (Bug D) · 2026-06-12 · outcome: success
+- **Method:** the ToolReranker instruction (`prompts.py:121`) interpolates
+  `{accumulated_tools}`, which the upstream ToolRetriever's `retrieve_tools` populates.
+  When the retriever's LLM didn't accumulate (no tool call, or DB returned
+  `unavailable` per F009.A2), the key was absent and ADK's `inject_session_state`
+  raised `KeyError: Context variable not found: accumulated_tools`, killing the
+  **whole** run (hit constantly on the dataset_S → TaskExecutor path). Fix: add
+  `callbacks.py:before_tool_reranker_agent` as the reranker's `before_agent_callback`
+  to seed `state['accumulated_tools'] = []` before the prompt renders — a mirror of
+  the existing `before_fullset_reranker_agent` guard for `{accumulated_web_mcps}`.
+- **Result:** dataset_S / literature runs no longer crash on `accumulated_tools`;
+  this is what made the clean F014.A4 model A/B possible (the path had to survive).
+- **Evidence:** crash traces (lit `019ebb9c`, `019ebbb2` — span err "Context variable
+  not found: accumulated_tools"); fix in `callbacks.py:before_tool_reranker_agent`
+  wired at `agents.py` `tool_reranker_agent`; unit tests
+  `tests/unit/test_accumulated_tools_guard.py` (2 pass).
 
 ## ✅ TODO
 - [ ] No retrieval@k / precision eval for tool discovery recorded.

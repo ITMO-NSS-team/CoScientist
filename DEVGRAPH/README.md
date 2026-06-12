@@ -146,10 +146,12 @@ DEVGRAPH/
 ├── INDEX.md             ← FAST BOOT: one-screen map of every feature + status. Read first.
 ├── ROADMAP.md           ← ordered work + execution state (R## steps). "What to build next."
 ├── project_card.md      ← A2A-style capability card (what the system can do now)
-├── features/
-│   ├── F001-hitl.md
-│   ├── F002-coder-agent.md
-│   └── …                ← one file per feature node
+├── features/            ← one file per feature node, foldered by status
+│   ├── done/            │   ├── F002-coder-agent.md · F003-… (status: done)
+│   ├── in_progress/     │   ├── F001-hitl.md · F015a-… (status: in_progress)
+│   └── todo/            │   └── F015-… · F016-… (status: proposed)
+│                        ↑ on a status change, `git mv` the file to the matching
+│                          folder and fix inbound links (INDEX/README/ROADMAP, sibling refs).
 └── sources/
     ├── INDEX.md          ← source registry (id · type · trust · url · used-by)
     ├── S001-a-mem.md
@@ -316,7 +318,7 @@ sandbox idea from Voyager (S002) actually shipped, `S002.trust = partial`
 (skill-library-as-code applied; auto-curriculum not). The INDEX row reads:
 `F002 · CoderAgent · done · 2026-06-11 · "sandbox coder shipped; no eval yet"`.
 
-See `features/F001-hitl.md` and `features/F002-coder-agent.md` for the real seeded
+See `features/in_progress/F001-hitl.md` and `features/done/F002-coder-agent.md` for the real seeded
 nodes.
 
 ---
