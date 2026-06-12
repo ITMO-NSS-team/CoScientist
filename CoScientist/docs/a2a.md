@@ -129,8 +129,10 @@ and tool results to its own stdout (aggregated in the `run_all` console),
 labeled by agent name — so when the orchestrator delegates to e.g. `CoderAgent`
 you see the coder's own `execute_bash`/`check_job` calls, not just the final
 result that comes back over A2A. The benchmark client only streams the agent it
-hits directly; watch the `run_all` console for the full picture. Disable with
-`A2A_LOG_EVENTS=0`.
+hits directly; watch the `run_all` console for the full picture. The same
+plugin is attached to the `App` in `agent.py`, so plain `adk web` (no A2A)
+prints the same trace. Disable with `LOG_AGENT_EVENTS=0` (the older
+`A2A_LOG_EVENTS=0` still works).
 
 **Stopping the stack.** Ctrl+C (SIGINT/SIGTERM) stops all servers gracefully;
 a second Ctrl+C forces an immediate exit. An in-flight request can't block

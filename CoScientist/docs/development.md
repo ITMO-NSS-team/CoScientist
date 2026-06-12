@@ -71,6 +71,10 @@ A2A_MODE=1 adk web            # A2A orchestrator (sub-agents must be running)
 python -m CoScientist.a2a.run_all
 ```
 
+Both `adk web` modes print every agent's thoughts, tool calls and tool results
+to the console (the same event-logger plugin the A2A servers use); disable
+with `LOG_AGENT_EVENTS=0`.
+
 The historical imports still work — `from CoScientist.agents import
 research_agent, orchestrator_agent, ...` re-exports the assembled instances.
 

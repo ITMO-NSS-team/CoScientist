@@ -1,12 +1,15 @@
-"""ADK plugin that logs every agent's inner activity to the server's stdout.
+"""ADK plugin that logs every agent's inner activity to stdout.
 
-Attached to each A2A server's Runner, so when an agent delegates to a sub-agent
-the sub-agent's OWN reasoning and tool use show up on its server's console
-(aggregated by run_all). This surfaces what each agent does internally —
-thoughts, tool calls, and tool results — not just the final result that comes
-back over A2A.
+Attached in two places:
+- each A2A server's Runner (``a2a/server.py``) — a sub-agent's reasoning and
+  tool use show up on its own server's console (aggregated by run_all);
+- the ``App`` exported from ``agent.py`` — so plain ``adk web`` /
+  ``adk api_server`` runs get the same console trace without A2A.
 
-Disable with A2A_LOG_EVENTS=0.
+This surfaces what each agent does internally — thoughts, tool calls, and tool
+results — not just the final answer.
+
+Disable with LOG_AGENT_EVENTS=0 (the older A2A_LOG_EVENTS=0 still works).
 """
 from __future__ import annotations
 
@@ -27,7 +30,8 @@ _RESET = "\033[0m"
 
 
 def _enabled() -> bool:
-    return os.getenv("A2A_LOG_EVENTS", "1") not in ("0", "false", "False")
+    value = os.getenv("LOG_AGENT_EVENTS") or os.getenv("A2A_LOG_EVENTS") or "1"
+    return value not in ("0", "false", "False")
 
 
 def _short(value: Any, limit: int = 500) -> str:
