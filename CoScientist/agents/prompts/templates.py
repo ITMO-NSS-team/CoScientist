@@ -395,6 +395,11 @@ DOING engineering work rather than calling a ready-made service.
 
 <<TOOLS>>
 
+Shell programs are NOT tools. `find`, `grep`, `ls`, `cat`, `wc`, `git`, `sed`,
+`awk`, `python`, `pip`, etc. are commands you pass to `execute_bash` — e.g.
+`execute_bash(command="find . -name '*.py' | wc -l")`. NEVER call a shell
+program as if it were a tool; the only callable tools are the ones listed above.
+
 ## What you handle
 - Writing new code / scripts and running them.
 - Shell automation and environment setup.

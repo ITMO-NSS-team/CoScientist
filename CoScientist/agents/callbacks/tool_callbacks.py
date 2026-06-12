@@ -1,12 +1,12 @@
 import os
 
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.models import LlmRequest
+from google.adk.models import LlmRequest, LlmResponse
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import logging
 logger = logging.getLogger(__name__)
@@ -150,6 +150,54 @@ def redirect_when_no_tools(
     logger.info("[ExperimentAgent] abstaining (no matching tool, best=%s) → CoderAgent", best)
     state["fedot_results"] = message
     return types.Content(role="model", parts=[types.Part(text=message)])
+
+
+def make_unknown_tool_guard(valid_names: Iterable[str]) -> Callable:
+    """Build an after_model_callback that intercepts hallucinated tool calls.
+
+    When the LLM emits a function call whose name is NOT a real tool of the
+    agent, ADK raises and kills the whole run before any tool/agent callback can
+    react (e.g. CoderAgent calling `find` directly instead of
+    `execute_bash("find ...")`). This guard catches that in the model response
+    and replaces it with a corrective message, so the agent re-plans on its next
+    turn instead of crashing the orchestration.
+    """
+    valid = set(valid_names)
+
+    def guard(
+        callback_context: CallbackContext, llm_response: LlmResponse
+    ) -> Optional[LlmResponse]:
+        content = getattr(llm_response, "content", None)
+        parts = getattr(content, "parts", None) if content is not None else None
+        if not parts:
+            return None
+        unknown = []
+        for p in parts:
+            fc = getattr(p, "function_call", None)
+            name = getattr(fc, "name", None) if fc is not None else None
+            if name and name not in valid:
+                unknown.append(name)
+        if not unknown:
+            return None
+        bad = ", ".join(sorted(set(unknown)))
+        allowed = ", ".join(sorted(valid))
+        logger.warning("[%s] hallucinated tool call(s): %s", _agent_name(callback_context), bad)
+        msg = (
+            f"The tool(s) `{bad}` do not exist — they are not in your tool list. "
+            f"Your only tools are: {allowed}. Shell programs (find, grep, ls, cat, "
+            "wc, git, sed, awk, …) are NOT tools — run them INSIDE execute_bash, "
+            "e.g. execute_bash(command=\"find . -name '*.py' | wc -l\"). "
+            "Re-issue your request calling ONLY a tool from the list above."
+        )
+        return LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(text=msg)])
+        )
+
+    return guard
+
+
+def _agent_name(callback_context: CallbackContext) -> str:
+    return getattr(callback_context, "agent_name", None) or "agent"
 
 
 def print_research_agent_tool_call(

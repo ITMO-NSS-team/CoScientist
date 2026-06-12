@@ -10,8 +10,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from google.adk.models import LlmResponse  # noqa: E402
+from google.genai import types  # noqa: E402
+
 from CoScientist.agents.callbacks import (  # noqa: E402
     after_tool_reranker_agent,
+    make_unknown_tool_guard,
     redirect_when_no_tools,
 )
 from CoScientist.agents.callbacks.tool_callbacks import (  # noqa: E402
@@ -81,3 +85,43 @@ def test_redirect_skipped_when_web_mcp_deployed():
     assert state[TOOL_MATCH_STATE_KEY]["matched"] is False
     # filtered_mcps present -> guard does not redirect.
     assert redirect_when_no_tools(_ctx(state)) is None
+
+
+# ── Hallucinated-tool guard (CoderAgent calling `find` directly) ─────────────
+
+_CODER_TOOLS = [
+    "execute_bash", "check_job", "read_file",
+    "write_file", "list_directory", "install_package",
+]
+
+
+def _fc_response(name, args):
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[types.Part(function_call=types.FunctionCall(name=name, args=args))],
+        )
+    )
+
+
+def test_unknown_tool_call_is_corrected_not_crashed():
+    guard = make_unknown_tool_guard(_CODER_TOOLS)
+    out = guard(SimpleNamespace(agent_name="CoderAgent"), _fc_response("find", {"path": "src"}))
+    assert out is not None
+    text = out.content.parts[0].text
+    assert "do not exist" in text and "execute_bash" in text
+
+
+def test_valid_tool_call_passes_through():
+    guard = make_unknown_tool_guard(_CODER_TOOLS)
+    out = guard(
+        SimpleNamespace(agent_name="CoderAgent"),
+        _fc_response("execute_bash", {"command": "find . | wc -l"}),
+    )
+    assert out is None
+
+
+def test_plain_text_response_passes_through():
+    guard = make_unknown_tool_guard(_CODER_TOOLS)
+    resp = LlmResponse(content=types.Content(role="model", parts=[types.Part(text="done")]))
+    assert guard(SimpleNamespace(agent_name="CoderAgent"), resp) is None

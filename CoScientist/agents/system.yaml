@@ -203,6 +203,10 @@ agents:
     prompt: coder
     tools: [coder]
     output_key: coder_results
+    callbacks:
+      # Catch hallucinated tool names (e.g. calling `find` directly) and return a
+      # corrective message instead of letting ADK crash the whole run.
+      after_model: [guard_unknown_tools]
     a2a:
       key: coder
       port: 8006

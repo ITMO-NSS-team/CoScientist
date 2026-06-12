@@ -335,6 +335,14 @@ def _redirect_when_no_tools():
     return redirect_when_no_tools
 
 
+def _guard_unknown_tools(ctx):
+    """after_model guard capturing the agent's REAL tool names from its context,
+    so a hallucinated tool call is corrected instead of crashing the run."""
+    from CoScientist.agents.callbacks import make_unknown_tool_guard
+    names = [d.name for e in ctx.tool_entries for d in e.docs]
+    return make_unknown_tool_guard(names)
+
+
 def _pre_action_critique(ctx):
     from CoScientist.agents.callbacks import make_pre_action_critique
     return make_pre_action_critique(REGISTRY.prompt("pre_action_critic")(ctx))
@@ -356,6 +364,8 @@ _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_rerank
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
+# Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
+_cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)

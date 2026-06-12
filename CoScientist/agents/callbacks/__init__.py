@@ -20,6 +20,7 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     after_fullset_reranker_agent,
     after_tool_reranker_agent,
     before_tool_reranker_model,
+    make_unknown_tool_guard,
     print_research_agent_tool_call,
     redirect_when_no_tools,
 )
@@ -37,4 +38,5 @@ __all__ = [
     "after_fullset_reranker_agent",
     "print_research_agent_tool_call",
     "redirect_when_no_tools",
+    "make_unknown_tool_guard",
 ]
