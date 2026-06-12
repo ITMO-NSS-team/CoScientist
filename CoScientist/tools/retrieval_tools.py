@@ -155,13 +155,26 @@ class RetrievalToolSet(BaseToolset):
         Returns:
             Server metadata.
         """
-
         postgres = PostgresClient(settings.postgres)
-        await postgres.initialize()
-
-        server: MCPServer = await postgres.get_server(server_id)
-
-        await postgres.close()
+        try:
+            await postgres.initialize()
+            server: MCPServer = await postgres.get_server(server_id)
+        except Exception as exc:
+            # Same graceful-degradation contract as retrieve_tools (F009.A2): a
+            # registry/DB outage must not crash the agent run.
+            logger.warning(
+                "get_server_info: server registry unavailable (%s); returning unavailable", exc
+            )
+            return {
+                "status": "unavailable",
+                "result": None,
+                "message": f"Server registry unavailable ({type(exc).__name__}).",
+            }
+        finally:
+            try:
+                await postgres.close()
+            except Exception:
+                pass
 
         return {
             "status": "success",
@@ -213,7 +226,11 @@ async def list_available_tools(query: str) -> Dict[str, Any]:
             {
                 "name": r.name,
                 "server_id": r.server_id,
-                "description": (r.description or "").strip()[:200],
+                # FULL description — never truncate. A tool's description carries the
+                # info the orchestrator needs to ground a request (e.g. the concrete
+                # cases / datasets / models a parameterized tool supports). Cutting it
+                # hid those and led to invented case names / "false success" (F015c/F015h).
+                "description": (r.description or "").strip(),
                 "score": round(float(r.rerank_score or 0.0), 3),
             }
             for r in retrieved

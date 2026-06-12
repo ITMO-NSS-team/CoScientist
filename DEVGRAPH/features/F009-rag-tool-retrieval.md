@@ -48,6 +48,23 @@ RAG retrieval over the `rag_tools` DB. Backed by the external `rag_tools` packag
   `OSError` to `10.32.1.36:5432`); post-fix returns `unavailable`; code in
   `retrieval_tools.py` (`_create_rag_manager` + try/except in both entry points).
   See [[opik-tracing-access]].
+### F009.A3 — Stop truncating tool descriptions + harden get_server_info · 2026-06-12 · outcome: success
+- **Method:** two fixes in `retrieval_tools.py`. (1) **Critical:** `list_available_tools`
+  (the orchestrator's only window into MCP tools, `agents.py:314`) truncated each tool's
+  `description` to **200 chars** (`[:200]`), so the orchestrator never saw the full
+  description — including the concrete cases/datasets/models a parameterized tool supports.
+  Removed the cap (now matches `retrieve_tools`, which already returned full descriptions).
+  (2) **Similar problem found:** `get_server_info` did raw `PostgresClient.initialize()/get_server()`
+  with NO error handling — same crash-on-DB-down bug F009.A2 fixed elsewhere. Wrapped it to
+  degrade to `{"status":"unavailable"}` with a `finally` close.
+- **Result:** the orchestrator now sees full tool descriptions (can ground a request against
+  the real cases a tool lists); a registry/DB outage no longer crashes `get_server_info`.
+  This directly attacks the "invented case → false success" failure (F015c/F015h).
+- **Evidence:** `retrieval_tools.py:216` (cap removed) + `get_server_info` try/except; py_compile OK.
+- **Note (verified):** `MCPServer` has NO tools field, so `get_server_info` returns server
+  metadata (url/description), not a tool list — the per-tool **description** is the only
+  plan-time source of a tool's cases, which is exactly why the truncation was critical.
+  The web-registry path (`to_agent_text`) does NOT truncate descriptions (only caps server count).
 
 ## ✅ TODO
 - [ ] No retrieval@k / precision eval for tool discovery recorded.

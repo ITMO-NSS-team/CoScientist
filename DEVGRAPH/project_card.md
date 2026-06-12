@@ -3,7 +3,7 @@ id: project_card
 type: project_card
 name: CoScientist
 version: 1.0.0            # README changelog; no separate release tag verified
-updated: 2026-06-11
+updated: 2026-06-12
 source_of_truth:         # where each claim below is verifiable in-repo
   agents: CoScientist/agents/catalog.py
   tools: CoScientist/tools/__init__.py
@@ -52,6 +52,45 @@ coder/sandbox (`coder_toolset_instance`).
   `mcp.tavily.com`; see feature F003.A2). No live web search until re-enabled.
 - Plus: MCP servers discovered at runtime — via public registries
   (`search_mcp_servers`, F005) and via the RAG DB (`RetrievalToolSet`, F009).
+
+## Where things live — data & control map
+A map so the FEDOT-vs-tools / "where's the case list?" confusion doesn't recur.
+
+**Tool & server metadata (the registry):**
+- Stored in the **rag_tools DB** (Postgres + Qdrant), populated by `scripts/rag_tools`. A tool
+  entry = `{name, server_id, description, …}`; a server row = `{server_id, name, url, protocol,
+  description, …}` — **a server row does NOT enumerate its tools** (`MCPServer` has no tools field).
+- Read at **plan time** via RAG: `list_available_tools(query)` (the orchestrator's tool) and
+  `retrieve_tools(query)` (ToolRetriever/TaskExecutor path) — both return per-tool
+  `{name, server_id, description, score}`, top-k RAG-ranked. The **tool description** is what the
+  orchestrator sees to ground a request; it is now returned **in full** (untruncated — F009.A3).
+- `get_server_info(server_id)` → server-level metadata (url/description), NOT a tool list.
+
+**Description (plan time) vs execution (run time):**
+- The orchestrator/planner only **read descriptions** from the registry — they do NOT call MCP
+  tools directly. To actually RUN a tool, the orchestrator delegates to **TaskExecutorAgent →
+  FEDOT.MAS**, which binds the real `McpToolset` and executes. So a tool's *live* output (e.g.
+  `list_generative_train_cases` returning the real cases, or a 404 listing available datasets)
+  appears only on the execution path, inside FEDOT.
+
+**FEDOT.MAS dispatch (experiments executor):**
+- `fedot_tool(task_description)` is the seam: it pulls **servers** from session state
+  (`state['filtered_tools']` from RAG + `state['deployed_mcps']`) → `servers_payload =
+  {server: HttpMCPServer(url, desc)}` → `mas.run(task)`. FEDOT.MAS's meta-agent reads only
+  **server descriptions**, autonomously generates a worker roster (`routing_meta_agent` +
+  workers), and binds tools **per server** (whole toolset, not per-tool). See F015g.D1.
+
+**Artifacts & datasets (S3):** computational artifacts, and some MCP servers' datasets/models,
+live in **S3** (e.g. the remote generative MCP's training files at
+`molecule-generative-mcp.s3.amazonaws.com/train/…`; presigned URLs, ТП §2.4). A missing
+dataset/model there → "false success" (F015h).
+
+**LLM:** LiteLLM over OpenRouter; model from `settings.llm.main_model`; provider pinning via
+`extra_body` (`agents.make_llm` / `experiments/planner`). The **per-run** model is recorded in
+the **Opik trace metadata** — that is ground truth, not the live `.env` (F014.A1).
+
+**Observability:** all agent/LLM/tool spans → **Opik** (Comet cloud, workspace `itmo-nss`,
+project `adk-coscientist`) — the only reliable window into sub-agent / FEDOT internals.
 
 ## Capabilities (verified-present, from `tools_checklist.md`)
 Covered by an MCP tool today: molecule generation (GAN+Transformer, 6 cases),
