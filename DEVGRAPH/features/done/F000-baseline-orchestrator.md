@@ -70,18 +70,46 @@ Starting symbols this node anchors:
 - **Next:** `ResilientAgentTool`'s fallback uses `output_key`, which ADK only writes
   on a final-response turn; if a sub-agent never emits one it still returns ''
   (acceptable). All orchestrator sub-agents inherit the wrapper.
+### F000.A3 — Staged orchestrator prompt (live A/B/B2 on dataset_S, qwen) · 2026-06-12 · outcome: partial
+- **Method:** replaced the flat "tool-first" rule in `prompts.py:ORCHESTRATOR_TEMPLATE` with a
+  **staged research pipeline** + module descriptions: scope → ground tools
+  (`list_available_tools`/`list_server_tools`) → **STOP exploring** once a fitting tool is named →
+  only-if-unclear delegate to Research/Hypotheses → **RUN** via TaskExecutorAgent → finalize.
+  Plus an explicit rule: the orchestrator can only LIST tools, it **cannot execute MCP tools**
+  (`get_state_from_server`/`generate_*`/docking) itself — must delegate execution. Tested live
+  A→B→B2 on 4 dataset_S tasks (GSK-3β/KRAS/BTK/STAT3), qwen-235b, cap 600s; harness
+  `scripts/experiments/ab_runner.py` + `scripts/opik_eval/ab_analyze.py` (Opik thread_id `ab_*`).
+- **Result:**
+  - **A (baseline):** 4/4 capped 600s, **over-explored** (`search_mcp_servers×9`, deep paper
+    search), **0/4 reached generation, 0 answers** — over-exploration is the baseline killer.
+  - **B (staged, pre-fix):** 3/4 **crashed <80s** on `ValueError: Tool 'get_state_from_server'
+    not found` — the orchestrator tried to EXECUTE an MCP tool directly. Decisive but broken.
+  - **B2 (staged + can't-execute fix):** **first condition to reach REAL generation** — GSK-3β:
+    FEDOT `molecule_generator` → `Pipeline complete 73.5s`; 1/4 produced a final answer (KRAS, 548 chars).
+- **Evidence:** commit `5a39485`; `scripts/experiments/results/ab_{A,B,B2}_2026-06-12_*.json`;
+  Opik traces by thread_id `ab_A_/ab_B_/ab_B2_*`. See [[opik-tracing-access]].
+- **Next (residual levers, biggest first):** (1) orchestrator does NOT **finalize** after a
+  substantive result — GSK-3β generated then over-ran the cap → add "got a result → synthesize
+  & finish"; (2) sometimes **answers without running** (KRAS: `fedot=0`, text only) → "must run
+  the experiment, not a plan"; (3) **per-step pre-action critic ~doubles LLM calls** (latency);
+  (4) FEDOT-internal crashes (STAT3 ExceptionGroup). Cross-ref: F014 (dataset_S reliability),
+  F017 (the staged flow is the near-term slice of the meta-model), F015a planner (parallel session).
 
 ## ✅ TODO
 - [ ] No eval harness exists for the baseline — add one (shared with project card gap).
+- [ ] Orchestrator: **finalize after a substantive result**; **must run** the experiment (not a plan) — top fixes from F000.A3.
 
 ## ⚠ Pitfalls / Known problems
 - Upstream OpenRouter providers are flaky → **do not** remove provider pinning /
   retries without a replacement; that was the actual bug fixed in `79cb9c6`.
-- **Config drift (found in F014.A1):** `settings.pinned_providers` is currently `[]`
-  (pinning OFF) with a comment assuming the active model is qwen3-235b, but `.env`
-  runs `gpt-oss-120b` — the exact model the comment says needs the 4-provider set.
-  So pinning is *not engaged for the model in use*. Verify `(main_model,
-  pinned_providers)` agree before trusting that the empty-response fix is active.
+- **Config drift (found in F014.A1) — FIXED 2026-06-12 (F014.A4, variant 1):**
+  `pinned_providers` was `[]` (pinning OFF) while `.env` ran `gpt-oss-120b`. Now `.env`
+  sets `LLM__PINNED_PROVIDERS=["deepinfra","groq","together","fireworks"]` →
+  `provider_routing()` engages for gpt-oss. **Two gotchas remain:** (1) `provider_routing()`
+  reads `pinned_providers`, NOT `allowed_providers` (the latter, `LLM__ALLOWED_PROVIDERS`,
+  is a dead/legacy field). (2) the pin set is gpt-oss-specific — if `LLM__MAIN_MODEL`
+  switches to qwen, set `LLM__PINNED_PROVIDERS=[]` (else 429/500). NB pinning did NOT
+  actually reduce full-pipeline empties (F014.A4) — it's engaged but not the empties fix.
 - Integration tests need ITMO VPN + hosted services; they won't run locally.
 
 ## Symbols
