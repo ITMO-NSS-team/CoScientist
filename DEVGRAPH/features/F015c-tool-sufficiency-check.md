@@ -73,6 +73,16 @@ backend-unavailable, the timeout-guarded probe, and the enriched index represent
 - [ ] Build the live-MCP inventory index (name+description+synthetic calls) as the shared substrate.
 - [ ] `sufficiency(step) -> {sufficient | gap: TypeA|TypeB, evidence}` callable (fail-closed on backend-unavailable).
 - [ ] Timeout-guarded reachability probe; threshold calibrated vs distractors; bench on dataset_S (F015h).
+- [ ] **Sufficiency must cover ASSETS, not just tools/servers (from the false-success trace, F015h):**
+      a parameterized step needs a real **case / dataset / model** to exist (e.g. a generator's
+      `case=…`). A tool being present ≠ the asset it needs is present. List the tool's real cases
+      (e.g. `list_generative_train_cases`) and treat a missing/assumed asset as a gap.
+- [ ] **Semantic bridging via Research/Hypotheses (no hardcoded maps):** when a request names a
+      target the tools don't index by (GSK-3β is a *protein*; cases are by *disease*, e.g. Alzheimer),
+      resolve the link by delegating to Research (literature) / Hypotheses — never hardcode
+      protein→disease maps. Near-term lever already added to the **orchestrator + pre-action critic**
+      prompts (`agents/prompts.py`: "Ground the request before you run an experiment" + critic REVISE
+      rule); the durable home is this per-step sufficiency check.
 
 ## Symbols
 - `CoScientist/tools/retrieval_tools.py:RetrievalToolSet` — `retrieve_tools` (note: `[]` on backend down).
