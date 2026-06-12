@@ -65,6 +65,26 @@ RAG retrieval over the `rag_tools` DB. Backed by the external `rag_tools` packag
   metadata (url/description), not a tool list — the per-tool **description** is the only
   plan-time source of a tool's cases, which is exactly why the truncation was critical.
   The web-registry path (`to_agent_text`) does NOT truncate descriptions (only caps server count).
+### F009.A4 — Add list_server_tools (full toolset + full descriptions) for plan-time grounding · 2026-06-12 · outcome: success
+- **Method:** even after F009.A3, the RAG path (`list_available_tools`) returns only top-k tools
+  and a **500-char** description — that cap is in rag_tools' embedding text
+  (`ingestion/text_builder.py:223`), NOT the stored row. Added `list_server_tools(server_id)` →
+  `PostgresClient.get_tools_by_server` → returns a server's COMPLETE toolset with each tool's
+  **full** description + `input_schema` (graceful on DB down). Wired into the orchestrator
+  (`agents.py` import + `FunctionTool(list_server_tools)`) + the orchestrator prompt.
+- **Result (live, Postgres up via VPN, server `d36e3d994404e957`):** full descriptions —
+  `generate_case_mols` = **1729 chars** (vs 500 via RAG) and enumerates **all 6 cases**:
+  `alzheimer, skleroz, cancer, parkinson, dyslipidemia, drug_resist`. So the orchestrator can now
+  read a tool's real cases at PLAN time → the GSK-3β "false success" (F015h) is groundable WITHOUT
+  hardcoding (research bridges GSK-3β→Alzheimer → `case='alzheimer'`, which exists).
+- **Evidence:** live query (count=5, 6 cases parsed); `retrieval_tools.py:list_server_tools`;
+  prompt render shows `list_server_tools`. **⚠ The `agents.py` wiring (import + FunctionTool) is
+  applied in the working tree but NOT yet in its own commit** — `agents.py` currently holds a
+  parallel session's uncommitted changes (ResilientAgentTool etc.), and partial hunk staging is
+  unavailable here, so the 2 lines land with that file's next commit.
+- **Finding:** the ~500-char limit is an **embedding-text** cap (for vector search), not the
+  stored description — full grounding info IS available at plan time via `get_tools_by_server`;
+  RAG snippets are only for ranking.
 
 ## ✅ TODO
 - [ ] No retrieval@k / precision eval for tool discovery recorded.

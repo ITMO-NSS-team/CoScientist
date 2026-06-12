@@ -249,6 +249,60 @@ async def list_available_tools(query: str) -> Dict[str, Any]:
     return {"status": "success", "count": len(tools), "tools": tools}
 
 
+async def list_server_tools(server_id: str) -> Dict[str, Any]:
+    """List ALL tools of one MCP server, with FULL (untruncated) descriptions.
+
+    Use this AFTER `list_available_tools` surfaces a relevant server: RAG search
+    returns only the top-k matching tools and a 500-char description snippet, whereas
+    this returns the server's COMPLETE toolset and each tool's full description and
+    input schema — including the concrete cases / datasets / models a parameterized
+    tool supports (e.g. which disease cases a generator has). Use it to ground a
+    request against the tool's real options instead of assuming a value.
+
+    Args:
+        server_id: the `server_id` from a `list_available_tools` result.
+
+    Returns:
+        {"status": "success", "server_id", "count",
+         "tools": [{"name", "description", "input_schema", "tags"}]}
+    """
+    postgres = PostgresClient(settings.postgres)
+    try:
+        await postgres.initialize()
+        tools = await postgres.get_tools_by_server(server_id)
+    except Exception as exc:
+        logger.warning(
+            "list_server_tools: server registry unavailable (%s); returning unavailable", exc
+        )
+        return {
+            "status": "unavailable",
+            "server_id": server_id,
+            "count": 0,
+            "tools": [],
+            "message": f"Server registry unavailable ({type(exc).__name__}).",
+        }
+    finally:
+        try:
+            await postgres.close()
+        except Exception:
+            pass
+
+    return {
+        "status": "success",
+        "server_id": server_id,
+        "count": len(tools),
+        "tools": [
+            {
+                "name": t.name,
+                "description": (t.description or "").strip(),  # FULL — never truncate
+                "input_schema": t.input_schema,
+                "tags": t.tags,
+            }
+            for t in tools
+        ],
+    }
+
+
 retrieval_toolset = RetrievalToolSet()
 retrieval_toolset_instance = retrieval_toolset.get_tools(None)
 

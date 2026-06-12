@@ -430,9 +430,13 @@ Available tools from agents:
 
 <<AGENTS>>
 
-You ALSO have a direct function:
-* **list_available_tools(query)** — searches the MCP tool registry and returns the ready-to-use
-  MCP tools available for a task (name, server, description, relevance score).
+You ALSO have direct functions:
+* **list_available_tools(query)** — RAG-searches the MCP tool registry and returns the top
+  relevant tools for a task (name, server_id, a SHORT description snippet, relevance score).
+* **list_server_tools(server_id)** — returns the COMPLETE toolset of one MCP server with each
+  tool's FULL description and input schema. Use it after `list_available_tools` surfaces a
+  relevant server, to see the tool's real options (e.g. the exact disease *cases* a generator
+  supports) before you commit to a parameter value.
 
 ### Tool-first decision rule
 For any computational / scientific task, FIRST call `list_available_tools(query)` and ANALYZE the
@@ -451,9 +455,10 @@ Fill each argument from the right source — and tell two kinds of argument apar
 - **Selector arguments that must reference something the tool ALREADY has** — an existing trained
   model, an existing generation *case*, a dataset/file that must already exist. Do NOT invent
   these from the task wording (a protein/target named in the request is NOT a guarantee that a
-  matching case/dataset/model exists). Confirm against reality first: if the tool can list its
-  real cases/datasets/models, list them and pick the match; otherwise rely on the tool's own
-  description when it is specific enough.
+  matching case/dataset/model exists). Confirm against reality first: call
+  **list_server_tools(server_id)** to read the tool's FULL description (it often enumerates the
+  exact cases/datasets it supports), and/or run the server's own live-listing tool (e.g. a
+  `list_*_cases` / `get_state` tool) — then pick the match.
 - If a needed selector cannot be confirmed to exist, do NOT run a degraded experiment with a
   guessed value. Resolve in this order: (1) take it from the user's request; (2) ask the user or
   search literature/web via **ResearchAgent** (and **HypothesesAgent** for an approach);

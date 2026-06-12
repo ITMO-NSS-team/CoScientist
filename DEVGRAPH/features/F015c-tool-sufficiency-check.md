@@ -76,11 +76,11 @@ backend-unavailable, the timeout-guarded probe, and the enriched index represent
 - [ ] **Sufficiency must cover ASSETS, not just tools/servers (from the false-success trace, F015h):**
       a parameterized step needs a real **case / dataset / model** to exist (e.g. a generator's
       `case=…`). A tool being present ≠ the asset it needs is present. Two sources for the real
-      options: (a) the tool **description** — visible at plan time via `list_available_tools`
-      (`retrieval_tools.py` returns `{name, server_id, description, score}`; the 200-char
-      truncation that hid long case lists is **fixed**, F009.A3, so it's now full). F015c's own
-      inventory index must likewise keep the **full** description (and ideally the tool's
-      param schema, where a `case` enum would live); (b) the **live** list (e.g.
+      options: (a) the tool **description + input_schema** — visible at plan time via
+      **`list_server_tools(server_id)`** (F009.A4: `get_tools_by_server` → FULL, uncapped; the RAG
+      path `list_available_tools` is still 500-char embedding-snippet only). Verified: it
+      enumerates a generator's real cases (`alzheimer, skleroz, cancer, parkinson, dyslipidemia,
+      drug_resist`). F015c's inventory index should source from this, not the RAG snippet; (b) the **live** list (e.g.
       `list_generative_train_cases`) which is only reachable by *executing* the tool
       (orchestrator → TaskExecutorAgent → FEDOT.MAS; the orchestrator can't call MCP tools directly).
       Treat a missing/assumed asset (only existing-asset *selectors*, not free caller-defined args) as a gap.
