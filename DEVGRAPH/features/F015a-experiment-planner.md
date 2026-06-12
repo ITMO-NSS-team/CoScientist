@@ -12,6 +12,7 @@ sources: [S010, S013, S014, S015, S031]
 tags: [planning, orchestration, json-plan, dag, experiments]
 code:
   - CoScientist/experiments/plan.py:ExperimentPlan       # the step-plan DAG schema (R05)
+  - CoScientist/experiments/plan.py:ServerTools          # per-step server→tools binding (F015a.A2)
   - CoScientist/experiments/planner.py:generate_plan     # strict-JSON gen + validate-then-repair (R05)
   - CoScientist/experiments/prompts.py:build_planner_messages
   - CoScientist/agents/prompts.py            # planner_instruction (L801-802 prohibition, L836 flat format) — still to rewrite
@@ -71,6 +72,28 @@ is a bounded loop with a per-step tool-sufficiency gate (F015c) before dispatch 
   validity = structural (schema/DAG), NOT that the named real tools exist or that the plan is
   scientifically optimal. The planner is standalone here — not yet wired as the ADK PlannerAgent
   (`agents/prompts.py` rewrite, R09, still pending).
+
+### F015a.A2 — Schema carries server→tools binding (user direction) · 2026-06-12 · outcome: success
+- **Method:** per user direction, a step no longer names bare tools — it carries
+  `tool_servers: list[ServerTools]` where each `ServerTools = {server, tools, url?}`
+  groups the needed tools by the MCP server that provides them. This is the exact unit
+  FEDOT.MAS dispatch consumes (`servers_payload`, see F015g.D1). The inventory + prompt
+  are now server-grouped; the planner is meant to source this from the **live
+  tool-analysis tool** (`retrieve_tools` / F015c, R07) rather than a static list.
+- **Result:** 3/3 valid plans, attempts=1. Steps bind correctly, e.g.
+  `chemical-mcp-server[calculate_docking]`, `admet-mcp[predict_admet]`. Gap check is now
+  at **(server, tool)** granularity and caught two real things: (a) missing filtering
+  parked under `UNKNOWN:filter_molecules` (true capability gap → F015d/F015e); (b) a
+  **server-name mismatch** — the planner wrote `chemical-mcp` instead of the exact
+  `chemical-mcp-server` → flagged `chemical-mcp:get_rdkit_properties`.
+- **Evidence:** `scripts/experiments/results/r05_plans_2026-06-12.json`; unit tests 8/8
+  (`tests/unit/test_experiment_plan.py` updated for `ServerTools`).
+- **Finding:** server-name fidelity matters. With a static stand-in inventory + a flaky
+  model the planner can mis-name a server; **F015c must resolve/normalize server names
+  against the live inventory** and treat a mis-named server as a correctable gap, not a
+  hard failure. The live inventory (R07) makes the names exact.
+- **Next:** feed the LIVE inventory (R07); map `step.tool_servers` → FEDOT.MAS
+  `servers_payload` in the executor (F015g, R14).
 
 ## ⚠ Risks / open questions (incl. adversarial review)
 - **Coupling to F015c (build F015c first):** reversing the tool-naming prohibition only helps

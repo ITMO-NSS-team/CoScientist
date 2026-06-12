@@ -4,6 +4,7 @@ from CoScientist.experiments.plan import (
     ExperimentPlan,
     ExperimentStep,
     PlanError,
+    ServerTools,
     StepProvenance,
 )
 from CoScientist.experiments.planner import (
@@ -15,6 +16,7 @@ __all__ = [
     "Artifact",
     "ExperimentPlan",
     "ExperimentStep",
+    "ServerTools",
     "StepProvenance",
     "PlanError",
     "generate_plan",

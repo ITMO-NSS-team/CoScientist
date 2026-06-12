@@ -33,12 +33,26 @@ class StepProvenance(BaseModel):
     )
 
 
+class ServerTools(BaseModel):
+    """The MCP server that provides a step's tools, and which tools are needed.
+
+    This is the unit handed to FEDOT.MAS (server-granular dispatch, see F015g.D1):
+    ``servers_payload = {server: HttpMCPServer(url, ...)}``. The planner fills
+    ``server`` + ``tools`` from the live tool inventory (F015c / retrieve_tools);
+    ``url`` is resolved at dispatch/registration time (left None at plan time).
+    """
+
+    server: str = Field(..., description="exact MCP server name from the inventory")
+    tools: list[str] = Field(..., description="exact tool names needed from THIS server")
+    url: Optional[str] = Field(None, description="resolved at dispatch (registry/presigned); None at plan time")
+
+
 class ExperimentStep(BaseModel):
     id: str = Field(..., description="unique step id, e.g. 's1'")
     subtask: str = Field(..., description="single, concrete computational sub-task (imperative)")
-    required_tools: list[str] = Field(
+    tool_servers: list[ServerTools] = Field(
         default_factory=list,
-        description="EXACT tool/server names this step needs (from the live inventory)",
+        description="tools this step needs, GROUPED BY the MCP server that provides them",
     )
     run_params: dict[str, Any] = Field(
         default_factory=dict,
@@ -100,9 +114,19 @@ class ExperimentPlan(BaseModel):
     def artifact_ids(self) -> set[str]:
         return {a.id for s in self.steps for a in s.expected_artifacts}
 
-    def all_required_tools(self) -> list[str]:
+    def required_servers(self) -> list[str]:
+        """Distinct MCP server names the plan needs (order-preserving)."""
         seen: dict[str, None] = {}
         for s in self.steps:
-            for t in s.required_tools:
-                seen.setdefault(t, None)
+            for ts in s.tool_servers:
+                seen.setdefault(ts.server, None)
+        return list(seen)
+
+    def required_tool_names(self) -> list[str]:
+        """Distinct tool names across all servers (order-preserving)."""
+        seen: dict[str, None] = {}
+        for s in self.steps:
+            for ts in s.tool_servers:
+                for t in ts.tools:
+                    seen.setdefault(t, None)
         return list(seen)

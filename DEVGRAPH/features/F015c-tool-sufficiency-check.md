@@ -62,6 +62,12 @@ backend-unavailable, the timeout-guarded probe, and the enriched index represent
 - **Probe must be timeout-guarded** (cf. F003.A2: an SSE/`list_tools` hang killed a whole run).
 - **Index representation:** third-party MCPs have thin docs → embed name+description+synthetic
   example calls. You may rewrite the INDEX representation but NOT the tool (F014.D1).
+- **Serves the planner's inventory + normalizes server names (found in F015a.A2):** the plan
+  carries `tool_servers: [{server, tools}]` (F015a, `plan.py:ServerTools`); F015c supplies the
+  **server-grouped** inventory the planner reads AND resolves each `(server, tool)` against the
+  live index. With a static stand-in the planner mis-named a server (`chemical-mcp` vs exact
+  `chemical-mcp-server`). Treat a near-miss server name as a **correctable** gap (fuzzy-resolve
+  to the real server), not a hard failure; an unresolvable one is a true Type-A gap.
 
 ## ✅ TODO
 - [ ] Build the live-MCP inventory index (name+description+synthetic calls) as the shared substrate.

@@ -2,15 +2,22 @@
 import pytest
 from pydantic import ValidationError
 
-from CoScientist.experiments.plan import Artifact, ExperimentPlan, ExperimentStep
+from CoScientist.experiments.plan import (
+    Artifact,
+    ExperimentPlan,
+    ExperimentStep,
+    ServerTools,
+)
 
 
-def _step(sid, deps=None, arts=None, tools=None):
+def _step(sid, deps=None, arts=None, tool_servers=None):
+    # tool_servers: dict {server: [tool, ...]}
+    ts = [ServerTools(server=srv, tools=tools) for srv, tools in (tool_servers or {}).items()]
     return ExperimentStep(
         id=sid,
         subtask=f"do {sid}",
         deps=deps or [],
-        required_tools=tools or [],
+        tool_servers=ts,
         expected_artifacts=[Artifact(id=a, description="x", kind="data") for a in (arts or [])],
     )
 
@@ -51,14 +58,16 @@ def test_empty_plan_rejected():
         ExperimentPlan(goal="g", steps=[])
 
 
-def test_artifact_ids_and_required_tools():
+def test_artifacts_servers_and_tools():
     plan = ExperimentPlan(goal="g", steps=[
-        _step("s1", arts=["m1"], tools=["generate_mols"]),
-        _step("s2", deps=["s1"], arts=["m2"], tools=["calculate_docking", "generate_mols"]),
+        _step("s1", arts=["m1"], tool_servers={"gen-mcp": ["generate_mols"]}),
+        _step("s2", deps=["s1"], arts=["m2"],
+              tool_servers={"chem-mcp": ["calculate_docking"], "gen-mcp": ["generate_mols"]}),
     ])
     assert plan.artifact_ids() == {"m1", "m2"}
     # de-duplicated, order-preserving
-    assert plan.all_required_tools() == ["generate_mols", "calculate_docking"]
+    assert plan.required_servers() == ["gen-mcp", "chem-mcp"]
+    assert plan.required_tool_names() == ["generate_mols", "calculate_docking"]
 
 
 def test_json_roundtrip():
