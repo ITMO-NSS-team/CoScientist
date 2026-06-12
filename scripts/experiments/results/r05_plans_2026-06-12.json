@@ -1,0 +1,705 @@
+[
+ {
+  "case": "alzheimer/GSK-3beta",
+  "ok": true,
+  "model": "openrouter/openai/gpt-oss-120b",
+  "attempts": 1,
+  "steps": 7,
+  "order": [
+   "s1",
+   "s2",
+   "s3",
+   "s4",
+   "s5",
+   "s6",
+   "s7"
+  ],
+  "gaps": [
+   "filter_candidates"
+  ],
+  "plan": {
+   "goal": "Generate GSK-3beta inhibitor candidates with high docking scores and low blood‑brain‑barrier permeability",
+   "steps": [
+    {
+     "id": "s1",
+     "subtask": "Fetch known active molecules for GSK-3beta from public databases",
+     "required_tools": [
+      "fetch_protein_activities"
+     ],
+     "run_params": {
+      "target": "GSK-3beta"
+     },
+     "expected_artifacts": [
+      {
+       "id": "actives_dataset",
+       "description": "Dataset of known GSK-3beta actives (SMILES, activity values)",
+       "kind": "dataset"
+      }
+     ],
+     "deps": [],
+     "provenance": {
+      "hypothesis": null,
+      "source": "ChEMBL/BindingDB"
+     }
+    },
+    {
+     "id": "s2",
+     "subtask": "Generate candidate molecules conditioned on GSK-3beta actives",
+     "required_tools": [
+      "generate_case_mols"
+     ],
+     "run_params": {
+      "target": "GSK-3beta",
+      "conditioning_data": "{actives_dataset}",
+      "num_samples": "5000"
+     },
+     "expected_artifacts": [
+      {
+       "id": "candidate_mols",
+       "description": "Generated SMILES strings for potential GSK-3beta inhibitors",
+       "kind": "molecules"
+      }
+     ],
+     "deps": [
+      "s1"
+     ],
+     "provenance": {
+      "hypothesis": "Generative model can propose novel chemotypes around known actives",
+      "source": null
+     }
+    },
+    {
+     "id": "s3",
+     "subtask": "Dock generated candidates into GSK-3beta binding site",
+     "required_tools": [
+      "calculate_docking"
+     ],
+     "run_params": {
+      "smiles": "{candidate_mols}",
+      "pdb_id": "1Q4L"
+     },
+     "expected_artifacts": [
+      {
+       "id": "docking_scores",
+       "description": "Docking scores (e.g., kcal/mol) for each candidate SMILES",
+       "kind": "score"
+      }
+     ],
+     "deps": [
+      "s2"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": "GSK-3beta crystal structure PDB 1Q4L"
+     }
+    },
+    {
+     "id": "s4",
+     "subtask": "Predict blood‑brain‑barrier permeability for each candidate",
+     "required_tools": [
+      "predict_bbb_permeability"
+     ],
+     "run_params": {
+      "smiles": "{candidate_mols}"
+     },
+     "expected_artifacts": [
+      {
+       "id": "bbb_predictions",
+       "description": "Predicted BBB permeability values (logBB) per SMILES",
+       "kind": "score"
+      }
+     ],
+     "deps": [
+      "s2"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s5",
+     "subtask": "Compute physicochemical properties for each candidate",
+     "required_tools": [
+      "get_rdkit_properties"
+     ],
+     "run_params": {
+      "smiles": "{candidate_mols}"
+     },
+     "expected_artifacts": [
+      {
+       "id": "physchem_props",
+       "description": "RDKit properties (MW, logP, TPSA, QED) per SMILES",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s2"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s6",
+     "subtask": "Filter candidates for high docking affinity and low BBB permeability",
+     "required_tools": [
+      "filter_candidates"
+     ],
+     "run_params": {
+      "docking_scores": "{docking_scores}",
+      "bbb_predictions": "{bbb_predictions}",
+      "score_threshold": "-8",
+      "bbb_threshold": "-1"
+     },
+     "expected_artifacts": [
+      {
+       "id": "filtered_candidates",
+       "description": "SMILES of candidates meeting docking (< -8 kcal/mol) and BBB (logBB < -1) criteria",
+       "kind": "molecules"
+      }
+     ],
+     "deps": [
+      "s3",
+      "s4"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s7",
+     "subtask": "Generate retrosynthetic routes for the filtered top candidates",
+     "required_tools": [
+      "retrosynthesis_route"
+     ],
+     "run_params": {
+      "smiles": "{filtered_candidates}",
+      "max_steps": "5"
+     },
+     "expected_artifacts": [
+      {
+       "id": "retrosynthesis_routes",
+       "description": "Proposed synthetic routes for each filtered candidate",
+       "kind": "text"
+      }
+     ],
+     "deps": [
+      "s6"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    }
+   ]
+  }
+ },
+ {
+  "case": "lung_cancer/KRAS_G12C",
+  "ok": true,
+  "model": "openrouter/openai/gpt-oss-120b",
+  "attempts": 1,
+  "steps": 13,
+  "order": [
+   "s1",
+   "s2",
+   "s3",
+   "s4",
+   "s5",
+   "s6",
+   "s7",
+   "s8",
+   "s9",
+   "s10",
+   "s11",
+   "s12",
+   "s13"
+  ],
+  "gaps": [
+   "compute_selectivity",
+   "filter_candidates"
+  ],
+  "plan": {
+   "goal": "Generate selective KRAS G12C inhibitors that do not bind HRAS or NRAS, with predicted ADMET and retrosynthetic routes",
+   "steps": [
+    {
+     "id": "s1",
+     "subtask": "Fetch known active molecules for KRAS G12C",
+     "required_tools": [
+      "fetch_protein_activities"
+     ],
+     "run_params": {
+      "protein_id": "KRAS_G12C"
+     },
+     "expected_artifacts": [
+      {
+       "id": "kras_actives",
+       "description": "Dataset of known KRAS G12C active SMILES",
+       "kind": "dataset"
+      }
+     ],
+     "deps": [],
+     "provenance": {
+      "hypothesis": null,
+      "source": "ChEMBL/BindingDB"
+     }
+    },
+    {
+     "id": "s2",
+     "subtask": "Fetch known active molecules for HRAS",
+     "required_tools": [
+      "fetch_protein_activities"
+     ],
+     "run_params": {
+      "protein_id": "HRAS"
+     },
+     "expected_artifacts": [
+      {
+       "id": "hras_actives",
+       "description": "Dataset of known HRAS active SMILES",
+       "kind": "dataset"
+      }
+     ],
+     "deps": [],
+     "provenance": {
+      "hypothesis": null,
+      "source": "ChEMBL/BindingDB"
+     }
+    },
+    {
+     "id": "s3",
+     "subtask": "Fetch known active molecules for NRAS",
+     "required_tools": [
+      "fetch_protein_activities"
+     ],
+     "run_params": {
+      "protein_id": "NRAS"
+     },
+     "expected_artifacts": [
+      {
+       "id": "nras_actives",
+       "description": "Dataset of known NRAS active SMILES",
+       "kind": "dataset"
+      }
+     ],
+     "deps": [],
+     "provenance": {
+      "hypothesis": null,
+      "source": "ChEMBL/BindingDB"
+     }
+    },
+    {
+     "id": "s4",
+     "subtask": "Generate candidate molecules for KRAS G12C using a generative model",
+     "required_tools": [
+      "generate_case_mols"
+     ],
+     "run_params": {
+      "target_protein": "KRAS_G12C",
+      "conditioning_set": {
+       "kras_actives": "kras_actives"
+      }
+     },
+     "expected_artifacts": [
+      {
+       "id": "cand_mols",
+       "description": "Generated candidate SMILES",
+       "kind": "molecules"
+      }
+     ],
+     "deps": [
+      "s1"
+     ],
+     "provenance": {
+      "hypothesis": "Generative model can propose novel KRAS G12C binders",
+      "source": null
+     }
+    },
+    {
+     "id": "s5",
+     "subtask": "Dock candidate molecules against KRAS G12C (PDB 6OIM)",
+     "required_tools": [
+      "calculate_docking"
+     ],
+     "run_params": {
+      "smiles": {
+       "cand_mols": "cand_mols"
+      },
+      "pdb_id": "6OIM"
+     },
+     "expected_artifacts": [
+      {
+       "id": "dock_kras",
+       "description": "Docking scores of candidates vs KRAS G12C",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s4"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s6",
+     "subtask": "Dock candidate molecules against HRAS (PDB 5W1D)",
+     "required_tools": [
+      "calculate_docking"
+     ],
+     "run_params": {
+      "smiles": {
+       "cand_mols": "cand_mols"
+      },
+      "pdb_id": "5W1D"
+     },
+     "expected_artifacts": [
+      {
+       "id": "dock_hras",
+       "description": "Docking scores of candidates vs HRAS",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s4"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s7",
+     "subtask": "Dock candidate molecules against NRAS (PDB 5UHV)",
+     "required_tools": [
+      "calculate_docking"
+     ],
+     "run_params": {
+      "smiles": {
+       "cand_mols": "cand_mols"
+      },
+      "pdb_id": "5UHV"
+     },
+     "expected_artifacts": [
+      {
+       "id": "dock_nras",
+       "description": "Docking scores of candidates vs NRAS",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s4"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s8",
+     "subtask": "Compute selectivity metrics (KRAS vs HRAS/NRAS)",
+     "required_tools": [
+      "compute_selectivity"
+     ],
+     "run_params": {
+      "kras_scores": {
+       "dock_kras": "dock_kras"
+      },
+      "hras_scores": {
+       "dock_hras": "dock_hras"
+      },
+      "nras_scores": {
+       "dock_nras": "dock_nras"
+      }
+     },
+     "expected_artifacts": [
+      {
+       "id": "selectivity_scores",
+       "description": "Selectivity ΔΔG or score for each candidate",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s5",
+      "s6",
+      "s7"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s9",
+     "subtask": "Calculate RDKit physicochemical properties for candidates",
+     "required_tools": [
+      "get_rdkit_properties"
+     ],
+     "run_params": {
+      "smiles": {
+       "cand_mols": "cand_mols"
+      }
+     },
+     "expected_artifacts": [
+      {
+       "id": "rdkit_props",
+       "description": "MW, logP, TPSA, QED, etc. for each candidate",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s4"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s10",
+     "subtask": "Predict ADMET profiles for candidates",
+     "required_tools": [
+      "predict_admet"
+     ],
+     "run_params": {
+      "smiles": {
+       "cand_mols": "cand_mols"
+      }
+     },
+     "expected_artifacts": [
+      {
+       "id": "admet_preds",
+       "description": "Predicted toxicity and ADMET endpoints per candidate",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s4"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s11",
+     "subtask": "Predict blood‑brain‑barrier permeability for candidates",
+     "required_tools": [
+      "predict_bbb_permeability"
+     ],
+     "run_params": {
+      "smiles": {
+       "cand_mols": "cand_mols"
+      }
+     },
+     "expected_artifacts": [
+      {
+       "id": "bbb_preds",
+       "description": "Predicted BBB permeability per candidate",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s4"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s12",
+     "subtask": "Filter candidates for high KRAS selectivity, favorable ADMET, and drug‑like properties",
+     "required_tools": [
+      "filter_candidates"
+     ],
+     "run_params": {
+      "selectivity": {
+       "selectivity_scores": "selectivity_scores"
+      },
+      "admet": {
+       "admet_preds": "admet_preds"
+      },
+      "bbb": {
+       "bbb_preds": "bbb_preds"
+      },
+      "physchem": {
+       "rdkit_props": "rdkit_props"
+      },
+      "thresholds": {
+       "selectivity_delta": "2.0",
+       "qed_min": "0.6",
+       "logP_max": "5.0",
+       "admet_pass": "true"
+      }
+     },
+     "expected_artifacts": [
+      {
+       "id": "filtered_mols",
+       "description": "SMILES of candidates passing all filters",
+       "kind": "molecules"
+      }
+     ],
+     "deps": [
+      "s8",
+      "s9",
+      "s10",
+      "s11"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    },
+    {
+     "id": "s13",
+     "subtask": "Generate retrosynthetic routes for the top filtered candidates",
+     "required_tools": [
+      "retrosynthesis_route"
+     ],
+     "run_params": {
+      "smiles": {
+       "filtered_mols": "filtered_mols"
+      },
+      "max_steps": "5"
+     },
+     "expected_artifacts": [
+      {
+       "id": "routes",
+       "description": "Proposed synthetic routes for each selected inhibitor",
+       "kind": "text"
+      }
+     ],
+     "deps": [
+      "s12"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    }
+   ]
+  }
+ },
+ {
+  "case": "drug_resistance/STAT3",
+  "ok": true,
+  "model": "openrouter/openai/gpt-oss-120b",
+  "attempts": 1,
+  "steps": 4,
+  "order": [
+   "s1",
+   "s2",
+   "s3",
+   "s4"
+  ],
+  "gaps": [
+   "filter_molecules"
+  ],
+  "plan": {
+   "goal": "Identify candidate molecules that inhibit STAT3, have water solubility >60 µg/mL, and inhibit CYP1A2",
+   "steps": [
+    {
+     "id": "s1",
+     "subtask": "Retrieve known STAT3 active compounds from public bioactivity databases",
+     "required_tools": [
+      "fetch_protein_activities"
+     ],
+     "run_params": {
+      "target_protein": "STAT3"
+     },
+     "expected_artifacts": [
+      {
+       "id": "actives_stat3",
+       "description": "Dataset of SMILES and activity values for known STAT3 inhibitors",
+       "kind": "dataset"
+      }
+     ],
+     "deps": [],
+     "provenance": {
+      "hypothesis": null,
+      "source": "ChEMBL / BindingDB"
+     }
+    },
+    {
+     "id": "s2",
+     "subtask": "Generate novel candidate molecules conditioned on known STAT3 actives",
+     "required_tools": [
+      "generate_case_mols"
+     ],
+     "run_params": {
+      "reference_dataset": "{actives_stat3}"
+     },
+     "expected_artifacts": [
+      {
+       "id": "cand_mols",
+       "description": "Set of generated SMILES strings for potential STAT3 inhibitors",
+       "kind": "molecules"
+      }
+     ],
+     "deps": [
+      "s1"
+     ],
+     "provenance": {
+      "hypothesis": "Generative model can propose chemically diverse STAT3 binders",
+      "source": null
+     }
+    },
+    {
+     "id": "s3",
+     "subtask": "Predict ADMET properties, including aqueous solubility and CYP1A2 inhibition, for generated candidates",
+     "required_tools": [
+      "predict_admet"
+     ],
+     "run_params": {
+      "smiles": "{cand_mols}"
+     },
+     "expected_artifacts": [
+      {
+       "id": "admet_preds",
+       "description": "Table with predicted solubility (µg/mL) and CYP1A2 inhibition flag for each SMILES",
+       "kind": "table"
+      }
+     ],
+     "deps": [
+      "s2"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": "In‑silico ADMET model"
+     }
+    },
+    {
+     "id": "s4",
+     "subtask": "Filter candidates to retain only those with solubility >60 µg/mL and predicted CYP1A2 inhibition",
+     "required_tools": [
+      "filter_molecules"
+     ],
+     "run_params": {
+      "admet_table": "{admet_preds}",
+      "solubility_threshold": "60",
+      "cyp1a2_inhibition": "true"
+     },
+     "expected_artifacts": [
+      {
+       "id": "selected_mols",
+       "description": "List of SMILES that satisfy both solubility and CYP1A2 inhibition criteria",
+       "kind": "molecules"
+      }
+     ],
+     "deps": [
+      "s3"
+     ],
+     "provenance": {
+      "hypothesis": null,
+      "source": null
+     }
+    }
+   ]
+  }
+ }
+]
