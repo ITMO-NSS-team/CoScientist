@@ -1,4 +1,8 @@
 """Toolset module."""
+# Must run before any MCP toolset is used: fail-fast backport for truncated SSE
+# frames from remote MCP servers (see mcp_patches docstring).
+import CoScientist.tools.mcp_patches  # noqa: F401
+
 from CoScientist.tools.fedotmas_tools import FedotMASToolset, fedot_toolset_instance
 from CoScientist.tools.research_tools import websearch_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance
 from CoScientist.tools.retrieval_tools import RetrievalToolSet, retrieval_toolset_instance
