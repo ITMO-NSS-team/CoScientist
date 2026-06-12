@@ -37,6 +37,12 @@ _CFG = settings.code_exec
 _LOCAL_JOBS: Dict[str, Dict[str, Any]] = {}
 _MAX_LOCAL_JOBS = 500  # cap registry size; evict oldest finished jobs past this
 
+# Session-state key pinning the per-ADK-session sandbox workspace. Shared with
+# the orchestrator's seed callback (seed_coder_workspace) so every CoderAgent
+# delegation in one ADK session — and any sub-agent that uses this toolset —
+# lands in the SAME sandbox, across user messages.
+_WORKSPACE_STATE_KEY = "coder_workspace_id"
+
 
 def _evict_finished_jobs() -> None:
     """Drop oldest finished job records so _LOCAL_JOBS doesn't grow unbounded.
@@ -144,22 +150,23 @@ class CoderToolset(BaseToolset):
 
     @staticmethod
     def _workspace_id(tool_context: Optional[ToolContext]) -> str:
-        """Stable per-session workspace id, shared by ALL tool calls in a session.
+        """One sandbox workspace per ADK session, reused by ALL tool calls.
 
-        Anchored to the session id so the same sandbox is reused across every
-        execute_bash / file / check_job call — and across repeated CoderAgent
-        invocations within one session (e.g. a critic-driven REFINE retry). This
-        does NOT depend on a state write surviving between calls, which is what
-        previously let a clone and a later `list_directory` land in different
-        workspaces. Falls back to a cached/random id only when no session is
-        available (e.g. direct unit-test use).
+        Every CoderAgent delegation runs in its OWN ephemeral AgentTool
+        sub-session with a random session id, so anchoring on the session id
+        directly would spawn a fresh, empty workspace on every call (a clone in
+        one call, `cd repo` in the next → fails). Instead we pin the workspace
+        id in SESSION STATE: AgentTool copies the parent session state into each
+        sub-session and forwards state deltas back, so the id written on first
+        use is reused by every later CoderAgent call in the same top-level ADK
+        session — and persists across user messages (the session state is
+        persisted between messages).
+
+        Priority: an explicit CODER_WORKSPACE_ID pin (e.g. the A2A shared
+        workspace) wins; otherwise the state-pinned id; otherwise we mint one
+        (from the session id, else random) and store it. Read at call time so it
+        doesn't depend on import order.
         """
-        # A2A delegations arrive as separate messages → separate ADK sessions,
-        # so the per-session anchor below would land each step in a fresh empty
-        # workspace (clone in one call, `cd repo` in the next → fails). When the
-        # CoderAgent runs as a standalone A2A service we therefore pin a single
-        # shared workspace via CODER_WORKSPACE_ID so state persists across the
-        # whole run. Read at call time so it doesn't depend on import order.
         fixed = os.getenv("CODER_WORKSPACE_ID")
         if fixed:
             safe = re.sub(r"[^A-Za-z0-9_\-]", "", fixed)[:48] or "shared"
@@ -168,16 +175,14 @@ class CoderToolset(BaseToolset):
         if tool_context is None:
             return "default"
 
-        sid = CoderToolset._session_id(tool_context)
-        if sid:
-            safe = re.sub(r"[^A-Za-z0-9_\-]", "", sid)[:48] or "default"
-            return f"ws_{safe}"
+        existing = tool_context.state.get(_WORKSPACE_STATE_KEY)
+        if existing:
+            return existing
 
-        # No session available — keep a stable id within this context.
-        ws = tool_context.state.get("coder_workspace_id")
-        if not ws:
-            ws = f"ws_{uuid.uuid4().hex[:12]}"
-            tool_context.state["coder_workspace_id"] = ws
+        # First use in this session: mint a stable id and pin it in state.
+        seed = CoderToolset._session_id(tool_context) or uuid.uuid4().hex[:12]
+        ws = f"ws_{re.sub(r'[^A-Za-z0-9_-]', '', str(seed))[:48] or 'default'}"
+        tool_context.state[_WORKSPACE_STATE_KEY] = ws
         return ws
 
     def _local_workspace(self, tool_context: Optional[ToolContext]) -> Path:
@@ -713,3 +718,30 @@ if settings.hitl.enabled:
 
 coder_toolset = CoderToolset(hitl_handler=_hitl_handler)
 coder_toolset_instance = coder_toolset.get_tools(None)
+
+
+def seed_coder_workspace(callback_context, llm_request=None):
+    """before_model callback (wired on the orchestrator): pin the coder sandbox
+    to THIS ADK session before any CoderAgent delegation.
+
+    The orchestrator's callback context carries the top-level (user) session id,
+    which is stable across the whole session and across user messages. Seeding
+    the workspace id from it — once, before delegating — guarantees every
+    CoderAgent delegation (even several fanned out in one turn) shares one
+    sandbox deterministically. The CoderToolset self-seeds as a fallback when no
+    orchestrator runs (e.g. standalone A2A), and an explicit CODER_WORKSPACE_ID
+    pin still wins over both.
+    """
+    if os.getenv("CODER_WORKSPACE_ID"):
+        return None
+    state = callback_context.state
+    if state.get(_WORKSPACE_STATE_KEY):
+        return None
+    inv = (getattr(callback_context, "_invocation_context", None)
+           or getattr(callback_context, "invocation_context", None))
+    session = getattr(inv, "session", None) if inv is not None else None
+    sid = getattr(session, "id", None)
+    if sid:
+        safe = re.sub(r"[^A-Za-z0-9_-]", "", str(sid))[:48] or "session"
+        state[_WORKSPACE_STATE_KEY] = f"ws_{safe}"
+    return None

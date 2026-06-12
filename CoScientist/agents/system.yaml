@@ -56,7 +56,7 @@ agents:
       - CoderAgent
       - MedicalAgent
     callbacks:
-      before_model: [save_uploaded_artifacts]
+      before_model: [save_uploaded_artifacts, seed_coder_workspace]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
       # `after_tool: [post_action_critique]` to enable it — the orchestrator

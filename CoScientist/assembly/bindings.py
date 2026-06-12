@@ -300,6 +300,11 @@ def _save_uploaded_artifacts():
     return before_model_modifier
 
 
+def _seed_coder_workspace():
+    from CoScientist.tools.coder_tools import seed_coder_workspace
+    return seed_coder_workspace
+
+
 def _inject_medical_artifacts():
     from CoScientist.agents.callbacks import med_agent_before_model
     return med_agent_before_model
@@ -356,6 +361,8 @@ def _post_action_critique(ctx):
 # Plain callbacks are registered through tiny lazy factories that ignore the
 # context — so importing bindings never drags in S3/opik/etc. transitively.
 _cb("save_uploaded_artifacts", "before_model", factory=lambda ctx: _save_uploaded_artifacts())
+# Pin the coder sandbox to the ADK session (one workspace per session).
+_cb("seed_coder_workspace", "before_model", factory=lambda ctx: _seed_coder_workspace())
 _cb("inject_medical_artifacts", "before_model", factory=lambda ctx: _inject_medical_artifacts())
 _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_uploaded_papers())
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
