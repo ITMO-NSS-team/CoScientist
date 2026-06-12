@@ -162,6 +162,26 @@ def test_orchestrator_tool_discovery_gate(config, system):
         )
 
 
+def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(config, system):
+    """The DatasetCollectorAgent is wired under CoderAgent, named in the coder's
+    prompt, and uses the coder toolset — so it works in the same per-session
+    sandbox workspace (the data it downloads lands where the coder builds on it)."""
+    coder = config.agent("CoderAgent")
+    assert "DatasetCollectorAgent" in coder.subordinates
+    collector = config.agent("DatasetCollectorAgent")
+    # Both share the coder toolset -> same workspace-state anchor -> same sandbox.
+    assert "coder" in collector.tools and "coder" in coder.tools
+    # The coder prompt advertises the subordinate (rendered from config).
+    coder_instruction = system.agent("CoderAgent").instruction
+    assert "DatasetCollectorAgent" in coder_instruction
+    assert "SAME sandbox" in coder_instruction
+    # Reached only through the coder — not a standalone A2A service.
+    assert collector.a2a is None
+    # Built and attached as an AgentTool on the coder.
+    attached = [t.agent.name for t in system.agent("CoderAgent").tools if hasattr(t, "agent")]
+    assert attached == ["DatasetCollectorAgent"]
+
+
 def test_orchestrator_prompt_documents_only_wired_critics(config, system):
     cfg = config.agent("OrchestratorAgent")
     instruction = system.root.instruction

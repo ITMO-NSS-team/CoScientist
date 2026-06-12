@@ -202,6 +202,7 @@ agents:
             doing software/data engineering rather than calling a ready service
     prompt: coder
     tools: [coder]
+    subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
@@ -223,6 +224,27 @@ agents:
         name: Code & Run
         description: Write/run code, shell & git operations, build and process data in a sandbox
         tags: [code, sandbox, git, data]
+
+  # Subordinate of CoderAgent — assembles datasets in the SHARED sandbox.
+  # Uses the coder toolset (same per-session workspace) plus web search, so the
+  # data it downloads lands where the coder builds on it. Not exposed over A2A:
+  # it is reached only through CoderAgent.
+  DatasetCollectorAgent:
+    class: llm
+    model: coder
+    description: >-
+      collects and assembles a dataset for a task from multiple sources
+      (HuggingFace Datasets, scientific APIs like ChEMBL/PubChem/OpenAlex, and
+      direct web/URL downloads), materialising it as files in the shared sandbox.
+    routing: >-
+      when a step needs raw data gathered/assembled from external sources before
+      building or training on it (e.g. "collect a dataset of BTK inhibitors with
+      IC50"). It downloads into the shared workspace and writes a MANIFEST.
+    prompt: dataset_collector
+    tools: [coder, websearch]
+    output_key: dataset_results
+    callbacks:
+      after_model: [guard_unknown_tools]
 
   MedicalAgent:
     class: llm
