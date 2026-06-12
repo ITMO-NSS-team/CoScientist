@@ -15,7 +15,6 @@ from google.adk.models.llm_response import LlmResponse
 
 from CoScientist.config import get_settings
 from CoScientist.hitl.handler import ConsoleHITLHandler
-from CoScientist.hitl.tool import get_hitl_tools
 
 settings = get_settings()
 
@@ -115,22 +114,3 @@ def make_llm(model: str = MODEL) -> LiteLlm:
 def make_coder_llm() -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the dedicated coder model."""
     return RetryingLiteLlm(model=CODER_MODEL)
-
-
-def agent_tools(base_tools: Any = None, *, hitl: bool = False) -> list:
-    """Build a tool list, optionally appending HITL tools.
-
-    Args:
-        base_tools: a single tool/toolset, a list of tools, or None.
-        hitl: whether to append HITL approval/selection tools when enabled.
-    """
-    if base_tools is None:
-        tools: list = []
-    elif isinstance(base_tools, list):
-        tools = list(base_tools)
-    else:
-        tools = [base_tools]
-
-    if hitl and hitl_enabled:
-        tools.extend(get_hitl_tools())
-    return tools

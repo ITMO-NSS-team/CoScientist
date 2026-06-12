@@ -222,55 +222,18 @@ from CoScientist.agents import task_execution_agent
 
 ### Agent Prompts
 
-#### hypotheses_instruction
+Prompts are no longer importable strings. They are templates registered in
+`CoScientist/agents/prompts/templates.py` and rendered by the assembler
+(`CoScientist.assembly`) from `CoScientist/agents/system.yaml` — tool lists,
+agent rosters and HITL sections are filled from the same config that wires the
+agents. To inspect a rendered prompt:
 
 ```python
-from CoScientist.agents.prompts import hypotheses_instruction
+from CoScientist.assembly import build_system
+
+system = build_system()
+print(system.agent("ResearchAgent").instruction)
 ```
-
-**Type:** `str`
-
-Instructions for the hypotheses agent.
-
-#### research_instruction
-
-```python
-from CoScientist.agents.prompts import research_instruction
-```
-
-**Type:** `str`
-
-Instructions for the research agent.
-
-#### tool_retriever_instruction
-
-```python
-from CoScientist.agents.prompts import tool_retriever_instruction
-```
-
-**Type:** `str`
-
-Instructions for the tool retriever agent.
-
-#### fedot_instruction
-
-```python
-from CoScientist.agents.prompts import fedot_instruction
-```
-
-**Type:** `str`
-
-Instructions for the FEDOT experiment agent.
-
-#### orchestrator_instruction
-
-```python
-from CoScientist.agents.prompts import orchestrator_instruction
-```
-
-**Type:** `str`
-
-Instructions for the orchestrator agent.
 
 ---
 

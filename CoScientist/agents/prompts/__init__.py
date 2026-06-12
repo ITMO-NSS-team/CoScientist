@@ -1,13 +1,11 @@
-"""Prompt strings and prompt builders for the agents.
+"""Prompt templates for the agents.
 
-Re-exported here so existing `from CoScientist.agents.prompts import <name>`
-imports keep working after the split into instructions.py / builder.py.
+Templates live in :mod:`CoScientist.agents.prompts.templates` and register
+themselves in the assembly registry under the names ``system.yaml`` references
+(``prompt: <name>``). They are rendered by the assembler with a PromptContext,
+which fills the unified placeholders (<<TOOLS>>, <<AGENTS>>, <<ROUTING>>,
+<<HITL>>) from the same config that wires the agents.
 """
 from CoScientist.agents.prompts.builder import PromptBuilder, render_template
-from CoScientist.agents.prompts.instructions import *  # noqa: F401,F403
-from CoScientist.agents.prompts.instructions import (
-    build_orchestrator_instruction,
-    build_research_instruction,
-)
 
-__all__ = ["PromptBuilder", "render_template", "build_orchestrator_instruction", "build_research_instruction"]
+__all__ = ["PromptBuilder", "render_template"]

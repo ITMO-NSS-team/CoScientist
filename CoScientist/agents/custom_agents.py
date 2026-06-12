@@ -1,3 +1,4 @@
+"""Custom (non-LLM) agent classes referenced from system.yaml via custom:<name>."""
 from typing import AsyncGenerator, List, Dict, Any
 from typing_extensions import override
 
@@ -27,7 +28,7 @@ class WebToolsDeployerAgent(BaseAgent):
         current_state = ctx.session.state
 
         filtered_mcps: List[Dict[str, Any]] = current_state.get('filtered_mcps', [])
-        
+
         #TODO: Implement full deploying strategy after side tools are ready
         deployed_mcps = []
         ctx.session.state['deployed_mcps'] = deployed_mcps
@@ -35,4 +36,3 @@ class WebToolsDeployerAgent(BaseAgent):
 
         # if not filtered_mcps:
         #     return
-

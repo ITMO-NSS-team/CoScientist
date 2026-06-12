@@ -9,13 +9,15 @@ if not os.getenv("ADK_A2A_EXPERIMENTAL_WARNINGS"):
 from a2a.server.apps.jsonrpc.fastapi_app import A2AFastAPIApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCard
+from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from fastapi import FastAPI
 from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+
+from CoScientist.assembly.schema import AgentConfig
 
 
 # Substrings that mark a settings key as sensitive; matched case-insensitively.
@@ -65,6 +67,36 @@ def _attach_opik_tracer(agent: BaseAgent, app_name: str) -> None:
         logging.getLogger(__name__).warning(
             "Opik tracing disabled for %s: %s", app_name, exc
         )
+
+
+def make_agent_card(agent_cfg: AgentConfig) -> AgentCard:
+    """Build the A2A AgentCard for an agent from its system.yaml declaration.
+
+    The card name/description are the agent's own (single source of truth);
+    the skill comes from the agent's ``a2a.skill`` section.
+    """
+    from CoScientist.a2a.config import AGENT_URLS
+
+    if agent_cfg.a2a is None:
+        raise ValueError(f"{agent_cfg.name} has no a2a section in system.yaml")
+    skill = agent_cfg.a2a.skill
+    return AgentCard(
+        name=agent_cfg.name,
+        description=agent_cfg.description,
+        url=AGENT_URLS[agent_cfg.a2a.key],
+        version="1.0.0",
+        capabilities=AgentCapabilities(streaming=True),
+        defaultInputModes=["text/plain"],
+        defaultOutputModes=["text/plain"],
+        skills=[
+            AgentSkill(
+                id=skill.id,
+                name=skill.name,
+                description=skill.description,
+                tags=list(skill.tags),
+            )
+        ],
+    )
 
 
 def make_a2a_app(

@@ -18,11 +18,22 @@ from google.adk.plugins.base_plugin import BasePlugin
 
 from CoScientist.graph import client
 
-# A tool call whose name is one of our agents is a delegation, not a leaf tool.
-_AGENT_NAMES = {
-    "PlannerAgent", "HypothesesAgent", "ResearchAgent",
-    "TaskExecutorAgent", "MedicalAgent", "CoderAgent",
-}
+# A tool call whose name is one of our delegatable agents is a delegation, not
+# a leaf tool. The roster comes from system.yaml (every agent that appears as a
+# subordinate), resolved lazily and cached so a config problem never breaks
+# graph emission.
+_agent_names_cache: Optional[set] = None
+
+
+def _agent_names() -> set:
+    global _agent_names_cache
+    if _agent_names_cache is None:
+        try:
+            from CoScientist.assembly.schema import get_config
+            _agent_names_cache = get_config().delegatable_names()
+        except Exception:  # noqa: BLE001 — best-effort, like the rest of the module
+            _agent_names_cache = set()
+    return _agent_names_cache
 
 _RUN_ID_STATE_KEY = "deg_run_id"
 
@@ -72,7 +83,7 @@ class GraphEmitterPlugin(BasePlugin):
         )
         fcid = getattr(tool_context, "function_call_id", None) or tool.name
         nid = f"{run_id}:{fcid}"
-        is_delegation = tool.name in _AGENT_NAMES
+        is_delegation = tool.name in _agent_names()
         await client.emit_node(
             run_id=run_id, node_id=nid,
             kind="agent_call" if is_delegation else "tool_call",

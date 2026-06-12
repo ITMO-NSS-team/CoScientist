@@ -674,9 +674,10 @@ class CoderToolset(BaseToolset):
         """
         Install a Python package with pip inside the session sandbox.
 
-        Like execute_bash this is fire-and-forget (installs can be slow): it
-        returns a `job_id`; call check_job(job_id) to see whether the install
-        finished. Installs may require human approval before starting.
+        Like execute_bash this WAITS for the install and returns its result
+        directly; only a very slow install outlives the inline wait and comes
+        back as status "running" with a `job_id` for check_job. Installs may
+        require human approval before starting.
 
         Args:
             package_name: Package name (e.g. "numpy" or "numpy==1.26.0"), or a
@@ -686,7 +687,9 @@ class CoderToolset(BaseToolset):
             upgrade: Pass --upgrade flag (default False).
 
         Returns:
-            Dict with `job_id` and status "running" (or "blocked"/"denied").
+            Dict with status ("success" | "error" | "timeout" | "blocked" |
+            "denied"), stdout, stderr and exit_code — or status "running" with
+            a `job_id` for a long install.
         """
         # Basic package name validation — reject shell injection attempts.
         # Note: ';' is intentionally NOT allowed (it would enable command

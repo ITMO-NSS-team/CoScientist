@@ -1,18 +1,30 @@
-"""LLM Agents module."""
-from CoScientist.agents.definitions.coder_agent import coder_agent
-from CoScientist.agents.definitions.hypotheses_agent import hypotheses_agent
-from CoScientist.agents.definitions.medical_agent import medical_agent
-from CoScientist.agents.definitions.orchestrator_agent import orchestrator_agent
-from CoScientist.agents.definitions.planner_agent import planner_agent
-from CoScientist.agents.definitions.research_agent import research_agent
-from CoScientist.agents.definitions.task_execution_agent import (
-    fedot_agent,
-    task_execution_agent,
-    tool_agent,
-    tool_reranker_agent,
-    tool_retriever_agent,
-    tool_websearcher_agent,
-)
+"""LLM Agents module — agents are assembled from CoScientist/agents/system.yaml.
+
+The YAML is the single source of truth for the system layout (agents, tools,
+callbacks, prompts, HITL, A2A exposure). This module builds the in-process
+system once and re-exports the agent instances under their historical names so
+existing imports keep working.
+"""
+from CoScientist.assembly import build_system
+from CoScientist.logging import multi_agent_tracer
+from opik.integrations.adk import track_adk_agent_recursive
+
+_system = build_system()
+
+orchestrator_agent = _system.root
+planner_agent = _system.agent("PlannerAgent")
+hypotheses_agent = _system.agent("HypothesesAgent")
+research_agent = _system.agent("ResearchAgent")
+task_execution_agent = _system.agent("TaskExecutorAgent")
+medical_agent = _system.agent("MedicalAgent")
+coder_agent = _system.agent("CoderAgent")
+tool_agent = _system.agent("ToolPreparerAgent")
+tool_retriever_agent = _system.agent("ToolRetrieverAgent")
+tool_reranker_agent = _system.agent("ToolReranker")
+tool_websearcher_agent = _system.agent("ToolWebSearcherAgent")
+fedot_agent = _system.agent("ExperimentAgent")
+
+track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
 
 __all__ = [
     "orchestrator_agent",

@@ -294,7 +294,7 @@ async def main() -> None:
             except httpx.ConnectError:
                 raise SystemExit(
                     f"✗ Could not connect to {url}. Is the server running?\n"
-                    f"  Start it with: python -m CoScientist.a2a.servers.{args.agent}"
+                    f"  Start it with: python -m CoScientist.a2a.serve {args.agent}"
                 )
             latencies.append(elapsed)
 

@@ -1,9 +1,9 @@
 """
-Critic agents for the orchestrator.
+Critic callbacks for the orchestrator.
 
-Two callbacks are wired onto the OrchestratorAgent:
+Two callback FACTORIES are wired onto the OrchestratorAgent via system.yaml:
 
-  * `pre_action_critique`   -> after_model_callback
+  * `make_pre_action_critique(instruction)`   -> after_model_callback
         Runs after the orchestrator LLM has decided on its next action(s)
         but BEFORE those actions execute. Inspects the chosen function
         calls (which sub-agent, with what args) in light of the task and
@@ -14,12 +14,15 @@ Two callbacks are wired onto the OrchestratorAgent:
                        describes why the plan was rejected; the
                        orchestrator will then re-decide on its next turn
 
-  * `post_action_critique`  -> after_tool_callback
+  * `make_post_action_critique(instruction)`  -> after_tool_callback
         Runs after a sub-agent (tool) returns. Evaluates the result and
         annotates it with a `_critic` directive when the result is
         insufficient or wrong, leaving the original payload intact.
 
-Both critics are themselves LLM calls returning strict JSON.
+Both critics are themselves LLM calls returning strict JSON. They are
+factories (not module-level callbacks) because their system prompts embed the
+orchestrator's CURRENT roster — the assembler renders the prompt from the same
+config that wires the sub-agents and passes it in.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from opik import track
 import json
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import litellm
 from google.adk.agents.callback_context import CallbackContext
@@ -39,10 +42,6 @@ from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from CoScientist.config import get_settings
-from CoScientist.agents.prompts import (
-    pre_action_critic_instruction,
-    post_action_critic_instruction,
-)
 
 
 _settings = get_settings()
@@ -280,6 +279,29 @@ def _apply_revisions(
             except Exception:
                 pass
 
+def _format_retrieved_tools(state: Any) -> str:
+    """Render the tools the orchestrator's retrieve_tools surfaced, so the critic
+    can judge whether a chosen agent actually MATCHES an available tool.
+
+    Reads `accumulated_tools` (what the orchestrator's own retrieve_tools calls
+    accumulated this turn). Returns '' when nothing was retrieved.
+    """
+    try:
+        tools = state.get("accumulated_tools") or []
+    except Exception:  # noqa: BLE001 — state shape varies across ADK versions
+        return ""
+    if not tools:
+        return ""
+    lines: List[str] = []
+    for t in tools[:20]:
+        if not isinstance(t, dict):
+            continue
+        name = t.get("tool") or t.get("name") or t.get("tool_name") or "?"
+        desc = t.get("description") or t.get("desc") or ""
+        lines.append(f"- {name}: {_truncate(desc, 160)}")
+    return "\n".join(lines)
+
+
 def _first_text(content) -> str:
     """First text part of a Content, or '' if none (e.g. an image-only message)."""
     if content is None or not getattr(content, "parts", None):
@@ -290,138 +312,157 @@ def _first_text(content) -> str:
     return ""
 
 
-@track(name="pre_action_critique")
-async def pre_action_critique(
-    callback_context: CallbackContext, llm_response: LlmResponse
-) -> Optional[LlmResponse]:
-    """after_model_callback for the OrchestratorAgent."""
-    pending = _extract_pending_calls(llm_response)
+def make_pre_action_critique(instruction: str) -> Callable:
+    """Build the orchestrator's after_model_callback with the given critic prompt."""
 
-    # No tool calls in this response -> nothing to critique.
-    if not pending:
-        return None
+    @track(name="pre_action_critique")
+    async def pre_action_critique(
+        callback_context: CallbackContext, llm_response: LlmResponse
+    ) -> Optional[LlmResponse]:
+        """after_model_callback for the OrchestratorAgent."""
+        pending = _extract_pending_calls(llm_response)
 
-    contents = _session_contents(callback_context)
-    # user_content may be absent or start with a non-text part (image/DICOM upload).
-    user_task = _first_text(getattr(callback_context, "user_content", None))
-    trajectory = _extract_completed_trajectory(contents)
+        # No tool calls in this response -> nothing to critique.
+        if not pending:
+            return None
 
-    user_prompt = (
-        f"ORIGINAL TASK:\n{user_task}\n\n"
-        f"COMPLETED TRAJECTORY:\n{_format_trajectory(trajectory)}\n\n"
-        f"PROPOSED NEXT ACTION(S) (not yet executed):\n{_format_pending_calls(pending)}\n\n"
-        "Decide whether to approve, revise, or reject these proposed actions. "
-        "Respond as strict JSON."
-    )
+        contents = _session_contents(callback_context)
+        # user_content may be absent or start with a non-text part (image/DICOM upload).
+        user_task = _first_text(getattr(callback_context, "user_content", None))
+        trajectory = _extract_completed_trajectory(contents)
 
-    print(f"pre action critic invoked with such prompt: {user_prompt}")
+        # Tools the orchestrator's retrieve_tools surfaced — lets the critic judge
+        # whether a chosen compute agent actually matches an available tool.
+        retrieved = _format_retrieved_tools(callback_context.state)
+        retrieved_block = (
+            f"RETRIEVED TOOLS (from retrieve_tools this turn):\n{retrieved}\n\n"
+            if retrieved else ""
+        )
 
-    payload = await _invoke_critic_llm(pre_action_critic_instruction, user_prompt)
-    verdict_raw = (payload.get("verdict") or "approve").lower().strip()
-    feedback = (payload.get("feedback") or "").strip()
-    revised_calls = payload.get("revised_calls") or []
+        user_prompt = (
+            f"ORIGINAL TASK:\n{user_task}\n\n"
+            f"COMPLETED TRAJECTORY:\n{_format_trajectory(trajectory)}\n\n"
+            f"{retrieved_block}"
+            f"PROPOSED NEXT ACTION(S) (not yet executed):\n{_format_pending_calls(pending)}\n\n"
+            "Decide whether to approve, revise, or reject these proposed actions. "
+            "Respond as strict JSON."
+        )
 
-    # Audit trail
-    state = callback_context.state
-    history = state.get("critic_pre_history", [])
-    history.append(
-        {
-            "verdict": verdict_raw,
-            "feedback": feedback,
-            "proposed": [{"tool": c["tool"], "args": c["args"]} for c in pending],
-        }
-    )
-    state["critic_pre_history"] = history
+        print(f"pre action critic invoked with such prompt: {user_prompt}")
 
-    print(f"pre action critic returned: {payload}")
-    if verdict_raw == PreVerdict.APPROVE.value:
-        print(f"pre action critic returned None")
-        return None
+        payload = await _invoke_critic_llm(instruction, user_prompt)
+        verdict_raw = (payload.get("verdict") or "approve").lower().strip()
+        feedback = (payload.get("feedback") or "").strip()
+        revised_calls = payload.get("revised_calls") or []
 
-    if verdict_raw == PreVerdict.REVISE.value:
-        if revised_calls:
-            _apply_revisions(pending, revised_calls)
-        if feedback and llm_response.content and llm_response.content.parts:
-            llm_response.content.parts.insert(
-                0,
-                types.Part(text=f"[CRITIC REVISION]: {feedback}", thought=True),
+        # Audit trail
+        state = callback_context.state
+        history = state.get("critic_pre_history", [])
+        history.append(
+            {
+                "verdict": verdict_raw,
+                "feedback": feedback,
+                "proposed": [{"tool": c["tool"], "args": c["args"]} for c in pending],
+            }
+        )
+        state["critic_pre_history"] = history
+
+        print(f"pre action critic returned: {payload}")
+        if verdict_raw == PreVerdict.APPROVE.value:
+            print(f"pre action critic returned None")
+            return None
+
+        if verdict_raw == PreVerdict.REVISE.value:
+            if revised_calls:
+                _apply_revisions(pending, revised_calls)
+            if feedback and llm_response.content and llm_response.content.parts:
+                llm_response.content.parts.insert(
+                    0,
+                    types.Part(text=f"[CRITIC REVISION]: {feedback}", thought=True),
+                )
+            print(f"pre action critic returned revision: {feedback}")
+            return None
+
+        if verdict_raw == PreVerdict.REJECT.value:
+            msg = (
+                "I am rejecting my own proposed action(s). "
+                f"Reason: {feedback or 'the plan does not advance the task'}. "
+                "I will reconsider which agent to call and with what arguments, "
+                "given the original task and the completed trajectory so far."
             )
-        print(f"pre action critic returned revision: {feedback}")
+            print(f"pre action critic rejected with msg {msg}")
+            return LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(text=msg)])
+            )
+
         return None
 
-    if verdict_raw == PreVerdict.REJECT.value:
-        msg = (
-            "I am rejecting my own proposed action(s). "
-            f"Reason: {feedback or 'the plan does not advance the task'}. "
-            "I will reconsider which agent to call and with what arguments, "
-            "given the original task and the completed trajectory so far."
-        )
-        print(f"pre action critic rejected with msg {msg}")
-        return LlmResponse(
-            content=types.Content(role="model", parts=[types.Part(text=msg)])
-        )
-
-    return None
+    return pre_action_critique
 
 
 # ---------------------------------------------------------------------------
 # Post-action critic  (after_tool_callback)
 # ---------------------------------------------------------------------------
-@track(name="post_action_critique")
-async def post_action_critique(
-    tool: BaseTool,
-    args: Dict[str, Any],
-    tool_context: ToolContext,
-    tool_response: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    """after_tool_callback for the OrchestratorAgent."""
-    user_prompt = (
-        f"TOOL CALLED: {tool.name}\n"
-        f"ARGS: {_truncate(args, 800)}\n"
-        f"RESULT: {_truncate(tool_response, 3000)}\n\n"
-        "Evaluate whether this result is sufficient to advance the task, "
-        "needs refinement, or is wrong. Respond as strict JSON."
-    )
+def make_post_action_critique(instruction: str) -> Callable:
+    """Build the orchestrator's after_tool_callback with the given critic prompt."""
 
-    print(f'Post action critic invoked with {user_prompt}')
-    payload = await _invoke_critic_llm(post_action_critic_instruction, user_prompt)
-    verdict_raw = (payload.get("verdict") or "sufficient").lower().strip()
-    feedback = (payload.get("feedback") or "").strip()
-    print(f'Post action critic returned with {payload}')
-    state = tool_context.state
-    history = state.get("critic_post_history", [])
-    history.append(
-        {"tool": tool.name, "verdict": verdict_raw, "feedback": feedback}
-    )
-    state["critic_post_history"] = history
+    @track(name="post_action_critique")
+    async def post_action_critique(
+        tool: BaseTool,
+        args: Dict[str, Any],
+        tool_context: ToolContext,
+        tool_response: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """after_tool_callback for the OrchestratorAgent."""
+        user_prompt = (
+            f"TOOL CALLED: {tool.name}\n"
+            f"ARGS: {_truncate(args, 800)}\n"
+            f"RESULT: {_truncate(tool_response, 3000)}\n\n"
+            "Evaluate whether this result is sufficient to advance the task, "
+            "needs refinement, or is wrong. Respond as strict JSON."
+        )
 
-    if verdict_raw == PostVerdict.SUFFICIENT.value:
+        print(f'Post action critic invoked with {user_prompt}')
+        payload = await _invoke_critic_llm(instruction, user_prompt)
+        verdict_raw = (payload.get("verdict") or "sufficient").lower().strip()
+        feedback = (payload.get("feedback") or "").strip()
+        print(f'Post action critic returned with {payload}')
+        state = tool_context.state
+        history = state.get("critic_post_history", [])
+        history.append(
+            {"tool": tool.name, "verdict": verdict_raw, "feedback": feedback}
+        )
+        state["critic_post_history"] = history
+
+        if verdict_raw == PostVerdict.SUFFICIENT.value:
+            return None
+
+        annotated = (
+            deepcopy(tool_response)
+            if isinstance(tool_response, dict)
+            else {"result": tool_response}
+        )
+
+        if verdict_raw == PostVerdict.INSUFFICIENT.value:
+            annotated["_critic"] = {
+                "verdict": "insufficient",
+                "directive": "REFINE",
+                "feedback": feedback
+                or "Result is incomplete; refine the query or call a different agent.",
+            }
+            print(f'post action critic returned insufficient {annotated}')
+            return annotated
+
+        if verdict_raw == PostVerdict.WRONG.value:
+            annotated["_critic"] = {
+                "verdict": "wrong",
+                "directive": "REPLAN",
+                "feedback": feedback
+                or "Result does not address the task; re-plan from scratch.",
+            }
+            print(f'post action critic returned wrong {annotated}')
+            return annotated
+
         return None
 
-    annotated = (
-        deepcopy(tool_response)
-        if isinstance(tool_response, dict)
-        else {"result": tool_response}
-    )
-
-    if verdict_raw == PostVerdict.INSUFFICIENT.value:
-        annotated["_critic"] = {
-            "verdict": "insufficient",
-            "directive": "REFINE",
-            "feedback": feedback
-            or "Result is incomplete; refine the query or call a different agent.",
-        }
-        print(f'post action critic returned insufficient {annotated}')
-        return annotated
-
-    if verdict_raw == PostVerdict.WRONG.value:
-        annotated["_critic"] = {
-            "verdict": "wrong",
-            "directive": "REPLAN",
-            "feedback": feedback
-            or "Result does not address the task; re-plan from scratch.",
-        }
-        print(f'post action critic returned wrong {annotated}')
-        return annotated
-
-    return None
+    return post_action_critique

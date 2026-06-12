@@ -153,9 +153,10 @@ class HITLSettings(BaseModel):
 # ORCHESTRATOR
 # =========================
 class OrchestratorSettings(BaseModel):
-    # Whether the orchestrator uses the PlannerAgent. When False, the planner
-    # tool is NOT attached and the orchestrator plans inline. Keep the prompt
-    # (build_orchestrator_instruction) and the attached tools consistent with it.
+    # Whether the orchestrator uses the PlannerAgent (referenced from
+    # system.yaml as ${orchestrator.use_planner}). When False, the planner is
+    # not attached and the orchestrator prompt's planning step adapts — the
+    # assembler keeps prompt and tools consistent automatically.
     use_planner: bool = False
 
 # =========================

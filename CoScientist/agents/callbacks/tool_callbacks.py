@@ -1,12 +1,29 @@
+import os
+
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 import logging
 logger = logging.getLogger(__name__)
+
+# ── Executor tool-match thresholds (the Coder↔Executor redirect mechanism) ───
+# A retrieved tool counts as a real match only at/above _KEEP. When NOTHING
+# clears _KEEP we look at the single best score:
+#   * best >= _ABSTAIN  -> marginal salvage: take top-2 and proceed (cautious).
+#   * best <  _ABSTAIN  -> ABSTAIN: leave the tool set empty and flag a no-match,
+#                          so ExperimentAgent redirects to CoderAgent instead of
+#                          "solving" the task with an unrelated tool (e.g. running
+#                          a GAN trainer for a "train a transformer" task).
+_TOOL_KEEP_SCORE = float(os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
+_TOOL_ABSTAIN_SCORE = float(os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+
+# State key carrying the executor's tool-match verdict for the redirect guard.
+TOOL_MATCH_STATE_KEY = "executor_tool_match"
 
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
@@ -40,24 +57,32 @@ def after_tool_reranker_agent(
 
     filtered_tools: List[Dict[str, Any]] = [
         tool for tool in acc_tools
-        if rerank_map.get(tool['tool_index'], 0) >= 0.3
+        if rerank_map.get(tool['tool_index'], 0) >= _TOOL_KEEP_SCORE
     ]
 
-    if not filtered_tools:
-        # fallback: take top-2 by rerank score
-        top_indices = sorted(
-            rerank_map.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:2]
+    best_score = max(rerank_map.values(), default=0.0)
+    matched = bool(filtered_tools)
 
-        top_ids = {idx for idx, _ in top_indices}
+    if not filtered_tools and best_score >= _TOOL_ABSTAIN_SCORE:
+        # Marginal salvage: nothing cleared _KEEP but the best is not hopeless —
+        # take top-2 and proceed cautiously (preserves the old behaviour here).
+        top_ids = {
+            idx for idx, _ in sorted(
+                rerank_map.items(), key=lambda x: x[1], reverse=True
+            )[:2]
+        }
+        filtered_tools = [t for t in acc_tools if t['tool_index'] in top_ids]
+        matched = bool(filtered_tools)
+    # else (best < _ABSTAIN): ABSTAIN — leave filtered_tools empty so the
+    # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
+    # running an unrelated tool.
 
-        filtered_tools = [
-            tool for tool in acc_tools
-            if tool['tool_index'] in top_ids
-        ]
-
+    # Record the verdict for the redirect guard / the orchestrator's critic.
+    callback_context.state[TOOL_MATCH_STATE_KEY] = {
+        "matched": matched,
+        "best_score": round(best_score, 3),
+        "kept": len(filtered_tools),
+    }
     callback_context.state['filtered_tools'] = filtered_tools
     callback_context.state['accumulated_tools'] = []
     callback_context.state['retrieval_queries'] = []
@@ -85,6 +110,46 @@ def after_fullset_reranker_agent(
     callback_context.state['accumulated_web_mcps'] = []
     callback_context.state['retrieval_queries_mcp'] = []
     return
+
+
+# Recognisable token the orchestrator prompt / post-critic key off to re-route.
+NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
+
+
+def redirect_when_no_tools(
+    callback_context: CallbackContext,
+) -> Optional[types.Content]:
+    """before_agent_callback for ExperimentAgent: abstain → redirect to CoderAgent.
+
+    By the time ExperimentAgent runs, the tool-prep pipeline has set
+    ``executor_tool_match``. If no retrieved tool matched the task (and no web
+    MCP was deployed), running FEDOT would just pick the nearest-but-wrong tool
+    (the "train a GAN for a transformer task" failure). Instead we short-circuit
+    the agent and return a structured redirect so the orchestrator sends the
+    step to CoderAgent.
+    """
+    state = callback_context.state
+    verdict = state.get(TOOL_MATCH_STATE_KEY) or {}
+    has_local = bool(state.get("filtered_tools"))
+    has_web = bool(state.get("filtered_mcps"))
+
+    # Only abstain on an explicit no-match verdict with nothing usable.
+    if verdict.get("matched") or has_local or has_web:
+        return None
+
+    best = verdict.get("best_score", 0.0)
+    message = (
+        f"{NO_MATCHING_TOOL_TOKEN}: No ready-made MCP tool matches this task "
+        f"(best tool relevance was {best}, below the bar). This looks like custom "
+        "engineering — a specific architecture, a named repository/example code, "
+        "or writing and running code — which no existing tool covers. Do NOT "
+        "treat a tool that shares only the verb (e.g. 'train a GAN' for a 'train a "
+        "transformer' request) as a match. Recommend re-routing this step to "
+        "CoderAgent."
+    )
+    logger.info("[ExperimentAgent] abstaining (no matching tool, best=%s) → CoderAgent", best)
+    state["fedot_results"] = message
+    return types.Content(role="model", parts=[types.Part(text=message)])
 
 
 def print_research_agent_tool_call(
