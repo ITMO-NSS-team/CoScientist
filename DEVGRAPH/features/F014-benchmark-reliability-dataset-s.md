@@ -179,6 +179,12 @@ which corrected an earlier wrong inference:
       pinning A/B is checkable from traces, not just raw calls (A2 limitation).
 
 ## ⚠ Pitfalls / Known problems
+- **"False success" — `status:success` ≠ correct (trace `019eb27d`, 2026-06-12):** a
+  GSK-3beta run returned 10 valid SMILES but training **404'd** on a missing dataset
+  (`gsk3b_inhibitors_chembl.csv`; only `Alzheimer.csv`/`Test_mas_1.csv` exist) and
+  `predict_ml` had no model — so the molecules are **generic, unscored**. Missing data
+  **assets** (datasets/models the task assumes) are a distinct failure class from
+  tool-not-found / runaways. Eval must score correctness, not the success flag (see F015h).
 - **Trust Opik per-run metadata over the live `.env`** — the model changed across
   sessions (qwen3 yesterday, gpt-oss today); only the trace's `metadata.main_model`
   tells you what a given run actually used. F014.A1 got this wrong by reading `.env`.

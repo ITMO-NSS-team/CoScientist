@@ -54,6 +54,20 @@ way to prove F015 fixes F014 instead of entrenching a false "it works" (DEVGRAPH
   This is a *snapshot baseline*, not the controlled acceptance run (that's roadmap R19).
 - **Next:** clean controlled dataset_S baseline (fixed task set, one model, file-logged) for R19.
 
+## ⚠ Known failure mode — "false success" (trace evidence, 2026-06-12)
+A FEDOT.MAS run can return `status:"success"` while the science silently failed. Trace
+`019eb27d` ("Generate GSK-3beta inhibitors with high activity"): `fedot_tool` returned 10
+valid SMILES, but (a) model training failed — the dataset `gsk3b_inhibitors_chembl.csv`
+**404'd** on S3 (only `Alzheimer.csv`/`Test_mas_1.csv` exist), and (b) `predict_ml` couldn't
+run (no model/data), so the molecules are from a **generic** generator, **unscored** for the
+target. So `status:success` ≠ correct. Implications:
+- **F015h must score `is_correct` / scientific validity**, never trust the run's success flag.
+- **F015g executor's completion check** must verify the artifact is *real* (e.g. SMILES actually
+  scored against the target), not merely present (a generic-molecule list passes a naive "got SMILES" check).
+- New pitfall for F014: missing data **assets** (datasets/models the task assumes exist) are a
+  distinct failure class from tool-not-found / runaways — the planner/`run_params` reference
+  assets (`gsk3b_inhibitors_chembl.csv`, `model='activity_GSK3B'`) that aren't in the system.
+
 ## ⚠ Risks / open questions
 - **Local infra caps live runs here** (Postgres `:5432` down, ITMO MCP needs VPN — F014.A1);
   full multi-step runs need real infra. Read existing traces from Opik where live runs aren't possible.
