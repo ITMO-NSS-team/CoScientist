@@ -1,6 +1,7 @@
 """HITL handlers — abstract interface and implementations."""
 
 import asyncio
+import sys
 from abc import ABC, abstractmethod
 
 from CoScientist.hitl.models import HITLRequest, HITLResponse, HITLAction
@@ -48,8 +49,29 @@ class ConsoleHITLHandler(AbstractHITLHandler):
             print("  2. Edit (Provide feedback / request changes to agent)")
             print("  3. Stop program (Exit completely)")
         
+        # Non-interactive session (no TTY, e.g. headless/background/server run): we
+        # cannot prompt a human. Fall back to a safe default instead of blocking or
+        # letting input() raise EOFError and kill the entire run. Auto-REJECT (not
+        # approve) so outward-facing / hard-to-reverse actions are never executed
+        # unattended; flip the default here if unattended auto-approval is desired.
+        if not sys.stdin.isatty():
+            print("[HITL] Non-interactive session — auto-rejecting (no human to approve).")
+            return HITLResponse(
+                action=HITLAction.REJECT,
+                approved=False,
+                instructions="Auto-rejected: non-interactive (headless) session, no human available to approve.",
+            )
+
         while True:
-            choice = await asyncio.to_thread(input, f"\nSelect action (1-{2 if is_simple_toggle else 3}): ")
+            try:
+                choice = await asyncio.to_thread(input, f"\nSelect action (1-{2 if is_simple_toggle else 3}): ")
+            except EOFError:
+                print("[HITL] stdin closed — auto-rejecting (no human to approve).")
+                return HITLResponse(
+                    action=HITLAction.REJECT,
+                    approved=False,
+                    instructions="Auto-rejected: stdin closed, no human available to approve.",
+                )
             choice = choice.strip()
 
             if choice == "1":
@@ -65,7 +87,10 @@ class ConsoleHITLHandler(AbstractHITLHandler):
                         instructions="Human rejected execution."
                     )
                 else:
-                    feedback = await asyncio.to_thread(input, "Enter your feedback/changes: ")
+                    try:
+                        feedback = await asyncio.to_thread(input, "Enter your feedback/changes: ")
+                    except EOFError:
+                        feedback = "Auto-rejected: stdin closed during feedback prompt."
                     return HITLResponse(
                         action=HITLAction.EDIT,
                         approved=False,
@@ -73,7 +98,6 @@ class ConsoleHITLHandler(AbstractHITLHandler):
                     )
             elif choice == "3" and not is_simple_toggle:
                 print("\nStopping program execution based on user request...")
-                import sys
                 sys.exit(0)
             else:
                 print(f"Invalid choice. Please enter a valid option.")

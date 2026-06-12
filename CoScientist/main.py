@@ -112,7 +112,18 @@ class CoScientistManager:
 
             if event.is_final_response():
                 if event.content and event.content.parts:
-                    final_response = event.content.parts[0].text or ""
+                    parts = event.content.parts
+                    # Thinking models emit a separate `thought` part before the
+                    # answer; parts[0] is often that reasoning. Prefer the
+                    # non-thought answer text, falling back to any text so we
+                    # never drop the response entirely.
+                    answer = "\n".join(
+                        p.text for p in parts
+                        if getattr(p, "text", None) and not getattr(p, "thought", False)
+                    )
+                    final_response = answer or "\n".join(
+                        p.text for p in parts if getattr(p, "text", None)
+                    ) or ""
                 elif event.actions and event.actions.escalate:
                     final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
 

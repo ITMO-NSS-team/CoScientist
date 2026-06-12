@@ -83,6 +83,24 @@ def before_fullset_reranker_agent(
     return None
 
 
+def before_tool_reranker_agent(
+    callback_context: CallbackContext, llm_request=None
+):
+    """Seed the state var the ToolReranker instruction interpolates.
+
+    The ToolReranker prompt interpolates {accumulated_tools}, which is populated
+    by the upstream ToolRetriever's `retrieve_tools`. If the retriever didn't
+    accumulate (its LLM never called the tool, the RAG DB was unavailable, etc.),
+    the key is absent and ADK raises "Context variable not found:
+    `accumulated_tools`", killing the entire run. Default it to [] so the prompt
+    always renders. (Mirror of `before_fullset_reranker_agent`.)
+    """
+    state = callback_context.state
+    if state.get('accumulated_tools') is None:
+        state['accumulated_tools'] = []
+    return None
+
+
 def after_fullset_reranker_agent(
     callback_context: CallbackContext
 ) -> None:

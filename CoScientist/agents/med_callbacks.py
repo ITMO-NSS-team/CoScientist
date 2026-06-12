@@ -1,4 +1,4 @@
-"""Callbacks for medical image handling across the agent pipeline."""
+"""Callbacks for user file uploads (intake) and medical image handling."""
 
 import hashlib
 from typing import List
@@ -10,10 +10,13 @@ from google.genai.types import Part
 _STATE_KEY = "uploaded_medical_artifacts"
 
 
-async def before_model_modifier(
+async def upload_intake_before_model(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> LlmResponse | None:
     """Orchestrator-level callback: save uploaded files as artifacts and register their IDs.
+
+    Not medical-specific — intercepts ANY inline_data part (DICOM, CSV, PDF, ...);
+    raw bytes must never reach the LiteLLM request (binary MIME types fail there).
 
     For every Part that carries inline_data:
       1. Derive a deterministic artifact ID from the file content.
@@ -42,7 +45,7 @@ async def med_agent_before_model(
 ) -> LlmResponse | None:
     """MedicalAgent-level callback: inject available artifact IDs from session state.
 
-    Reads the registry written by before_model_modifier and prepends a reminder
+    Reads the registry written by upload_intake_before_model and prepends a reminder
     to the current turn so the agent always knows which artifacts are available,
     regardless of what the orchestrator included in its call.
     """

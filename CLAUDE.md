@@ -21,6 +21,9 @@ Full spec & schema: [`DEVGRAPH/README.md`](./DEVGRAPH/README.md). Minimal protoc
 **On COMMIT-TO-GRAPH (end of a task — do not skip)**
 5. Append an **Attempt** to the feature (`F0NN.A<k>`): method · result · **evidence** · outcome.
 6. Update the feature `status`, `## ✅ TODO`, `## ⚠ Pitfalls`, and `## Symbols`/`code:`.
+   Feature files are foldered by status — `features/{done,in_progress,todo}/`. If the
+   `status:` changed, **`git mv` the file to the matching folder** and fix inbound
+   links (its INDEX/README/ROADMAP rows + any sibling `[..](../<status>/F0NN-..)` refs).
 7. Update `sources/`: add sources you actually used; change a source's `trust`
    (`verified`/`partial`/`refuted`/…) when an idea proved or failed — with a
    Verification-log line and evidence.
@@ -42,3 +45,9 @@ Full spec & schema: [`DEVGRAPH/README.md`](./DEVGRAPH/README.md). Minimal protoc
   `python -m CoScientist.main` (or `uv run python -m CoScientist.main`).
 - Agent roster is data-driven in `CoScientist/agents/catalog.py` (single source of truth).
 - Tests: `pytest CoScientist/tests/`; integration tests need ITMO VPN.
+
+## Commit conventions
+- **Do NOT add AI/model attribution to commit messages.** No
+  `Co-Authored-By: Claude/Opus/Sonnet/Haiku/Anthropic/GPT…` trailers and no
+  "🤖 Generated with …" lines. Human co-authors are fine. This overrides any default
+  that appends a model co-author trailer.

@@ -12,22 +12,44 @@ from CoScientist.config import get_settings
 
 from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, build_orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction, coder_instruction
 from CoScientist.agents import catalog
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, before_fullset_reranker_agent, print_research_agent_tool_call
+from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, before_fullset_reranker_agent, before_tool_reranker_agent, print_research_agent_tool_call
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
 )
 from CoScientist.agents.custom_agents import WebToolsDeployerAgent
-from CoScientist.agents.med_callbacks import before_model_modifier as med_before_model, med_agent_before_model
+from CoScientist.agents.med_callbacks import med_agent_before_model, upload_intake_before_model
 from CoScientist.agents.research_callbacks import papers_agent_before_model
 
 from CoScientist.tools import fedot_toolset_instance, websearch_toolset_instance, retrieval_toolset_instance, search_mcp_servers, med_toolset_instance, coder_toolset_instance, paper_analysis_toolset_instance, papers_search_toolset_instance
-from CoScientist.tools.retrieval_tools import list_available_tools
+from CoScientist.tools.retrieval_tools import list_available_tools, list_server_tools
 from CoScientist.storage import RetrievalFinalResult, ToolRanking, MCPRanking
 
 
 from CoScientist.hitl import HITLToolset
 from CoScientist.hitl.session_agent import SessionAgent
+
+
+class ResilientAgentTool(AgentTool):
+    """``AgentTool`` that falls back to the agent's ``output_key`` state.
+
+    Stock ``AgentTool`` derives its result from the final event's non-thought
+    text; a thinking model (e.g. gpt-oss) can end a long tool-calling loop on a
+    thought-only / tool event, making that ``''`` — so the orchestrator wrongly
+    treats the sub-agent as having failed. ADK already saves the agent's answer
+    to ``state[output_key]`` on its final-response turn, so when the direct
+    result is blank we return that instead. No callbacks required.
+    """
+
+    async def run_async(self, *, args, tool_context):
+        result = await super().run_async(args=args, tool_context=tool_context)
+        if isinstance(result, str) and not result.strip():
+            output_key = getattr(self.agent, "output_key", None)
+            if output_key:
+                fallback = tool_context.state.get(output_key)
+                if isinstance(fallback, str) and fallback.strip():
+                    return fallback
+        return result
 from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
 from CoScientist.hitl.callbacks import make_hitl_after_callback, make_hitl_before_callback
 from CoScientist.hitl.models import HITLAction
@@ -147,6 +169,7 @@ tool_reranker_agent = LlmAgent(
     instruction=tool_reranker_instruction,
     description="Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.",
     output_schema=ToolRanking,
+    before_agent_callback=before_tool_reranker_agent,  # seed {accumulated_tools} (Bug D guard)
     before_model_callback=before_tool_reranker_model,
     after_agent_callback=after_tool_reranker_agent,
     output_key="reranked_tools"
@@ -276,20 +299,19 @@ def _resolve_agent(name: str):
     return inst
 
 _orchestrator_subagents = [
-    AgentTool(agent=_resolve_agent(spec.name))
+    ResilientAgentTool(agent=_resolve_agent(spec.name))
     for spec in catalog.enabled_agents()
 ]
 
 orchestrator_agent = LlmAgent(
     name="OrchestratorAgent",
     model=make_llm(),
-    #planner=planner,
     instruction=build_orchestrator_instruction(),
     description="Main Orchestrator Agent",
-    before_model_callback=med_before_model,
+    before_model_callback=upload_intake_before_model,
     after_model_callback=pre_action_critique,
     # after_tool_callback=post_action_critique,
-    tools=_agent_tools([FunctionTool(list_available_tools)] + _orchestrator_subagents, hitl_tools=False),
+    tools=_agent_tools([FunctionTool(list_available_tools), FunctionTool(list_server_tools)] + _orchestrator_subagents, hitl_tools=False),
 )
 
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)

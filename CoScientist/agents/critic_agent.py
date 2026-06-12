@@ -263,6 +263,14 @@ def _apply_revisions(
         new_args = rev.get("args")
         if not isinstance(new_args, dict):
             continue
+        # Sub-agent delegation calls go through AgentTool, which requires a single
+        # 'request' string. The critic sometimes "revises" such a call into a
+        # domain-specific arg shape (e.g. {keywords, year, limit}), dropping the
+        # 'request' key and crashing AgentTool with KeyError: 'request'. Preserve
+        # the delegation contract by keeping the original request string.
+        old_args = call.get("args") or {}
+        if "request" in old_args and "request" not in new_args:
+            new_args = {**new_args, "request": old_args["request"]}
         part = call["_part"]
         fc = getattr(part, "function_call", None)
         if fc is None:
