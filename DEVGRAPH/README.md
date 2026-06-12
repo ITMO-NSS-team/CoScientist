@@ -80,6 +80,7 @@ references between IDs.**
 | Node | ID form | Lives in | What it is |
 |------|---------|----------|------------|
 | **Project Card** | `project_card` (singleton) | `project_card.md` | Current capabilities, benchmarks, MCP servers, tools. The "what can the system do now" snapshot. |
+| **Roadmap** | `roadmap` (singleton) | `ROADMAP.md` | Ordered work + execution state as editable `R##` steps (tracks/stages, `Depends`, `Status`, `Evidence`). The "what to build next, in what order, and how far we got". A step ≠ a feature: one feature can span several steps. |
 | **Feature** | `F001`, `F002`, … | `features/F001-<slug>.md` | A unit of work or capability being built/changed. Carries attempts, TODOs, pitfalls, symbols, sources. |
 | **Attempt** | `F001.A1`, `F001.A2`, … | a section *inside* a feature file | One concrete try at (part of) a feature: method, result, evidence, outcome. |
 | **Decision** | `F001.D1`, … | a section inside a feature file | A mini-ADR: a choice made, alternatives, consequences. (Optional.) |
@@ -143,6 +144,7 @@ find back-references. Don't hand-maintain both directions unless cheap.
 DEVGRAPH/
 ├── README.md            ← this spec (how to read & write the graph)
 ├── INDEX.md             ← FAST BOOT: one-screen map of every feature + status. Read first.
+├── ROADMAP.md           ← ordered work + execution state (R## steps). "What to build next."
 ├── project_card.md      ← A2A-style capability card (what the system can do now)
 ├── features/
 │   ├── F001-hitl.md
@@ -245,6 +247,12 @@ tags: []
 
 - **IDs are immutable.** Once `F007` exists, never renumber it; mark `rejected`/
   `superseded` instead. Filenames may change slug; IDs may not.
+- **Epic → child ids.** When a feature is a *decomposition* of a larger one (an epic),
+  its children take a **letter suffix on the parent id** — `F015a`, `F015b`, … — so the
+  inheritance is visible at a glance and they aren't confused with new standalone
+  features. Standalone features stay numeric (`F016`, `F017`, …). Children still carry
+  `derives_from: [F015]` for the explicit edge. Attempts/decisions nest as usual
+  (`F015g.A1`, `F015g.D1`).
 - **Dates are absolute** (`2026-06-11`), never "today/last week".
 - **Grounding over prose.** Every feature should name ≥1 real `code:` path (or be
   `proposed`). A feature claiming behavior with no code reference is suspect.

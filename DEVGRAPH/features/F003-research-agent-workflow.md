@@ -4,7 +4,7 @@ title: ResearchAgent workflow (literature + web + RAG, paper upload/cleanup)
 type: feature
 status: done
 created: 2026-06-11
-updated: 2026-06-11
+updated: 2026-06-12
 owners: [ITMO-NSS-team]
 derives_from: [F000]
 depends_on: [F000, F007, F009, F012]
@@ -55,6 +55,21 @@ resolve a local papers dir and clean up uploaded papers per user/session
   **local-machine VPN/DNS/proxy/TLS-MITM config** on the box where this was caught
   — not an inherent VPN↔Tavily incompatibility. Treat as a hypothesis, not a
   settled fact, until F003.A3 reproduces it across environments (see TODO).
+### F003.A3 — Literature pipeline verified e2e; missing MCP env URLs added · 2026-06-12 · outcome: success
+- **Method:** ran "Find 3 papers about CRISPR-Cas published after 2024" end-to-end
+  and traced via Opik. The paper-analysis/papers-search MCP toolsets were **None**
+  because `MCP__PAPER_ANALYSIS_URL` / `MCP__PAPERS_SEARCH_URL` were absent from `.env`
+  (exactly the `_http_mcp_toolset`-returns-None pitfall below) — added them
+  (`http://10.32.11.45:7334/mcp`, `:7331/mcp`; ITMO-internal, need the FortiClient VPN).
+- **Result:** the literature pipeline works end-to-end —
+  `search_papers` → `download_papers_from_search` (uploads PDFs to S3) →
+  `explore_my_papers` (RAG over the downloaded paper) → grounded answer with
+  citations. `explore_chemistry_database` returns "Could not extract any data from
+  DB" (chem DB unpopulated) but the agent self-recovers via search + download.
+- **Evidence:** Opik traces `019eb4e0` (BASHY) and `019ebb5d` (CRISPR, clean
+  3-paper answer); direct `McpToolset.get_tools()` listed the tools; memories
+  [[itmo-mcp-endpoints]], [[opik-tracing-access]].
+- **Next:** see the `has_pdf` TODO; chem DB needs populating for `explore_chemistry_database`.
 
 ## ✅ TODO
 - [ ] No eval of retrieval quality / escalation success — add a small QA set.
@@ -67,6 +82,8 @@ resolve a local papers dir and clean up uploaded papers per user/session
       If it fails off-VPN too → not VPN. If it works on another machine on the same
       VPN → local config, not the VPN itself. Record the result as F003.A3 with evidence.
 - [ ] Re-enable Tavily web search once the real blocker is identified & cleared (see F003.A2).
+- [ ] `download_papers_from_search` rejects a `has_pdf` kwarg the LLM keeps passing
+      (validation error; agent recovers) — align its signature with `search_papers`.
 
 ## ⚠ Pitfalls / Known problems
 - **Tavily web search is currently DISABLED** (`websearch_toolset_instance = None`,
@@ -77,6 +94,10 @@ resolve a local papers dir and clean up uploaded papers per user/session
   re-enabling.
 - `_http_mcp_toolset` returns `None` if the MCP URL is unset → the agent silently
   loses a capability. Check URLs are configured before assuming research tools exist.
+  **Confirmed 2026-06-12 (F003.A3):** both `MCP__PAPER_ANALYSIS_URL` /
+  `MCP__PAPERS_SEARCH_URL` were missing from `.env`, so ResearchAgent ran with no
+  literature tools; now set (see [[itmo-mcp-endpoints]]). The endpoints are
+  ITMO-internal (`10.32.x`) — reachable only over the FortiClient VPN.
 
 ## Symbols
 - `CoScientist/tools/research_tools.py:_http_mcp_toolset` — builds an HTTP MCP toolset (or None if URL missing).

@@ -1,0 +1,542 @@
+[
+ {
+  "id": "019ebb9e-0d24-7014-91d1-c66cb1552c51",
+  "start": "2026-06-12 11:35:57",
+  "model": "gpt-oss-120b",
+  "duration_s": 304.2,
+  "span_count": 77,
+  "n_llm": 17,
+  "n_tool": 6,
+  "n_general": 54,
+  "empty_llm": 1,
+  "finish": {
+   "STOP": 16,
+   "null": 1
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 5748,
+  "query": "Find 3 papers about CRISPR-CAS published after 2024"
+ },
+ {
+  "id": "019ebb9c-c212-74e9-b68a-ce5966f907f2",
+  "start": "2026-06-12 11:34:33",
+  "model": "gpt-oss-120b",
+  "duration_s": 63.6,
+  "span_count": 15,
+  "n_llm": 4,
+  "n_tool": 2,
+  "n_general": 9,
+  "empty_llm": 1,
+  "finish": {
+   "null": 1,
+   "STOP": 3
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": true,
+  "error_type": "ExceptionGroup",
+  "completion_tokens": 491,
+  "query": "Find 3 papers about CRISPR-CAS published after 2024"
+ },
+ {
+  "id": "019ebb5d-69ea-7fa8-b191-6944fcb863df",
+  "start": "2026-06-12 10:25:21",
+  "model": "gpt-oss-120b",
+  "duration_s": 312.4,
+  "span_count": 23,
+  "n_llm": 11,
+  "n_tool": 9,
+  "n_general": 3,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 11
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 2,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 3419,
+  "query": "Find 3 papers about CRISPR-CAS published after 2024"
+ },
+ {
+  "id": "019ebb58-5939-7d80-8175-d8ba070013ae",
+  "start": "2026-06-12 10:19:49",
+  "model": "gpt-oss-120b",
+  "duration_s": 27.8,
+  "span_count": 6,
+  "n_llm": 2,
+  "n_tool": 2,
+  "n_general": 2,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 2
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": true,
+  "error_type": "KeyError",
+  "completion_tokens": 341,
+  "query": "Find 3 papers about CRISPR-CAS published after 2024"
+ },
+ {
+  "id": "019ebb49-224e-7b87-87fe-ba08e548b1f5",
+  "start": "2026-06-12 10:03:12",
+  "model": "gpt-oss-120b",
+  "duration_s": 209.6,
+  "span_count": 44,
+  "n_llm": 12,
+  "n_tool": 7,
+  "n_general": 25,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 12
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": true,
+  "error_type": "EOFError",
+  "completion_tokens": 3390,
+  "query": "Find 3 papers about CRISPR-CAS published after 2024"
+ },
+ {
+  "id": "019eb936-4450-7809-b858-ad42e76499b5",
+  "start": "2026-06-12 00:23:21",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 12.7,
+  "span_count": 1,
+  "n_llm": 1,
+  "n_tool": 0,
+  "n_general": 0,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 1
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 0,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 805,
+  "query": "Generate 2 novel small molecule inhibitors for GSK-3beta with high predicted activity usin"
+ },
+ {
+  "id": "019eb934-318b-7946-9813-5de425671e7e",
+  "start": "2026-06-12 00:21:06",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 129.3,
+  "span_count": 44,
+  "n_llm": 12,
+  "n_tool": 9,
+  "n_general": 23,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 12
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1858,
+  "query": "Use CoderAgent to evaluate hepatotoxicity and myotoxicity of the molecule with SMILES 'COc"
+ },
+ {
+  "id": "019eb934-3183-70aa-86ec-d886ebd4e76b",
+  "start": "2026-06-12 00:21:06",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 34.1,
+  "span_count": 24,
+  "n_llm": 7,
+  "n_tool": 6,
+  "n_general": 11,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 7
+  },
+  "tool_not_found": 1,
+  "notfound_names": {
+   "request_approval": 1
+  },
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": true,
+  "error_type": "ValueError",
+  "completion_tokens": 843,
+  "query": "Use CoderAgent to evaluate hepatotoxicity and myotoxicity of the molecule with SMILES 'Oc1"
+ },
+ {
+  "id": "019eb931-57f1-7141-9ac5-a0986943dbe9",
+  "start": "2026-06-12 00:17:59",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 137.6,
+  "span_count": 54,
+  "n_llm": 12,
+  "n_tool": 7,
+  "n_general": 35,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 12
+  },
+  "tool_not_found": 2,
+  "notfound_names": {
+   "predict_ml": 2
+  },
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1028,
+  "query": "Generate 2 small molecules for blood lipid disorder treatment using the generate_case_mols"
+ },
+ {
+  "id": "019eb931-57ee-72bc-87e7-48829d3a69bc",
+  "start": "2026-06-12 00:17:59",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 175.4,
+  "span_count": 40,
+  "n_llm": 10,
+  "n_tool": 7,
+  "n_general": 23,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 10
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1922,
+  "query": "Generate 3 novel small molecule inhibitors for BTK (tyrosine-protein kinase BTK) with high"
+ },
+ {
+  "id": "019eb931-57e1-7564-9269-4fe2b4801b70",
+  "start": "2026-06-12 00:17:59",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 174.8,
+  "span_count": 49,
+  "n_llm": 8,
+  "n_tool": 5,
+  "n_general": 36,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 8
+  },
+  "tool_not_found": 2,
+  "notfound_names": {
+   "predict_ml": 2
+  },
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1375,
+  "query": "Generate 2 small molecules for blood lipid disorder treatment using the generate_case_mols"
+ },
+ {
+  "id": "019eb931-57de-7158-87ef-ad5c9c5e134e",
+  "start": "2026-06-12 00:17:59",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 38.9,
+  "span_count": 20,
+  "n_llm": 8,
+  "n_tool": 3,
+  "n_general": 9,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 8
+  },
+  "tool_not_found": 1,
+  "notfound_names": {
+   "request_approval": 1
+  },
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": true,
+  "error_type": "ValueError",
+  "completion_tokens": 981,
+  "query": "Generate 3 novel small molecule inhibitors for KRAS G12C using the generate_case_mols tool"
+ },
+ {
+  "id": "019eb930-e61c-7032-8fbe-628255c88da9",
+  "start": "2026-06-12 00:17:30",
+  "model": "?",
+  "duration_s": 372.7,
+  "span_count": 31,
+  "n_llm": 5,
+  "n_tool": 11,
+  "n_general": 15,
+  "empty_llm": 1,
+  "finish": {
+   "null": 1,
+   "STOP": 4
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 535,
+  "query": "\"Generate GSK-3beta inhibitors with high activit. Suggest some small molecules that inhibi"
+ },
+ {
+  "id": "019eb91e-9a28-7d79-a174-015a9fbec390",
+  "start": "2026-06-11 23:57:31",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 13.8,
+  "span_count": 3,
+  "n_llm": 2,
+  "n_tool": 1,
+  "n_general": 0,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 2
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 86,
+  "query": "Run exactly this and report output: echo graph_emitter_test && pwd"
+ },
+ {
+  "id": "019eb90b-c6a6-7615-80df-fb498fb6a0db",
+  "start": "2026-06-11 23:36:57",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 175.7,
+  "span_count": 41,
+  "n_llm": 8,
+  "n_tool": 6,
+  "n_general": 27,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 8
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1137,
+  "query": "Generate 2 small molecules tailored for a lipid disorder characterized by high cholesterol"
+ },
+ {
+  "id": "019eb90b-c6a3-758d-b849-de2afc3d5edb",
+  "start": "2026-06-11 23:36:57",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 379.8,
+  "span_count": 45,
+  "n_llm": 9,
+  "n_tool": 8,
+  "n_general": 28,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 9
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1436,
+  "query": "Generate 2 small molecules optimized for lipid disorder (high cholesterol, triglycerides, "
+ },
+ {
+  "id": "019eb90b-c696-780c-b98e-73d1f178a14b",
+  "start": "2026-06-11 23:36:57",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 167.6,
+  "span_count": 41,
+  "n_llm": 9,
+  "n_tool": 8,
+  "n_general": 24,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 9
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1464,
+  "query": "Generate 5 novel small molecule inhibitors of tyrosine-protein kinase BTK with high predic"
+ },
+ {
+  "id": "019eb90b-c693-7b1f-a131-28187876ac50",
+  "start": "2026-06-11 23:36:57",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 327.9,
+  "span_count": 51,
+  "n_llm": 14,
+  "n_tool": 11,
+  "n_general": 26,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 14
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 2,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1514,
+  "query": "Generate 5 novel small molecule inhibitors targeting GSK-3beta, KRAS G12C, and BTK with hi"
+ },
+ {
+  "id": "019eb90b-6885-7287-a81c-495a62db740b",
+  "start": "2026-06-11 23:36:33",
+  "model": "?",
+  "duration_s": 412.6,
+  "span_count": 19,
+  "n_llm": 3,
+  "n_tool": 7,
+  "n_general": 9,
+  "empty_llm": 1,
+  "finish": {
+   "null": 1,
+   "STOP": 2
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 335,
+  "query": "\"Generate GSK-3beta inhibitors with high activit. Suggest some small molecules that inhibi"
+ },
+ {
+  "id": "019eb902-30ee-7cce-a1af-3378958d0638",
+  "start": "2026-06-11 23:26:29",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 51.5,
+  "span_count": 1,
+  "n_llm": 1,
+  "n_tool": 0,
+  "n_general": 0,
+  "empty_llm": 1,
+  "finish": {
+   "null": 1
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 0,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": null,
+  "query": "Use the 'generate_case_mols' tool with the 'cancer' case model to generate 5 small molecul"
+ },
+ {
+  "id": "019eb901-baf2-75da-9f2f-b188d31a9ec8",
+  "start": "2026-06-11 23:25:58",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 12.2,
+  "span_count": 12,
+  "n_llm": 4,
+  "n_tool": 1,
+  "n_general": 7,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 4
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": true,
+  "error_type": "KeyError",
+  "completion_tokens": 370,
+  "query": "Use the 'generate_case_mols' tool to generate 5 small molecule inhibitors for GSK-3beta wi"
+ },
+ {
+  "id": "019eb8ff-032d-7a51-a3c2-2d051eba8602",
+  "start": "2026-06-11 23:23:00",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 169.3,
+  "span_count": 7,
+  "n_llm": 4,
+  "n_tool": 3,
+  "n_general": 0,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 4
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 1264,
+  "query": "Identify well-known small molecule inhibitors of KRAS G12C used in non-small cell lung can"
+ },
+ {
+  "id": "019eb8fe-b78e-7412-9aaa-4a4f335840c4",
+  "start": "2026-06-11 23:22:41",
+  "model": "qwen3-235b-a22b-2507",
+  "duration_s": 14.2,
+  "span_count": 1,
+  "n_llm": 1,
+  "n_tool": 0,
+  "n_general": 0,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 1
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 0,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 922,
+  "query": "Propose approaches to generate or identify small molecule inhibitors for GSK-3beta with hi"
+ },
+ {
+  "id": "019eb8fe-84fb-7a34-a899-f166f3327eb9",
+  "start": "2026-06-11 23:22:28",
+  "model": "?",
+  "duration_s": 292.1,
+  "span_count": 21,
+  "n_llm": 4,
+  "n_tool": 8,
+  "n_general": 9,
+  "empty_llm": 0,
+  "finish": {
+   "STOP": 4
+  },
+  "tool_not_found": 0,
+  "notfound_names": {},
+  "max_repeat_toolcall": 1,
+  "runaway": false,
+  "errored": false,
+  "error_type": null,
+  "completion_tokens": 412,
+  "query": "\"Generate GSK-3beta inhibitors with high activit. Suggest some small molecules that inhibi"
+ }
+]

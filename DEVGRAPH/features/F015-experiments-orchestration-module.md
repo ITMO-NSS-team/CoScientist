@@ -64,13 +64,17 @@ streamable-http on a random 20000–30000 port, register in CoScientist, **reusa
 ## How this fixes F014 (the mapping)
 - **Runaway loops (≤81 LLM calls / 700s):** ⇽ plan/execute separation + critic +
   bounded iteration budgets. FEDOT.MAS gets one small step at a time, not the firehose.
-- **`molecule_generator` "Tool 'X' not found":** ⇽ the per-step **tool-sufficiency
-  check** decides *before* dispatch whether docking/property tools exist; if not,
-  Alembic **builds** them. The sub-agent is never asked to run a step it lacks tools
-  for — and **no existing MCP tool is modified** (see F014.D1).
+- **`molecule_generator` "Tool 'X' not found":** ⇽ per-step **tool-sufficiency check**
+  (F015c) decides *before* dispatch whether docking/property tools exist; if not, Alembic
+  **builds** them — **no existing MCP tool is modified** (F014.D1). **⚠ Re-scoped by
+  adversarial review:** F015c at the CoScientist layer only guarantees the right *servers*
+  reach FEDOT.MAS; FEDOT.MAS's own meta-agent still assigns tools per worker at *server*
+  granularity, so it can under-equip an internally-generated worker. **F015g.D1 RESOLVED
+  (2026-06-12):** closed at the orchestration layer — per-step server filtering (existing RAG
+  seam) + tool-level details embedded in the step's task text + config-verify via the public
+  `generate_config`/`build_and_run` two-step API. F015c+F015g.D1 together cover the failure.
 - **Out of scope (honest):** does NOT fix OpenRouter provider flakiness / empty
-  responses (that's pinning — F014.A3), nor tools that are genuinely unavailable and
-  cannot be found or built by Alembic.
+  responses (pinning — F014.A3), nor tools genuinely unavailable and unbuildable by Alembic.
 
 ## Current state
 `proposed` on this branch. Building blocks already exist: `PlannerAgent`
@@ -80,15 +84,50 @@ is under active development on branches** (`origin/alembic`, `alembic-environmen
 `alembic-examples`, `alembic_feature_236`, `alembic-integration-demo`) — not yet
 integrated here. The integrated plan→critic→sufficiency→execute loop is not yet wired.
 
+## Decomposition (epic → F015a–F015h)
+F015 is an **epic**; the work splits into the sub-features below (each its own node, with
+adopted best practices + sources). Decomposition refined by an adversarial review workflow
+(2026-06-11) — see each node's "adversarial review" notes.
+
+| Sub | Title | Status | Note |
+|-----|-------|--------|------|
+| [F015a](./F015a-experiment-planner.md) | Planner — JSON step-plan DAG + bounded loop | proposed | needs F015c's live inventory at plan time |
+| [F015b](./F015b-plan-critic-loop.md) | Plan-critic loop (deterministic-first, bounded) | proposed | its hard gate **folds in F015c** (don't duplicate) |
+| [F015c](./F015c-tool-sufficiency-check.md) | MCP inventory + tool-sufficiency callable | proposed | **shared substrate; build FIRST**; fail-closed on backend-down |
+| [F015d](./F015d-repo-search-agent.md) | Repo-search (literature-first) | proposed | feeds F015e; provenance carry-through |
+| [F015e](./F015e-alembic-repo-to-mcp.md) | Alembic repo→MCP pipeline | **in_progress** | mostly built on branches; integrate, don't extend inline |
+| [F015f](./F015f-tool-deploy-registration.md) | Deploy + register/reuse + sandbox | proposed | build+serve already in F015e; scope = register+reuse+sandbox |
+| [F015g](./F015g-single-step-fedotmas-dispatch.md) | Single-step FEDOT.MAS dispatch | proposed | gated on **F015g.D1** (dispatch granularity) |
+| [F015h](./F015h-am-eval-harness.md) | Eval harness on dataset_S | proposed | acceptance gate; proves the fix (anti-entrenchment) |
+
+**Prerequisite decision:** **F015g.D1 — RESOLVED 2026-06-12** (user direction): per-step server
+filtering via the EXISTING `retrieve_tools`→`filtered_tools`→`servers_payload` seam + detailed
+per-step task text embedding tool-level details + plan-update after Alembic builds (several
+small FEDOT.MAS calls) + a `generate_config`→verify-`MASConfig`→`build_and_run` safety net
+(public two-step fedotmas API; no fedotmas changes). See F015g Decisions.
+
+**Build order (corrected by review — F015c before F015a; F015b folds F015c):**
+`F015g.D1 → F015c → F015a → F015b → F015g → F015f → F015d → F015e(integrate)`, with **F015h** running
+alongside as the acceptance gate.
+
+## Cross-cutting concerns (from the adversarial review — easy to miss)
+- **Structured/constrained decoding** for the JSON plan: flaky open models emit empty/invalid
+  JSON (F014.A2). Use litellm/OpenRouter `response_format=json_schema` + Pydantic
+  validate-then-repair; mirror FEDOT.MAS's own `output_schema=MASConfig` (in-repo prior art).
+- **Model tiering / pinning** [S032]: strong **pinned** model for plan+critic, cheap pinned
+  model for per-step dispatch/dedup (LATM maker/user split). Ties to F014.A3 (pinning is the live lever, currently off).
+- **CodeAct routing** [S031]: many steps should be one executable code block over a typed API
+  (CoderAgent/`code_exec_server`, F002) — worst F014 runaways were `bash`/`write_file` thrash, not tool-not-found.
+- **Retrieval-oracle fail-closed** (F015c): `[]` on backend-down must NOT read as "everything is a gap".
+- **MCP supply-chain / tool-poisoning** (F015f): third-party tool descriptions + outputs are
+  untrusted inputs flowing into the planner and FEDOT.MAS's description-only router.
+- **HITL plan-approval gating** (F001): interrupt for plan approval / uncertainty-triggered escalation, not just "stuck".
+- **Eval harness** (F015h): the module's claims are unproven without it.
+
 ## ✅ TODO
-- [ ] Implement the experiment **orchestrator** that emits the structured JSON plan
-      (`{subtask, required_tools, run_params, expected_artifacts}` per step).
-- [ ] Wire the **plan critic** loop with an explicit iteration budget (reuse F006).
-- [ ] Implement the **per-step tool-sufficiency check** against the live MCP tool list
-      (reuse F009 retrieval / `search_mcp_servers` F005) — this is the direct F014 fix.
-- [ ] Dispatch **one step at a time** to FEDOT.MAS (stop the all-at-once query).
-- [ ] Integrate **Alembic** from its branches; register built MCP servers for reuse.
-- [ ] Bench against `dataset_S.xlsx` (F014) and compare loop size / tool-not-found
+- [ ] Resolve **F015g.D1** (FEDOT.MAS dispatch granularity) — prerequisite for everything.
+- [ ] Build **F015c** (inventory + sufficiency) first, then F015a → F015b → F015g → F015f → F015d → integrate F015e.
+- [ ] Stand up **F015h** eval on `dataset_S.xlsx` as the acceptance gate (loop size / tool-not-found
       rate / `is_correct` vs the current path.
 
 ## ⚠ Pitfalls / Known problems

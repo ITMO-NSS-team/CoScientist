@@ -4,7 +4,7 @@ title: Pre/post critic + executor refinement
 type: feature
 status: done
 created: 2026-06-11
-updated: 2026-06-11
+updated: 2026-06-12
 owners: [ITMO-NSS-team]
 derives_from: [F000]
 depends_on: [F000]
@@ -38,6 +38,22 @@ The critic roster is rendered from `catalog.py:render_critic_roster()`.
 ### F006.A2 — Critic provider routing + retries · 2026-06-10 · outcome: success
 - **Method:** route the critic to pinned providers with retries (same flakiness fix as F000.A1).
 - **Evidence:** commit `79cb9c6`.
+### F006.A3 — Critic clobbered sub-agent delegation args → `KeyError: 'request'` · 2026-06-12 · outcome: success
+- **Method:** on verdict REVISE, `_apply_revisions` overwrote each function_call's
+  args wholesale with the critic's `revised_calls[i].args`. For a sub-agent
+  delegation (ADK `AgentTool` requires a single `{"request": <str>}`) the critic
+  "revised" the call into a domain shape (`{keywords, year, limit}`), dropping
+  `request`; `AgentTool.run_async` then did `args['request']` → `KeyError` and
+  killed the whole run. Fix: if the original call had a `request` key and the
+  revision drops it, keep the original `request` string.
+- **Result:** delegation survives critic revision; the "Find 3 papers…" query
+  completes end-to-end instead of crashing at the TaskExecutorAgent call.
+- **Evidence:** Opik trace `019ebb58` (delegation args became `{keywords, year, limit}`
+  → `KeyError: 'request'`) vs fixed run `019ebb5d` (clean final answer);
+  `critic_agent.py:_apply_revisions` request-preserve guard; unit tests
+  `tests/unit/test_critic_revisions.py` (4 pass). See memory [[opik-tracing-access]].
+- **Next:** ideally the critic shouldn't rewrite delegation args at all — consider a
+  prompt rule to leave agent-tool `request` calls untouched.
 
 ## ✅ TODO
 - [ ] No measurement of whether the critic improves task success vs. its latency/cost.
@@ -54,6 +70,9 @@ The critic roster is rendered from `catalog.py:render_critic_roster()`.
   it needed provider pinning + retries (F006.A2). Don't remove those.
 - Trajectory/critic prompts truncate values (`_truncate`, 1500 chars) — very large
   tool outputs may be judged on a clipped view.
+- `_apply_revisions` rewrites function-call args **by index, wholesale**. It must
+  not strip the `request` key of sub-agent (`AgentTool`) delegations — that crashes
+  the run with `KeyError: 'request'` (fixed F006.A3). Keep the request-preserve guard.
 
 ## Symbols
 - `CoScientist/agents/critic_agent.py:PreVerdict` / `:PostVerdict` — verdict enums.
