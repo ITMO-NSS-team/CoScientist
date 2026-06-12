@@ -1,0 +1,39 @@
+{
+ "condition": "B2",
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "session_prefix": "ab_B2_",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activity",
+   "session_id": "ab_B2_00_225459",
+   "duration_s": 600.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s"
+  },
+  {
+   "query": "Generate inhibitors of KRAS protein with G12C mutation. The inhibitors should be selective",
+   "session_id": "ab_B2_01_225459",
+   "duration_s": 119.6,
+   "resp_len": 548,
+   "resp_head": "I am rejecting my own proposed action(s). Reason: The proposed call uses a server_id 'd36e3d994404e957' that was not previously confirmed or returned in any prior result. This server_id appears to be ",
+   "error": null
+  },
+  {
+   "query": "Generate high activity tyrosine-protein kinase BTK inhibitors",
+   "session_id": "ab_B2_02_225459",
+   "duration_s": 600.2,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit signal transducer and activator of transcription 3 ",
+   "session_id": "ab_B2_03_225459",
+   "duration_s": 345.8,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)"
+  }
+ ]
+}

@@ -1,0 +1,15 @@
+{
+ "condition": "smoke",
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "session_prefix": "ab_smoke_",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activity",
+   "session_id": "ab_smoke_00_204006",
+   "duration_s": 360.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>360s"
+  }
+ ]
+}

@@ -1,0 +1,39 @@
+{
+ "condition": "A",
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "session_prefix": "ab_A_",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activity",
+   "session_id": "ab_A_00_214409",
+   "duration_s": 600.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s"
+  },
+  {
+   "query": "Generate inhibitors of KRAS protein with G12C mutation. The inhibitors should be selective",
+   "session_id": "ab_A_01_214409",
+   "duration_s": 600.3,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s"
+  },
+  {
+   "query": "Generate high activity tyrosine-protein kinase BTK inhibitors",
+   "session_id": "ab_A_02_214409",
+   "duration_s": 600.3,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit signal transducer and activator of transcription 3 ",
+   "session_id": "ab_A_03_214409",
+   "duration_s": 600.3,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s"
+  }
+ ]
+}
