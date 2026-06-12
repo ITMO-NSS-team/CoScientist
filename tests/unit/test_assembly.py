@@ -162,6 +162,23 @@ def test_orchestrator_tool_discovery_gate(config, system):
         )
 
 
+def test_executor_sufficiency_and_discovery_guardrails(config, system):
+    """Two routing guardrails are present when the relevant agents are wired:
+    the ExperimentAgent must be able to abstain (NO_MATCHING_TOOL) when retrieved
+    tools don't implement the task, and the orchestrator must do tool DISCOVERY
+    itself rather than delegating "does a tool exist" to the Executor."""
+    exp = system.agent("ExperimentAgent").instruction
+    assert "NO_MATCHING_TOOL" in exp
+    assert "Recommend CoderAgent" in exp
+
+    cfg = config.agent("OrchestratorAgent")
+    if "retrieval" in cfg.tools and "TaskExecutorAgent" in cfg.subordinates:
+        orch = system.root.instruction
+        assert "retrieve_tools" in orch
+        assert 'delegate "check if a tool exists"' in orch.lower() or \
+               'Do NOT delegate "check if a tool exists"' in orch
+
+
 def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(config, system):
     """The DatasetCollectorAgent is wired under CoderAgent, named in the coder's
     prompt, and uses the coder toolset — so it works in the same per-session

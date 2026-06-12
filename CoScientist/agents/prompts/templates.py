@@ -353,16 +353,33 @@ Your role is to solve tasks by using **FEDOT_MAS**, which automatically generate
 - Those servers are AUTOMATICALLY available to fedot_tool (via internal state)
 - DO NOT ask for or reference server IDs — they are handled internally
 
-## Instructions:
-1. Understand the task and expected output
-2. Convert the task into a **clear, detailed task description** suitable for FEDOT.MAS:
-   * include goals, inputs, constraints, and desired outputs
-   * specify if the task involves research, data processing, or experiments
-3. Call fedot_tool with the task description
-4. Return the result
+## FIRST: do the retrieved tools actually cover this task?
+The tools retrieved for this task are listed below. Before doing anything, judge
+whether they genuinely implement the REQUESTED operation — not merely the same
+domain. Being molecule-related is NOT enough.
 
-Here are retrieved tools:
+- If the task names a specific method, algorithm, framework, or architecture that
+  NO retrieved tool implements (e.g. a GOLEM evolutionary-optimization loop, a
+  named model, a custom training procedure), the retrieved tools are only loosely
+  related — FEDOT.MAS cannot do it. Do NOT call fedot_tool. Instead respond with
+  EXACTLY one line and nothing else:
+
+      NO_MATCHING_TOOL: <one sentence on what's missing>. Recommend CoderAgent.
+
+- Only when a retrieved tool (or a sensible combination of them) genuinely
+  performs the requested operation should you proceed below. Do NOT improvise a
+  pipeline out of unrelated tools to "make something run".
+
+Retrieved tools for this task:
 {filtered_tools?}
+
+## If the tools cover the task:
+1. Understand the task and expected output.
+2. Convert the task into a **clear, detailed task description** suitable for
+   FEDOT.MAS (goals, inputs, constraints, desired outputs; note whether it is
+   research, data processing, or experiments).
+3. Call fedot_tool with the task description.
+4. Return the result.
 
 Do NOT solve the task manually — delegate to FEDOT.MAS.
 
@@ -736,11 +753,21 @@ def orchestrator(ctx: PromptContext) -> str:
             "generation or computation."
             if has_research else ""
         )
+        discovery_clause = (
+            "\n   Discovering WHICH tools exist is YOUR job — call `retrieve_tools`"
+            " yourself.\n   Do NOT delegate \"check if a tool exists\" to "
+            "TaskExecutorAgent: delegating to it\n   runs the full discover→deploy"
+            "→FEDOT pipeline (which executes even when nothing\n   matches). "
+            "Delegate to TaskExecutorAgent only to RUN a computation you have\n"
+            "   already confirmed a tool covers."
+            if has_exec else ""
+        )
         steps.append(
             "BEFORE delegating, call `retrieve_tools` to discover which ready-made MCP\n"
             "   tools exist for the task. Run one or two focused `retrieve_tools` queries per capability\n"
             f"   (e.g. \"molecule generation\", \"inhibitor design\"); if a relevant tool\n"
-            f"   exists, {prefer}.{research_clause}\n"
+            f"   exists, {prefer}.{research_clause}"
+            f"{discovery_clause}\n"
             "   Retrieved tools accumulate — do not repeat near-identical queries, and\n"
             "   never invent server ids (`get_server_info` only takes ids it returned)."
         )
