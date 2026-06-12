@@ -48,6 +48,16 @@ subset** — replacing the current single overloaded query (the F014 runaway roo
   per server (no per-tool filter). Tool-level descriptions are visible to a worker's LLM only
   at runtime — AFTER the roster is fixed. This is exactly how F014's `molecule_generator` got
   only the 5 generation tools and then called docking/property tools it didn't have.
+- **Trace evidence (Opik, 2026-06-12):** dumped a real FEDOT-launching run — trace
+  `019eb27d-7950-714f-bb56-d315266eaffc` ("Generate GSK-3beta inhibitors with high activity",
+  qwen3, 246 spans) via `scripts/opik_eval/dump_fedot_trace.py`. Confirms: each `fedot_tool`
+  span INPUT is **only** `{"task_description": "..."}` (the orchestrator already embeds tool
+  names there, e.g. *"use the 'train_ml' tool with case=…, target_column=…"*) — **no servers in
+  the call payload**; the server list is injected from `state['filtered_tools']` inside
+  `fedot_tool`. FEDOT.MAS then spawns its OWN workers via the meta-agent (visible:
+  `routing_meta_agent`, `ml_task_coordinator`/`model_trainer`, `molecule_design_coordinator`/
+  `generative_molecule_worker` — names generated per run). So today: one big task in, autonomous
+  worker generation inside — exactly the firehose F015 replaces with per-step plans.
 - **Resolution (user, 2026-06-12):** the experiments orchestrator solves this at the
   ORCHESTRATION layer, with no fedotmas changes:
   1. **Per-step server filtering** via the existing RAG-over-tools (`retrieve_tools` →
