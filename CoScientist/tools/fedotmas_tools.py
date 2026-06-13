@@ -8,7 +8,9 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from fedotmas import MAS, HttpMCPServer
+from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
 
+from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
@@ -67,15 +69,43 @@ class FedotMASToolset(BaseToolset):
         }
         servers_payload.update(web_servers_payload)
 
+        # F010.A3/A4: an after_tool_callback plugin captures S3 artifact links
+        # (results_presigned_url) at the tool-call boundary, BEFORE FEDOT.MAS sub-agents
+        # paraphrase them away / hallucinate molecules.
+        # NB: passing plugins= REPLACES MAS defaults, so re-include them.
+        cap = ArtifactCapturePlugin()
         try:
-            mas = MAS(mcp_servers=servers_payload)
+            mas = MAS(
+                mcp_servers=servers_payload,
+                plugins=[LoggingPlugin(), WebSearchLimitPlugin(max_calls_per_agent=4), cap],
+            )
             result = await mas.run(task_description)
         except Exception as e:
             return {"status": "error", "error": f"FEDOT.MAS run failed: {e}"}
 
+        # Fallback (F010.A4): also scan the final MAS state for presigned URLs the
+        # plugin may have missed (e.g. a link that only survived inside a sub-agent's
+        # paraphrased text), so the link is never silently lost.
+        import re as _re
+        import json as _json
+        try:
+            _txt = _json.dumps(result, default=str, ensure_ascii=False)
+        except Exception:
+            _txt = str(result)
+        _known = {a.get("url") for a in cap.captured}
+        for _u in dict.fromkeys(_re.findall(r"https?://[^\s\"'<>)\\]+X-Amz-[^\s\"'<>)\\]+", _txt)):
+            if _u not in _known:
+                cap.captured.append({"url": _u, "tool": "fedot_state_scan"})
+
+        # Surface the REAL artifacts both in the return value and in shared session
+        # state, so the link survives the TaskExecutor/orchestrator LLM paraphrases.
+        if cap.captured and tool_context is not None:
+            tool_context.state["fedot_artifacts"] = cap.captured
+
         return {
             "status": "success",
             "result": result,
+            "artifacts": cap.captured,
         }
 
     

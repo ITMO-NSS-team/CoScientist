@@ -42,6 +42,13 @@ class ResilientAgentTool(AgentTool):
     """
 
     async def run_async(self, *, args, tool_context):
+        # Guard (F010.A5): stock AgentTool does ``args['request']`` (agent_tool.py:216) and
+        # hard-crashes the whole run with KeyError if the LLM emitted the delegation without
+        # a ``request`` key. Inject one from the next-best string arg so the run continues.
+        if isinstance(args, dict) and "request" not in args:
+            import json as _json
+            _alt = next((v for v in args.values() if isinstance(v, str) and v.strip()), None)
+            args = {**args, "request": _alt or (_json.dumps(args) if args else "Proceed with the delegated task.")}
         result = await super().run_async(args=args, tool_context=tool_context)
         if isinstance(result, str) and not result.strip():
             output_key = getattr(self.agent, "output_key", None)

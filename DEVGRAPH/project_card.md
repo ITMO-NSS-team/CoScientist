@@ -85,10 +85,12 @@ live in **S3** (e.g. the remote generative MCP's training files at
 `molecule-generative-mcp.s3.amazonaws.com/train/…`; presigned URLs, ТП §2.4). A missing
 dataset/model there → "false success" (F015h). **GENERATION RESULTS are also S3, not inline:**
 `generate_mols`/`generate_case_mols` return `results_presigned_url` (+ `results_s3_key`) to a results
-CSV — the molecules live behind the link. ⚠ Today the FEDOT.MAS `molecule_generator` sub-agent
-**paraphrases that result and drops the link** (state `output_key` = LLM text, not the raw tool
-payload), so the real molecules never reach the orchestrator (F010.A3; fix → F015g). The `vault` MCP
-(`http://10.32.11.45:8000/mcp`) is the intended helper for pulling/holding artifact links.
+CSV — the molecules live behind the link. ✅ The FEDOT.MAS sub-agent used to paraphrase that result and
+drop the link; now `ArtifactCapturePlugin` (injected via `MAS(plugins=…)`) captures the presigned URL at
+the tool boundary → `fedot_tool` returns `artifacts` + `state['fedot_artifacts']`, and `main.py`'s
+finalizer downloads the CSV and reads its contents into the user answer (F010.A3→A7). S3 links are the
+data transport between remote MCPs; the answer is formed from the file contents. The `vault` MCP
+(`http://10.32.11.45:8000/mcp`) persists/holds artifact links.
 
 **LLM:** LiteLLM over OpenRouter; model from `settings.llm.main_model`; provider pinning via
 `extra_body` (`agents.make_llm` / `experiments/planner`). The **per-run** model is recorded in

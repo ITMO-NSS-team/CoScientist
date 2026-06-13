@@ -1,0 +1,52 @@
+{
+ "condition": "S3",
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "session_prefix": "ab_S3_",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activity",
+   "session_id": "ab_S3_00_032445",
+   "duration_s": 55.2,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "ValueError: Tool 'list_s3_train_cases' not found.\nAvailable tools: list_available_tools, list_server_tools, HypothesesAgent, ResearchAgent, TaskExecutorAgent, CoderAgent, MedicalAgent\n\nPossible causes:\n  1. LLM h",
+   "trace_id": null
+  },
+  {
+   "query": "Generate inhibitors of KRAS protein with G12C mutation. The inhibitors should be selective",
+   "session_id": "ab_S3_01_032445",
+   "duration_s": 130.2,
+   "resp_len": 552,
+   "resp_head": "I am rejecting my own proposed action(s). Reason: The proposed action re-attempts 'list_server_tools' on a server already inspected twice, yielding no new information. The orchestrator is looping with",
+   "error": null,
+   "trace_id": "019ebdf2-474e-7007-9192-7d25c2f455ca"
+  },
+  {
+   "query": "Generate high activity tyrosine-protein kinase BTK inhibitors",
+   "session_id": "ab_S3_02_032445",
+   "duration_s": 334.6,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "JSONDecodeError: Expecting ',' delimiter: line 1 column 888 (char 887)",
+   "trace_id": "019ebdf4-95d5-7706-8462-7f4af5a821f5"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit signal transducer and activator of transcription 3 ",
+   "session_id": "ab_S3_03_032445",
+   "duration_s": 787.2,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "McpError: Timed out while waiting for response to ClientRequest. Waited 300.0 seconds.",
+   "trace_id": "019ebdf9-dae1-7fa7-8f12-bb41a2fcb8da"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit Proprotein Convertase Subtilisin/Kexin Type 9 with ",
+   "session_id": "ab_S3_04_032445",
+   "duration_s": 385.1,
+   "resp_len": 452,
+   "resp_head": "[PRE-ACTION CRITIC] I am abandoning the proposed action. Reason: The tool registry is temporarily unavailable, so relying solely on list_available_tools without fallback is risky. I will re-plan from ",
+   "error": null,
+   "trace_id": "019ebe05-ea5e-742a-847b-fa6ddd265aae"
+  }
+ ]
+}

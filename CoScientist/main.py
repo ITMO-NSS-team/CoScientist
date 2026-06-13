@@ -33,6 +33,36 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> str:
+    """Best-effort: download a presigned-S3 CSV and return a small text preview
+    (header + first rows of Smiles + key property columns). Returns '' on any failure.
+
+    Lets the final answer be formed from the ACTUAL S3 file contents rather than a bare
+    link or unverified prose (F010.A6).
+    """
+    import urllib.request
+    import csv
+    import io
+    try:
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            raw = resp.read(max_bytes).decode("utf-8", "replace")
+        rows = list(csv.reader(io.StringIO(raw)))
+        if not rows:
+            return ""
+        hdr = rows[0]
+        prefer = ("Smiles", "QED", "LogP", "Synthetic Accessibility", "Validity")
+        keep = [i for i, h in enumerate(hdr) if h in prefer] or list(range(min(5, len(hdr))))
+        out = [" | ".join(hdr[i] for i in keep)]
+        for row in rows[1:1 + max_rows]:
+            out.append(" | ".join(row[i] if i < len(row) else "" for i in keep))
+        extra = len(rows) - 1 - max_rows
+        if extra > 0:
+            out.append(f"… (+{extra} more rows)")
+        return "\n".join(out)
+    except Exception:
+        return ""
+
+
 class CoScientistManager:
     """
     Main manager for CoScientist (ADK-based execution).
@@ -127,6 +157,32 @@ class CoScientistManager:
                 elif event.actions and event.actions.escalate:
                     final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
 
+        # Deterministic finalizer (F010.A5/A6): the orchestrator LLM sometimes drops a
+        # successfully-generated result. The real molecules live behind a presigned S3 URL
+        # that fedot_tool captured into state['fedot_artifacts']. If that result is not
+        # already in the answer, DOWNLOAD the file and append a preview of its contents (read
+        # from S3, not fabricated) plus the link, so generated molecules always reach the user.
+        try:
+            session = await self.session_service.get_session(
+                app_name=self.app_name, user_id=self.user_id, session_id=self.session_id,
+            )
+            arts = (getattr(session, "state", None) or {}).get("fedot_artifacts") if session else None
+        except Exception:
+            arts = None
+        if arts:
+            missing = [a for a in arts if a.get("url") and a["url"] not in (final_response or "")]
+            if missing:
+                blocks = []
+                for a in missing:
+                    url = a["url"]
+                    cnt = a.get("generated_count")
+                    tag = f" ({cnt} molecules)" if cnt else ""
+                    preview = await asyncio.to_thread(_s3_csv_preview, url)
+                    block = f"**Generated molecules{tag}** — [download full CSV]({url})"
+                    if preview:
+                        block += f"\n```\n{preview}\n```"
+                    blocks.append(block)
+                final_response = (final_response or "").rstrip() + "\n\n---\n" + "\n\n".join(blocks)
 
         return final_response
 

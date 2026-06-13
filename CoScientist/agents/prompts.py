@@ -282,7 +282,17 @@ Your role is to solve tasks by using **FEDOT_MAS**, which automatically generate
    * include goals, inputs, constraints, and desired outputs
    * specify if the task involves research, data processing, or experiments
 3. Call fedot_tool with the task description
-4. Return the result
+4. Return the result.
+   ⚠ **S3 ARTIFACTS — pass them through VERBATIM.** Generation/ML MCP tools do NOT
+   return data inline — they upload it to S3 and return a **presigned URL**. fedot_tool
+   surfaces these in its `artifacts` list (`url`, `s3_key`, `generated_count`,
+   `columns`, `case`). If `artifacts` is non-empty you MUST quote each `url` exactly in
+   your answer — it is the ONLY reliable handle on the real generated molecules/results
+   (the data lives in the CSV behind the link). Do NOT invent, re-list, or "summarize"
+   SMILES strings: any inline molecule list is UNVERIFIED and likely hallucinated.
+   Report the S3 URL(s) + `generated_count` + `columns`, and say the full data is
+   downloadable there. If `artifacts` is empty, say generation produced no artifact —
+   never fabricate molecules to fill the gap.
 
 Here are retrieved tools:
 {filtered_tools}
@@ -542,6 +552,41 @@ authoritative.
   point at the specific gap — never re-run the whole task from scratch.
 - Repeating expensive work (cloning, building, training) wastes time and money;
   do it only with a concrete reason.
+
+### S3 result links — the data-transfer mechanism, AND read them to form your answer
+MCP tools are REMOTE and cannot pass large data (datasets, images, molecule sets) inline —
+so they upload results to S3 and return a **presigned URL**. S3 links are therefore how data
+moves through the pipeline, BOTH into and out of tools:
+- **Between steps (transport):** feed a step's S3 URL as the INPUT to the next tool/agent
+  instead of trying to inline the data (e.g. a generated-molecules CSV link → a
+  property-prediction step). TaskExecutorAgent surfaces these links in its `artifacts`.
+- **For the FINAL answer to the user (read the contents):** do NOT just hand over a raw link.
+  **Download and READ the file(s) behind the S3 URL(s)** — delegate to **CoderAgent** to fetch
+  the presigned URL and parse the file (e.g. read the CSV and list the generated SMILES + key
+  properties like QED/LogP) — and FORM YOUR ANSWER FROM THE ACTUAL CONTENTS. You MAY also
+  include the S3 link itself so the user can download the full file.
+- Treat any inline SMILES / numbers a sub-agent merely *typed out* as UNVERIFIED prose — the
+  authoritative data is the S3 file; READ it rather than trusting the text, and NEVER replace
+  a real S3 result with a hand-written molecule list.
+- If the task asked for generated molecules and NO S3 artifact came back, that step did not
+  actually produce data — report the gap or re-run; do not fabricate molecules.
+
+### Molecule generation — the GENERIC generator is always a valid deliverable
+For "generate / suggest molecules" requests, the generic generator (`generate_mols`, run
+via TaskExecutorAgent) ALWAYS works with no trained case and returns real molecules + an
+S3 link. Use it as the reliable fallback so a request never ends empty:
+- `generate_case_mols` supports only a FIXED set of disease cases. If the requested target
+  is not clearly one of them, or you cannot confirm a case in ONE check, do NOT loop
+  introspecting schemas / re-listing tools — fall back to `generate_mols` and deliver those
+  molecules + the S3 link.
+- If property/activity/docking models for the requested constraints do not exist, or a
+  secondary step fails or TIMES OUT, STILL deliver the generated molecules + S3 link and
+  list which constraints could not be computed. Generated molecules + the S3 link is a
+  SUCCESSFUL result — never abandon the whole task because a secondary step failed.
+- If the tool registry is temporarily unavailable, proceed with generation via
+  TaskExecutorAgent rather than abandoning the run.
+- The critic may name a specific MCP tool (e.g. `list_generative_train_cases`); that is a
+  LEAF tool — NEVER emit a function call with that name. Delegate the run to TaskExecutorAgent.
 
 <<CRITIC_PROTOCOL>>
 '''

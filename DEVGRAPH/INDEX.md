@@ -27,7 +27,7 @@ inbound links). Within a section, ordered by ID.
 | [F007](./features/done/F007-paper-analysis-pipeline.md) | Paper analysis & parsing | 2026-06-11 | F000 | Marker→Chroma→S3 + QA + MCP (#204/#239/#256); PDF extraction gap. |
 | [F008](./features/done/F008-observability-opik.md) | Observability — Opik tracer | 2026-06-13 | F000 | Opik tracing + orchestrator prompt fix (#225); **F008.A2** reliable run→trace correlation (server-side `thread_id` filter + `trace_locator.py` manifest); enablement undocumented. |
 | [F009](./features/done/F009-rag-tool-retrieval.md) | RAG tool/MCP retrieval (DB) | 2026-06-12 | F000 | Hybrid RAG-DB retrieval + rerank (#212); now **degrades gracefully** when DB down (F009.A2); hard dep on rag_tools + Postgres. (≠ F005.) |
-| [F010](./features/done/F010-fedotmas-integration.md) | FEDOT.MAS integration | 2026-06-13 | F000 | Text→ML pipelines (#211, fix #224); needs SSH `fedotmas` install. **⚠ F010.A3: `molecule_generator` sub-agent returns an LLM paraphrase — drops the tool's S3 link & hallucinates SMILES; real molecules lost in S3. Fix→F015g.** |
+| [F010](./features/done/F010-fedotmas-integration.md) | FEDOT.MAS integration | 2026-06-13 | F000 | Text→ML pipelines (#211, fix #224); needs SSH `fedotmas` install. **F010.A3→A7: S3-link-loss SOLVED — `ArtifactCapturePlugin` captures the presigned URL at the tool boundary; finalizer downloads+reads the CSV into the answer (proven S4 Q1/Q3). Reliability (timeouts/variance) → F015.** |
 | [F011](./features/done/F011-dataset-collection-mcp.md) | Dataset-collection MCP | 2026-06-11 | F000 | Build datasets from papers (#196, fix #269); coverage unchecked. |
 | [F012](./features/done/F012-papers-search-mcp.md) | Papers-search MCP (OpenAlex) | 2026-06-11 | F000 | OpenAlex search/download (#196); needs API key, wiring unconfirmed. |
 | [F013](./features/done/F013-chemical-mcp-docker.md) | Chemical MCP + docker | 2026-06-11 | F000 | Dockerized chemistry tools (#187, S3 #197); most verified capabilities. |
@@ -58,15 +58,16 @@ inbound links). Within a section, ordered by ID.
 Legend: `proposed` · `in_progress` (=TODO) · `blocked` · `done` (=CLOSE) · `rejected` (=REJECT) · `superseded`.
 
 ## Hot / attention
-- **⚠ FEDOT.MAS sub-agent fabricates molecules & drops the S3 result link (F010.A3, 2026-06-13).**
-  Empirically confirmed: `generate_mols` (GenerativeMoleculeModels MCP) returns a **presigned S3 URL**
-  to a results CSV — no inline SMILES. The `molecule_generator` sub-agent (ADK `LlmAgent`) returns
-  the LLM's **paraphrase** (state `output_key` = `part.text`, not the raw `function_response`,
-  `llm_agent.py:837-851`), so it **dropped the S3 link and hallucinated 15 SMILES**. Master
-  orchestrator then drops even that in final synthesis (defect B, cross-ref F000). The real molecules
-  never reach the orchestrator/chat → reactplan-vs-inline planner A/B is **moot** until fixed.
-  **Fix lives in F015g** (capture the structured S3 artifact; success = `expected_artifacts` in S3,
-  not the LLM summary). Evidence: live MCP call, Opik trace `019ebdab-…`, workflow `fedot-s3-link-trace`.
+- **✅ FEDOT.MAS S3-link loss — SOLVED (F010.A3→A7, 2026-06-13).** Was: `generate_mols` returns a
+  **presigned S3 URL** (no inline SMILES), but the `molecule_generator` sub-agent paraphrased it away
+  and hallucinated SMILES; the orchestrator then dropped it in final synthesis. Fix (committed):
+  `ArtifactCapturePlugin` (after_tool_callback, injected via `MAS(plugins=…)`) captures the presigned
+  URL at the tool boundary regardless of paraphrase → `fedot_tool` returns `artifacts` + writes
+  `state['fedot_artifacts']`; a deterministic finalizer in `main.py` DOWNLOADS the CSV and reads its
+  contents into the answer; orchestrator prompt now says to download+read S3 contents (transport
+  between MCPs, contents for the user). **Proven:** S4 Q1/Q3 delivered real molecules + link to the
+  chat; direct `fedot_tool` call captures the URL. **Remaining (NOT S3): pipeline reliability** —
+  timeouts on slow paths, qwen run-to-run variance, critic-revision text leaking as the answer → F015.
 - **F001 HITL** — still `in_progress`. Live path now **confirmed** (F001.A2): fires
   via **callback** on the CoderAgent's outward-facing-command approval; the console
   handler now auto-rejects with no TTY (headless-safe). Still open: tool/internal_loop
