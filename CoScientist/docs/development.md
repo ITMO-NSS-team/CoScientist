@@ -72,7 +72,8 @@ python -m CoScientist.a2a.run_all
 ```
 
 Both `adk web` modes print every agent's thoughts, tool calls and tool results
-to the console (the same event-logger plugin the A2A servers use); disable
+to the console (the same event-logger plugin the A2A servers use) and append
+the same trace to `AGENT_LOG_FILE` (default `/app/agent_events.log`); disable
 with `LOG_AGENT_EVENTS=0`.
 
 The historical imports still work — `from CoScientist.agents import

@@ -131,7 +131,9 @@ you see the coder's own `execute_bash`/`check_job` calls, not just the final
 result that comes back over A2A. The benchmark client only streams the agent it
 hits directly; watch the `run_all` console for the full picture. The same
 plugin is attached to the `App` in `agent.py`, so plain `adk web` (no A2A)
-prints the same trace. Disable with `LOG_AGENT_EVENTS=0` (the older
+prints the same trace. The trace is also appended (ANSI stripped) to
+`AGENT_LOG_FILE` (default `/app/agent_events.log`; set it to `""` for
+console-only). Disable everything with `LOG_AGENT_EVENTS=0` (the older
 `A2A_LOG_EVENTS=0` still works).
 
 **Stopping the stack.** Ctrl+C (SIGINT/SIGTERM) stops all servers gracefully;

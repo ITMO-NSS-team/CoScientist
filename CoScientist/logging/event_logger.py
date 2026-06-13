@@ -9,12 +9,18 @@ Attached in two places:
 This surfaces what each agent does internally — thoughts, tool calls, and tool
 results — not just the final answer.
 
-Disable with LOG_AGENT_EVENTS=0 (the older A2A_LOG_EVENTS=0 still works).
+The same trace is also appended to a log file (ANSI stripped) — handy when the
+terminal scrollback can't hold a long run. Path: AGENT_LOG_FILE (default
+``/app/agent_events.log``); set it to "" to keep only the console output.
+
+Disable everything with LOG_AGENT_EVENTS=0 (the older A2A_LOG_EVENTS=0 still
+works).
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Optional
 
 from google.adk.plugins.base_plugin import BasePlugin
@@ -27,6 +33,28 @@ _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
 _MAGENTA = "\033[35m"
 _RESET = "\033[0m"
+
+# File copy of the console trace (ANSI stripped). Best-effort: an unwritable
+# path disables the file sink rather than breaking the run. Under run_all every
+# A2A server appends to the same file — O_APPEND keeps each capped line intact,
+# so they aggregate just like the shared console.
+_LOG_FILE = os.getenv("AGENT_LOG_FILE", "/app/agent_events.log")
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+_log_fh = None        # open handle, lazily created
+_log_disabled = False  # set once if opening failed, so we stop retrying
+
+
+def _get_log_fh():
+    global _log_fh, _log_disabled
+    if _log_disabled or not _LOG_FILE:
+        return None
+    if _log_fh is None:
+        try:
+            _log_fh = open(_LOG_FILE, "a", buffering=1)  # line-buffered
+        except OSError:
+            _log_disabled = True
+            return None
+    return _log_fh
 
 
 def _enabled() -> bool:
@@ -45,7 +73,12 @@ def _agent(ctx: Any) -> str:
 
 def _emit(line: str) -> None:
     print(line, flush=True)
-
+    fh = _get_log_fh()
+    if fh is not None:
+        try:
+            fh.write(_ANSI_RE.sub("", line) + "\n")  # line-buffered, flushes on \n
+        except OSError:
+            pass
 
 class EventLoggerPlugin(BasePlugin):
     """Prints agent thoughts, tool calls, and tool results as they happen."""
