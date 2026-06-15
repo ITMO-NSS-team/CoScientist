@@ -33,43 +33,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from alembic.common import get_repo_name, ensure_base_image
+
+
 ROOT        = Path(__file__).resolve().parents[3]
 START_CHAIN = Path(__file__).resolve().parent / "start_chain.py"
 DOCKERFILE  = ROOT / "docker" / "alembic" / "Dockerfile"
-BASE_IMAGE  = "alembic-base:latest"
-
-
-def _repo_name(url: str) -> str:
-    return re.sub(r"\.git$", "", url.rstrip("/").split("/")[-1])
-
-
-def _image_exists(name: str) -> bool:
-    r = subprocess.run(
-        ["docker", "image", "inspect", name],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    return r.returncode == 0
-
-
-def ensure_base(platform: str | None, rebuild: bool) -> None:
-    """Build alembic-base:latest once before fanning out workers."""
-    if not rebuild and _image_exists(BASE_IMAGE):
-        print(f"[bench] base image {BASE_IMAGE} present — reusing.")
-        return
-    cmd = ["docker", "build"]
-    if platform:
-        cmd += ["--platform", platform]
-    cmd += ["-t", BASE_IMAGE, "-f", str(DOCKERFILE), str(ROOT)]
-    print(f"[bench] building base image: {' '.join(cmd)}", flush=True)
-    r = subprocess.run(cmd)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
 
 
 def run_one(repo_url: str, extra_args: list[str], log_dir: Path,
             idx: int, total: int) -> dict:
     """Invoke start_chain.py --no-serve for one repo; stream logs to a file."""
-    name     = _repo_name(repo_url)
+    name     = get_repo_name(repo_url)
     log_path = log_dir / f"{name}.log"
     print(f"[bench] ↑ start  {name}  ({idx}/{total})  log: {log_path.name}",
           flush=True)
@@ -240,7 +217,7 @@ def main() -> None:
     print(f"[bench] logs   → {ns.log_dir}")
     print(f"[bench] summary→ {ns.output}")
 
-    ensure_base(ns.platform, ns.rebuild_base)
+    ensure_base_image(DOCKERFILE, ROOT, platform=ns.platform, rebuild=ns.rebuild_base)
 
     extra: list[str] = []
     if ns.platform:
@@ -271,7 +248,7 @@ def main() -> None:
                 except Exception as e:
                     url = futures[fut]
                     rec = {
-                        "repo":        _repo_name(url),
+                        "repo":        get_repo_name(url),
                         "url":         url,
                         "elapsed_sec": 0,
                         "exit_code":   -1,

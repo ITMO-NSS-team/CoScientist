@@ -22,15 +22,17 @@ import argparse
 import os
 import platform
 import random
-import re
 import secrets
 import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from alembic.common import BASE_IMAGE, get_repo_name, ensure_base_image
+
 # /<root>/CoScientist/src/alembic/start_chain.py -> /<root>
 PROJECT_ROOT     = Path(__file__).resolve().parents[3]
-BASE_IMAGE       = "alembic-base:latest"
 BASE_DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 TOOL_REPO        = "alembic-tool"
 PORT_RANGE       = (20000, 30000)
@@ -48,37 +50,12 @@ def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, **kw)
 
 
-def _repo_name(repo_url: str) -> str:
-    return re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1])
-
-
-def _image_exists(name: str) -> bool:
-    r = subprocess.run(
-        ["docker", "image", "inspect", name],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    return r.returncode == 0
-
-
 def _default_platform() -> str | None:
     """linux/amd64 on Apple Silicon so old x86-only wheels (dgl 0.9, etc.)
     pull and run via Rosetta. Native everywhere else (None = no flag)."""
     if sys.platform == "darwin" and platform.machine() in ("arm64", "aarch64"):
         return "linux/amd64"
     return None
-
-
-def _ensure_base(rebuild: bool, plat: str | None) -> None:
-    if not rebuild and _image_exists(BASE_IMAGE):
-        print(f"[start-chain] base image {BASE_IMAGE} already present.")
-        return
-    cmd = ["docker", "build"]
-    if plat:
-        cmd += ["--platform", plat]
-    cmd += ["-t", BASE_IMAGE, "-f", str(BASE_DOCKERFILE), str(PROJECT_ROOT)]
-    r = _run(cmd)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
 
 
 def _random_port() -> int:
@@ -96,7 +73,7 @@ def _env_args(env_file: Path | None) -> list[str]:
 
 
 def build_image(repo_url: str, ns: argparse.Namespace) -> str:
-    repo       = _repo_name(repo_url)
+    repo       = get_repo_name(repo_url)
     cname      = f"alembic-build-{repo}-{secrets.token_hex(3)}"
     tool_image = f"{TOOL_REPO}:{repo}"
 
@@ -132,7 +109,7 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
 
 
 def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
-    repo  = _repo_name(repo_url)
+    repo  = get_repo_name(repo_url)
     port  = _random_port()
     cname = f"alembic-serve-{repo}-{secrets.token_hex(3)}"
 
@@ -194,7 +171,8 @@ def main() -> None:
                   f"Pass --platform native to override.")
     elif ns.platform == "native":
         ns.platform = None
-    _ensure_base(ns.rebuild_base, ns.platform)
+    ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT, 
+                      platform=ns.platform, rebuild=ns.rebuild_base)
     image = build_image(ns.repo_url, ns)
     if not ns.no_serve:
         serve_image(ns.repo_url, image, ns)
