@@ -1,6 +1,6 @@
 import os
-
 import litellm
+
 litellm.suppress_debug_info = True
 
 from google.adk.agents import Agent
@@ -12,13 +12,12 @@ from alembic.tools import (
     write_file, read_output_file, update_file,
     validate_syntax, run_tests, setup_venv, check_venv_compat,
     invoke_mcp_tool,
-)
+) 
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
     debugger_instruction, validator_instruction,
     environment_instruction,
 )
-
 MODEL = os.environ.get("MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
 
 explorer_agent = Agent(

@@ -1,0 +1,5 @@
+from CoScientist.src.alembic.instructions.coder import coder_instruction
+from CoScientist.src.alembic.instructions.debugger import debugger_instruction
+from CoScientist.src.alembic.instructions.explorer import explorer_instruction
+from CoScientist.src.alembic.instructions.validator import validator_instruction
+from CoScientist.src.alembic.instructions.environment import environment_instruction
