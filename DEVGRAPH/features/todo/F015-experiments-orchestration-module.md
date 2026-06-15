@@ -124,6 +124,46 @@ alongside as the acceptance gate.
 - **HITL plan-approval gating** (F001): interrupt for plan approval / uncertainty-triggered escalation, not just "stuck".
 - **Eval harness** (F015h): the module's claims are unproven without it.
 
+## Reliability findings (S5 reactplan/qwen, 2026-06-13)
+Detailed analysis of the 5 S5 traces (resolved ids: Q1 `019ebfe5`, **Q2 `019ebfe6`**, **Q3 `019ebff0`**,
+Q4 `019ebffa`, Q5 `019ebffb`) — **two distinct failure modes**, both reproduced:
+- **Mode A — grounding-loop + critic-leak (Q1, Q4):** orchestrator loops `list_available_tools` /
+  `list_server_tools` (×3-4), `pre_action_critique` intervenes every step, run ends on a critic turn →
+  the `[CRITIC REVISION]` / "I am rejecting…" text LEAKS as the final answer. Never reaches generation.
+  Fast but a false success (`err=None, len>0`, no molecules).
+- **Mode B — FEDOT.MAS unbounded slow path (Q2, Q3, Q5 — all timeout 600s):** once in FEDOT.MAS it runs
+  a long autonomous pipeline (Q2: fetch_activity_data → name2smiles → **calculate_docking**; Q5: papers →
+  generation → state checks) with **no step/time budget** → blows the cap. Q2 also looped on CoderAgent
+  **HITL auto-reject** (headless) before that.
+- **Experimental fixes built (2026-06-13, uncommitted):** (A) critic-leak guard in `main.py`
+  (drop `[CRITIC REVISION]`/reject text, fall back to artifacts or an honest note) + grounding anti-loop
+  nudge in `pre_action_critique` (after >3 grounding calls, force-delegate); (HITL) auto-approve flag +
+  loop-guard (F001.A3). **Mode B (step/time budget) deferred** — needs the F015g per-step dispatch.
+- **User direction (2026-06-13):** the per-action critic (`pre_action_critique`, fires on EVERY action)
+  is called too often — test the pipeline WITHOUT it; "we essentially only need a **plan** critic" (→ F015b).
+  `l_runner.py --no-action-critic` added to A/B this on dataset_L. **Test pending (infra down).**
+
+## dataset_L A/B result (2026-06-14) — per-action critic confirmed harmful; CoderAgent fabrication exposed
+L1 (per-action critic ON) vs L2 (`--no-action-critic`), 5 dataset_L multi-target queries, qwen, cap 600s.
+- **Per-action critic harmful (CONFIRMED):** L1 critic fired 3-8×/run, kept the orchestrator in grounding
+  loops → 3/5 never reached generation (honest fallback), 2/5 timeout, **0 S3 deliveries**. L2 (critic=0)
+  reached FEDOT/generation in 4/5, **1 clean S3 delivery** (L2.Q2 `019ec26e`, 6104 chars, real molecules + link).
+  → drop the per-action critic; keep only a **plan** critic (F015b).
+- **Mode B dominant:** 4/5 L2 runs timeout INSIDE `fedot_tool` (docking/property/generation slow); the outer
+  run-cap doesn't honor FEDOT MCP cancellation (runs hit 700-906s). L2.Q1 reached `generate_mols` but the
+  outer cap killed the run before `fedot_tool` returned → the captured S3 link was lost.
+- **⚠ NEW — CoderAgent fabricates molecules under HITL auto-approve (trace `019ec27f`):** with auto-approve ON,
+  the orchestrator delegated to CoderAgent, which wrote a Python script that **SIMULATED "known inhibitors"**
+  (invalid SMILES e.g. `CCCCCCCCCCOOccc`), filtered by LogP/TPSA, saved a CSV — bypassing the real generation
+  MCP, NO S3 link. A FAKE success, worse than honest failure. → HITL auto-approve must forbid CoderAgent
+  fabricating data; it must route to the real generation/MCP tools, not "simulate".
+- **Case-coverage gap:** `generate_case_mols` supports a FIXED case list (alzheimer/skleroz/cancer/parkinson/
+  dyslipidemia/drug_resist); KRAS G12C / BTK / PCSK9 are NOT cases → only generic generation for those targets.
+- **Correctness-first (user, 2026-06-14):** do NOT impose short FEDOT timeouts — first confirm the pipeline
+  produces correct results, then optimize. `FEDOT_TIMEOUT_S=None` (the earlier 300s cut-off reverted).
+- **TODO (later): investigate WHY FEDOT stages are slow** (docking / property prediction / generation
+  latency) and whether they can be sped up — measure per-stage time from traces; correctness before speed.
+
 ## ✅ TODO
 - [ ] Resolve **F015g.D1** (FEDOT.MAS dispatch granularity) — prerequisite for everything.
 - [ ] Build **F015c** (inventory + sufficiency) first, then F015a → F015b → F015g → F015f → F015d → integrate F015e.

@@ -19,6 +19,7 @@ import sys
 import time
 
 os.environ.setdefault("LLM__MAIN_MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
+os.environ.setdefault("HITL__HEADLESS_AUTO_APPROVE", "true")
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts/opik_eval"))
@@ -69,12 +70,23 @@ async def run_one(query: str, session_id: str, cap: int) -> dict:
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--condition", required=True)
+    ap.add_argument("--no-action-critic", action="store_true")
+    ap.add_argument("--plan-critic", action="store_true")
     ap.add_argument("--limit", type=int, default=10)
     ap.add_argument("--cap", type=int, default=480, help="per-run wall-clock cap (s)")
     args = ap.parse_args()
 
+    import CoScientist.agents.agents as _A
+    from CoScientist.config.settings import get_settings as _gs
+    if args.no_action_critic:
+        _A.orchestrator_agent.after_model_callback = None
+    if args.plan_critic:
+        _gs().orchestrator.plan_critic_only = True
+    _crit = ("no-action-critic" if args.no_action_critic
+             else "plan-critic" if args.plan_critic else "action-critic")
+
     stamp = datetime.datetime.now().strftime("%H%M%S")
-    print(f"=== A/B run · condition={args.condition} · model={os.environ['LLM__MAIN_MODEL']} "
+    print(f"=== A/B run · condition={args.condition} · {_crit} · model={os.environ['LLM__MAIN_MODEL']} "
           f"· {args.limit} queries · cap={args.cap}s ===", flush=True)
     runs = []
     for i, q in enumerate(QUERIES[: args.limit]):

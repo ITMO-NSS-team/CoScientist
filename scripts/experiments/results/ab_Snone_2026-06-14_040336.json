@@ -1,0 +1,52 @@
+{
+ "condition": "Snone",
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "session_prefix": "ab_Snone_",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activity",
+   "session_id": "ab_Snone_00_040336",
+   "duration_s": 601.6,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec339-f73c-7103-b065-b1cf714edf09"
+  },
+  {
+   "query": "Generate inhibitors of KRAS protein with G12C mutation. The inhibitors should be selective",
+   "session_id": "ab_Snone_01_040336",
+   "duration_s": 600.3,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec343-2ab5-7604-aecd-f83259aa0c43"
+  },
+  {
+   "query": "Generate high activity tyrosine-protein kinase BTK inhibitors",
+   "session_id": "ab_Snone_02_040336",
+   "duration_s": 301.7,
+   "resp_len": 1742,
+   "resp_head": "\nHigh-activity tyrosine-protein kinase BTK inhibitors have been successfully generated using the `generate_case_mols` tool with the **skleroz** case, which is pre-tuned for BTK-targeted molecules. A t",
+   "error": null,
+   "trace_id": "019ec34c-61ad-7721-80ba-bcc37278aadc"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit signal transducer and activator of transcription 3 ",
+   "session_id": "ab_Snone_03_040336",
+   "duration_s": 525.6,
+   "resp_len": 1547,
+   "resp_head": "\nHere are 9 drug-like candidate molecules that may inhibit STAT3 and meet your criteria as closely as possible given available tools:\n\n### Final List (SMILES):\n```\nCCS(=O)(=O)c1ccc(NC(=O)C2CCCCC2)cc1\n",
+   "error": null,
+   "trace_id": "019ec351-0721-7ab6-bcf4-f442f90aaa57"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit Proprotein Convertase Subtilisin/Kexin Type 9 with ",
+   "session_id": "ab_Snone_04_040336",
+   "duration_s": 600.7,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec359-1f23-7645-8fc8-c53fe202f58f"
+  }
+ ]
+}

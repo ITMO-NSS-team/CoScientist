@@ -1,0 +1,30 @@
+{
+ "runs": [
+  {
+   "probe": "ctrl",
+   "kind": "control",
+   "condition": "per-action",
+   "rep": 0,
+   "session_id": "pc_per-action_ctrl_0_195039",
+   "duration_s": 56.3,
+   "resp_len": 1210,
+   "error": null,
+   "n_critic_firings": 5,
+   "n_turns_with_calls": 5,
+   "fired_on_plan_delegation": 3,
+   "deleg_verdicts": [
+    "approve",
+    "revise",
+    "approve"
+   ],
+   "false_positive": true,
+   "true_positive": false
+  }
+ ],
+ "inventory_servers": [
+  "generative-models-mcp",
+  "chemical-mcp-server",
+  "admet-mcp",
+  "bioactivity-mcp"
+ ]
+}

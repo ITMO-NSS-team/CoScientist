@@ -1,0 +1,62 @@
+{
+ "condition": "L2",
+ "no_action_critic": true,
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activit. Suggest some small molecules that inhibit",
+   "tasks": [],
+   "session_id": "l_L2_00_001112",
+   "duration_s": 600.6,
+   "resp_len": 0,
+   "resp_head": "",
+   "has_s3": false,
+   "error": "timeout>600s",
+   "trace_id": "019ec265-30e4-76d3-8172-4757e54ccaab"
+  },
+  {
+   "query": "Generate GSK-3beta inhibitors with high activit. Suggest some small molecules that inhibit",
+   "tasks": [],
+   "session_id": "l_L2_01_001112",
+   "duration_s": 197.3,
+   "resp_len": 6104,
+   "resp_head": "  \nHere are the suggested small molecule inhibitors for each target, generated using appropriate generative models. All results include SMILES strings and key molecular properties (QED, LogP, PSA, BBB penetration, IC50 prediction, structural alert filters) in downloadable CSV files:\n\n---\n\n### **1. G",
+   "has_s3": true,
+   "error": null,
+   "trace_id": "019ec26e-6682-75bd-8a7f-37f4371d79ae"
+  },
+  {
+   "query": "Give me active molecules against GSK-3beta protein. I want them to be not toxic. Suggest s",
+   "tasks": [],
+   "session_id": "l_L2_02_001112",
+   "duration_s": 713.0,
+   "resp_len": 0,
+   "resp_head": "",
+   "has_s3": false,
+   "error": "timeout>600s",
+   "trace_id": "019ec271-81ae-761b-b256-164c0b9dc5f8"
+  },
+  {
+   "query": "Generate GSK-3beta inhibitors with high docking score and low brain-blood barrier permeabi",
+   "tasks": [],
+   "session_id": "l_L2_03_001112",
+   "duration_s": 511.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "has_s3": false,
+   "error": "timeout>600s",
+   "trace_id": "019ec27c-688a-775f-a6e8-2877e3606050"
+  },
+  {
+   "query": "Generate small molecules that exhibit high lipophilicity and molecular flexibility for enh",
+   "tasks": [],
+   "session_id": "l_L2_04_001112",
+   "duration_s": 512.8,
+   "resp_len": 0,
+   "resp_head": "",
+   "has_s3": false,
+   "error": "timeout>600s",
+   "trace_id": "019ec284-3d9f-748a-a046-fe9d1e6ccdec"
+  }
+ ]
+}

@@ -144,29 +144,32 @@ class CoderToolset(BaseToolset):
 
     @staticmethod
     def _workspace_id(tool_context: Optional[ToolContext]) -> str:
-        """Stable per-session workspace id, shared by ALL tool calls in a session.
+        """Workspace id shared by ALL tool calls AND across repeated CoderAgent
+        invocations within one user request.
 
-        Anchored to the session id so the same sandbox is reused across every
-        execute_bash / file / check_job call — and across repeated CoderAgent
-        invocations within one session (e.g. a critic-driven REFINE retry). This
-        does NOT depend on a state write surviving between calls, which is what
-        previously let a clone and a later `list_directory` land in different
-        workspaces. Falls back to a cached/random id only when no session is
-        available (e.g. direct unit-test use).
+        F002 bug: ADK's ``AgentTool`` runs every CoderAgent invocation in a BRAND-NEW
+        sub-session with a fresh uuid id (``agent_tool.py``: ``InMemorySessionService()`` +
+        ``create_session``). So the sub-session id is NOT stable across invocations — keying
+        the workspace to it landed a download (invocation #1) and a later read/sort
+        (invocation #2) in DIFFERENT sandboxes, so the data vanished and the agent
+        fabricated it. AgentTool DOES copy the parent state into each new sub-session
+        (``state=state_dict``) and forwards the delta back, so a workspace id stored in
+        STATE survives across invocations — anchor to that first.
         """
         if tool_context is None:
             return "default"
 
-        sid = CoderToolset._session_id(tool_context)
-        if sid:
-            safe = re.sub(r"[^A-Za-z0-9_\-]", "", sid)[:48] or "default"
-            return f"ws_{safe}"
-
-        # No session available — keep a stable id within this context.
+        # Stable across invocations (round-trips through the parent session state).
         ws = tool_context.state.get("coder_workspace_id")
-        if not ws:
-            ws = f"ws_{uuid.uuid4().hex[:12]}"
-            tool_context.state["coder_workspace_id"] = ws
+        if ws:
+            return ws
+
+        # First use: derive from the (sub-)session id if present, else random; then PERSIST
+        # so every later CoderAgent invocation in this request reuses the same sandbox.
+        sid = CoderToolset._session_id(tool_context)
+        ws = (f"ws_{re.sub(r'[^A-Za-z0-9_-]', '', sid)[:48] or 'default'}"
+              if sid else f"ws_{uuid.uuid4().hex[:12]}")
+        tool_context.state["coder_workspace_id"] = ws
         return ws
 
     def _local_workspace(self, tool_context: Optional[ToolContext]) -> Path:

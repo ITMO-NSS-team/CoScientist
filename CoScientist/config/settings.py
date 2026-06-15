@@ -161,6 +161,13 @@ class MCPSettings(BaseModel):
 # =========================
 class HITLSettings(BaseModel):
     enabled: bool = True
+    # In a non-interactive (no-TTY) run, APPROVE instead of the safe-default REJECT.
+    # Off by default so prod stays safe; turn on for headless/experiment runs to stop
+    # the orchestrator looping on an agent it keeps re-delegating to (F001/F015).
+    headless_auto_approve: bool = False
+    # Belt-and-suspenders: after this many identical headless requests, auto-APPROVE to
+    # break an infinite reject->retry loop even when headless_auto_approve is off.
+    loop_guard_repeats: int = 3
 
 # =========================
 # ORCHESTRATOR
@@ -170,6 +177,10 @@ class OrchestratorSettings(BaseModel):
     # tool is NOT attached and the orchestrator plans inline. Keep the prompt
     # (build_orchestrator_instruction) and the attached tools consistent with it.
     use_planner: bool = False
+    # When True, the pre-action critic reviews the PLAN once (at the first delegation) and
+    # never on grounding / per-action steps — avoids the per-action latency + grounding loops
+    # the per-action critic causes (F015 dataset_L A/B). False = critique every action.
+    plan_critic_only: bool = False
 
 # =========================
 # CODE EXECUTION

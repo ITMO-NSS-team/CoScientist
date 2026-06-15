@@ -1,0 +1,52 @@
+{
+ "runs": [
+  {
+   "bridge": "bridge_A",
+   "probe": "ctrl",
+   "rep": 0,
+   "session_id": "br_bridge_A_ctrl_0_230335",
+   "duration_s": 200.1,
+   "error": null,
+   "resp_len": 805,
+   "submit_plan_attempts": 4,
+   "submit_plan_accepted": true,
+   "plan_fill_fidelity": 0.25,
+   "first_gate_code": "reject:malformed",
+   "accepted_order": [
+    "check_case",
+    "generate_molecules",
+    "predict_docking",
+    "evaluate_properties",
+    "select_inhibitors"
+   ],
+   "turns": 42,
+   "conformance_checks": 34,
+   "off_plan": 26,
+   "executor_completed": null,
+   "executor_steps": null
+  },
+  {
+   "bridge": "bridge_B",
+   "probe": "ctrl",
+   "rep": 0,
+   "session_id": "br_bridge_B_ctrl_0_230335",
+   "duration_s": 45.8,
+   "error": null,
+   "resp_len": 884,
+   "submit_plan_attempts": 3,
+   "submit_plan_accepted": true,
+   "plan_fill_fidelity": 0.3333333333333333,
+   "first_gate_code": "reject:malformed",
+   "accepted_order": [
+    "gen_mols"
+   ],
+   "turns": 6,
+   "conformance_checks": 0,
+   "off_plan": 0,
+   "executor_completed": true,
+   "executor_steps": [
+    "gen_mols"
+   ]
+  }
+ ]
+}

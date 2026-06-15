@@ -218,8 +218,13 @@ def _format_pending_calls(calls: List[Dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 # LLM critic invocation
 # ---------------------------------------------------------------------------
+@track(name="critic_llm")
 async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
     """Returns parsed JSON dict; on any failure returns {} (permissive default).
+
+    Tracked (F015): the proposed action + trajectory (input) and the critic's
+    verdict/feedback (output) become a span, so the critic's decisions are visible in
+    Opik instead of being a black box (only its wall-clock duration was observable).
 
     Uses the async litellm API so the critic's network call does not block the
     orchestrator's event loop (the callbacks run inside it).
@@ -303,6 +308,39 @@ async def pre_action_critique(
     # No tool calls in this response -> nothing to critique.
     if not pending:
         return None
+
+    _GROUNDING = {"list_available_tools", "list_server_tools"}
+    state = callback_context.state
+
+    if _settings.orchestrator.plan_critic_only:
+        # Plan-critic-only (F015b). PlanReAct has NO discrete plan object — the plan lives in
+        # the model's `/*PLANNING*/` // `/*REPLANNING*/` reasoning, interleaved with actions.
+        # So critique ONLY the turns where the plan is formed/changed (those tags); skip pure
+        # `/*ACTION*/` / `/*REASONING*/` turns. This avoids the per-action LLM overhead and the
+        # critic-driven grounding loops while still reviewing every (re)plan.
+        _txt = " ".join(
+            p.text for p in ((llm_response.content.parts if llm_response.content else []) or [])
+            if getattr(p, "text", None)
+        )
+        if "/*PLANNING*/" not in _txt and "/*REPLANNING*/" not in _txt:
+            return None                       # not a (re)planning turn -> execute without critique
+        # fall through: critique the plan formed/changed in this turn.
+    else:
+        # Per-action mode: grounding anti-loop nudge — after a few list_* calls, force delegate.
+        if all(c["tool"] in _GROUNDING for c in pending):
+            gc = state.get("_grounding_calls", 0) + len(pending)
+            state["_grounding_calls"] = gc
+            if gc > 3 and llm_response.content and llm_response.content.parts:
+                llm_response.content.parts.insert(
+                    0,
+                    types.Part(
+                        text=(f"[GROUNDING GUARD]: You have listed tools {gc} times. STOP grounding. "
+                              "Pick the most relevant tool(s) you already saw and DELEGATE to "
+                              "TaskExecutorAgent NOW — do not call list_available_tools/list_server_tools again."),
+                        thought=True,
+                    ),
+                )
+                return None
 
     contents = _session_contents(callback_context)
     # user_content may be absent or start with a non-text part (image/DICOM upload).

@@ -94,6 +94,20 @@ Starting symbols this node anchors:
   the experiment, not a plan"; (3) **per-step pre-action critic ~doubles LLM calls** (latency);
   (4) FEDOT-internal crashes (STAT3 ExceptionGroup). Cross-ref: F014 (dataset_S reliability),
   F017 (the staged flow is the near-term slice of the meta-model), F015a planner (parallel session).
+- **Update 2026-06-13 (F014.A5, locus CONFIRMED = orchestrator):** the failing call's error
+  lists `Available tools: list_available_tools, list_server_tools, HypothesesAgent,
+  ResearchAgent, TaskExecutorAgent, CoderAgent, MedicalAgent` — i.e. the **master
+  orchestrator's** roster. So the bug is the orchestrator emitting `get_state_from_server`
+  (an MCP tool it can only LIST, not execute). Genuine `Tool 'get_state_from_server' not
+  found` = **4 occurrences, ALL on 06-12** (`ab_B_00/01` B-crash + 2× `session_001` gpt-oss).
+  - **CORRECTION (anti-entrenchment):** an earlier draft of this note claimed the over-reach
+    "recurs on 06-13 in `ab_S5`/`l_Lplan`/`l_Lnone`". **That was a false positive** — in those
+    traces `get_state_from_server` only appears inside *another* agent's `Available tools:`
+    list, because it is a **legitimate** tool of the FEDOT.MAS `molecule_generator` sub-agent
+    (F014.A2). No genuine orchestrator over-reach on 06-13.
+  - ⚠ But "none on 06-13" is **weak evidence the fix holds**: the 06-13 sample is small and the
+    `l_L1`/`l_L2` batch died on OpenRouter credits before reaching execution — so the B2/staged
+    prompt is **not yet proven** to have eliminated it. → see TODO reminder below.
 ### F000.A4 — Orchestrator prompt: callable-names + explicit PLAN step (folds the tool-not-found fix) · 2026-06-13 · outcome: success
 - **Method:** two additions to `prompts.py:ORCHESTRATOR_TEMPLATE` (on top of F000.A3):
   (1) **"CALLABLE NAMES — STRICT"** block — the orchestrator's ONLY callable tools are the
@@ -138,6 +152,16 @@ Starting symbols this node anchors:
       orchestrator's delegations, not a sub-agent's own loop. ResearchAgent ran away internally
       (6× empty `explore_chemistry_database`); patched via prompt (F003.A4). Generalize (prompt
       STOP rules and/or `max_iterations`) to other sub-agents.
+- [ ] 🔎 **REMINDER — additionally re-check the `get_state_from_server` over-reach (it is in the
+      ORCHESTRATOR).** Confirmed locus = master-orchestrator roster (F000.A3 update / F014.A5):
+      the orchestrator emits `get_state_from_server` (an MCP tool it may only LIST) → `Tool not
+      found` → fatal. Genuine cases: 4×, all 06-12 (`ab_B_00/01`, 2× `session_001`); none on
+      06-13 **but unproven** — the 06-13 runs died on credits before reaching execution. **To
+      close it:** run a clean, credit-funded batch that actually reaches TaskExecutor/FEDOT and
+      confirm the orchestrator never emits `get_state_from_server` (or any `generate_*`/MCP tool)
+      directly; if it still does, the durable fix is delegation via the experiments module (F015),
+      not prompt wording. NB `get_state_from_server` IS legitimate for the FEDOT `molecule_generator`
+      sub-agent — only an *orchestrator-level* call is the bug.
 
 ## ⚠ Pitfalls / Known problems
 - Upstream OpenRouter providers are flaky → **do not** remove provider pinning /

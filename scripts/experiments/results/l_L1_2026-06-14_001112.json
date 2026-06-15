@@ -1,0 +1,62 @@
+{
+ "condition": "L1",
+ "no_action_critic": false,
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activit. Suggest some small molecules that inhibit",
+   "tasks": [],
+   "session_id": "l_L1_00_001112",
+   "duration_s": 122.2,
+   "resp_len": 159,
+   "resp_head": "I couldn't complete this request within the available steps — the orchestrator did not reach a tool that produced a result. Please retry or narrow the request.",
+   "has_s3": false,
+   "error": null,
+   "trace_id": "019ec265-30ec-71c5-aa7f-cfa3f3f32033"
+  },
+  {
+   "query": "Generate GSK-3beta inhibitors with high activit. Suggest some small molecules that inhibit",
+   "tasks": [],
+   "session_id": "l_L1_01_001112",
+   "duration_s": 600.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "has_s3": false,
+   "error": "timeout>600s",
+   "trace_id": "019ec267-18cc-7ac8-b34a-fdad2fd712ba"
+  },
+  {
+   "query": "Give me active molecules against GSK-3beta protein. I want them to be not toxic. Suggest s",
+   "tasks": [],
+   "session_id": "l_L1_02_001112",
+   "duration_s": 66.0,
+   "resp_len": 159,
+   "resp_head": "I couldn't complete this request within the available steps — the orchestrator did not reach a tool that produced a result. Please retry or narrow the request.",
+   "has_s3": false,
+   "error": null,
+   "trace_id": "019ec270-5f2e-71cf-89f2-92fe94128441"
+  },
+  {
+   "query": "Generate GSK-3beta inhibitors with high docking score and low brain-blood barrier permeabi",
+   "tasks": [],
+   "session_id": "l_L1_03_001112",
+   "duration_s": 906.0,
+   "resp_len": 0,
+   "resp_head": "",
+   "has_s3": false,
+   "error": "timeout>600s",
+   "trace_id": "019ec271-7583-752d-bb39-1debc9013e51"
+  },
+  {
+   "query": "Generate small molecules that exhibit high lipophilicity and molecular flexibility for enh",
+   "tasks": [],
+   "session_id": "l_L1_04_001112",
+   "duration_s": 860.6,
+   "resp_len": 159,
+   "resp_head": "I couldn't complete this request within the available steps — the orchestrator did not reach a tool that produced a result. Please retry or narrow the request.",
+   "has_s3": false,
+   "error": null,
+   "trace_id": "019ec27f-5f13-7b27-a7c7-eb719da9bd83"
+  }
+ ]
+}

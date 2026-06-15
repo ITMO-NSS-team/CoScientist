@@ -37,8 +37,8 @@ inbound links). Within a section, ordered by ID.
 | ID | Title | Updated | Derives | Now (one line) |
 |----|-------|---------|---------|----------------|
 | [F001](./features/in_progress/F001-hitl.md) | Human-in-the-Loop (HITL) | 2026-06-12 | F000 | Live path **confirmed**: callback on CoderAgent outward-facing cmds (F001.A2) + headless auto-reject; edit/tool paths still TODO. |
-| [F014](./features/in_progress/F014-benchmark-reliability-dataset-s.md) | Benchmark reliability (dataset_S) | 2026-06-12 | F000 | **F014.A4** full-pipeline A/B (n=5) **contradicts** earlier claims: qwen **0 empties**, gpt-oss 3-4 (`finish=None`), **pinning didn't reduce them** (4→3). Re-pin now wired via `.env` (variant 1). Larger provider-logged A/B still needed. |
-| [F015a](./features/in_progress/F015a-experiment-planner.md) | АМ: experiment planner (JSON step-plan DAG) | 2026-06-12 | F015, F006 | **R05 done** (F015a.A1): `CoScientist/experiments/` plan-DAG schema + strict-JSON gen w/ repair; 3/3 dataset_S plans, surfaced capability gaps. Next: live inventory + ADK wiring (R09). |
+| [F014](./features/in_progress/F014-benchmark-reliability-dataset-s.md) | Benchmark reliability (dataset_S) | 2026-06-13 | F000 | **F014.A5** 160-trace offline taxonomy: tracked modes confirmed; **gaps** — OpenRouter `402 credits` invalidated the whole `l_L1/L2` 06-13 batch, unguarded `{accumulated_web_mcps}` KeyError, asyncpg timeout; ~½ of 06-13 infra-tainted. **A4** A/B: qwen 0 empties vs gpt-oss 3-4, pinning didn't help. |
+| [F015a](./features/in_progress/F015a-experiment-planner.md) | АМ: experiment planner (JSON step-plan DAG) | 2026-06-15 | F015, F006 | **F015a.A4**: `submit_plan`+gate+fidelity-fix + BOTH bridges (A conformance, B DAG-executor) BUILT & tested on REAL dataset_S/L (11 runs). Real molecules: **B 4/5, A 3/5**; fidelity-fix validated (no-fix → hallucinated tool). 4 failures pinpointed — dominant are SYSTEMIC: qwen malformed tool-call JSON (`lite_llm.py:1630` unguarded) + MCP 300s timeouts. Next: JSON-repair shim + per-MCP timeout/partial. |
 | [F015e](./features/in_progress/F015e-alembic-repo-to-mcp.md) | АМ: Alembic repo→MCP pipeline | 2026-06-11 | F015, F002 | Mostly **built on branches** (5-agent chain + docker). Integrate; packaging/import-path blocker. |
 
 ### 📋 To do (proposed)
@@ -46,7 +46,7 @@ inbound links). Within a section, ordered by ID.
 | ID | Title | Updated | Derives | Now (one line) |
 |----|-------|---------|---------|----------------|
 | [F015](./features/todo/F015-experiments-orchestration-module.md) | Experiments orchestration module (АМ) — **epic** | 2026-06-11 | F010, F006 | Designed in approved ТП (S009). Decomposed into F015a–F015h (below). The orchestration fix for F014's loops & tool-not-found, w/o touching MCP tools. |
-| [F015b](./features/todo/F015b-plan-critic-loop.md) | АМ: plan-critic loop (bounded) | 2026-06-11 | F015, F006 | Deterministic gate first (folds F015c), LLM critic advisory; self-critique unreliable. |
+| [F015b](./features/todo/F015b-plan-critic-loop.md) | АМ: plan-critic loop (bounded) | 2026-06-14 | F015, F006 | **Experiment (F015a.A3):** tag-critic INERT (plan-fire 0/8, TP 0/4) → RETIRE; delegation-gate = validated trigger (8/8, TP 4/4, ½ churn); deterministic-gate-first BUILT (`experiments/gate.py`). LLM critic → advisory only. |
 | [F015c](./features/todo/F015c-tool-sufficiency-check.md) | АМ: tool-sufficiency / capability-gap (shared) | 2026-06-11 | F015 | **Build first.** MCP-Zero/RAG-MCP/AnyTool. Re-scoped: ensures right *servers*, not full fix (see F015g.D1). Fail-closed on backend-down. |
 | [F015d](./features/todo/F015d-repo-search-agent.md) | АМ: repo-search (literature-first) | 2026-06-11 | F015 | AutoSOTA/SUPER; "no repo found" → HITL. |
 | [F015f](./features/todo/F015f-tool-deploy-registration.md) | АМ: deploy + register/reuse + sandbox | 2026-06-11 | F015, F015e | ScaleMCP/AutoMCP; the missing registration seam + tool-poisoning security. |

@@ -4,7 +4,7 @@ title: Benchmark reliability on dataset_S.xlsx (drug-design molecule generation)
 type: feature
 status: in_progress
 created: 2026-06-11
-updated: 2026-06-12
+updated: 2026-06-13
 owners: [SoloWayG]
 derives_from: [F000]
 depends_on: [F000, F003, F006, F010]
@@ -18,6 +18,9 @@ code:
   - scripts/opik_eval/opik_history.py
   - scripts/opik_eval/opik_deep.py
   - scripts/opik_eval/provider_pinning_microtest.py
+  - scripts/opik_eval/dump_traces.py
+  - scripts/opik_eval/analyze_dump.py
+  - scripts/opik_eval/trace_locator.py
 benchmarks: []
 ---
 
@@ -186,7 +189,61 @@ which corrected an earlier wrong inference:
   (previously only the dead `LLM__ALLOWED_PROVIDERS`); `provider_routing()` reads
   `pinned_providers`, so gpt-oss is now pinned **by default**. Closes the config-drift gap.
 
+### F014.A5 — Full 160-trace offline taxonomy (06-12/06-13) vs DEVGRAPH coverage · 2026-06-13 · outcome: partial
+- **Method:** dumped **every** Opik trace since 2026-06-12 (server-side `start_time`
+  filter, full bodies+spans) to a local folder and mined it offline (no rate limits).
+  Tooling (new): `scripts/opik_eval/dump_traces.py` (resumable dumper), `analyze_dump.py`
+  (exception/notfound/empty/runaway taxonomy with a per-day split), `trace_locator.py`
+  (server-side `thread_id` resolver + run→trace manifest, [[F008]].A2). Corpus: **160
+  traces** (110 on 06-12, 50 on 06-13; gpt-oss 61 / qwen 96). Goal: verify DEVGRAPH
+  tracks the real errors and that "fixed" items don't recur.
+- **DEVGRAPH coverage — CONFIRMED tracked & still present (good):** hallucinated tool
+  names exactly as F014.A2 (`predict_ml`×6, `smiles2props`, `get_state_from_server`,
+  + new agent-name hallucinations `property_filter_agent`/`literature_agent`/`research_agent`
+  and **target-parameterized** `gsk3beta_molecule_generator`); runaways (23/160 ≥25 LLM
+  or ≥690s); gpt-oss empties (`finish=None`); McpError 300s; ExceptionGroup (FEDOT).
+  `KeyError: 'request'` (F006.A3) and `EOFError` HITL (F001.A2) appear **only in 06-12**
+  traces — no recurrence in the 06-13 sample, consistent with those fixes holding.
+- **GAPS / under-tracked (evidence-backed):**
+  1. 🔴 **OpenRouter 402 `Insufficient credits` — UNTRACKED, batch-invalidating.** 20
+     occurrences across **all 10 `l_L1`/`l_L2` runs at 14:36 on 06-13** (qwen) — every
+     one ended **no-answer** purely from a billing outage, not its experimental condition.
+     F014 logs only generic `APIError: OpenRouter`; a 402 is **account-wide & persistent**,
+     so the entire L1-vs-L2 A/B from that window is **invalid data**. Same misattribution
+     family as the "trust trace metadata over `.env`" lesson.
+  2. 🟠 **`KeyError: 'Context variable not found: accumulated_tools / accumulated_web_mcps'`.**
+     The Bug-D guard ([[F009]].A3) seeds `{accumulated_tools}` but the **sibling
+     `{accumulated_web_mcps}` prompt var is unseeded** → same crash; and `accumulated_tools`
+     KeyError still appears in some `session_001` traces (verify pre/post-guard date — if
+     post, the guard is incomplete). Raised on the orchestrator span.
+  3. 🟠 **`asyncpg` connect **TimeoutError** ×47 (all 06-13)** — a DB-**timeout** variant
+     distinct from the refused/`ConnectionError` that F009.A2 degrades; the high count
+     suggests retry-hammering or a path the graceful wrapper misses.
+  4. **get_state_from_server over-reach = ORCHESTRATOR, 06-12 only (corrected).** The
+     error's `Available tools:` list is the orchestrator roster (`list_available_tools,
+     list_server_tools, Hypotheses/Research/TaskExecutor/Coder/MedicalAgent`), so the
+     over-reach is the **master orchestrator** calling an MCP tool. Genuine occurrences:
+     **4×, all 06-12** (`ab_B` crash + 2× `session_001`). An earlier draft said it "recurs
+     on 06-13" — **false positive**: `get_state` is a *legit* tool of the FEDOT
+     `molecule_generator` sub-agent, so it shows up in other agents' `Available tools:`
+     lists. Whether B2 truly eliminated it is **UNPROVEN** (06-13 runs died on credits
+     before reaching execution). Cross-ref F000.A3 + reminder in F000 TODO.
+- **06-13 is infra-tainted:** 24/50 traces carry credits/DB-timeout failures, so the
+  aggregate 06-13 "regression" (errored 30%→54%, answer 41%→34%) is **mostly an infra
+  artifact**, not a prompt/model regression — must isolate before concluding anything.
+- **Evidence:** `opik_dump/traces_since_2026-06-12/` (gitignored) + `analyze_dump.py`
+  output; credits batch = thread_ids `l_L1_0*_143608`/`l_L2_0*_143608`; KeyError span
+  msg `'Context variable not found: accumulated_web_mcps'` (trace `457bdaaa…`); get_state
+  not-found in `ab_S5_0*`/`l_Lplan_0*`/`l_Lnone_00` (qwen, 06-13). See [[opik-tracing-access]].
+- **Next:** (1) pre-flight/abort-on-402 + DB-timeout tagging in the runner so tainted runs
+  never enter an A/B; (2) seed `{accumulated_web_mcps}`; (3) re-confirm get_state guard.
+
 ## ✅ TODO
+- [ ] **Abort/flag credit- & DB-tainted runs (F014.A5):** detect OpenRouter `402` and
+      `asyncpg`/MCP timeouts per run; tag the trace and **exclude from A/B aggregates**
+      (a 402 invalidated the whole `l_L1`/`l_L2` 06-13 batch).
+- [ ] **Seed `{accumulated_web_mcps}`** like `{accumulated_tools}` (Bug-D guard sibling,
+      F014.A5) and verify the `accumulated_tools` KeyError is gone post-guard.
 - [x] **Re-pin gpt-oss-120b** — DONE (F014.A4, variant 1): `.env` now sets
       `LLM__PINNED_PROVIDERS=["deepinfra","groq","together","fireworks"]` and
       `provider_routing()` reads it. BUT the full-pipeline A/B showed pinning did **not**
@@ -215,6 +272,16 @@ which corrected an earlier wrong inference:
       pinning A/B is checkable from traces, not just raw calls (A2 limitation).
 
 ## ⚠ Pitfalls / Known problems
+- **qwen malformed tool-call JSON KILLS the run (F015a.A4, 2026-06-15):** the model sometimes emits broken
+  JSON in `tool_call.function.arguments` (missing comma / truncation / extra data — worse for big payloads
+  like a `submit_plan` plan). ADK parses it at **`lite_llm.py:1630` `json.loads(...)` UNGUARDED in the
+  non-streaming path** (the streaming path is guarded at :2158-2159) → `JSONDecodeError` propagates and ends
+  the whole run with no answer. Evidenced: traces `019ec80c` (char 441), `019ec85a` (char 2122). Same task can
+  pass on retry → run-to-run variance, same family as the empties. **Fix: JSON-repair shim at :1630 + bounded
+  re-prompt.**
+- **MCP 300s timeout sinks the run as `len=0` (F015a.A4):** `search_papers` / `generate_case_mols` (and other
+  non-async MCP tools) hit a 300s ceiling → `McpError` propagates to the orchestrator → empty answer even
+  though work was happening. Needs a per-MCP-call timeout + partial-result delivery, not whole-run abort.
 - **"False success" — `status:success` ≠ correct (trace `019eb27d`, 2026-06-12):** a
   GSK-3beta run returned 10 valid SMILES but training **404'd** on a missing dataset
   (`gsk3b_inhibitors_chembl.csv`; only `Alzheimer.csv`/`Test_mas_1.csv` exist) and
@@ -224,6 +291,12 @@ which corrected an earlier wrong inference:
 - **Trust Opik per-run metadata over the live `.env`** — the model changed across
   sessions (qwen3 yesterday, gpt-oss today); only the trace's `metadata.main_model`
   tells you what a given run actually used. F014.A1 got this wrong by reading `.env`.
+- **An OpenRouter `402 Insufficient credits` invalidates a whole batch, not one call
+  (F014.A5).** It is account-wide and persistent, so every run in that window fails
+  the same way (the 06-13 `l_L1`/`l_L2` batch: 10/10 no-answer). It masquerades as
+  "model/prompt got worse" in aggregate metrics. **Check for 402 (and DB/MCP timeouts)
+  before comparing conditions**, and exclude tainted runs — same misattribution trap
+  as reading `.env` instead of trace metadata.
 - **Config drift is real:** pinning is OFF for the gpt-oss model in use. Any claim
   that "pinning/qwen helped" is invalid until the config actually applies them.
 - **Pinning is the right lever, but qwen is not a flakiness fix** (F014.A3): qwen

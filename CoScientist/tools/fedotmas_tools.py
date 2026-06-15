@@ -74,39 +74,49 @@ class FedotMASToolset(BaseToolset):
         # paraphrase them away / hallucinate molecules.
         # NB: passing plugins= REPLACES MAS defaults, so re-include them.
         cap = ArtifactCapturePlugin()
+        # NOTE (F015): do NOT impose a short FEDOT timeout — confirm the pipeline produces
+        # CORRECT results first, optimize stage latency later. timeout=None = unbounded.
+        # The except branch below still returns captured artifacts on a FEDOT error, so a
+        # link produced before a failure is never lost.
+        FEDOT_TIMEOUT_S = None
+        result = None
+        status, err = "success", None
         try:
             mas = MAS(
                 mcp_servers=servers_payload,
                 plugins=[LoggingPlugin(), WebSearchLimitPlugin(max_calls_per_agent=4), cap],
             )
-            result = await mas.run(task_description)
+            result = await mas.run(task_description, timeout=FEDOT_TIMEOUT_S)
+        except (asyncio.TimeoutError, TimeoutError):
+            status, err = "timeout", f"FEDOT.MAS exceeded {FEDOT_TIMEOUT_S:.0f}s"
         except Exception as e:
-            return {"status": "error", "error": f"FEDOT.MAS run failed: {e}"}
+            status, err = "error", f"FEDOT.MAS run failed: {e}"
 
-        # Fallback (F010.A4): also scan the final MAS state for presigned URLs the
-        # plugin may have missed (e.g. a link that only survived inside a sub-agent's
-        # paraphrased text), so the link is never silently lost.
-        import re as _re
-        import json as _json
-        try:
-            _txt = _json.dumps(result, default=str, ensure_ascii=False)
-        except Exception:
-            _txt = str(result)
-        _known = {a.get("url") for a in cap.captured}
-        for _u in dict.fromkeys(_re.findall(r"https?://[^\s\"'<>)\\]+X-Amz-[^\s\"'<>)\\]+", _txt)):
-            if _u not in _known:
-                cap.captured.append({"url": _u, "tool": "fedot_state_scan"})
+        # Fallback (F010.A4): scan the final MAS state for presigned URLs the plugin may
+        # have missed (only when a result actually came back).
+        if result is not None:
+            import re as _re
+            import json as _json
+            try:
+                _txt = _json.dumps(result, default=str, ensure_ascii=False)
+            except Exception:
+                _txt = str(result)
+            _known = {a.get("url") for a in cap.captured}
+            for _u in dict.fromkeys(_re.findall(r"https?://[^\s\"'<>)\\]+X-Amz-[^\s\"'<>)\\]+", _txt)):
+                if _u not in _known:
+                    cap.captured.append({"url": _u, "tool": "fedot_state_scan"})
 
-        # Surface the REAL artifacts both in the return value and in shared session
-        # state, so the link survives the TaskExecutor/orchestrator LLM paraphrases.
+        # Surface the REAL artifacts in the return value AND shared session state — so the
+        # link survives even when FEDOT.MAS timed out AFTER generation (F015 Mode B fix).
         if cap.captured and tool_context is not None:
             tool_context.state["fedot_artifacts"] = cap.captured
 
-        return {
-            "status": "success",
-            "result": result,
-            "artifacts": cap.captured,
-        }
+        ret = {"status": status, "artifacts": cap.captured}
+        if result is not None:
+            ret["result"] = result
+        if err:
+            ret["error"] = err
+        return ret
 
     
 fedot_toolset = FedotMASToolset()

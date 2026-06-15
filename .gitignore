@@ -190,4 +190,7 @@ ChemCoScientist/tests/integration/data/.last_activity
 *db.json
 
 roadmap.txt
-workspace/
+workspace
+
+# Opik trace dumps (regenerable via scripts/opik_eval/dump_traces.py)
+/opik_dump/

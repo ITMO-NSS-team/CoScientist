@@ -1,0 +1,52 @@
+{
+ "condition": "Splan",
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "session_prefix": "ab_Splan_",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activity",
+   "session_id": "ab_Splan_00_040336",
+   "duration_s": 513.6,
+   "resp_len": 2070,
+   "resp_head": "\nI have successfully generated GSK-3beta inhibitors with high activity potential by leveraging the Alzheimer's disease-tuned molecular generation model (`generate_case_mols` with `case='alzheimer'`), ",
+   "error": null,
+   "trace_id": "019ec339-f73c-7a9c-b47f-ce1fe009654d"
+  },
+  {
+   "query": "Generate inhibitors of KRAS protein with G12C mutation. The inhibitors should be selective",
+   "session_id": "ab_Splan_01_040336",
+   "duration_s": 600.6,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec341-da6a-7fc1-b1d5-3fec8e68a8ca"
+  },
+  {
+   "query": "Generate high activity tyrosine-protein kinase BTK inhibitors",
+   "session_id": "ab_Splan_02_040336",
+   "duration_s": 525.0,
+   "resp_len": 1304,
+   "resp_head": "\nI generated 48 valid candidate molecules with drug-like properties as potential high-activity inhibitors of tyrosine-protein kinase BTK. These were produced using the generic GAN-LSTM molecule genera",
+   "error": null,
+   "trace_id": "019ec34b-0f1d-7735-96a6-96db0dcd11e5"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit signal transducer and activator of transcription 3 ",
+   "session_id": "ab_Splan_03_040336",
+   "duration_s": 600.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec353-2055-7ebd-9b2b-08efbb583378"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit Proprotein Convertase Subtilisin/Kexin Type 9 with ",
+   "session_id": "ab_Splan_04_040336",
+   "duration_s": 338.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)",
+   "trace_id": "019ec35c-87ab-751b-be12-6c7d2adfb208"
+  }
+ ]
+}

@@ -1,0 +1,52 @@
+{
+ "condition": "Scrit",
+ "model": "openrouter/qwen/qwen3-235b-a22b-2507",
+ "session_prefix": "ab_Scrit_",
+ "runs": [
+  {
+   "query": "Generate GSK-3beta inhibitors with high activity",
+   "session_id": "ab_Scrit_00_040336",
+   "duration_s": 601.7,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec339-f73c-7e6f-8fbd-255703ad5987"
+  },
+  {
+   "query": "Generate inhibitors of KRAS protein with G12C mutation. The inhibitors should be selective",
+   "session_id": "ab_Scrit_01_040336",
+   "duration_s": 600.4,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec343-2ea0-7b8f-9370-cc74cf8a70f9"
+  },
+  {
+   "query": "Generate high activity tyrosine-protein kinase BTK inhibitors",
+   "session_id": "ab_Scrit_02_040336",
+   "duration_s": 346.6,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "TypeError: unsupported format string passed to NoneType.__format__",
+   "trace_id": "019ec34c-63c5-71f3-94d8-f32cd6c278aa"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit signal transducer and activator of transcription 3 ",
+   "session_id": "ab_Scrit_03_040336",
+   "duration_s": 600.5,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "timeout>600s",
+   "trace_id": "019ec351-bb5c-7376-929b-ed59fa924f80"
+  },
+  {
+   "query": "Can you suggest molecules that inhibit Proprotein Convertase Subtilisin/Kexin Type 9 with ",
+   "session_id": "ab_Scrit_04_040336",
+   "duration_s": 35.3,
+   "resp_len": 0,
+   "resp_head": "",
+   "error": "ValueError: Tool 'get_state_from_server' not found.\nAvailable tools: list_available_tools, list_server_tools, HypothesesAgent, ResearchAgent, TaskExecutorAgent, CoderAgent, MedicalAgent\n\nPossible causes:\n  1. LLM",
+   "trace_id": "019ec35a-e9b7-78ff-ad37-3c428a50bd4e"
+  }
+ ]
+}

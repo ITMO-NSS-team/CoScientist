@@ -50,6 +50,15 @@ class ServerTools(BaseModel):
 class ExperimentStep(BaseModel):
     id: str = Field(..., description="unique step id, e.g. 's1'")
     subtask: str = Field(..., description="single, concrete computational sub-task (imperative)")
+    # Why a step needs (or doesn't need) an MCP tool. The deterministic gate
+    # (experiments/gate.py, R12) requires a 'compute' step to name >=1 tool_server,
+    # so an honestly-empty step for an out-of-inventory capability fails closed
+    # instead of passing silently (the wave-1 'gap' hole). research / hypothesize /
+    # code_exec steps legitimately carry no tool_server.
+    kind: str = Field(
+        "compute",
+        description="compute (needs >=1 resolvable tool_server) | research | hypothesize | code_exec",
+    )
     tool_servers: list[ServerTools] = Field(
         default_factory=list,
         description="tools this step needs, GROUPED BY the MCP server that provides them",

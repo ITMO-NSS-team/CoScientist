@@ -129,33 +129,55 @@ class CoScientistManager:
         )
 
         final_response = "No response"
+        run_error = None
 
-        async for event in self.runner.run_async(
-            user_id=self.user_id,
-            session_id=self.session_id,
-            new_message=content,
-        ):
-            if verbose:
-                print(
-                    f"[Event] {event.author} | {type(event).__name__} | Final={event.is_final_response()}"
-                )
-
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    parts = event.content.parts
-                    # Thinking models emit a separate `thought` part before the
-                    # answer; parts[0] is often that reasoning. Prefer the
-                    # non-thought answer text, falling back to any text so we
-                    # never drop the response entirely.
-                    answer = "\n".join(
-                        p.text for p in parts
-                        if getattr(p, "text", None) and not getattr(p, "thought", False)
+        # Partial delivery (F015a.A4 #2): a mid-run failure — notably an MCP 300s
+        # timeout / McpError on a slow tool — must NOT discard results already
+        # captured at the tool boundary (state['fedot_artifacts']). Swallow it here
+        # and fall through to the deterministic finalizer below, which surfaces those
+        # artifacts so the user still gets the molecules produced before the stall.
+        try:
+            async for event in self.runner.run_async(
+                user_id=self.user_id,
+                session_id=self.session_id,
+                new_message=content,
+            ):
+                if verbose:
+                    print(
+                        f"[Event] {event.author} | {type(event).__name__} | Final={event.is_final_response()}"
                     )
-                    final_response = answer or "\n".join(
-                        p.text for p in parts if getattr(p, "text", None)
-                    ) or ""
-                elif event.actions and event.actions.escalate:
-                    final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
+
+                if event.is_final_response():
+                    if event.content and event.content.parts:
+                        parts = event.content.parts
+                        # Thinking models emit a separate `thought` part before the
+                        # answer; parts[0] is often that reasoning. Prefer the
+                        # non-thought answer text, falling back to any text so we
+                        # never drop the response entirely.
+                        answer = "\n".join(
+                            p.text for p in parts
+                            if getattr(p, "text", None) and not getattr(p, "thought", False)
+                        )
+                        final_response = answer or "\n".join(
+                            p.text for p in parts if getattr(p, "text", None)
+                        ) or ""
+                    elif event.actions and event.actions.escalate:
+                        final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
+        except Exception as exc:
+            run_error = exc
+            logger.error(
+                f"run loop raised ({type(exc).__name__}: {str(exc)[:200]}); "
+                "attempting partial delivery from captured S3 artifacts."
+            )
+
+        # Critic-leak guard (F015): pre_action_critique's revision/rejection text can leak
+        # out as the final answer when the run ends on a critic turn (grounding loops, no
+        # delegation). Never surface the critic's internal monologue — drop it; artifacts
+        # or a clean fallback below take over.
+        _CRITIC_LEAK = ("[CRITIC REVISION]", "[PRE-ACTION CRITIC]",
+                        "I am rejecting my own proposed action", "I am abandoning the proposed action")
+        if final_response and any(m in final_response for m in _CRITIC_LEAK):
+            final_response = ""
 
         # Deterministic finalizer (F010.A5/A6): the orchestrator LLM sometimes drops a
         # successfully-generated result. The real molecules live behind a presigned S3 URL
@@ -183,6 +205,19 @@ class CoScientistManager:
                         block += f"\n```\n{preview}\n```"
                     blocks.append(block)
                 final_response = (final_response or "").rstrip() + "\n\n---\n" + "\n\n".join(blocks)
+
+        if not (final_response or "").strip():
+            if run_error is not None:
+                final_response = (
+                    f"The run stopped early ({type(run_error).__name__}) before producing a result, "
+                    "and no partial artifacts were captured. This is usually a slow MCP tool hitting "
+                    "its timeout or a transient model/network error — please retry."
+                )
+            else:
+                final_response = (
+                    "I couldn't complete this request within the available steps — the orchestrator "
+                    "did not reach a tool that produced a result. Please retry or narrow the request."
+                )
 
         return final_response
 
