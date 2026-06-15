@@ -655,7 +655,7 @@
       // Show modal
       modal.classList.remove('hidden');
       status.classList.remove('hidden');
-      status.textContent = 'Loading roadmap.txt...';
+      status.textContent = 'Loading task_tracker_data.json...';
       status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
       textarea.disabled = true;
       saveBtn.disabled = true;
@@ -875,7 +875,8 @@
       <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4">
         <p class="text-xs text-on-surface-variant leading-relaxed">
           Edit the execution plan stored in <code
-            class="bg-surface-container-highest px-1.5 py-0.5 rounded text-primary font-mono">roadmap.txt</code>. This
+            class="bg-surface-container-highest px-1.5 py-0.5 rounded text-primary font-mono">task_tracker_data.json</code>.
+          This
           plan guides agent execution.
         </p>
 

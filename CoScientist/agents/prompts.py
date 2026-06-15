@@ -15,6 +15,13 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
 5. If relevant, briefly note assumptions or required conditions.
 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
+Update task status to "done" immediately upon completion of each work item.
 '''
 
 research_instruction = '''
@@ -93,7 +100,15 @@ OUTPUT FORMAT
 **Key Points** – main takeaways
 **Uncertainty** – gaps or doubts (if any)
 
-You have a STRICT LIMIT of 2 search calls. Plan your search carefully:
+You have a STRICT LIMIT of 2 search calls. Plan your search carefully.
+
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
+Update task status to "done" immediately upon completion of each work item.
 '''
 
 tool_retriever_instruction = '''
@@ -885,7 +900,7 @@ You have a STRICT LIMIT of 1 tool call!
 """
 
 planner_instruction = """    
-You are a planner. Create a roadmap for solving the task.    
+You are a planner. Your goal is to decompose the task and create a roadmap by registering tasks using the `create_plan` tool.
 
 ### AGENTS  
 - ReporterAgent: Use this to verify the final results, ensure they meet all requirements, and generate the definitive comprehensive report.
@@ -905,19 +920,7 @@ You are a planner. Create a roadmap for solving the task.
 
 ### OUTPUT CONTRACT (STRICT)
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
-- Do NOT include explanations, comments, or extra text
-- Do NOT deviate from the required format
-- End output immediately after the last step
-- One step = one logical objective
-- NEVER specify data sources, tools, or methods
-- Each step must describe WHAT objective is achieved, NOT HOW it is implemented
-- Do NOT specify representations 
-
-Example format:    
-Plan: 
-1) Use ResearchAgent to search the web for information about X
-2) Use CoderAgent to implement the solution or execute any required computational tasks    
-
-DO NOT mention specific tools in the plan. The orchestrator will handle tool invocation.
-Start your response with "Plan: 1)"
+- You MUST use the `create_plan` tool to register ALL steps of your plan in one go.
+- Once you have successfully registered all tasks using `create_plan`, you can finish your turn.
 """
+

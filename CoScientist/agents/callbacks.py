@@ -1,3 +1,4 @@
+from infrastructure.task_tracker import task_tracker_instance
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools.tool_context import ToolContext
 from google.adk.models import LlmRequest
@@ -158,3 +159,9 @@ def normalize_json_response(
                 pass
   
     return None  
+
+def before_get_task(callback_context: CallbackContext):  
+    """Получает задачу перед началом работы агента."""  
+    active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)  
+    callback_context.state['active_tasks'] = active_tasks
+    return None 

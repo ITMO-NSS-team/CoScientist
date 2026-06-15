@@ -101,14 +101,12 @@ def create_app() -> FastAPI:
     # --- Roadmap endpoints ---
     @app.get("/api/roadmap")
     async def get_roadmap():
-        # Look for roadmap.txt in the current directory or parent directories
-        path = Path("roadmap.txt")
+        path = Path("task_tracker_data.json")
         if not path.exists():
-            # Try workspace directory CoScientist/roadmap.txt
-            path = Path(__file__).parent.parent.parent / "roadmap.txt"
+            path = Path(__file__).parent.parent.parent / "task_tracker_data.json"
         
         if not path.exists():
-            return JSONResponse({"content": "", "error": "roadmap.txt not found"}, status_code=404)
+            return JSONResponse({"content": "", "error": "task_tracker_data.json not found"}, status_code=404)
         
         try:
             content = path.read_text(encoding="utf-8")
@@ -119,9 +117,9 @@ def create_app() -> FastAPI:
     @app.post("/api/roadmap")
     async def save_roadmap(data: dict):
         content = data.get("content", "")
-        path = Path("roadmap.txt")
+        path = Path("task_tracker_data.json")
         if not path.exists():
-            path = Path(__file__).parent.parent.parent / "roadmap.txt"
+            path = Path(__file__).parent.parent.parent / "task_tracker_data.json"
             
         try:
             path.write_text(content, encoding="utf-8")
@@ -138,9 +136,13 @@ def create_app() -> FastAPI:
             "agents": [
                 {"name": "OrchestratorAgent", "role": "orchestrator", "status": "idle"},
                 {"name": "PlannerAgent", "role": "planner", "status": "idle"},
+                {"name": "CoderAgent", "role": "coder", "status": "idle"},
                 {"name": "HypothesesAgent", "role": "hypothesis", "status": "idle"},
                 {"name": "ResearchAgent", "role": "research", "status": "idle"},
                 {"name": "ToolRetrieverAgent", "role": "tool_retriever", "status": "idle"},
+                {"name": "ToolRerankerAgent", "role": "tool_reranker", "status": "idle"},
+                {"name": "ToolWebSearcherAgent", "role": "tool_websearcher", "status": "idle"},
+                {"name": "ToolSearcherAgent", "role": "tool_searcher", "status": "idle"},
                 {"name": "ExperimentAgent", "role": "experiment", "status": "idle"},
             ]
         })

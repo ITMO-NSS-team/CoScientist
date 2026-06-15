@@ -12,47 +12,12 @@ from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLRequest, HITLAction
 
 
-def cleanup_plan(plan_file_path: str) -> None:
-
-    with open(plan_file_path, "r", encoding="utf-8") as f:
-        plan = f.read()
-
-    # ensure non-empty
-    if not plan or not plan.strip():
-        raise ValueError("Plan cannot be empty.")
-
-    # ensure at least 1 step
-    if "1)" not in plan:
-        raise ValueError("Plan must contain at least one step. Found: \n" + plan)
-
-    # fallback protection: if it contains literally "1)", fix it
-    if "1)" in plan and plan.strip() == "1)":
-        raise ValueError("Plan contains only '1)'. Add a valid step.")
-
-    if " 1)" in plan:
-        plan_idx = plan.rfind("1)")
-        plan = plan[plan_idx:]
-        print("\nPlan has been cleaned up. It now starts from step 1.")
-
-    if "ReporterAgent" in plan:
-        report_idx = plan.find("ReporterAgent")
-        plan = plan[:report_idx]
-        last_idx = plan.rfind(")")
-        plan = plan[:last_idx-1]
-        #print("Plan has been cleaned up. It doesn't contain ReporterAgent.\n")
-
-    with open(plan_file_path, "w", encoding="utf-8") as f:
-        f.write(plan)
-
-    return
-
 class SessionAgent(LlmAgent):
     """A planner that generates a roadmap and asks the human.
     If the human requests changes, it automatically feeds the changes back
     to itself and generates a new roadmap, looping until approved.
     """
     hitl_handler: Optional[AbstractHITLHandler] = None
-    plan_file_path: Optional[str] = None
     correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
@@ -87,18 +52,6 @@ class SessionAgent(LlmAgent):
             # Perform HITL check
             message = f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes its result. Please review."
 
-            # If plan_file_path is set, write to file and update message
-            if self.plan_file_path:
-                try:
-                    with open(self.plan_file_path, "w", encoding="utf-8") as f:
-                        f.write(str(output_text))
-                    message += f"\n\n--> The plan has been recorded to '{self.plan_file_path}'. You can edit it before approving."
-                except Exception as e:
-                    message += f"\n\n[Warning] Failed to write plan to {self.plan_file_path}: {e}"
-
-            
-            cleanup_plan(self.plan_file_path)
-
             request = HITLRequest(
                 agent_name=self.name,
                 action_type=HITLAction.APPROVE,
@@ -110,28 +63,24 @@ class SessionAgent(LlmAgent):
             response = await self.hitl_handler.handle_request(request)
 
             if response.approved:
-                if self.plan_file_path:
+                if response.instructions and response.action != HITLAction.EDIT:
+                    edited_text = response.instructions
+                    if final_event is not None and final_event.content and final_event.content.parts:
+                        final_event.content.parts[0].text = edited_text
+                    if self.output_key:
+                        ctx.session.state[self.output_key] = edited_text
+
+                    import json
+                    from infrastructure.task_tracker import task_tracker_instance
                     try:
-                        if os.path.exists(self.plan_file_path):
-                            with open(self.plan_file_path, "r", encoding="utf-8") as f:
-                                edited_content = f.read()
-
-                            if self.output_key:
-                                ctx.session.state[self.output_key] = edited_content
-                                print(f"\n[SessionAgent] SUCCESS: Updated '{self.output_key}' from '{self.plan_file_path}'.")
-
-                                # Replace final_event content with the edited plan
-                                final_event = Event(
-                                    invocation_id=ctx.invocation_id,
-                                    author=self.name,
-                                    branch=ctx.branch,
-                                    content=types.Content(
-                                        role="model",
-                                        parts=[types.Part(text=edited_content)]
-                                    )
-                                )
-                    except Exception as e:
-                        print(f"Error reading plan from {self.plan_file_path}: {e}")
+                        parsed = json.loads(edited_text)
+                        if isinstance(parsed, list):
+                            class DummyContext:
+                                def __init__(self, state):
+                                    self.state = state
+                            task_tracker_instance.create_plan(parsed, DummyContext(ctx.session.state))
+                    except Exception:
+                        pass
 
                 if not response.free_input and response.action != HITLAction.EDIT:
                     # HITL approved — now emit the (possibly updated) final event and exit
