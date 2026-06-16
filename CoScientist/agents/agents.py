@@ -18,7 +18,7 @@ from CoScientist.config import get_settings
 
 from CoScientist.agents import catalog
 from CoScientist.agents.prompts import build_orchestrator_instruction, hypotheses_instruction, research_instruction, fedot_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, coder_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
-from CoScientist.agents.callbacks import before_get_task, print_research_agent_tool_call, before_tool_reranker_model, after_tool_reranker_model_callback, after_fullset_reranker_model_callback, SearchLimiter
+from CoScientist.agents.callbacks import before_get_task, print_research_agent_tool_call, before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, SearchLimiter
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -132,7 +132,7 @@ tool_reranker_agent = LlmAgent(
     description="Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.",
     output_schema=ToolRanking,
     before_model_callback=before_tool_reranker_model,
-    after_model_callback=[after_tool_reranker_model_callback],
+    after_agent_callback=after_tool_reranker_agent,
     output_key="reranked_tools"
 )
 
@@ -166,7 +166,7 @@ tool_fullset_reranker_agent = LlmAgent(
     instruction=tool_scoring_instruction,
     description="Agent to score found web MCP servers given already available local MCP servers for given task.",
     output_schema=MCPRanking,
-    after_model_callback=[after_fullset_reranker_model_callback],
+    after_agent_callback=after_fullset_reranker_agent,
     output_key="reranked_web_servers"
 )
 
@@ -246,7 +246,7 @@ planner_agent = SessionAgent(
 # for which agents are enabled, their prompt descriptions, and their order). Map
 # each catalog name to its LlmAgent instance and attach the enabled ones.
 _AGENT_INSTANCES = {
-    "PlannerAgent": planner_agent,
+    #"PlannerAgent": planner_agent,
     "HypothesesAgent": hypotheses_agent,
     "ResearchAgent": research_agent,
     "TaskExecutorAgent": task_execution_agent,

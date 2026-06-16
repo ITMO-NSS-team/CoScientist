@@ -32,14 +32,14 @@ class AgentSpec:
 
 # Order here is the order shown in prompts and in the tool list.
 ORCHESTRATOR_AGENTS: List[AgentSpec] = [
-    AgentSpec(
-        name="PlannerAgent",
-        description="produces a step-by-step roadmap for a complex, multi-step task; "
-                    "call it first, then execute the roadmap by delegating each step.",
-        routing="for a complex multi-step task, call this FIRST to produce a roadmap, "
-                "then follow it step by step.",
-        enabled=settings.orchestrator.use_planner,
-    ),
+    #AgentSpec(
+    #    name="PlannerAgent",
+    #    description="produces a step-by-step roadmap for a complex, multi-step task; "
+    #                "call it first, then execute the roadmap by delegating each step.",
+    #    routing="for a complex multi-step task, call this FIRST to produce a roadmap, "
+    #            "then follow it step by step.",
+    #    enabled=settings.orchestrator.use_planner,
+    #),
     AgentSpec(
         name="HypothesesAgent",
         description="generates ideas and hypotheses.",

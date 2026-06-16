@@ -29,9 +29,8 @@ def before_tool_reranker_model(
     return
 
 
-def after_tool_reranker_model_callback(
-    callback_context: CallbackContext,
-    llm_response: LlmResponse
+def after_tool_reranker_agent(
+    callback_context: CallbackContext
 ) -> None:
     """Adds ToolReranker output to state"""
 
@@ -67,9 +66,8 @@ def after_tool_reranker_model_callback(
     return
 
 
-def after_fullset_reranker_model_callback(
-    callback_context: CallbackContext,
-    llm_response: LlmResponse
+def after_fullset_reranker_agent(
+    callback_context: CallbackContext
 ) -> None:
     """Adds ToolReranker output to state"""
 
