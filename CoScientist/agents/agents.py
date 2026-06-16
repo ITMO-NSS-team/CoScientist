@@ -16,11 +16,9 @@ import litellm
 
 from CoScientist.config import get_settings
 
-from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, build_orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction, coder_instruction
 from CoScientist.agents import catalog
-from CoScientist.agents.callbacks import before_tool_reranker_model, after_tool_reranker_agent, after_fullset_reranker_agent, print_research_agent_tool_call, SearchLimiter
-from CoScientist.agents.prompts import hypotheses_instruction, research_instruction, fedot_instruction, orchestrator_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
-from CoScientist.agents.callbacks import before_get_task, before_tool_reranker_model, after_tool_reranker_model_callback, after_fullset_reranker_model_callback, SearchLimiter, normalize_json_response
+from CoScientist.agents.prompts import build_orchestrator_instruction, hypotheses_instruction, research_instruction, fedot_instruction, tool_retriever_instruction, planner_instruction, tool_reranker_instruction, coder_instruction, tool_websearcher_instruction, tool_scoring_instruction, medical_instruction
+from CoScientist.agents.callbacks import before_get_task, print_research_agent_tool_call, before_tool_reranker_model, after_tool_reranker_model_callback, after_fullset_reranker_model_callback, SearchLimiter, normalize_json_response
 from CoScientist.agents.critic_agent import (
     pre_action_critique,
     post_action_critique,
@@ -91,13 +89,8 @@ hypotheses_agent = LlmAgent(
     instruction=hypotheses_instruction,
     description="Agent to generate scientific hypotheses and ideas for given task",
     output_key="hypotheses",
-<<<<<<< HEAD
-    tools=_agent_tools([], hitl_tools=False),
-    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
-=======
-    tools=_agent_tools(get_task_tracker_tools(), hitl_tools=True),
+    tools=_agent_tools(get_task_tracker_tools(), hitl_tools=False),
     before_agent_callback=[before_get_task],
->>>>>>> 66ac38a (task tracker)
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
 
@@ -107,22 +100,17 @@ research_agent = LlmAgent(
     instruction=research_instruction,
     description="Agent to answer questions and knowledge mining using Literature and Web Search.",
     output_key="search_results",
-<<<<<<< HEAD
     # Drop any optional MCP toolsets that aren't configured (None) so the agent
     # still builds when their URLs are unset.
     tools=_agent_tools([t for t in [websearch_toolset_instance,
                                     paper_analysis_toolset_instance,
-                                    papers_search_toolset_instance] if t is not None],
+                                    papers_search_toolset_instance] if t is not None] + get_task_tracker_tools(),
                        hitl_tools=True),
     before_model_callback=papers_agent_before_model,
     before_tool_callback=SearchLimiter(max_searches=2).limit_searches,
     after_tool_callback=print_research_agent_tool_call,
-    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
-=======
-    tools=_agent_tools([websearch_toolset_instance] + get_task_tracker_tools(), hitl_tools=True),
-    before_tool_callback=SearchLimiter(max_searches=2).limit_searches,
     before_agent_callback=[before_get_task],
->>>>>>> 66ac38a (task tracker)
+    #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
 
@@ -225,12 +213,8 @@ fedot_agent = LlmAgent(
     instruction=fedot_instruction,
     description="Agent to invoke MAS for solving given task. Uses MCP tools",
     output_key="fedot_results",
-<<<<<<< HEAD
-    tools=_agent_tools(fedot_toolset_instance, hitl_tools=False),
-=======
-    tools=_agent_tools(fedot_toolset_instance + get_task_tracker_tools(), hitl_tools=True),
+    tools=_agent_tools(fedot_toolset_instance + get_task_tracker_tools(), hitl_tools=False),
     before_agent_callback=[before_get_task],
->>>>>>> 66ac38a (task tracker)
     #before_agent_callback=make_hitl_before_callback(hitl_handler) if hitl_enabled else None,
     #after_agent_callback=make_hitl_after_callback(hitl_handler, HITLAction.APPROVE) if hitl_enabled else None,
 )
@@ -334,21 +318,10 @@ orchestrator_agent = LlmAgent(
     description="Main Orchestrator Agent",
     before_model_callback=med_before_model,
     after_model_callback=pre_action_critique,
-<<<<<<< HEAD
-    # after_tool_callback=post_action_critique,
-    tools=_agent_tools(_orchestrator_subagents, hitl_tools=False),
-=======
     after_tool_callback=post_action_critique,
     before_agent_callback=[before_get_task],
     include_contents="none",
-    tools=_agent_tools([
-        AgentTool(agent=hypotheses_agent), 
-        AgentTool(agent=research_agent), 
-        AgentTool(agent=task_execution_agent),
-        AgentTool(agent=medical_agent),
-        AgentTool(agent=coder_agent),
-    ] + get_task_tracker_tools(), hitl_tools=True),
->>>>>>> 66ac38a (task tracker)
+    tools=_agent_tools(_orchestrator_subagents + get_task_tracker_tools(), hitl_tools=False),
 )
 
 #root_agent = Workflow(

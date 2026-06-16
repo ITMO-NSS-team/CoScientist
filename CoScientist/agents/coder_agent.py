@@ -313,7 +313,7 @@ async def run_openhands_sandbox(code: str = "") -> Any:
             host_port=host_port,
             platform=detect_platform(),
             extra_ports=True,
-            enable_gpu=False,
+            enable_gpu=True,
             volumes=[f"{Path.cwd().parent}/workspace:/workspace:rw"],
         )
         _active_workspace = workspace

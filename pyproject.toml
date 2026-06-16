@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12.11"
 dependencies = [
+    "boto3>=1.43.29",
     "fedotmas",
     "google-adk[extensions]>=2.1.0",
     "langchain-text-splitters>=1.1.2",

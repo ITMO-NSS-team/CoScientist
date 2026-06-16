@@ -58,8 +58,9 @@ class TaskTrackerToolset(BaseToolset):
         if not isinstance(tasks, list):
             return {"result": "error", "message": "'tasks' must be a list of task definitions."}
 
-        new_tasks = []
         for i, t in enumerate(tasks):
+            if not isinstance(t, dict):
+                return {"result": "error", "message": f"Task at index {i} must be a dictionary."}
             if "title" not in t:
                 return {"result": "error", "message": f"Task at index {i} missing 'title'."}
             if "description" not in t:
@@ -67,11 +68,44 @@ class TaskTrackerToolset(BaseToolset):
             if "assignee" not in t:
                 return {"result": "error", "message": f"Task at index {i} missing 'assignee'."}
 
+        processed_tasks = []
+        coder_task = None
+
+        for t in tasks:
             if t.get("assignee") == "ReporterAgent":
                 continue
+            
+            # Merge coder tasks
+            if t.get("assignee") == "CoderAgent":
+                if coder_task is None:
+                    coder_task = {
+                        "id": t.get("id"),
+                        "title": t.get("title"),
+                        "description": t.get("description"),
+                        "assignee": "CoderAgent",
+                        "parent_id": t.get("parent_id", None),
+                        "notes": t.get("notes", "")
+                    }
+                else:
+                    coder_task["title"] += f" - {t.get('title')}"
+                    coder_task["description"] += f" - {t.get('description')}"
+                    
+                    current_note = t.get("notes", "")
+                    if current_note:
+                        if coder_task["notes"]:
+                            coder_task["notes"] += f" - {current_note}"
+                        else:
+                            coder_task["notes"] = current_note
+            else:
+                processed_tasks.append(t)
 
+        if coder_task:
+            processed_tasks.insert(0, coder_task)
+
+        new_tasks = []
+        for t in processed_tasks:
             task = {
-                "id": t.get("id", f"TASK-{len(new_tasks) + 1}"),
+                "id": t.get("id") if t.get("id") else f"TASK-{len(new_tasks) + 1}",
                 "title": t.get("title"),
                 "description": t.get("description"),
                 "assignee": t.get("assignee"),

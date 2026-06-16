@@ -156,7 +156,7 @@ class OrchestratorSettings(BaseModel):
     # Whether the orchestrator uses the PlannerAgent. When False, the planner
     # tool is NOT attached and the orchestrator plans inline. Keep the prompt
     # (build_orchestrator_instruction) and the attached tools consistent with it.
-    use_planner: bool = False
+    use_planner: bool = True
 
 # =========================
 # CODE EXECUTION
