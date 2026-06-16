@@ -11,6 +11,8 @@ from google.adk.utils.context_utils import Aclosing
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLRequest, HITLAction
 
+import json
+from infrastructure.task_tracker import task_tracker_instance
 
 class SessionAgent(LlmAgent):
     """A planner that generates a roadmap and asks the human.
@@ -70,8 +72,6 @@ class SessionAgent(LlmAgent):
                     if self.output_key:
                         ctx.session.state[self.output_key] = edited_text
 
-                    import json
-                    from infrastructure.task_tracker import task_tracker_instance
                     try:
                         parsed = json.loads(edited_text)
                         if isinstance(parsed, list):

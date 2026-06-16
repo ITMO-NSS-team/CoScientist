@@ -21,7 +21,7 @@ dependencies = [
 
 [tool.uv.sources]
 rag-tools = { git = "https://github.com/fiestaxxl/rag_tools.git" }
-fedotmas = { git = "https://github.com//ITMO-NSS-team/FEDOT.MAS.git", subdirectory = "packages/fedotmas" }
+fedotmas = { git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git", subdirectory = "packages/fedotmas" }
 
 [tool.setuptools]
 packages = ["CoScientist"]

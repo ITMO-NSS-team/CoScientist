@@ -7,7 +7,6 @@ Runs the multi-agent scientific discovery pipeline:
 - Experimentation (FEDOT)
 - Orchestration
 """
-from CoScientist.tools import fedotmas_tools
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -21,7 +20,7 @@ from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.agents.research_callbacks import cleanup_uploaded_papers
-from CoScientist.agents import orchestrator_agent, planner_agent, root_agent
+from CoScientist.agents import root_agent
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
     AbstractHITLHandler,
