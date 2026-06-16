@@ -129,7 +129,7 @@ class SearchLimiter:
 
 
 def before_get_task(callback_context: CallbackContext):  
-    """Получает задачу перед началом работы агента."""  
+    """Get task before agent is called"""  
     active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)  
     callback_context.state['active_tasks'] = active_tasks
     return None 
