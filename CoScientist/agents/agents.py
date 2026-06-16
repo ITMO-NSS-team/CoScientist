@@ -231,15 +231,6 @@ coder_agent = LlmAgent(
 )
 
 #------------------------------------------------------------------
-coder_agent = LlmAgent(
-    name="CoderAgent",
-    model=LiteLlm(model=MODEL),
-    instruction=coder_instruction,
-    description="Agent for writing and executing code. Has access to workspace",
-    output_key="coder_results",
-    tools=_agent_tools([run_openhands_sandbox] + get_task_tracker_tools()),
-    before_agent_callback=[before_get_task],
-)
 
 planner_agent = SessionAgent(
     name="PlannerAgent",
@@ -284,7 +275,7 @@ orchestrator_agent = LlmAgent(
     description="Main Orchestrator Agent",
     before_model_callback=med_before_model,
     after_model_callback=pre_action_critique,
-    after_tool_callback=post_action_critique,
+    #after_tool_callback=post_action_critique,
     before_agent_callback=[before_get_task],
     include_contents="none",
     tools=_agent_tools(_orchestrator_subagents + get_task_tracker_tools(), hitl_tools=False),

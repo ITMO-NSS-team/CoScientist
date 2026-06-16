@@ -760,7 +760,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.29" },
-    { name = "fedotmas", git = "https://github.com//ITMO-NSS-team/FEDOT.MAS.git?subdirectory=packages%2Ffedotmas" },
+    { name = "fedotmas", git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git?subdirectory=packages%2Ffedotmas" },
     { name = "google-adk", extras = ["extensions"], specifier = ">=2.1.0" },
     { name = "langchain-text-splitters", specifier = ">=1.1.2" },
     { name = "metapub", specifier = ">=0.7.4" },
@@ -1138,7 +1138,7 @@ wheels = [
 [[package]]
 name = "fedotmas"
 version = "0.1.0"
-source = { git = "https://github.com//ITMO-NSS-team/FEDOT.MAS.git?subdirectory=packages%2Ffedotmas#8c74cad4b9b67f6b2563d3a8f5c005a88d68b235" }
+source = { git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git?subdirectory=packages%2Ffedotmas#8c74cad4b9b67f6b2563d3a8f5c005a88d68b235" }
 dependencies = [
     { name = "google-adk" },
     { name = "litellm" },

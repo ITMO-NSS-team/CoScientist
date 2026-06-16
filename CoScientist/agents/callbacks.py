@@ -6,15 +6,9 @@ from google.adk.tools.base_tool import BaseTool
 
 from typing import List, Dict, Any, Optional
 from google.adk.models.llm_response import LlmResponse  
-from google.genai import types  
-
-import json
-import ast
 
 import logging
 logger = logging.getLogger(__name__)
-from CoScientist.storage.models import ToolRanking, MCPRanking
-import re
 
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
