@@ -136,7 +136,7 @@ def download_papers_from_search(
         return {"answer": "No papers found for the given filters.", "metadata": {"papers": []}}
 
     logging.info(f"Found {len(works)} papers with PDFs available for download.")
-    s3_prefix = f"{user_id}/{session_id}/web_search_res/"
+    s3_prefix = f"{user_id}/{session_id}/papers_search_results/"
     s3_client = s3_service.create_s3_client()
     uploaded = []
 

@@ -86,9 +86,11 @@ def research(ctx: PromptContext) -> str:
             f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
         + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
         + " When calling `download_papers_from_search`, aim to find at least *10* "
-        "papers that might contain the answer. Choose keywords likely to "
-        "appear verbatim in the title or abstract of papers that directly "
-        "address the question."
+        "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
+        "as a single space-separated string, no quotes around phrases. "
+        "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
+        "do not paraphrase, stem, or replace Unicode symbols."
+        "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
         )
         n += 1
     if lit:

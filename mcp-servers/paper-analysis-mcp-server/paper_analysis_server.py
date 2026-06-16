@@ -5,6 +5,12 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from fastmcp import FastMCP
 from io import BytesIO
+
+
+class NamedBytesIO(BytesIO):
+    def __init__(self, data: bytes, name: str = "document.pdf"):
+        super().__init__(data)
+        self.name = name
 from urllib.parse import urlparse
 from pprint import pprint
 
@@ -91,8 +97,11 @@ def explore_my_papers(task: str, s3_keys: list[str]) -> dict:
     try:
         paper_buffers: list[BytesIO] = []
         for s3_key in s3_keys:
-            response = client.get_object(Bucket=s3_service.bucket_name, Key=s3_key)
-            paper_buffers.append(BytesIO(response['Body'].read()))
+            try:
+                response = client.get_object(Bucket=s3_service.bucket_name, Key=s3_key)
+                paper_buffers.append(BytesIO(response['Body'].read()))
+            except client.exceptions.NoSuchKey:
+                logger.warning(f"S3 key not found, skipping: {s3_key}")
 
         if not paper_buffers:
             return {'answer': 'No valid papers could be loaded from S3.'}
@@ -105,10 +114,10 @@ def explore_my_papers(task: str, s3_keys: list[str]) -> dict:
                         'Use them to answer the question.\n\n'
         for buf in paper_buffers:
             buf.seek(0)
-            detected_reactions = remove_keys(extract_reactions_from_pdf(buf))
+            detected_reactions = remove_keys(extract_reactions_from_pdf(('document.pdf', buf, 'application/pdf')))
             img_descriptions += f'Reactions: {str(detected_reactions)}\n'
             buf.seek(0)
-            detected_molecules = remove_keys(extract_molecules_from_pdf(buf))
+            detected_molecules = remove_keys(extract_molecules_from_pdf(('document.pdf', buf, 'application/pdf')))
             img_descriptions += f'Molecules: {str(detected_molecules)}\n'
             img_descriptions += '\n\n'
 
