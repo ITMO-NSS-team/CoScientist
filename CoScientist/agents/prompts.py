@@ -287,7 +287,6 @@ Your role is to solve tasks by using **FEDOT_MAS**, which automatically generate
 
 You have tools:
 * **fedot_tool(task_description)** – builds and executes a pipeline to solve the task
-* **request_approval(agent_name, message)** – (HITL) use this before running expensive/long tasks
 
 ## How it works:
 - The ToolRetriever agent already found the relevant MCP servers
