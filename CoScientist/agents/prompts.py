@@ -514,8 +514,10 @@ def build_orchestrator_instruction() -> str:
     planning step adapts to whether the PlannerAgent is enabled. Keep the catalog
     as the single source of truth — do not hand-edit agent lists here.
     """
-    planning_step = (_PLANNING_STEP_WITH_PLANNER if catalog.is_enabled("PlannerAgent")
-                     else _PLANNING_STEP_NO_PLANNER)
+    #planning_step = (_PLANNING_STEP_WITH_PLANNER if catalog.is_enabled("PlannerAgent")
+    #                 else _PLANNING_STEP_NO_PLANNER)
+    planning_step = _PLANNING_STEP_WITH_PLANNER
+    
     return render_template(
         ORCHESTRATOR_TEMPLATE,
         AGENTS=catalog.render_agent_bullets(),
@@ -806,13 +808,13 @@ Run both workflows and merge results, leading with the image interpretation.
 - If the question is outside the scope of the available tools, say so.
 '''
 
+#- CoderAgent: Use this to write and execute heavy ML/DL code. Only agent who has access to workplace/ directory.
 planner_instruction = """    
 You are a planner. Your goal is to decompose the task and create a roadmap by registering tasks using the `create_plan` tool.
 
 ### AGENTS  
 - ReporterAgent: Use this to verify the final results, ensure they meet all requirements, and generate the definitive comprehensive report.
 - HypothesesAgent: Use this to generate and test hypotheses.  
-- CoderAgent: Use this to write and execute heavy ML/DL code. Only agent who has access to workplace/ directory.
 - ResearchAgent: Use this ONLY when information cannot be computed or retrieved via tools, and specifically requires searching or gathering general information from the web.  
 - TaskExecutorAgent: Use this as your primary choice for ANY task that can be calculated, simulated, executed, or processed via code, APIs, and databases. 
   This agent has comprehensive capabilities and must be prioritized over searching whenever possible: 
@@ -821,12 +823,13 @@ You are a planner. Your goal is to decompose the task and create a roadmap by re
   - Data analysis  
   - System operations and automation  
   - Any computational task requiring tools
-  - Fully expert in chemistry with many chemistry tools
+  - Solves all tasks involving chemistry
 
 ### OUTPUT CONTRACT (STRICT)
+- Chemistry-specific rule MUST ALWAYS use TaskExecutorAgent
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
-- MAXIMUM ONE TASK FOR CODERAGENT: You are strictly forbidden from creating multiple tasks for CoderAgent. Combine environment setup and running pipeline into a single, comprehensive task assigned to CoderAgent.
 - You MUST use the `create_plan` tool to register ALL steps of your plan in one go.
 - Once you have successfully registered all tasks using `create_plan`, you can finish your turn.
 """
+#- MAXIMUM ONE TASK FOR CODERAGENT: You are strictly forbidden from creating multiple tasks for CoderAgent. Combine environment setup and running pipeline into a single, comprehensive task assigned to CoderAgent.
 

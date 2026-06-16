@@ -277,7 +277,6 @@ orchestrator_agent = LlmAgent(
     after_model_callback=pre_action_critique,
     # after_tool_callback=post_action_critique,
     before_agent_callback=[before_get_task],
-    include_contents="none",
     tools=_agent_tools(_orchestrator_subagents + get_task_tracker_tools(), hitl_tools=False),
 )
 
