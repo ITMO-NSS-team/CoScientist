@@ -14,7 +14,7 @@ Flow:
      container's ``$MCP_PORT`` so the MCP server is reachable from the host.
 
 Run from anywhere:
-    python CoScientist/src/alembic/start_chain.py <repo_url>
+    python CoScientist/alembic/start_chain.py <repo_url>
 """
 from __future__ import annotations
 
@@ -29,16 +29,16 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from alembic.common import BASE_IMAGE, get_repo_name, ensure_base_image
 
-# /<root>/CoScientist/src/alembic/start_chain.py -> /<root>
-PROJECT_ROOT     = Path(__file__).resolve().parents[3]
+# /<root>/CoScientist/alembic/start_chain.py -> /<root>
+PROJECT_ROOT     = Path(__file__).resolve().parents[2]
 BASE_DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 TOOL_REPO        = "alembic-tool"
 PORT_RANGE       = (20000, 30000)
-DEFAULT_ENV_FILE = PROJECT_ROOT / "CoScientist" / "src" / ".env"
+DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
 PASSTHROUGH_ENV = (
     "OPENROUTER_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY",
