@@ -157,6 +157,15 @@ if __name__ == "__main__":
 
         try:
             while True:
+                print(
+                    "\n"
+                    "==============================\n"
+                    "🚀  WEB INTERFACE NOT RUNNING\n"
+                    "==============================\n"
+                    "Do not run main.py directly, run web/server.py instead.\n"
+                    "Start it with:\n\n"
+                    "    uv run CoScientist/web/server.py\n\n"
+                )
                 query = input("Enter query (or 'exit'): ")
 
                 if query.lower() in {"exit", "quit"}:

@@ -312,6 +312,39 @@ async def _handle_chat(ws: WebSocket, data: dict):
                     if text_parts:
                         event_data["content"] = "\n".join(text_parts)
 
+                    # Extract tool calls (function_call) and tool responses
+                    # (function_response) so the frontend can show live
+                    # tool activity for agents like ExperimentAgent.
+                    tool_calls = []
+                    tool_responses = []
+                    for part in event.content.parts:
+                        if hasattr(part, 'function_call') and part.function_call:
+                            fc = part.function_call
+                            tool_calls.append({
+                                "name": fc.name,
+                                "args": dict(fc.args) if fc.args else {},
+                            })
+                        if hasattr(part, 'function_response') and part.function_response:
+                            fr = part.function_response
+                            # Safely serialise – response can be dict, str,
+                            # Pydantic model, etc.
+                            try:
+                                resp_payload = (
+                                    fr.response
+                                    if isinstance(fr.response, (dict, list, str, int, float, bool, type(None)))
+                                    else str(fr.response)
+                                )
+                            except Exception:
+                                resp_payload = str(fr.response)
+                            tool_responses.append({
+                                "name": fr.name,
+                                "response": resp_payload,
+                            })
+                    if tool_calls:
+                        event_data["tool_calls"] = tool_calls
+                    if tool_responses:
+                        event_data["tool_responses"] = tool_responses
+
                 if event.actions and event.actions.escalate:
                     event_data["escalation"] = event.error_message or "Unknown error"
 

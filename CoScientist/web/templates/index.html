@@ -236,13 +236,13 @@
       { name: "HypothesesAgent", icon: "psychology", desc: "Hypothesis Generator" },
       { name: "ResearchAgent", icon: "search", desc: "Literature & Web Search" },
       { name: "ToolRetrieverAgent", icon: "build", desc: "MCP Tool Retriever" },
-      { name: "ExperimentAgent", icon: "science", desc: "FEDOT.MAS Runner" },
+      { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
     ];
 
     function initAgentNav() {
       const nav = document.getElementById('agent-nav');
       nav.innerHTML = AGENTS.map(a => {
-        const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent";
+        const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
         const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
         const iconColorClass = isHighlightedByDefault ? "text-primary" : "text-outline-variant";
         const textColorClass = isHighlightedByDefault ? "text-on-surface font-semibold" : "text-outline-variant font-medium";
@@ -262,6 +262,8 @@
     function onAgentClick(name) {
       if (name === "PlannerAgent") {
         openRoadmapEditor();
+      } else if (name === "ToolsViewer") {
+        openToolsViewer();
       }
     }
 
@@ -275,7 +277,7 @@
           el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => s.classList.remove('text-outline-variant', 'opacity-50'));
         } else {
           // Меняем проверку здесь:
-          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent";
+          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
           const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
@@ -296,7 +298,7 @@
         const el = document.getElementById('agent-' + a.name);
         if (el) {
           // Меняем проверку здесь:
-          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent";
+          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
           const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
@@ -553,6 +555,19 @@
               if (!data.is_final) showTyping();
             } else {
               addTelemetry('EVENT :: ' + data.author + ' (no content)');
+            }
+            // Capture tool activity for the experiment viewer
+            if (data.tool_calls) {
+              data.tool_calls.forEach(tc => {
+                addExperimentToolCall(data.author, tc);
+                addTelemetry('TOOL_CALL :: ' + data.author + ' → ' + tc.name);
+              });
+            }
+            if (data.tool_responses) {
+              data.tool_responses.forEach(tr => {
+                addExperimentToolResponse(data.author, tr);
+                addTelemetry('TOOL_RESULT :: ' + data.author + ' ← ' + tr.name);
+              });
             }
             break;
           case 'final_response':
@@ -851,6 +866,116 @@
         confirmBtn.disabled = false;
       }
     }
+    // =========================================================================
+    // Experiment Viewer
+    // =========================================================================
+    let experimentToolEvents = [];
+
+    function openToolsViewer() {
+      const modal = document.getElementById('experiment-modal');
+      modal.classList.remove('hidden');
+      renderExperimentFeed();
+    }
+
+    function closeExperimentViewer() {
+      document.getElementById('experiment-modal').classList.add('hidden');
+    }
+
+    function clearExperimentViewer() {
+      experimentToolEvents = [];
+      renderExperimentFeed();
+    }
+
+    function addExperimentToolCall(author, tc) {
+      experimentToolEvents.push({
+        kind: 'call',
+        author: author,
+        name: tc.name,
+        args: tc.args,
+        timestamp: new Date(),
+      });
+      renderExperimentFeed();
+    }
+
+    function addExperimentToolResponse(author, tr) {
+      experimentToolEvents.push({
+        kind: 'response',
+        author: author,
+        name: tr.name,
+        response: tr.response,
+        timestamp: new Date(),
+      });
+      renderExperimentFeed();
+    }
+
+    function truncateStr(s, max) {
+      if (typeof s !== 'string') s = JSON.stringify(s, null, 2) || '';
+      return s.length > max ? s.slice(0, max) + '…' : s;
+    }
+
+    function renderExperimentFeed() {
+      const feed = document.getElementById('experiment-feed');
+      if (!feed) return;
+
+      // Update footer event counter
+      const counter = document.getElementById('experiment-event-count');
+      if (counter) counter.textContent = experimentToolEvents.length + ' events';
+
+      if (experimentToolEvents.length === 0) {
+        feed.innerHTML = `
+          <div class="flex flex-col items-center justify-center h-full opacity-40 py-16">
+            <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">science</span>
+            <p class="text-sm text-outline-variant font-medium">No tool activity yet</p>
+            <p class="text-[10px] text-outline-variant/50 mt-1">Tool calls and results from agents will appear here in real time</p>
+          </div>`;
+        return;
+      }
+
+      feed.innerHTML = experimentToolEvents.map((ev, idx) => {
+        const t = ev.timestamp.toLocaleTimeString('en-GB', { hour12: false });
+        const isCall = ev.kind === 'call';
+        const borderColor = isCall ? 'border-primary/30' : 'border-secondary/30';
+        const bgColor = isCall ? 'bg-primary/5' : 'bg-secondary/5';
+        const tagBg = isCall ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary';
+        const tagText = isCall ? 'CALL' : 'RESULT';
+        const icon = isCall ? 'play_arrow' : 'check_circle';
+
+        let body = '';
+        if (isCall) {
+          const argsStr = ev.args && Object.keys(ev.args).length > 0
+            ? JSON.stringify(ev.args, null, 2)
+            : '(no arguments)';
+          body = `
+            <div class="mt-2">
+              <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">Arguments</div>
+              <pre class="bg-surface-container-lowest/80 border border-outline-variant/10 rounded-md p-3 text-[10px] text-on-surface-variant font-mono leading-relaxed whitespace-pre-wrap break-all max-h-48 overflow-y-auto no-scrollbar">${escHtml(argsStr)}</pre>
+            </div>`;
+        } else {
+          let respStr;
+          try {
+            respStr = typeof ev.response === 'string' ? ev.response : JSON.stringify(ev.response, null, 2);
+          } catch { respStr = String(ev.response); }
+          body = `
+            <div class="mt-2">
+              <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">Response</div>
+              <pre class="bg-surface-container-lowest/80 border border-outline-variant/10 rounded-md p-3 text-[10px] text-on-surface-variant font-mono leading-relaxed whitespace-pre-wrap break-all max-h-64 overflow-y-auto no-scrollbar">${escHtml(respStr)}</pre>
+            </div>`;
+        }
+
+        return `
+          <div class="${bgColor} ${borderColor} border rounded-lg p-3 msg-enter">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-sm ${isCall ? 'text-primary' : 'text-secondary'}">${icon}</span>
+              <span class="text-[10px] font-bold ${tagBg} px-2 py-0.5 rounded uppercase tracking-wider">${tagText}</span>
+              <span class="text-xs font-bold text-on-surface font-mono">${escHtml(ev.name)}</span>
+              <span class="ml-auto text-[9px] text-outline-variant font-mono">${escHtml(ev.author)} · ${t}</span>
+            </div>
+            ${body}
+          </div>`;
+      }).join('');
+
+      feed.scrollTop = feed.scrollHeight;
+    }
   </script>
 
   <!-- Roadmap Editor Modal -->
@@ -914,6 +1039,64 @@
         <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
           class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
           <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Experiment Viewer Modal -->
+  <div id="experiment-modal"
+    class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] mx-4">
+      <!-- Modal Header -->
+      <div
+        class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">science</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Experiment Viewer
+            </h3>
+            <p class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">Live Tool Activity Feed
+            </p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="clearExperimentViewer()"
+            class="text-outline-variant hover:text-error transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-error/10"
+            title="Clear feed">
+            <span class="material-symbols-outlined text-sm">delete_sweep</span>
+          </button>
+          <button onclick="closeExperimentViewer()"
+            class="text-outline-variant hover:text-on-surface transition-colors flex items-center">
+            <span class="material-symbols-outlined text-lg">close</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Modal Body — scrolling feed -->
+      <div id="experiment-feed"
+        class="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20 min-h-[400px]">
+        <div class="flex flex-col items-center justify-center h-full opacity-40 py-16">
+          <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">science</span>
+          <p class="text-sm text-outline-variant font-medium">No tool activity yet</p>
+          <p class="text-[10px] text-outline-variant/50 mt-1">Tool calls and results from agents will appear here in
+            real time</p>
+        </div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div
+        class="px-6 py-3 border-t border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
+        <div class="flex items-center gap-2">
+          <span id="experiment-event-count"
+            class="text-[9px] font-mono text-outline-variant/60 uppercase tracking-wider">0 events</span>
+        </div>
+        <button onclick="closeExperimentViewer()"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Close
         </button>
       </div>
     </div>
