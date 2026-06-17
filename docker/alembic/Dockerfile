@@ -29,7 +29,7 @@ COPY docker/alembic/requirements.txt /tmp/alembic-requirements.txt
 RUN uv pip install --system --no-cache -r /tmp/alembic-requirements.txt
 
 COPY CoScientist/src/alembic /app/alembic
-COPY CoScientist/src/.env /app/.env
+COPY CoScientist/src/.env /app/alembic/.env
 
 COPY docker/alembic/entrypoint.py /usr/local/bin/entrypoint.py
 COPY docker/alembic/serve.py      /usr/local/bin/serve.py
