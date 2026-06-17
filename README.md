@@ -128,45 +128,6 @@ A sequential agent that combines tool retrieval and execution:
 - Automated pipeline generation
 - Multi-server orchestration
 
-## Installation
-
-### Prerequisites
-
-- Python 3.12.11
-- pip package manager
-- Git
-- Access to required APIs (OpenAI, Tavily, etc.)
-
-### Required Git Dependencies
-
-CoScientist requires two additional Git packages that must be installed separately:
-
-```bash
-# Install rag_tools for RAG-based tool retrieval
-pip install git+https://github.com/fiestaxxl/rag_tools.git
-
-# Install FEDOT.MAS for multi-agent experiment execution
-pip install git+ssh://git@github.com/ITMO-NSS-team/FEDOT.MAS.git#subdirectory=packages/fedotmas
-```
-
-### Full Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/ITMO-NSS-team/CoScientist.git
-cd CoScientist
-
-# Create a virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install required Git dependencies
-pip install git+https://github.com/fiestaxxl/rag_tools.git
-pip install git+ssh://git@github.com/ITMO-NSS-team/FEDOT.MAS.git#subdirectory=packages/fedotmas
-
-# Install the package and dependencies
-pip install -e .
-```
 
 ### Environment Configuration
 
@@ -361,44 +322,6 @@ my_agent = LlmAgent(
 
 This project is licensed under the MIT License. See [LICENSE](./LICENSE) for details.
 
-## Authors
-
-ITMO-NSS-team
-
-## Acknowledgments
-
-- Google Agent Development Kit team
-- FEDOT.MAS development team
-- RAG Tools development team
-
-## Citation
-
-If you use CoScientist in your research, please cite:
-
-### APA format:
-
-    ITMO-NSS-team (2025). CoScientist repository [Computer software]. https://github.com/ITMO-NSS-team/CoScientist
-
-### BibTeX format:
-```bibtex
-    @misc{CoScientist,
-
-        author = {ITMO-NSS-team},
-
-        title = {CoScientist repository},
-
-        year = {2025},
-
-        publisher = {github.com},
-
-        journal = {github.com repository},
-
-        howpublished = {\url{https://github.com/ITMO-NSS-team/CoScientist.git}},
-
-        url = {https://github.com/ITMO-NSS-team/CoScientist.git}
-
-    }
-```
 
 ## Support
 
@@ -406,14 +329,3 @@ For issues and questions:
 - Open an issue on GitHub
 - Check the documentation
 - Contact the maintainers
-
-
-## Changelog
-
-### v1.0.0 (2025-01)
-- Initial release
-- Multi-agent orchestration
-- FEDOT.MAS integration
-- RAG-based tool retrieval
-- Chemical computing utilities
-- Paper parsing pipeline

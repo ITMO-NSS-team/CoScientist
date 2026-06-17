@@ -208,13 +208,30 @@ def _format_pending_calls(calls: List[Dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 # LLM critic invocation
 # ---------------------------------------------------------------------------
+def _provider_routing() -> Optional[Dict[str, Any]]:
+    """OpenRouter provider routing for the critic LLM, mirroring the other agents.
+
+    Pins the critic to the same provider allow-list the rest of the system uses
+    (``llm.allowed_providers``), so its verdicts come from a known-good endpoint
+    instead of whatever litellm picks by default. Returns None when nothing is
+    pinned.
+    """
+    provs = _settings.llm.allowed_providers
+    if not provs:
+        return None
+    return {"provider": {"only": list(provs)}}
+
+
 async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
     """Returns parsed JSON dict; on any failure returns {} (permissive default).
 
     Uses the async litellm API so the critic's network call does not block the
-    orchestrator's event loop (the callbacks run inside it).
+    orchestrator's event loop (the callbacks run inside it). Retries and a
+    provider pin (F006.A2) keep a flaky endpoint from silently turning every
+    verdict into the permissive default.
     """
     try:
+        routing = _provider_routing()
         resp = await litellm.acompletion(
             model=_CRITIC_MODEL,
             messages=[
@@ -223,6 +240,9 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
+            num_retries=4,
+            timeout=120,
+            **({"extra_body": routing} if routing else {}),
         )
         raw = resp["choices"][0]["message"]["content"]
         return json.loads(raw)

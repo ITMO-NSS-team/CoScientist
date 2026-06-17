@@ -8,7 +8,9 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from fedotmas import MAS, HttpMCPServer
+from fedotmas.plugins import LoggingPlugin
 
+from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
@@ -67,16 +69,48 @@ class FedotMASToolset(BaseToolset):
         }
         servers_payload.update(web_servers_payload)
 
+        # An after_tool_callback plugin captures S3 artifact links
+        # (results_presigned_url) at the tool-call boundary, BEFORE the FEDOT.MAS
+        # sub-agents paraphrase them away or hallucinate molecules.
+        # NB: passing plugins= REPLACES the MAS default (just LoggingPlugin in this
+        # fedotmas version), so re-include it alongside the capture plugin.
+        cap = ArtifactCapturePlugin()
+        result = None
+        status, err = "success", None
         try:
-            mas = MAS(mcp_servers=servers_payload)
+            mas = MAS(
+                mcp_servers=servers_payload,
+                plugins=[LoggingPlugin(), cap],
+            )
             result = await mas.run(task_description)
         except Exception as e:
-            return {"status": "error", "error": f"FEDOT.MAS run failed: {e}"}
+            status, err = "error", f"FEDOT.MAS run failed: {e}"
 
-        return {
-            "status": "success",
-            "result": result,
-        }
+        # Fallback: scan the returned MAS state for presigned URLs the plugin may
+        # have missed (only when a result actually came back).
+        if result is not None:
+            import re as _re
+            import json as _json
+            try:
+                _txt = _json.dumps(result, default=str, ensure_ascii=False)
+            except Exception:
+                _txt = str(result)
+            _known = {a.get("url") for a in cap.captured}
+            for _u in dict.fromkeys(_re.findall(r"https?://[^\s\"'<>)\\]+X-Amz-[^\s\"'<>)\\]+", _txt)):
+                if _u not in _known:
+                    cap.captured.append({"url": _u, "tool": "fedot_state_scan"})
+
+        # Surface the REAL artifacts in the return value AND shared session state, so
+        # the link survives the sub-agents' paraphrasing.
+        if cap.captured and tool_context is not None:
+            tool_context.state["fedot_artifacts"] = cap.captured
+
+        ret = {"status": status, "artifacts": cap.captured}
+        if result is not None:
+            ret["result"] = result
+        if err:
+            ret["error"] = err
+        return ret
 
     
 fedot_toolset = FedotMASToolset()
