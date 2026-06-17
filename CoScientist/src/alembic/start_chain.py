@@ -27,6 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from alembic.common import BASE_IMAGE, get_repo_name, ensure_base_image
@@ -65,7 +67,9 @@ def _random_port() -> int:
 def _env_args(env_file: Path | None) -> list[str]:
     args: list[str] = []
     if env_file and env_file.exists():
-        args += ["--env-file", str(env_file)]
+        for k, v in dotenv_values(env_file).items():
+            if v is not None:
+                args += ["-e", f"{k}={v}"]
     for var in PASSTHROUGH_ENV:
         if var in os.environ:
             args += ["-e", f"{var}={os.environ[var]}"]
