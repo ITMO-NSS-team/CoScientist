@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import sys
-import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -9,13 +8,6 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import asyncio
-
-_api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
-if not _api_key:
-    sys.exit(
-        "[alembic] ERROR: neither OPENROUTER_API_KEY nor OPENAI_API_KEY is set. "
-        "Pass it via --env-file or -e in your docker run command."
-    )
 import json
 import shutil
 import textwrap
