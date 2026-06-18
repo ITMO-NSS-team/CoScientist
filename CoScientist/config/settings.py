@@ -157,7 +157,7 @@ class OrchestratorSettings(BaseModel):
     # system.yaml as ${orchestrator.use_planner}). When False, the planner is
     # not attached and the orchestrator prompt's planning step adapts — the
     # assembler keeps prompt and tools consistent automatically.
-    use_planner: bool = False
+    use_planner: bool = True
 
 # =========================
 # CODE EXECUTION

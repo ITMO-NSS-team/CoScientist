@@ -26,6 +26,7 @@ config that wires the sub-agents and passes it in.
 """
 
 from __future__ import annotations
+from google.adk.agents import callback_context
 
 from opik import track
 
@@ -228,7 +229,7 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
         return json.loads(raw)
     except Exception as e:
         print(f"[Critic] LLM call failed ({e!r}); defaulting to permissive verdict.")
-        return {}
+        return {"verdict": "approve"}
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +326,19 @@ def make_pre_action_critique(instruction: str) -> Callable:
         # No tool calls in this response -> nothing to critique.
         if not pending:
             return None
+
+        #######
+        # Auto-approve task management tools to save LLM calls and prevent false rejections.
+        MANAGEMENT_TOOLS = {"update_task_status", "request_approval"}
+        if all(call.get("tool") in MANAGEMENT_TOOLS for call in pending):
+            print(f"pre_action_critique auto-approved management tools: {[c.get('tool') for c in pending]}")
+            return None
+
+        contents = _session_contents(callback_context)
+        # user_content may be absent or start with a non-text part (image/DICOM upload).
+        user_task = _first_text(getattr(callback_context, "user_content", None))
+        trajectory = _extract_completed_trajectory(contents)
+        #####
 
         contents = _session_contents(callback_context)
         # user_content may be absent or start with a non-text part (image/DICOM upload).

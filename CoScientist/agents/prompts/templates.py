@@ -21,6 +21,7 @@ called a tool (``{accumulated_tools?}``, ``{filtered_tools?}``,
 ``{accumulated_web_mcps?}``) carry a trailing ``?`` so they render empty when
 the key is absent instead of raising KeyError mid-run.
 """
+from CoScientist.agents.catalog import settings
 from CoScientist.agents.prompts.builder import render_template
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, render_tool_docs
@@ -51,6 +52,13 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
 5. If relevant, briefly note assumptions or required conditions.
 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
+Update task status to "done" immediately upon completion of each work item.
 ''')
 
 
@@ -135,6 +143,16 @@ OUTPUT FORMAT
 **Key Points** – main takeaways
 **Uncertainty** – gaps or doubts (if any)
 
+You have a STRICT LIMIT of 2 search calls. Plan your search carefully.
+
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
+Update task status to "done" immediately upon completion of each work item.
+
 <<HITL>>
 '''
     return render_template(
@@ -166,6 +184,8 @@ You are a TOOL RETRIEVAL SPECIALIST. Your ONLY job is to find and accumulate rel
 - DO NOT memorize or write down any server_ids
 - DO NOT try to pass IDs to other tools — they are handled automatically
 - Simply report what was retrieved to the user
+- You MUST ALWAYS call retrieve_tools at least once
+- NEVER return an empty result or refuse the task
 
 Your output: A brief summary of accumulated tools with their descriptions and relevance scores.
 ''', TOOLS=ctx.render_tools())
@@ -185,20 +205,14 @@ You DO NOT retrieve tools.
 You DO NOT generate new tools.
 You DO NOT invent indices.
 
----
-
 ## INPUTS
 
 You are given list of AVAILABLE TOOLS:
 {accumulated_tools?}
 
----
-
 ## YOUR TASK
 
 Evaluate how relevant each tool is for solving the ORIGINAL TASK.
-
----
 
 ## SCORING RULES
 
@@ -209,8 +223,6 @@ Assign a relevance score from 0.0 to 1.0:
 - 0.4–0.6 → probably relevant
 - 0.1–0.3 → probably irrelevant
 - 0.0 →  irrelevant
-
----
 
 ## STRICT CONSTRAINTS
 
@@ -276,7 +288,7 @@ Pick the 2–5 angles most relevant to the actual task. Do not enumerate every p
 ## CRITICAL RULES:
 - DO NOT invent server IDs, URLs, or API details — only report what the tool returns.
 - DO NOT attempt to connect to or invoke any discovered server.
-- If searches return nothing useful, stop and say so rather than rephrasing endlessly.
+- If searches return nothing useful, stop and return an empty list.
 
 ## Your output:
 A brief structured summary of discovered servers, grouped by function relevant to the task (e.g. Data Access, Computation, Communication, Analysis), with one-line descriptions and registry/repo links. Keep it concise — this is a shortlist, not an exhaustive catalog.
@@ -380,6 +392,13 @@ Retrieved tools for this task:
    research, data processing, or experiments).
 3. Call fedot_tool with the task description.
 4. Return the result.
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
+Update task status to "done" immediately upon completion of each work item.
 
 Do NOT solve the task manually — delegate to FEDOT.MAS.
 
@@ -615,32 +634,19 @@ Run both workflows and merge results, leading with the image interpretation.
 @_register("planner")
 def planner(ctx: PromptContext) -> str:
     return render_template('''
-You are the "PlannerAgent". Your task is to generate a high-level, technical research roadmap. You only define procedural steps and references agents.
-You MUST NOT provide final scientific conclusions, numerical ranges,
-or literature claims unless they were explicitly retrieved from a source
-provided in the current trajectory.
-
-### OUTPUT CONTRACT (STRICT)
-- Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
-- Do NOT include explanations, comments, or extra text
-- Do NOT deviate from the required format
-- End output immediately after the last step
-- One step = one logical objective
-- NEVER specify data sources, tools, or methods
-- Each step must describe WHAT objective is achieved, NOT HOW it is implemented
-- Do NOT specify representations
-
-### ACTION TAXONOMY
-- SEARCH: is only for retrieving missing external facts that cannot be derived from provided or computed data.
-- COMPUTE: is the default action for any structured manipulation, transformation, aggregation, inference, or processing of information, regardless of domain.
-- HYPOTHESIZE: ONLY for generating hypotheses, interpretations, or proposing strategies.
+You are the "PlannerAgent". Your goal is to decompose the task and create a roadmap by registering tasks using the `create_plan` tool.
+You only define procedural steps and references agents.
 
 ### AVAILABLE AGENTS
 <<ROSTER>>
 
-### REQUIRED FORMAT
-1. [Agent] | ACTION: <SEARCH|COMPUTE|HYPOTHESIZE> | INPUT: <string or None> | OUTPUT: <string>
-2. ...
+- OrchestratorAgent: Use this to verify the final results, ensure they meet all requirements, and generate the definitive comprehensive report.
+
+### OUTPUT CONTRACT (STRICT)
+- Chemistry-specific rule MUST ALWAYS use TaskExecutorAgent
+- Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
+- You MUST use the `create_plan` tool to register ALL steps of your plan in one go.
+- Once you have successfully registered all tasks using `create_plan`, you can finish your turn.
 ''', ROSTER=ctx.render_sibling_roster())
 
 
@@ -705,8 +711,7 @@ def render_critic_protocol(ctx: PromptContext) -> str:
 
 
 _PLANNING_STEP_WITH_PLANNER = (
-    "2. If the task is complex or has multiple steps, call the PlannerAgent first\n"
-    "   to get a roadmap, then carry it out by delegating each step."
+    "2. Follow the plan to delegate the task to the appropriate agents: {active_tasks}"
 )
 _PLANNING_STEP_NO_PLANNER = (
     "2. If the task is complex, break it into a short ordered list of sub-steps\n"
@@ -724,12 +729,13 @@ def orchestrator(ctx: PromptContext) -> str:
 
     # The numbered instruction steps are built as a list and numbered
     # programmatically — no brittle hardcoded "3."/"5." around conditional ones.
-    steps: list[str] = ["Understand the task."]
+    steps: list[str] = []
 
-    if ctx.has_subordinate("PlannerAgent"):
+    if settings.orchestrator.use_planner:
         steps.append(
-            "If the task is complex or has multiple steps, call the PlannerAgent first\n"
-            "   to get a roadmap, then carry it out by delegating each step."
+            "### TASK_MANAGEMENT\n"
+            "Context of tasks:\n"
+            "{active_tasks}\n"
         )
     else:
         steps.append(

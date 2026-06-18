@@ -202,6 +202,10 @@ def _build_llm_agent(
         kwargs["instruction"] = _render_instruction(cfg, ctx)
     if cfg.output_key:
         kwargs["output_key"] = cfg.output_key
+    if cfg.include_contents:
+        kwargs["include_contents"] = cfg.include_contents
+    if cfg.mode:
+        kwargs["mode"] = cfg.mode
     if cfg.output_schema:
         kwargs["output_schema"] = REGISTRY.output_schema(cfg.output_schema)
     if cfg.planner:

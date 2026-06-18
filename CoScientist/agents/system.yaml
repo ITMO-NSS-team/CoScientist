@@ -41,15 +41,16 @@ agents:
   # ── Root ───────────────────────────────────────────────────────────────────
   OrchestratorAgent:
     class: llm
-    root: true
+    root: false
+    include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
     # retrieval lets the orchestrator check which ready-made MCP tools exist
     # BEFORE routing a step — prefer TaskExecutorAgent over research when a
     # relevant tool is already available.
-    tools: [retrieval]
+    tools: [retrieval, task_tracker]
     subordinates:
-      - PlannerAgent
+      # - PlannerAgent
       - HypothesesAgent
       - ResearchAgent
       - TaskExecutorAgent
@@ -57,6 +58,7 @@ agents:
       - MedicalAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
+      before_agent: [before_get_task]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
       # `after_tool: [post_action_critique]` to enable it — the orchestrator
@@ -71,10 +73,30 @@ agents:
         description: Coordinate scientific research agents to solve complex tasks
         tags: [orchestration, science, multi-agent]
 
+
+  InitAgent:
+    class: sequential
+    root: true
+    children:
+      - PlannerAgent
+      - OrchestratorAgent
+    enabled: true
+    hitl: true
+    description: Initialize the CoScientist system
+    a2a:
+      key: init
+      port: 8008
+      skill:
+        id: init
+        name: Init
+        description: Initialize the CoScientist system
+        tags: [init, science, multi-agent]
+
   # ── Direct subordinates ────────────────────────────────────────────────────
   PlannerAgent:
     class: custom:session
-    enabled: false #${orchestrator.use_planner}
+    root: false
+    enabled: true #${orchestrator.use_planner}
     description: >-
       produces a step-by-step roadmap for a complex, multi-step task;
       call it first, then execute the roadmap by delegating each step.
@@ -82,11 +104,9 @@ agents:
       for a complex multi-step task, call this FIRST to produce a roadmap,
       then follow it step by step.
     prompt: planner
+    tools: [create_plan_tool]
     output_key: planner_roadmap
-    planner: plan_react
     hitl: true
-    options:
-      plan_file_path: roadmap.txt
     a2a:
       key: planner
       port: 8001
@@ -101,11 +121,12 @@ agents:
     description: generates ideas and hypotheses.
     routing: when the direction is unclear or multiple approaches need to be proposed.
     planning: |-
-      use when:
-          * the direction is unclear
-          * multiple strategies must be explored or compared
+      Use this to generate and test hypotheses.
     prompt: hypotheses
     output_key: hypotheses
+    tools: [task_tracker]
+    callbacks:
+      before_agent: [before_get_task]
     a2a:
       key: hypotheses
       port: 8002
@@ -128,16 +149,15 @@ agents:
       "find and download papers about <expanded topic>". Do NOT use it to read a
       specific repository or URL the user named — that goes to CoderAgent.
     planning: |-
-      (LOWER PRIORITY) use only when:
-          * external factual knowledge is strictly required
-          * the problem cannot be solved via computation or available data
-          * validation against external literature is necessary
-          * literature search is needed
+      Use this ONLY when information cannot be computed or retrieved via tools, and specifically 
+      requires searching information from the web or literature.  
     prompt: research
-    tools: [websearch, paper_analysis, papers_search]
+    tools: [websearch, paper_analysis, papers_search, task_tracker]
     output_key: search_results
     callbacks:
+      before_agent: [before_get_task]
       before_model: [inject_uploaded_papers]
+      before_tool: [WebSearchLimiter]
       after_tool: [log_research_tool_calls]
     hitl: true
     a2a:
@@ -160,11 +180,10 @@ agents:
       when the result can be obtained by RUNNING AN EXISTING tool/service.
       Hallmark: "compute/run X using tools we already have."
     planning: |-
-      choose for steps achievable by RUNNING AN EXISTING tool/service:
-          * property estimation, docking, simulations
-          * inference with an already-available model
-          * structured transformation handled by ready-made chemical/ML MCP tools
-          → Operates by orchestrating existing MCP tools; does NOT write code
+      Use this as your primary choice for ANY task that can be calculated. 
+      This agent has comprehensive capabilities and must be prioritized over searching whenever possible: 
+        - Any computational task requiring tools
+        - Solves all tasks involving chemistry
     children: [ToolPreparerAgent, ExperimentAgent]
     a2a:
       key: task_execution
@@ -256,13 +275,14 @@ agents:
       data; if the user uploaded a medical image (DICOM/scan), pass its artifact_id.
     planning: |-
       use when:
-          * the step involves clinical or biomedical questions
-          * medical literature evidence (PubMed, PICO, study taxonomy) is required
-          * an uploaded medical image (DICOM/scan) must be analyzed
+          - the step involves clinical or biomedical questions
+          - medical literature evidence (PubMed, PICO, study taxonomy) is required
+          - an uploaded medical image (DICOM/scan) must be analyzed
     prompt: medical
-    tools: [medical]
+    tools: [medical, task_tracker]
     output_key: medical_results
     callbacks:
+      before_agent: [before_get_task]
       before_model: [inject_medical_artifacts]
     a2a:
       key: medical
@@ -330,9 +350,9 @@ agents:
     class: llm
     description: Agent to invoke MAS for solving given task. Uses MCP tools
     prompt: fedot
-    tools: [fedot]
+    tools: [fedot, task_tracker]
     output_key: fedot_results
     callbacks:
       # Abstain → recommend CoderAgent when the tool-prep pipeline found no tool
       # that actually matches the task (instead of running a nearest-but-wrong one).
-      before_agent: [redirect_when_no_tools]
+      before_agent: [redirect_when_no_tools, before_get_task]

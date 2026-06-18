@@ -103,6 +103,8 @@ class AgentConfig(BaseModel):
     children: List[str] = Field(default_factory=list)
     callbacks: CallbacksConfig = Field(default_factory=CallbacksConfig)
     hitl: bool = False
+    include_contents: Optional[str] = "default"
+    mode: Optional[str] = None
     output_key: Optional[str] = None
     output_schema: Optional[str] = None
     planner: Optional[str] = None

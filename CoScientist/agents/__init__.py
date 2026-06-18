@@ -12,6 +12,7 @@ from opik.integrations.adk import track_adk_agent_recursive
 _system = build_system()
 
 orchestrator_agent = _system.root
+root_agent = orchestrator_agent
 planner_agent = _system.agent("PlannerAgent")
 hypotheses_agent = _system.agent("HypothesesAgent")
 research_agent = _system.agent("ResearchAgent")
@@ -28,6 +29,7 @@ track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
 
 __all__ = [
     "orchestrator_agent",
+    "root_agent",
     "planner_agent",
     "fedot_agent",
     "research_agent",
@@ -38,5 +40,5 @@ __all__ = [
     "tool_reranker_agent",
     "tool_websearcher_agent",
     "task_execution_agent",
-    "tool_agent",
+    "tool_agent"
 ]

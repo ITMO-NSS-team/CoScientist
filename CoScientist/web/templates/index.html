@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <title>CoScientist — Orchestrator</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+    rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#00daf3", "surface-dim": "#101319",
+            "surface-container-high": "#272a31", "outline": "#8c90a1",
+            "surface-variant": "#32353c", "secondary": "#40e56c",
+            "secondary-container": "#02c953", "tertiary": "#eac400",
+            "outline-variant": "#424656", "surface-container-low": "#191c22",
+            "on-surface": "#e1e2eb", "primary-container": "#007e8c",
+            "surface-container": "#1d2026", "surface-container-lowest": "#0b0e14",
+            "on-surface-variant": "#c2c6d8", "surface-container-highest": "#32353c",
+            "error": "#ffb4ab", "on-primary": "#00363d",
+            "surface": "#101319", "on-error": "#690005",
+            "background": "#101319", "on-background": "#e1e2eb",
+            "surface-bright": "#363940", "on-primary-container": "#e9fbff",
+            "on-error-container": "#ffdad6", "error-container": "#93000a",
+          },
+          fontFamily: {
+            headline: ["Space Grotesk"], body: ["Inter"],
+            label: ["Space Grotesk"], mono: ["JetBrains Mono"]
+          }
+        },
+      },
+    }
+  </script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .line-through-dim {
+      text-decoration: line-through;
+      text-decoration-color: #424656;
+      color: #424656;
+    }
+
+    .topology-grid {
+      background-image: radial-gradient(rgba(0, 218, 243, 0.05) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    .msg-enter {
+      animation: fadeIn .3s ease-out;
+    }
+
+    .typing-dot {
+      animation: pulse 1.2s infinite;
+    }
+
+    .typing-dot:nth-child(2) {
+      animation-delay: .2s;
+    }
+
+    .typing-dot:nth-child(3) {
+      animation-delay: .4s;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: .3
+      }
+
+      50% {
+        opacity: 1
+      }
+    }
+  </style>
+</head>
+
+<body class="bg-background text-on-surface overflow-hidden">
+
+  <!-- SideNavBar -->
+  <aside
+    class="w-64 h-full fixed left-0 top-0 border-r border-[#424656]/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
+    <div class="px-6 mb-8">
+      <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
+      <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
+    </div>
+    <div class="px-6 mb-4">
+      <h3 class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Agents</h3>
+    </div>
+    <nav id="agent-nav" class="flex-1 space-y-1 px-3 overflow-y-auto no-scrollbar">
+      <!-- Populated by JS -->
+    </nav>
+    <div class="px-4 mt-auto space-y-4">
+      <div class="flex items-center gap-3 pt-4 border-t border-outline-variant/10">
+        <div class="w-8 h-8 rounded bg-surface-container-high flex items-center justify-center">
+          <span class="material-symbols-outlined text-primary text-sm">science</span>
+        </div>
+        <div>
+          <p class="text-[10px] font-bold text-on-surface">SYS_ADMIN</p>
+          <p id="conn-status" class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- TopNavBar -->
+  <header
+    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-[#424656]/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
+    <div class="flex items-center gap-8">
+      <div class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR</div>
+      <div
+        class="hidden md:flex items-center gap-6 font-['Space_Grotesk'] text-[10px] uppercase tracking-widest font-bold">
+        <span id="status-badge" class="text-[#424656]">Status: Idle</span>
+        <span id="event-count" class="text-[#424656]">Events: 0</span>
+      </div>
+    </div>
+    <div class="flex items-center gap-4 text-[#424656]">
+      <button onclick="clearChat()" title="Clear chat">
+        <span
+          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="ml-64 p-8 flex gap-8 h-[calc(100vh-72px)] overflow-hidden">
+
+    <!-- Central Chat Area -->
+    <section
+      class="flex-1 flex flex-col bg-surface-container-low rounded-xl relative border border-[#424656]/10 shadow-inner">
+      <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
+        <div class="flex items-center gap-3">
+          <span id="live-dot" class="w-2 h-2 bg-[#424656] rounded-full"></span>
+          <h2 class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
+          </h2>
+        </div>
+        <div id="active-badge"
+          class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
+          Offline</div>
+      </div>
+
+      <!-- Chat Feed -->
+      <div id="chat-feed"
+        class="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20">
+        <div class="flex flex-col items-center justify-center h-full opacity-50">
+          <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
+          <p class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
+        </div>
+      </div>
+
+      <!-- Chat Input -->
+      <div class="p-6 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
+        <form id="chat-form"
+          class="flex items-center gap-4 bg-surface-container-high/40 p-2 rounded-lg border border-outline-variant/10 focus-within:border-primary/40 transition-colors">
+          <input id="chat-input"
+            class="bg-transparent border-none focus:ring-0 text-sm flex-1 text-on-surface placeholder:text-outline-variant/50 font-medium"
+            placeholder="Send system command..." type="text" autocomplete="off" />
+          <button type="button" id="stop-btn" onclick="stopChat()"
+            class="hidden p-2 bg-error/20 text-error border border-error/30 rounded-md hover:bg-error/30 transition-all shadow-md"
+            title="Stop agents">
+            <span class="material-symbols-outlined text-sm">stop_circle</span>
+          </button>
+          <button type="submit" id="send-btn"
+            class="p-2 bg-primary text-on-primary rounded-md hover:brightness-110 transition-all shadow-md">
+            <span class="material-symbols-outlined text-sm">send</span>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Right Sidebar: Telemetry -->
+    <aside class="w-80 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
+      <!-- Telemetry -->
+      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
+        <div class="absolute top-3 right-3">
+          <span id="telemetry-live"
+            class="text-[8px] font-bold text-[#424656] font-mono tracking-tighter uppercase flex items-center gap-1">
+            <span class="w-1 h-1 bg-[#424656] rounded-full"></span> Offline
+          </span>
+        </div>
+        <h4 class="text-[10px] font-bold text-outline-variant uppercase mb-3 tracking-widest">Telemetry Output</h4>
+        <div id="telemetry-log"
+          class="space-y-1.5 font-mono text-[9px] text-primary/60 max-h-96 overflow-y-auto no-scrollbar">
+          <div class="text-outline-variant">Waiting for connection…</div>
+        </div>
+      </div>
+
+      <!-- HITL Pending -->
+      <div id="hitl-panel" class="hidden">
+        <!-- Filled dynamically -->
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    // =========================================================================
+    // WebSocket & State
+    // =========================================================================
+    let ws = null;
+    let eventCount = 0;
+    let reconnectTimer = null;
+
+    const AGENTS = [
+      { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
+      { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
+      { name: "HypothesesAgent", icon: "psychology", desc: "Hypothesis Generator" },
+      { name: "ResearchAgent", icon: "search", desc: "Literature & Web Search" },
+      { name: "ToolRetrieverAgent", icon: "build", desc: "MCP Tool Retriever" },
+      { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
+    ];
+
+    function initAgentNav() {
+      const nav = document.getElementById('agent-nav');
+      nav.innerHTML = AGENTS.map(a => {
+        const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
+        const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
+        const iconColorClass = isHighlightedByDefault ? "text-primary" : "text-outline-variant";
+        const textColorClass = isHighlightedByDefault ? "text-on-surface font-semibold" : "text-outline-variant font-medium";
+
+        return `
+          <div id="agent-${a.name}" onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
+            <span class="material-symbols-outlined ${iconColorClass} text-lg">${a.icon}</span>
+            <div class="flex flex-col">
+              <span class="text-sm ${textColorClass}">${a.desc}</span>
+              <span class="text-[8px] text-outline-variant/50 font-mono uppercase">${a.name}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function onAgentClick(name) {
+      if (name === "PlannerAgent") {
+        openRoadmapEditor();
+      } else if (name === "ToolsViewer") {
+        openToolsViewer();
+      }
+    }
+
+    function highlightAgent(name) {
+      AGENTS.forEach(a => {
+        const el = document.getElementById('agent-' + a.name);
+        if (!el) return;
+        if (a.name === name) {
+          el.className = "flex items-center gap-3 py-3 px-4 bg-[#272a31] rounded-lg transition-all duration-200 border-l-2 border-[#00daf3] cursor-pointer";
+          el.querySelector('.material-symbols-outlined').className = "material-symbols-outlined text-primary text-lg animate-pulse";
+          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => s.classList.remove('text-outline-variant', 'opacity-50'));
+        } else {
+          // Меняем проверку здесь:
+          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
+          const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
+          el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
+
+          const icon = el.querySelector('.material-symbols-outlined');
+          icon.className = `material-symbols-outlined ${isHighlightedByDefault ? 'text-primary' : 'text-outline-variant'} text-lg`;
+
+          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
+            if (!s.classList.contains('font-mono')) {
+              s.className = `text-sm ${isHighlightedByDefault ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
+            }
+          });
+        }
+      });
+    }
+
+    function resetAgents() {
+      AGENTS.forEach(a => {
+        const el = document.getElementById('agent-' + a.name);
+        if (el) {
+          // Меняем проверку здесь:
+          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
+          const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
+          el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
+
+          const icon = el.querySelector('.material-symbols-outlined');
+          icon.className = `material-symbols-outlined ${isHighlightedByDefault ? 'text-primary' : 'text-outline-variant'} text-lg`;
+
+          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
+            if (!s.classList.contains('font-mono')) {
+              s.className = `text-sm ${isHighlightedByDefault ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
+            }
+          });
+        }
+      });
+    }
+
+    // =========================================================================
+    // Chat rendering
+    // =========================================================================
+    function scrollChat() {
+      const feed = document.getElementById('chat-feed');
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function ts() { return new Date().toLocaleTimeString('en-GB', { hour12: false }); }
+
+    function addSystemMsg(text) {
+      const feed = document.getElementById('chat-feed');
+      feed.innerHTML += `
+    <div class="flex flex-col gap-2 max-w-2xl msg-enter">
+      <div class="flex items-center gap-2">
+        <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">System</span>
+        <span class="text-[10px] text-outline-variant font-mono">${ts()}</span>
+      </div>
+      <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
+        <p class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>
+      </div>
+    </div>`;
+      scrollChat();
+    }
+
+    function addAgentMsg(author, text) {
+      const feed = document.getElementById('chat-feed');
+      feed.innerHTML += `
+    <div class="flex items-start gap-4 max-w-3xl msg-enter">
+      <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+        <span class="material-symbols-outlined text-sm text-primary">smart_toy</span>
+      </div>
+      <div class="flex flex-col gap-1">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(author)}</span>
+          <span class="text-[10px] text-outline-variant">${ts()}</span>
+        </div>
+        <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
+          <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">${escHtml(text)}</p>
+        </div>
+      </div>
+    </div>`;
+      scrollChat();
+    }
+
+    function addUserMsg(text) {
+      const feed = document.getElementById('chat-feed');
+      feed.innerHTML += `
+    <div class="flex items-start gap-4 max-w-2xl ml-auto flex-row-reverse msg-enter">
+      <div class="w-8 h-8 rounded-lg bg-surface-container-highest flex items-center justify-center shrink-0">
+        <span class="material-symbols-outlined text-sm text-on-surface">person</span>
+      </div>
+      <div class="flex flex-col gap-1 items-end">
+        <div class="flex items-center gap-2">
+          <span class="text-[10px] text-outline-variant">${ts()}</span>
+          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">You</span>
+        </div>
+        <div class="bg-primary/5 p-4 rounded-xl rounded-tr-none border border-primary/20">
+          <p class="text-sm text-on-surface">${escHtml(text)}</p>
+        </div>
+      </div>
+    </div>`;
+      scrollChat();
+    }
+
+    function showTyping() {
+      const feed = document.getElementById('chat-feed');
+      if (document.getElementById('typing-indicator')) return;
+      feed.innerHTML += `
+    <div id="typing-indicator" class="flex items-center gap-3 msg-enter">
+      <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+        <span class="material-symbols-outlined text-sm text-primary animate-pulse">smart_toy</span>
+      </div>
+      <div class="flex gap-1.5 px-4 py-3 bg-surface-container-high rounded-xl border border-outline-variant/5">
+        <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
+        <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
+        <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
+      </div>
+    </div>`;
+      scrollChat();
+    }
+
+    function hideTyping() {
+      const el = document.getElementById('typing-indicator');
+      if (el) el.remove();
+    }
+
+    // =========================================================================
+    // HITL UI
+    // =========================================================================
+    function showHITL(data) {
+      const panel = document.getElementById('hitl-panel');
+      const feed = document.getElementById('chat-feed');
+
+      let openRoadmapSidebarBtn = '';
+      let openRoadmapChatBtn = '';
+      if (data.agent_name === 'PlannerAgent') {
+        openRoadmapSidebarBtn = `
+      <button onclick="openRoadmapEditor()" class="w-full mt-2 flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-high transition-all">
+        <span class="material-symbols-outlined text-sm">map</span> Open Roadmap
+      </button>
+    `;
+        openRoadmapChatBtn = `
+      <div class="mt-4 pl-11">
+        <button onclick="openRoadmapEditor()" class="flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-wider hover:bg-surface-container-high transition-all">
+          <span class="material-symbols-outlined text-sm">map</span> Open Roadmap
+        </button>
+      </div>
+    `;
+      }
+
+      // Show in sidebar
+      panel.classList.remove('hidden');
+      panel.innerHTML = `
+    <div class="relative">
+      <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
+      <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-4">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
+            <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
+          </div>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">HITL Required</h3>
+        </div>
+        <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(data.message)}</p>
+        <div class="flex gap-3">
+          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+            <span class="material-symbols-outlined text-base">check_circle</span> Accept
+          </button>
+          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+            <span class="material-symbols-outlined text-base">close</span> Reject
+          </button>
+        </div>
+        ${openRoadmapSidebarBtn}
+      </div>
+    </div>`;
+
+      // Also show in chat
+      feed.innerHTML += `
+    <div class="my-6 relative msg-enter">
+      <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
+      <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
+            <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
+          </div>
+          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">Human-In-The-Loop Required</h3>
+        </div>
+        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(data.message)}</p>
+        <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)}</p>
+        ${openRoadmapChatBtn}
+      </div>
+    </div>`;
+      scrollChat();
+    }
+
+    let currentPlannerHitlRequest = null;
+
+    function respondHITL(requestId, approved) {
+      const feedbackEl = document.getElementById('hitl-feedback');
+      const feedback = feedbackEl ? feedbackEl.value : '';
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'hitl_response',
+          request_id: requestId,
+          action: approved ? 'approve' : 'reject',
+          approved: approved,
+          instructions: feedback || null,
+          free_input: feedback || null,
+        }));
+      }
+      document.getElementById('hitl-panel').classList.add('hidden');
+      addSystemMsg(approved ? '✓ HITL Approved' + (feedback ? ': ' + feedback : '') : '✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
+
+      if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
+        currentPlannerHitlRequest = null;
+        updateRoadmapModalButtons();
+      }
+    }
+
+    // =========================================================================
+    // Telemetry
+    // =========================================================================
+    function addTelemetry(text) {
+      const log = document.getElementById('telemetry-log');
+      const t = new Date().toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      log.innerHTML += `<div class="flex gap-2"><span class="text-outline-variant">[${t}]</span> ${escHtml(text)}</div>`;
+      log.scrollTop = log.scrollHeight;
+      eventCount++;
+      document.getElementById('event-count').textContent = 'Events: ' + eventCount;
+    }
+
+    // =========================================================================
+    // WebSocket
+    // =========================================================================
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+      ws.onopen = () => {
+        document.getElementById('conn-status').textContent = 'Connected';
+        document.getElementById('conn-status').className = 'text-[8px] text-secondary uppercase font-bold tracking-widest';
+        document.getElementById('live-dot').className = 'w-2 h-2 bg-secondary rounded-full animate-pulse';
+        document.getElementById('active-badge').textContent = 'Online';
+        document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-primary border border-primary/20 uppercase font-bold tracking-widest';
+        document.getElementById('telemetry-live').innerHTML = '<span class="w-1 h-1 bg-secondary rounded-full"></span> Live';
+        document.getElementById('telemetry-live').className = 'text-[8px] font-bold text-secondary animate-pulse font-mono tracking-tighter uppercase flex items-center gap-1';
+        addTelemetry('CONNECTED to backend');
+      };
+
+      ws.onclose = () => {
+        document.getElementById('conn-status').textContent = 'Disconnected';
+        document.getElementById('conn-status').className = 'text-[8px] text-error uppercase font-bold tracking-widest';
+        document.getElementById('live-dot').className = 'w-2 h-2 bg-[#424656] rounded-full';
+        document.getElementById('active-badge').textContent = 'Offline';
+        document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest';
+        addTelemetry('DISCONNECTED — retrying in 3s');
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => addTelemetry('ERROR :: WebSocket error');
+
+      ws.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        switch (data.type) {
+          case 'connected':
+            addTelemetry('INIT :: ' + data.message);
+            break;
+          case 'status':
+            document.getElementById('status-badge').textContent = 'Status: ' + data.status;
+            addTelemetry('STATUS :: ' + data.message);
+            showTyping();
+            break;
+          case 'agent_event':
+            if (data.content) {
+              hideTyping();
+              highlightAgent(data.author);
+              addAgentMsg(data.author, data.content);
+              addTelemetry('EVENT :: ' + data.author + (data.is_final ? ' [FINAL]' : ''));
+              if (!data.is_final) showTyping();
+            } else {
+              addTelemetry('EVENT :: ' + data.author + ' (no content)');
+            }
+            // Capture tool activity for the experiment viewer
+            if (data.tool_calls) {
+              data.tool_calls.forEach(tc => {
+                addExperimentToolCall(data.author, tc);
+                addTelemetry('TOOL_CALL :: ' + data.author + ' → ' + tc.name);
+              });
+            }
+            if (data.tool_responses) {
+              data.tool_responses.forEach(tr => {
+                addExperimentToolResponse(data.author, tr);
+                addTelemetry('TOOL_RESULT :: ' + data.author + ' ← ' + tr.name);
+              });
+            }
+            break;
+          case 'final_response':
+            hideTyping();
+            resetAgents();
+            document.getElementById('status-badge').textContent = 'Status: Idle';
+            document.getElementById('send-btn').disabled = false;
+            document.getElementById('stop-btn').classList.add('hidden');
+            currentPlannerHitlRequest = null;
+            updateRoadmapModalButtons();
+            addTelemetry('COMPLETE :: Final response received');
+            break;
+          case 'hitl_request':
+            hideTyping();
+            showHITL(data);
+            if (data.agent_name === 'PlannerAgent') {
+              currentPlannerHitlRequest = data;
+              updateRoadmapModalButtons();
+            }
+            addTelemetry('HITL :: ' + data.agent_name + ' requests ' + data.action_type);
+            break;
+          case 'error':
+            hideTyping();
+            addSystemMsg('Error: ' + data.message);
+            addTelemetry('ERROR :: ' + data.message);
+            document.getElementById('send-btn').disabled = false;
+            document.getElementById('stop-btn').classList.add('hidden');
+            currentPlannerHitlRequest = null;
+            updateRoadmapModalButtons();
+            break;
+          case 'pong':
+            break;
+        }
+      };
+    }
+
+    // =========================================================================
+    // Form
+    // =========================================================================
+    document.getElementById('chat-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('chat-input');
+      const msg = input.value.trim();
+      if (!msg || !ws || ws.readyState !== 1) return;
+      addUserMsg(msg);
+      ws.send(JSON.stringify({ type: 'chat_message', message: msg }));
+      input.value = '';
+      document.getElementById('send-btn').disabled = true;
+      document.getElementById('stop-btn').classList.remove('hidden');
+      addTelemetry('SEND :: user query');
+    });
+
+    function stopChat() {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ type: 'stop_chat' }));
+      document.getElementById('stop-btn').classList.add('hidden');
+      document.getElementById('send-btn').disabled = false;
+      hideTyping();
+      resetAgents();
+      document.getElementById('status-badge').textContent = 'Status: Idle';
+      document.getElementById('hitl-panel').classList.add('hidden');
+      currentPlannerHitlRequest = null;
+      updateRoadmapModalButtons();
+      addTelemetry('STOP :: user requested stop, clearing agent context');
+      addSystemMsg('⏹ Chat stopped. All agents and their context have been cleared.');
+    }
+
+    function clearChat() {
+      document.getElementById('chat-feed').innerHTML = `
+    <div class="flex flex-col items-center justify-center h-full opacity-50">
+      <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
+      <p class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
+    </div>`;
+    }
+
+    function escHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    // =========================================================================
+    // Init
+    // =========================================================================
+    initAgentNav();
+    connect();
+
+    // Keep-alive ping
+    setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
+
+    // =========================================================================
+    // Roadmap Editor
+    // =========================================================================
+    async function openRoadmapEditor() {
+      const modal = document.getElementById('roadmap-modal');
+      const textarea = document.getElementById('roadmap-textarea');
+      const status = document.getElementById('roadmap-status');
+      const saveBtn = document.getElementById('save-roadmap-btn');
+
+      // Show modal
+      modal.classList.remove('hidden');
+      status.classList.remove('hidden');
+      status.textContent = 'Loading task_tracker_data.json...';
+      status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
+      textarea.disabled = true;
+      saveBtn.disabled = true;
+
+      updateRoadmapModalButtons();
+
+      try {
+        const response = await fetch('/api/roadmap');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        textarea.value = data.content || '';
+        status.textContent = 'Roadmap loaded successfully.';
+        status.className = 'text-[10px] font-mono text-secondary';
+      } catch (error) {
+        console.error('Failed to load roadmap:', error);
+        status.textContent = 'Error loading roadmap: ' + error.message;
+        status.className = 'text-[10px] font-mono text-error';
+      } finally {
+        textarea.disabled = false;
+        saveBtn.disabled = false;
+      }
+    }
+
+    function closeRoadmapEditor() {
+      const modal = document.getElementById('roadmap-modal');
+      modal.classList.add('hidden');
+    }
+
+    async function saveRoadmap() {
+      const textarea = document.getElementById('roadmap-textarea');
+      const status = document.getElementById('roadmap-status');
+      const saveBtn = document.getElementById('save-roadmap-btn');
+      const content = textarea.value;
+
+      status.classList.remove('hidden');
+      status.textContent = 'Saving changes...';
+      status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
+      textarea.disabled = true;
+      saveBtn.disabled = true;
+
+      try {
+        const response = await fetch('/api/roadmap', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ content: content })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          status.textContent = 'Roadmap saved successfully.';
+          status.className = 'text-[10px] font-mono text-secondary';
+          // Auto close after 1 second
+          setTimeout(closeRoadmapEditor, 1000);
+          addTelemetry('ROADMAP :: saved successfully');
+        } else {
+          throw new Error(data.error || 'Unknown error');
+        }
+      } catch (error) {
+        console.error('Failed to save roadmap:', error);
+        status.textContent = 'Error saving roadmap: ' + error.message;
+        status.className = 'text-[10px] font-mono text-error';
+      } finally {
+        textarea.disabled = false;
+        saveBtn.disabled = false;
+      }
+    }
+
+    function updateRoadmapModalButtons() {
+      const confirmBtn = document.getElementById('confirm-roadmap-btn');
+      const reviseBtn = document.getElementById('revise-roadmap-btn');
+      const feedbackContainer = document.getElementById('roadmap-feedback-container');
+      if (!confirmBtn) return;
+      if (currentPlannerHitlRequest) {
+        confirmBtn.classList.remove('hidden');
+        if (reviseBtn) reviseBtn.classList.remove('hidden');
+        if (feedbackContainer) feedbackContainer.classList.remove('hidden');
+      } else {
+        confirmBtn.classList.add('hidden');
+        if (reviseBtn) reviseBtn.classList.add('hidden');
+        if (feedbackContainer) feedbackContainer.classList.add('hidden');
+      }
+    }
+
+    async function reviseRoadmap() {
+      if (!currentPlannerHitlRequest) {
+        alert("No pending roadmap confirmation request found.");
+        return;
+      }
+
+      const textarea = document.getElementById('roadmap-textarea');
+      const feedbackInput = document.getElementById('roadmap-feedback-input');
+      const status = document.getElementById('roadmap-status');
+      const content = textarea.value;
+      const feedback = feedbackInput ? feedbackInput.value : '';
+
+      status.classList.remove('hidden');
+      status.textContent = 'Sending revision request...';
+      status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
+
+      try {
+        const response = await fetch('/api/roadmap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: content })
+        });
+
+        if (response.ok) {
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({
+              type: 'hitl_response',
+              request_id: currentPlannerHitlRequest.request_id,
+              action: 'edit',
+              approved: false,
+              instructions: feedback || null,
+              free_input: feedback || null,
+            }));
+          }
+
+          document.getElementById('hitl-panel').classList.add('hidden');
+          addSystemMsg('✗ HITL Sent for Revision' + (feedback ? ': ' + feedback : ''));
+
+          currentPlannerHitlRequest = null;
+          updateRoadmapModalButtons();
+          setTimeout(closeRoadmapEditor, 1000);
+          status.textContent = 'Revision requested.';
+          status.className = 'text-[10px] font-mono text-error';
+        }
+      } catch (error) {
+        console.error('Error:', error);
+      }
+    }
+
+    async function saveAndConfirmRoadmap() {
+      if (!currentPlannerHitlRequest) {
+        alert("No pending roadmap confirmation request found.");
+        return;
+      }
+
+      const textarea = document.getElementById('roadmap-textarea');
+      const status = document.getElementById('roadmap-status');
+      const saveBtn = document.getElementById('save-roadmap-btn');
+      const confirmBtn = document.getElementById('confirm-roadmap-btn');
+      const content = textarea.value;
+
+      status.classList.remove('hidden');
+      status.textContent = 'Saving and confirming plan...';
+      status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
+      textarea.disabled = true;
+      saveBtn.disabled = true;
+      confirmBtn.disabled = true;
+
+      try {
+        const response = await fetch('/api/roadmap', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ content: content })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          status.textContent = 'Roadmap saved and confirmed successfully.';
+          status.className = 'text-[10px] font-mono text-secondary';
+          addTelemetry('ROADMAP :: saved successfully');
+
+          const reqId = currentPlannerHitlRequest.request_id;
+          respondHITL(reqId, true);
+
+          setTimeout(closeRoadmapEditor, 1000);
+        } else {
+          throw new Error(data.error || 'Unknown error');
+        }
+      } catch (error) {
+        console.error('Failed to save and confirm roadmap:', error);
+        status.textContent = 'Error: ' + error.message;
+        status.className = 'text-[10px] font-mono text-error';
+      } finally {
+        textarea.disabled = false;
+        saveBtn.disabled = false;
+        confirmBtn.disabled = false;
+      }
+    }
+    // =========================================================================
+    // Experiment Viewer
+    // =========================================================================
+    let experimentToolEvents = [];
+
+    function openToolsViewer() {
+      const modal = document.getElementById('experiment-modal');
+      modal.classList.remove('hidden');
+      renderExperimentFeed();
+    }
+
+    function closeExperimentViewer() {
+      document.getElementById('experiment-modal').classList.add('hidden');
+    }
+
+    function clearExperimentViewer() {
+      experimentToolEvents = [];
+      renderExperimentFeed();
+    }
+
+    function addExperimentToolCall(author, tc) {
+      experimentToolEvents.push({
+        kind: 'call',
+        author: author,
+        name: tc.name,
+        args: tc.args,
+        timestamp: new Date(),
+      });
+      renderExperimentFeed();
+    }
+
+    function addExperimentToolResponse(author, tr) {
+      experimentToolEvents.push({
+        kind: 'response',
+        author: author,
+        name: tr.name,
+        response: tr.response,
+        timestamp: new Date(),
+      });
+      renderExperimentFeed();
+    }
+
+    function truncateStr(s, max) {
+      if (typeof s !== 'string') s = JSON.stringify(s, null, 2) || '';
+      return s.length > max ? s.slice(0, max) + '…' : s;
+    }
+
+    function renderExperimentFeed() {
+      const feed = document.getElementById('experiment-feed');
+      if (!feed) return;
+
+      // Update footer event counter
+      const counter = document.getElementById('experiment-event-count');
+      if (counter) counter.textContent = experimentToolEvents.length + ' events';
+
+      if (experimentToolEvents.length === 0) {
+        feed.innerHTML = `
+          <div class="flex flex-col items-center justify-center h-full opacity-40 py-16">
+            <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">science</span>
+            <p class="text-sm text-outline-variant font-medium">No tool activity yet</p>
+            <p class="text-[10px] text-outline-variant/50 mt-1">Tool calls and results from agents will appear here in real time</p>
+          </div>`;
+        return;
+      }
+
+      feed.innerHTML = experimentToolEvents.map((ev, idx) => {
+        const t = ev.timestamp.toLocaleTimeString('en-GB', { hour12: false });
+        const isCall = ev.kind === 'call';
+        const borderColor = isCall ? 'border-primary/30' : 'border-secondary/30';
+        const bgColor = isCall ? 'bg-primary/5' : 'bg-secondary/5';
+        const tagBg = isCall ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary';
+        const tagText = isCall ? 'CALL' : 'RESULT';
+        const icon = isCall ? 'play_arrow' : 'check_circle';
+
+        let body = '';
+        if (isCall) {
+          const argsStr = ev.args && Object.keys(ev.args).length > 0
+            ? JSON.stringify(ev.args, null, 2)
+            : '(no arguments)';
+          body = `
+            <div class="mt-2">
+              <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">Arguments</div>
+              <pre class="bg-surface-container-lowest/80 border border-outline-variant/10 rounded-md p-3 text-[10px] text-on-surface-variant font-mono leading-relaxed whitespace-pre-wrap break-all max-h-48 overflow-y-auto no-scrollbar">${escHtml(argsStr)}</pre>
+            </div>`;
+        } else {
+          let respStr;
+          try {
+            respStr = typeof ev.response === 'string' ? ev.response : JSON.stringify(ev.response, null, 2);
+          } catch { respStr = String(ev.response); }
+          body = `
+            <div class="mt-2">
+              <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">Response</div>
+              <pre class="bg-surface-container-lowest/80 border border-outline-variant/10 rounded-md p-3 text-[10px] text-on-surface-variant font-mono leading-relaxed whitespace-pre-wrap break-all max-h-64 overflow-y-auto no-scrollbar">${escHtml(respStr)}</pre>
+            </div>`;
+        }
+
+        return `
+          <div class="${bgColor} ${borderColor} border rounded-lg p-3 msg-enter">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-sm ${isCall ? 'text-primary' : 'text-secondary'}">${icon}</span>
+              <span class="text-[10px] font-bold ${tagBg} px-2 py-0.5 rounded uppercase tracking-wider">${tagText}</span>
+              <span class="text-xs font-bold text-on-surface font-mono">${escHtml(ev.name)}</span>
+              <span class="ml-auto text-[9px] text-outline-variant font-mono">${escHtml(ev.author)} · ${t}</span>
+            </div>
+            ${body}
+          </div>`;
+      }).join('');
+
+      feed.scrollTop = feed.scrollHeight;
+    }
+  </script>
+
+  <!-- Roadmap Editor Modal -->
+  <div id="roadmap-modal"
+    class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] mx-4">
+      <!-- Modal Header -->
+      <div
+        class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
+        <div class="flex items-center gap-3">
+          <span class="material-symbols-outlined text-primary">map</span>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Roadmap Editor</h3>
+        </div>
+        <button onclick="closeRoadmapEditor()"
+          class="text-outline-variant hover:text-on-surface transition-colors flex items-center">
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4">
+        <p class="text-xs text-on-surface-variant leading-relaxed">
+          Edit the execution plan stored in <code
+            class="bg-surface-container-highest px-1.5 py-0.5 rounded text-primary font-mono">task_tracker_data.json</code>.
+          This
+          plan guides agent execution.
+        </p>
+
+        <div class="relative flex-1 flex flex-col min-h-[300px]">
+          <textarea id="roadmap-textarea"
+            class="w-full flex-1 min-h-[300px] bg-surface-container-lowest border border-outline-variant/10 rounded-lg p-4 font-mono text-xs text-on-surface placeholder:text-outline-variant/30 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none leading-relaxed"
+            placeholder="1. Action...&#10;2. Action..."></textarea>
+        </div>
+
+        <div id="roadmap-feedback-container" class="hidden mt-2 flex flex-col gap-2">
+          <label class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Feedback / Revision
+            Instructions</label>
+          <input id="roadmap-feedback-input"
+            class="bg-surface-container-highest border border-outline-variant/10 rounded-md px-3 py-2 text-xs text-on-surface placeholder:text-outline-variant/50 focus:ring-1 focus:ring-primary/40 focus:border-primary/40"
+            placeholder="E.g. Add an extra step for data validation..." />
+        </div>
+
+        <div id="roadmap-status" class="text-[10px] font-mono text-outline-variant hidden"></div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 bg-surface-container-low/50">
+        <button onclick="closeRoadmapEditor()"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Cancel
+        </button>
+        <button id="save-roadmap-btn" onclick="saveRoadmap()"
+          class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+          <span class="material-symbols-outlined text-sm">save</span> Save Changes
+        </button>
+        <button id="revise-roadmap-btn" onclick="reviseRoadmap()"
+          class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
+          <span class="material-symbols-outlined text-sm">edit</span> Revise Plan
+        </button>
+        <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
+          class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
+          <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Experiment Viewer Modal -->
+  <div id="experiment-modal"
+    class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] mx-4">
+      <!-- Modal Header -->
+      <div
+        class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">science</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Experiment Viewer
+            </h3>
+            <p class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">Live Tool Activity Feed
+            </p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="clearExperimentViewer()"
+            class="text-outline-variant hover:text-error transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-error/10"
+            title="Clear feed">
+            <span class="material-symbols-outlined text-sm">delete_sweep</span>
+          </button>
+          <button onclick="closeExperimentViewer()"
+            class="text-outline-variant hover:text-on-surface transition-colors flex items-center">
+            <span class="material-symbols-outlined text-lg">close</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Modal Body — scrolling feed -->
+      <div id="experiment-feed"
+        class="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20 min-h-[400px]">
+        <div class="flex flex-col items-center justify-center h-full opacity-40 py-16">
+          <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">science</span>
+          <p class="text-sm text-outline-variant font-medium">No tool activity yet</p>
+          <p class="text-[10px] text-outline-variant/50 mt-1">Tool calls and results from agents will appear here in
+            real time</p>
+        </div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div
+        class="px-6 py-3 border-t border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
+        <div class="flex items-center gap-2">
+          <span id="experiment-event-count"
+            class="text-[9px] font-mono text-outline-variant/60 uppercase tracking-wider">0 events</span>
+        </div>
+        <button onclick="closeExperimentViewer()"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>

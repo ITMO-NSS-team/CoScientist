@@ -69,6 +69,10 @@ class PromptContext:
         delegate to (minus the planner itself) — the agents a plan may assign
         steps to.
         """
+        if self.config.name == "PlannerAgent":
+            if "OrchestratorAgent" in self.system.agents:
+                return self.system.enabled_subordinates("OrchestratorAgent")
+
         seen, out = set(), []
         for parent in self.system.parents_of(self.config.name):
             if not parent.is_enabled():

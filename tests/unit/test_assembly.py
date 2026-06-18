@@ -85,15 +85,15 @@ def test_all_agents_built_under_their_names(config, system):
 
 
 def test_orchestrator_roster_matches_prompt_and_tools(config, system):
-    root = system.root
+    orchestrator = system.agent("OrchestratorAgent")
     enabled = [a.name for a in config.enabled_subordinates("OrchestratorAgent")]
-    attached = [t.agent.name for t in root.tools if hasattr(t, "agent")]
+    attached = [t.agent.name for t in orchestrator.tools if hasattr(t, "agent")]
     assert attached == enabled
     for name in enabled:
-        assert name in root.instruction, f"{name} wired but not in the prompt"
+        assert name in orchestrator.instruction, f"{name} wired but not in the prompt"
     for sub in config.agent("OrchestratorAgent").subordinates:
         if not config.agent(sub).is_enabled():
-            assert sub not in root.instruction, f"{sub} disabled but still in the prompt"
+            assert sub not in orchestrator.instruction, f"{sub} disabled but still in the prompt"
 
 
 def test_prompts_advertise_exactly_the_attached_function_tools(config, system):
@@ -130,7 +130,7 @@ def test_pipeline_state_injections_are_optional(config, system):
 
 
 def test_critic_prompt_embeds_current_roster(config):
-    ctx = PromptContext(config=config.root, system=config)
+    ctx = PromptContext(config=config.agent("OrchestratorAgent"), system=config)
     critic_prompt = REGISTRY.prompt("pre_action_critic")(ctx)
     for sub in config.enabled_subordinates("OrchestratorAgent"):
         assert sub.name in critic_prompt
@@ -152,7 +152,7 @@ def test_orchestrator_tool_discovery_gate(config, system):
     so the orchestrator checks for ready-made tools before delegating. (The exact
     wording of the gate is content the prompt author may tune.)"""
     cfg = config.agent("OrchestratorAgent")
-    instruction = system.root.instruction
+    instruction = system.agent("OrchestratorAgent").instruction
     has_retrieval = "retrieval" in cfg.tools
     assert ("retrieve_tools" in instruction) == has_retrieval
     if has_retrieval:
@@ -173,7 +173,7 @@ def test_executor_sufficiency_and_discovery_guardrails(config, system):
 
     cfg = config.agent("OrchestratorAgent")
     if "retrieval" in cfg.tools and "TaskExecutorAgent" in cfg.subordinates:
-        orch = system.root.instruction
+        orch = system.agent("OrchestratorAgent").instruction
         assert "retrieve_tools" in orch
         assert 'delegate "check if a tool exists"' in orch.lower() or \
                'Do NOT delegate "check if a tool exists"' in orch
@@ -201,7 +201,7 @@ def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(config, sy
 
 def test_orchestrator_prompt_documents_only_wired_critics(config, system):
     cfg = config.agent("OrchestratorAgent")
-    instruction = system.root.instruction
+    instruction = system.agent("OrchestratorAgent").instruction
     assert ("Pre-action critic" in instruction) == (
         "pre_action_critique" in cfg.callbacks.after_model
     )

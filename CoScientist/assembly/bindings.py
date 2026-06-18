@@ -60,6 +60,13 @@ def _coder():
     from CoScientist.tools import coder_toolset_instance
     return coder_toolset_instance
 
+def _task_tracker():
+    from CoScientist.tools import task_tracker_instance
+    return task_tracker_instance
+
+def _create_plan_tool():
+    from CoScientist.tools.task_tracker import create_plan_tool
+    return [create_plan_tool()]
 
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
@@ -135,6 +142,36 @@ REGISTRY.register_tool(ToolEntry(
             name="get_server_info",
             signature="get_server_info(server_id)",
             purpose="Returns server metadata.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="task_tracker",
+    factory=_task_tracker,
+    runtime_resolved=True,  # BaseToolset — tool surface comes from get_tools()
+    docs=(
+        ToolDoc(
+            name="get_active_tasks",
+            signature="get_active_tasks(query)",
+            purpose="Get tasks from TaskTracker",
+        ),
+        ToolDoc(
+            name="update_task_status",
+            signature="update_task_status(task_id)",
+            purpose="Set task status to DONE/FAILED/IN_PROGRESS",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="create_plan_tool",
+    factory=_create_plan_tool,
+    docs=(
+        ToolDoc(
+            name="create_plan",
+            signature="create_plan(tasks)",
+            purpose="Replace all tasks with a new plan. Each task needs title, description, and assignee.",
         ),
     ),
 ))
@@ -340,6 +377,16 @@ def _redirect_when_no_tools():
     return redirect_when_no_tools
 
 
+def _before_get_task():
+    from CoScientist.agents.callbacks import before_get_task
+    return before_get_task
+
+
+def _web_search_limiter():
+    from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
+    return SearchLimiter(max_searches=2).limit_searches
+
+
 def _guard_unknown_tools(ctx):
     """after_model guard capturing the agent's REAL tool names from its context,
     so a hallucinated tool call is corrected instead of crashing the run."""
@@ -371,6 +418,10 @@ _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_rerank
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
+# Load active tasks into agent state before the agent runs.
+_cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+# Limit web search calls per agent turn.
+_cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.

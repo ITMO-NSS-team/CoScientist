@@ -19,8 +19,9 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
-from CoScientist.agents import orchestrator_agent
+from CoScientist.agents import orchestrator_agent, root_agent
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
+from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
     AbstractHITLHandler,
     HITLRequest,
@@ -73,10 +74,13 @@ class CoScientistManager:
 
         # Runner
         self.runner = Runner(
-            agent=orchestrator_agent,
+            agent=root_agent,
             app_name=self.app_name,
             session_service=self.session_service,
         )
+
+        if self._hitl_handler:
+            hitl_toolset._handler = self._hitl_handler
 
         self._initialized = True
 
@@ -153,6 +157,15 @@ if __name__ == "__main__":
 
         try:
             while True:
+                print(
+                    "\n"
+                    "==============================\n"
+                    "🚀  WEB INTERFACE NOT RUNNING\n"
+                    "==============================\n"
+                    "Do not run main.py directly, run web/server.py instead.\n"
+                    "Start it with:\n\n"
+                    "    uv run CoScientist/web/server.py\n\n"
+                )
                 query = input("Enter query (or 'exit'): ")
 
                 if query.lower() in {"exit", "quit"}:

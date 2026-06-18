@@ -14,7 +14,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 
 from CoScientist.config import get_settings
-from CoScientist.hitl.handler import ConsoleHITLHandler
+from CoScientist.hitl.handler import ConsoleHITLHandler, DelegatingHITLHandler
 
 settings = get_settings()
 
@@ -93,7 +93,7 @@ litellm.api_key = settings.llm.openai_api_key
 litellm.suppress_debug_info = True
 
 hitl_enabled = settings.hitl.enabled
-hitl_handler = ConsoleHITLHandler() if hitl_enabled else None
+hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler()) if hitl_enabled else None
 
 # The CoderAgent runs on a dedicated (stronger) model — its multi-step tool-use
 # benefits from more capability. Falls back to the main model when unset.

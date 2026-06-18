@@ -177,14 +177,15 @@ def smiles2name(smiles: Annotated[str, "SMILES of a molecule"]):
 
 @mcp.tool()
 def smiles2prop(
-    smiles: Annotated[str, "SMILES of a molecule"], iupac: Optional[str] = None
+    smiles: Annotated[Optional[str], "The SMILES string of the molecule. Leave empty if providing IUPAC name."] = None,
+    iupac: Annotated[Optional[str], "The IUPAC name of the molecule. (e.g., 'aspirin'). Leave empty if providing SMILES."] = None
 ):
     """
     Calculate molecular properties from a SMILES string or IUPAC name.
     
     Args:
-        smiles (str): The SMILES string of the molecule.
-        iupac (str, optional): The IUPAC name of the molecule. If provided, the SMILES string will be derived from it. Defaults to None.
+        smiles (str, optional): The SMILES string of the molecule.
+        iupac (str, optional): The IUPAC name of the molecule.
     
     Returns:
         CalcMolDescriptors: An object containing calculated molecular properties. 
@@ -192,6 +193,9 @@ def smiles2prop(
     """
 
     try:
+        if not smiles and not iupac:
+            return "Failed to execute. Error: Either smiles or iupac must be provided."
+
         if iupac:
             compound = pcp.get_compounds(iupac, "name")
             if len(compound):

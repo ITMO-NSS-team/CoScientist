@@ -1,3 +1,4 @@
+from CoScientist.tools.task_tracker import task_tracker_instance
 import os
 
 from google.adk.agents.callback_context import CallbackContext
@@ -57,7 +58,7 @@ def after_tool_reranker_agent(
 
     filtered_tools: List[Dict[str, Any]] = [
         tool for tool in acc_tools
-        if rerank_map.get(tool['tool_index'], 0) >= _TOOL_KEEP_SCORE
+        if rerank_map.get(tool.get('tool_index', -1), 0) >= _TOOL_KEEP_SCORE
     ]
 
     best_score = max(rerank_map.values(), default=0.0)
@@ -71,7 +72,7 @@ def after_tool_reranker_agent(
                 rerank_map.items(), key=lambda x: x[1], reverse=True
             )[:2]
         }
-        filtered_tools = [t for t in acc_tools if t['tool_index'] in top_ids]
+        filtered_tools = [t for t in acc_tools if t.get('tool_index', -1) in top_ids]
         matched = bool(filtered_tools)
     # else (best < _ABSTAIN): ABSTAIN — leave filtered_tools empty so the
     # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
@@ -103,7 +104,7 @@ def after_fullset_reranker_agent(
 
     filtered_mcps: List[Dict[str, Any]] = [
         mcp for mcp in acc_mcps
-        if rerank_map.get(mcp['index'], False)
+        if rerank_map.get(mcp.get('index', -1), False)
     ]
 
     callback_context.state['filtered_mcps'] = filtered_mcps
@@ -111,6 +112,11 @@ def after_fullset_reranker_agent(
     callback_context.state['retrieval_queries_mcp'] = []
     return
 
+def before_get_task(callback_context: CallbackContext):  
+    """Get task before agent is called"""  
+    active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)  
+    callback_context.state['active_tasks'] = active_tasks
+    return None 
 
 # Recognisable token the orchestrator prompt / post-critic key off to re-route.
 NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
@@ -212,3 +218,28 @@ def print_research_agent_tool_call(
         logger.info(f"[ResearchAgent tool args] {args}")
     except Exception as e:
         logger.error(f"Error in print_research_agent_tool_call: {e}")
+
+class SearchLimiter:
+
+    _STATE_KEY = "_search_limiter_count"
+
+    def __init__(self, max_searches: int = 5):
+        self.max_searches = max_searches
+
+    def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
+        if "search" not in tool.name.lower():
+            return None
+
+        count = tool_context.state.get(self._STATE_KEY, 0)
+        count += 1
+        tool_context.state[self._STATE_KEY] = count
+
+        if count > self.max_searches:
+            return {
+                "result": (
+                    f"Search limit reached ({self.max_searches} searches allowed). "
+                    "You MUST now synthesize your answer from the results you already have. "
+                    "Do NOT attempt any more searches."
+                )
+            }
+        return None
