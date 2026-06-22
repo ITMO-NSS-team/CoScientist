@@ -21,7 +21,7 @@ called a tool (``{accumulated_tools?}``, ``{filtered_tools?}``,
 ``{accumulated_web_mcps?}``) carry a trailing ``?`` so they render empty when
 the key is absent instead of raising KeyError mid-run.
 """
-from CoScientist.agents.catalog import settings
+from CoScientist.config import settings
 from CoScientist.agents.prompts.builder import render_template
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, render_tool_docs
