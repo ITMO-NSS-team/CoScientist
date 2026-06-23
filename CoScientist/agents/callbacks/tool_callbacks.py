@@ -228,10 +228,12 @@ def print_research_agent_tool_call(
         if not new_keys:
             return
         existing: List[str] = tool_context.state.get("downloaded_paper_s3_keys", [])
-        tool_context.state["downloaded_paper_s3_keys"] = existing + [
-            k for k in new_keys if k not in existing
-        ]
-        logger.info("Registered %d downloaded paper S3 key(s) in session state.", len(new_keys))
+        merged_keys: List[str] = existing + [k for k in new_keys if k not in existing]
+        tool_context.state["downloaded_paper_s3_keys"] = merged_keys
+        logger.info(
+            "Registered %d downloaded paper S3 key(s) in session state.",
+            len(merged_keys),
+        )
     except Exception as e:
         logger.error("Failed to persist downloaded paper S3 keys: %s", e)
 
