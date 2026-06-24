@@ -103,8 +103,32 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         )
         sys.exit(r.returncode)
 
+    # ── Pre-commit cleanup — keep secrets out of the saved image ──────
+    # 1. Wipe pipeline.log inside the container; agent stderr may have
+    #    echoed API keys passed at build time.
+    _run(
+        ["docker", "exec", cname, "sh", "-c",
+         "rm -f /work/.alembic/*/pipeline.log"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+    # 2. Build --change="ENV KEY=" for every sensitive var so it is
+    #    blanked in the committed image's Config.Env. Without this,
+    #    `docker inspect <image>` exposes every key passed via -e or
+    #    --env-file during build. Serve container still gets real
+    #    values at run-time via its own --env-file.
+    keys_to_scrub: set[str] = set(PASSTHROUGH_ENV)
+    if ns.env_file and Path(ns.env_file).exists():
+        for line in Path(ns.env_file).read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                keys_to_scrub.add(line.split("=", 1)[0].strip())
+    change_args: list[str] = []
+    for key in sorted(keys_to_scrub):
+        change_args += ["--change", f"ENV {key}="]
+
     print(f"[start-chain] committing {cname} -> {tool_image}")
-    c = _run(["docker", "commit", cname, tool_image])
+    c = _run(["docker", "commit", *change_args, cname, tool_image])
     if c.returncode != 0:
         sys.exit(c.returncode)
     _run(["docker", "rm", cname],
