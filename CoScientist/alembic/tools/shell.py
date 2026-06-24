@@ -14,7 +14,11 @@ def _glob_command(stripped: str) -> dict | None:
     if len(parts) < 2:
         return {"error": "glob requires a pattern argument."}
     pattern = parts[1]
-    matched = sorted(str(p) for p in Path("/").glob(pattern.lstrip("/")))
+    if pattern.startswith("/"):
+        root, pat = Path("/"), pattern.lstrip("/")
+    else:
+        root, pat = Path("."), pattern
+    matched = sorted(str(p) for p in root.glob(pat))
     return {"matches": matched}
 
 
