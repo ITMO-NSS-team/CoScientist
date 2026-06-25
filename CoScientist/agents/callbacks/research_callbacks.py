@@ -30,11 +30,15 @@ async def papers_agent_before_model(
     await ensure_local_papers_uploaded(callback_context)
 
     s3_keys: List[str] = callback_context.state.get(_PAPER_STATE_KEY, [])
-    if not s3_keys:
+    downloaded_keys: List[str] = callback_context.state.get("downloaded_paper_s3_keys", [])
+    all_keys = s3_keys + downloaded_keys
+
+    if not all_keys:
         reminder = Part(
             text=(
-                "[Available uploaded papers] No uploaded papers are available for this session. "
-                "Do not call explore_my_papers and do not invent any S3 keys."
+                "[Available uploaded papers] No pre-uploaded papers are available for this session. "
+                "Do not invent S3 keys. "
+                "You may still call explore_my_papers if you have S3 keys from a previous download_papers_from_search result."
             )
         )
         for content in reversed(llm_request.contents):
@@ -43,10 +47,10 @@ async def papers_agent_before_model(
                 break
         return None
 
-    paper_list = ", ".join(s3_keys)
+    paper_list = ", ".join(all_keys)
     reminder = Part(
         text=(
-            "[Available uploaded papers] The following S3 keys are available for user-uploaded papers: "
+            "[Available papers] The following S3 keys are available: "
             f"{paper_list}. "
             "Use these s3_keys when calling explore_my_papers."
         )

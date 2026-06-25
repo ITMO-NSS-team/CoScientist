@@ -119,7 +119,10 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="search_papers",
             signature="search_papers(query, filters)",
-            purpose="Searches scientific papers in OpenAlex using metadata and search filters.",
+            purpose=(
+                "Searches scientific papers in OpenAlex using metadata and "
+                "search filters. Does NOT download full paper files."
+            ),
         ),
         ToolDoc(
             name="download_papers_from_search",

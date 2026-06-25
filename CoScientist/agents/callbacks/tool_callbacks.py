@@ -212,12 +212,30 @@ def print_research_agent_tool_call(
     tool_context: ToolContext,
     tool_response: Any,
 ) -> None:
-    """Print the tool name and args when ResearchAgent invokes a tool."""
+    """Print tool calls and persist downloaded S3 keys to session state."""
     try:
         logger.info(f"\n[ResearchAgent tool called] {tool.name}")
         logger.info(f"[ResearchAgent tool args] {args}")
     except Exception as e:
         logger.error(f"Error in print_research_agent_tool_call: {e}")
+
+    if tool.name != "download_papers_from_search":
+        return
+
+    try:
+        papers = (tool_response or {}).get("metadata", {}).get("papers", [])
+        new_keys = [p["s3_key"] for p in papers if p.get("s3_key")]
+        if not new_keys:
+            return
+        existing: List[str] = tool_context.state.get("downloaded_paper_s3_keys", [])
+        merged_keys: List[str] = existing + [k for k in new_keys if k not in existing]
+        tool_context.state["downloaded_paper_s3_keys"] = merged_keys
+        logger.info(
+            "Registered %d downloaded paper S3 key(s) in session state.",
+            len(merged_keys),
+        )
+    except Exception as e:
+        logger.error("Failed to persist downloaded paper S3 keys: %s", e)
 
 class SearchLimiter:
 

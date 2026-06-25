@@ -75,18 +75,34 @@ def research(ctx: PromptContext) -> str:
 
     steps, n = [], 1
     if paper_analysis:
+        # 1) If user has uploaded papers (S3 keys) analyse them first.
         steps.append(
             f"{n}. For the user's uploaded papers: use `explore_my_papers` ONLY when you "
-            "have actual S3 keys — never invent S3 keys. Otherwise try "
-            "`explore_chemistry_database` first."
+            "have actual S3 keys — never invent S3 keys."
         )
         n += 1
+        # 2) Otherwise (or if no uploaded papers) always call explore_chemistry_database first
+        steps.append(
+            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_chemistry_database` before other literature tools. "
+            "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
+        )
+    n += 1
+    
+    # 3) Use papers search
     if papers_search:
         steps.append(
             f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+        + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+        + " When calling `download_papers_from_search`, aim to find at least *10* "
+        "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
+        "as a single space-separated string, no quotes around phrases. "
+        "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
+        "do not paraphrase, stem, or replace Unicode symbols."
+        "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
         )
         n += 1
+
+    # 4) Final fallback to tavily
     if lit:
         steps.append(
             f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. "
@@ -100,14 +116,14 @@ def research(ctx: PromptContext) -> str:
 
     paper_search_section = ""
     if papers_search:
-        paper_search_section = (
-            "\n--------------------------------------------------\n"
-            "PAPER SEARCH REQUESTS\n"
-            "--------------------------------------------------\n\n"
-            "Use `search_papers` for metadata/search only and "
-            "`download_papers_from_search` for downloadable/analyzable papers. "
-            "Do not download unless the user asks for analysis or downloading.\n"
-        )
+      paper_search_section = (
+        "\n--------------------------------------------------\n"
+        "PAPER SEARCH REQUESTS\n"
+        "--------------------------------------------------\n\n"
+        "Use `search_papers` for metadata/search only and "
+        "`download_papers_from_search` for downloadable/analyzable papers. "
+        "Do not download unless the user asks for analysis or downloading.\n"
+      )
 
     prefer_line = "- Prefer peer-reviewed evidence over web content\n" if lit else ""
 
