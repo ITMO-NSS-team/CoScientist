@@ -1,6 +1,7 @@
 """Tools for fedotmas inference"""
 
 import asyncio
+import logging
 from typing import List, Optional, Dict, Any
 
 from google.adk.tools import BaseTool, ToolContext
@@ -16,6 +17,56 @@ from rag_tools.retrieval import APIEmbedder, APIReranker, BM25Reranker, HybridRe
 from rag_tools.storage.models import RetrievalResult
 
 settings = get_settings()
+_logger = logging.getLogger(__name__)
+
+# The full description + input_schema are returned INLINE to the calling agent
+# (planner/orchestrator) in each retrieve_tools response. The session-state
+# `accumulated_tools` is re-injected into the downstream rerankers' prompts on
+# every turn, so there we keep a capped description and drop the schema to avoid
+# unbounded context bloat (and the schema-validation pressure it puts on the
+# structured-output rerankers).
+_ACCUM_DESC_CAP = 600
+
+
+async def _fetch_full_tool_meta(server_ids) -> Dict[tuple, Dict[str, Any]]:
+    """Map ``(server_id, tool_name) -> {description, input_schema}`` from the registry.
+
+    The RAG retrieval path returns a truncated description chunk and no schema;
+    the full, authoritative tool metadata lives in the Postgres registry. We
+    fetch it once per unique server. Best-effort: a server that fails to resolve
+    is simply skipped (the caller falls back to the RAG chunk).
+    """
+    meta: Dict[tuple, Dict[str, Any]] = {}
+    if not server_ids:
+        return meta
+    postgres = PostgresClient(settings.postgres)
+    try:
+        await postgres.initialize()
+        for sid in server_ids:
+            try:
+                tools = await postgres.get_tools_by_server(sid)
+            except Exception as exc:
+                _logger.warning(
+                    "retrieve_tools: could not fetch full metadata for server %r: %s",
+                    sid, exc,
+                )
+                continue
+            for t in tools:
+                name = getattr(t, "name", None)
+                if not name:
+                    continue
+                schema = getattr(t, "input_schema", None)
+                if schema is not None and not isinstance(schema, dict):
+                    # pydantic model / other -> plain dict for JSON serialisation
+                    dump = getattr(schema, "model_dump", None)
+                    schema = dump() if callable(dump) else getattr(schema, "__dict__", None)
+                meta[(sid, name)] = {
+                    "description": getattr(t, "description", None),
+                    "input_schema": schema,
+                }
+    finally:
+        await postgres.close()
+    return meta
 
 
 class RetrievalToolSet(BaseToolset):
@@ -64,11 +115,20 @@ class RetrievalToolSet(BaseToolset):
                 rerank_top_k=settings.rag.rerank_top_k,
                 min_score=settings.rag.min_relevance_score)
 
+            # The RAG layer returns only a truncated (~chunk_size) chunk of each
+            # tool's description and drops its argument schema — so the calling
+            # agent never sees what a tool RETURNS or which arguments it accepts.
+            # Re-fetch the FULL description + input_schema from the registry.
+            full_meta = await _fetch_full_tool_meta(
+                {r.server_id for r in retrieved_tools}
+            )
+
             results = [
                 RetrievalToolResult(
                     tool=r.name,
                     server_id=r.server_id,
-                    description=r.description,
+                    description=full_meta.get((r.server_id, r.name), {}).get("description") or r.description,
+                    input_schema=full_meta.get((r.server_id, r.name), {}).get("input_schema"),
                     score=r.rerank_score,
                 )
                 for r in retrieved_tools
@@ -95,7 +155,9 @@ class RetrievalToolSet(BaseToolset):
                 accumulated.append({
                     'tool': tool_result.tool,
                     'server_id': tool_result.server_id,
-                    'description': tool_result.description,
+                    # Capped here (not in the inline response) — this dict is
+                    # re-injected into the rerankers' prompts every turn.
+                    'description': (tool_result.description or "")[:_ACCUM_DESC_CAP],
                     'score': tool_result.score,
                     'tool_index': last_idx,
                     'retrieval_query': query,  # Track which query found this
@@ -124,11 +186,12 @@ class RetrievalToolSet(BaseToolset):
         """
 
         postgres = PostgresClient(settings.postgres)
-        await postgres.initialize()
-
-        server: MCPServer = await postgres.get_server(server_id)
-
-        await postgres.close()
+        try:
+            await postgres.initialize()
+            server: MCPServer = await postgres.get_server(server_id)
+        finally:
+            # Always release the DB connection, even if the lookup raises.
+            await postgres.close()
 
         return {
             "status": "success",

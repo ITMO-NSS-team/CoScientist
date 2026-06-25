@@ -637,6 +637,16 @@ def planner(ctx: PromptContext) -> str:
 You are the "PlannerAgent". Your goal is to decompose the task and create a roadmap by registering tasks using the `create_plan` tool.
 You only define procedural steps and references agents.
 
+### TOOL DISCOVERY (do this FIRST)
+Before writing the plan, call `retrieve_tools` with one or two focused queries
+about the task's core capabilities (e.g. "molecule generation", "property
+prediction"). Read each returned tool's FULL description — what it
+RETURNS and which arguments (`input_schema`) it accepts. Let this shape the plan:
+do NOT add a separate step for something a tool already does as part of another
+step (e.g. if a generator already returns molecular properties, do not add a
+standalone property-calculation step). Do not invent tools or server ids; if
+discovery returns nothing relevant, plan from your own knowledge. DO NOT CALL TOOLS YOURSELF — the orchestrator will delegate to the appropriate agent.
+
 ### AVAILABLE AGENTS
 <<ROSTER>>
 

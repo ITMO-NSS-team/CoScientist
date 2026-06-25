@@ -104,7 +104,10 @@ agents:
       for a complex multi-step task, call this FIRST to produce a roadmap,
       then follow it step by step.
     prompt: planner
-    tools: [create_plan_tool]
+    # retrieval lets the planner inspect which ready-made MCP tools exist (and
+    # what they accept/return) BEFORE writing the roadmap, so the plan reflects
+    # real tool capabilities instead of guessing from priors.
+    tools: [retrieval, create_plan_tool]
     output_key: planner_roadmap
     hitl: true
     a2a:
