@@ -7,7 +7,13 @@ existing imports keep working.
 """
 from CoScientist.assembly import build_system
 from CoScientist.logging import multi_agent_tracer
+from CoScientist.agents.llm_repair import install_json_repair
 from opik.integrations.adk import track_adk_agent_recursive
+
+# Guard the LiteLlm tool-call JSON boundary process-wide BEFORE any runner executes:
+# a malformed tool-call payload (qwen truncation / missing comma) must not kill the run.
+# Idempotent; installed once at first import of the agents package (CLI + web both hit this).
+install_json_repair()
 
 _system = build_system()
 

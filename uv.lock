@@ -521,6 +521,7 @@ dependencies = [
     { name = "boto3" },
     { name = "fedotmas" },
     { name = "google-adk" },
+    { name = "json-repair" },
     { name = "langchain-text-splitters" },
     { name = "metapub" },
     { name = "opik" },
@@ -534,6 +535,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.32" },
     { name = "fedotmas", git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git?subdirectory=packages%2Ffedotmas" },
     { name = "google-adk", specifier = ">=2.3.0" },
+    { name = "json-repair", specifier = ">=0.30.0" },
     { name = "langchain-text-splitters", specifier = ">=1.1.2" },
     { name = "metapub", specifier = ">=0.7.4" },
     { name = "opik", specifier = ">=2.0.70" },
@@ -1300,6 +1302,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/44/90/25cb27518750218e4f850be63d8bbb2343efaad1c01c3571aaa4b3c33bd7/joserfc-1.7.1.tar.gz", hash = "sha256:77d0b76514879c68c6f433bc5b7357a4ab72008ff1e33d8379fd11d72bd8ca81", size = 233181, upload-time = "2026-06-08T07:21:33.412Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/00/fa62404c3e347f946faa13aa21085205f9cc06ad17671e37f81a51662ae8/joserfc-1.7.1-py3-none-any.whl", hash = "sha256:b3e3d655612e2e1ef67b2600f2f420e12e537b020208fab1761fad647319c164", size = 70423, upload-time = "2026-06-08T07:21:32.001Z" },
+]
+
+[[package]]
+name = "json-repair"
+version = "0.61.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/c0/1cb689126eacd166fd5a78370f095c7d3a250808dabeda129300e5280110/json_repair-0.61.0.tar.gz", hash = "sha256:48759cc6c3052814c797d1d56787d9e1d451603a8760a55d619e97d2f49353d6", size = 50055, upload-time = "2026-06-16T12:18:33.32Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/b9/e996902245d5e12e55b0b2e667d3e83a4636dec3692e405e5b8ea0868263/json_repair-0.61.0-py3-none-any.whl", hash = "sha256:ee9fe5f95fcb2713d72d4495b67b794b62ff2cd24d6dba3bfb3173d9f7ab0f7d", size = 48490, upload-time = "2026-06-16T12:18:31.883Z" },
 ]
 
 [[package]]

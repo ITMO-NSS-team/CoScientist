@@ -9,6 +9,7 @@ dependencies = [
     "boto3>=1.43.32",
     "fedotmas",
     "google-adk>=2.3.0",
+    "json-repair>=0.30.0",
     "langchain-text-splitters>=1.1.2",
     "metapub>=0.7.4",
     "opik>=2.0.70",
