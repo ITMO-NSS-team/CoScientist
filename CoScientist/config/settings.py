@@ -27,6 +27,12 @@ class LLMSettings(BaseModel):
     main_model: Optional[str] = None
     scenario_model: Optional[str] = None
 
+    # Dedicated model for the CoderAgent (a stronger model handles its multi-step
+    # engineering / tool-use better). Falls back to main_model if unset. The
+    # provider prefix in the model string (e.g. "openrouter/...") selects the
+    # endpoint, so no separate URL is needed.
+    coder_model: Optional[str] = None
+
     service_url: Optional[str] = None
     service_cc_url: Optional[str] = None
 
@@ -56,6 +62,19 @@ class ServicesSettings(BaseModel):
     tavily_api_key: Optional[str] = None
     openalex_api_key: Optional[str] = None
 
+
+# =========================
+# MED LLM CONFIG
+# =========================
+class MedLLMSettings(BaseModel):
+    task_url: Optional[str] = None
+    result_url: Optional[str] = None
+
+    login: Optional[str] = None
+    password: Optional[str] = None
+
+    poll_interval: int = 10
+    max_polls: int = 60
 
 # =========================
 # STORAGE
@@ -129,10 +148,53 @@ class OpikSettings(BaseModel):
 
 
 # =========================
+# MCP
+# =========================
+class MCPSettings(BaseModel):
+    paper_analysis_url: Optional[str] = None
+    papers_search_url: Optional[str] = None
+
+
+# =========================
 # HITL (Human-in-the-Loop)
 # =========================
 class HITLSettings(BaseModel):
     enabled: bool = True
+
+# =========================
+# ORCHESTRATOR
+# =========================
+class OrchestratorSettings(BaseModel):
+    # Whether the orchestrator uses the PlannerAgent (referenced from
+    # system.yaml as ${orchestrator.use_planner}). When False, the planner is
+    # not attached and the orchestrator prompt's planning step adapts — the
+    # assembler keeps prompt and tools consistent automatically.
+    use_planner: bool = True
+
+# =========================
+# CODE EXECUTION
+# =========================
+class CodeExecSettings(BaseModel):
+    """Settings for the remote code-execution MCP server used by the CoderAgent.
+
+    The server is expected to expose an HTTP API:
+      - POST {submit_url}  with JSON {command, workspace_id, timeout} -> {job_id}
+      - GET  {result_url}?job_id=... -> {status, stdout, stderr, exit_code}
+    When `url` is empty the CoderToolset falls back to local subprocess execution.
+    """
+    url: Optional[str] = None             # base url of the code-exec MCP server
+    submit_path: str = "/submit"
+    result_path: str = "/result"
+    poll_interval: int = 5                # seconds between status polls
+    default_timeout: int = 1800           # per-command timeout (s) for long jobs
+    exec_wait: int = 180                  # how long execute_bash waits inline for
+                                          # the command to finish before handing
+                                          # back a job_id — so the model gets the
+                                          # result in ONE call instead of polling
+    check_wait: int = 15                  # how long check_job waits inline for a
+                                          # running job before returning (saves
+                                          # repeated LLM-driven polls)
+    workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
 
 # =========================
 # MAIN SETTINGS
@@ -143,13 +205,17 @@ class Settings(BaseSettings):
     llm: LLMSettings = LLMSettings()
     hypothesis: HypothesisSettings = HypothesisSettings()
     services: ServicesSettings = ServicesSettings()
+    med_llm: MedLLMSettings = MedLLMSettings()
     storage: StorageSettings = StorageSettings()
     hosts_ports: HostsPortsSettings = HostsPortsSettings()
     collections: CollectionsSettings = CollectionsSettings()
     s3: S3Settings = S3Settings()
     opik: OpikSettings = OpikSettings()
     hitl: HITLSettings = HITLSettings()
+    orchestrator: OrchestratorSettings = OrchestratorSettings()
+    code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
+    mcp: MCPSettings = MCPSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

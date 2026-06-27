@@ -18,6 +18,24 @@ class AbstractHITLHandler(ABC):
         ...
 
 
+class DelegatingHITLHandler(AbstractHITLHandler):
+    """A handler that delegates to another handler, allowing runtime swapping."""
+
+    def __init__(self, delegate: AbstractHITLHandler):
+        self.delegate = delegate
+
+    def set_delegate(self, delegate: AbstractHITLHandler):
+        self.delegate = delegate
+
+    async def handle_request(self, request: HITLRequest) -> HITLResponse:
+        return await self.delegate.handle_request(request)
+
+    def __deepcopy__(self, memo):
+        # Return self so that workflow deepcopies share the same handler instance
+        return self
+
+
+
 class ConsoleHITLHandler(AbstractHITLHandler):
     """Simple console-based HITL handler (for local development/testing)."""
 

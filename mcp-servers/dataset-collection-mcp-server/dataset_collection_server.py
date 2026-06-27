@@ -29,9 +29,9 @@ s3_service = S3BucketService(
 
 mcp = FastMCP("DatasetCollection")
 
-def convert_pdf_pages_to_images(path: str) -> list:
-    """Converts PDF pages into fitz.Pixmap images."""
-    doc = fitz.open(path)
+def convert_pdf_pages_to_images(pdf_bytes: bytes) -> list:
+    """Converts PDF bytes into fitz.Pixmap images."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     images = []
     for page in doc:
         pix = page.get_pixmap(dpi=500)
@@ -77,19 +77,20 @@ def extract_props(model_url: str, question: str, pdfs: list) -> dict:
     """
     Queries a language model with a question and a list of PDF documents to collect a dataset of
     molecules and their properties from scientific papers.
+
+    pdfs: list of (filename, bytes) tuples.
     """
 
     llm = create_llm_connector(model_url)
 
     content = []
 
-    for paper_pdf in pdfs:
-        with open(paper_pdf, "rb") as f:
-            base64_pdf = base64.b64encode(f.read()).decode("utf-8")
+    for filename, pdf_bytes in pdfs:
+        base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
         paper_part = {
             "type": "file",
             "file": {
-                "filename": paper_pdf,
+                "filename": filename,
                 "file_data": f"data:application/pdf;base64,{base64_pdf}",
             },
         }
@@ -126,20 +127,20 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
 def extract_mols_prop_dataset(
     model_url: str,
     question: str,
-    pdfs: list,
+    s3_keys: list,
     session_id: str,
     user_id: str
-) -> (Path, Path):
+) -> dict:
     """
     Extracts a dataset with molecular SMILES and properties from PDF documents
     by calling the OpenChemIE tool and quering a language model. It returns the resulting dataset
     along with the original PDF pages, annotated with bounding boxes highlighting the detected
     molecular structures.
-    
+
     Args:
         model_url (str): The URL of the language model to use for querying.
         question (str): The question to ask the language model.
-        pdfs (list): A list of paths to PDF documents.
+        s3_keys (list): A list of S3 keys pointing to PDF documents.
         session_id (str): Session ID.
         user_id (str): User ID.
     Returns:
@@ -153,24 +154,25 @@ def extract_mols_prop_dataset(
     annotated_images_paths = []
 
     all_datasets = []
-    for pdf in pdfs:
+    for s3_key in s3_keys:
         try:
-            images = convert_pdf_pages_to_images(pdf)
+            pdf_bytes = s3_client.get_object(Bucket=s3_service.bucket_name, Key=s3_key)["Body"].read()
+            images = convert_pdf_pages_to_images(pdf_bytes)
             results = extract_smiles_from_images(images)
             rendered_files = render_molecule_detections(images, results)
             for file_name, file_bytes in rendered_files:
-                image_key = f"{images_prefix}/{Path(pdf).stem}/{file_name}"
+                image_key = f"{images_prefix}/{Path(s3_key).stem}/{file_name}"
                 s3_client.upload_fileobj(BytesIO(file_bytes), s3_service.bucket_name, image_key)
                 annotated_images_paths.append(f"s3://{s3_service.bucket_name}/{image_key}")
             mols_df = mols_to_csv(results)
             mols_df['id'] = mols_df['id'].astype(str)
-            props_df = extract_props(model_url, question, [pdf])
+            props_df = extract_props(model_url, question, [(Path(s3_key).name, pdf_bytes)])
             props_df['id'] = props_df['id'].astype(str)
             merged_df = pd.merge(props_df, mols_df, on="id", how="inner")
-            merged_df["source"] = os.path.basename(pdf)
+            merged_df["source"] = s3_key
             all_datasets.append(merged_df)
         except Exception as e:
-            logger.error(f"Error processing PDF {pdf}: {e}")
+            logger.error(f"Error processing PDF {s3_key}: {e}")
             logger.info("Skipping this PDF and continuing with others...")
             continue
     

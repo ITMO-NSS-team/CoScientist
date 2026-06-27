@@ -183,9 +183,15 @@ tools/models
 *.pt
 *.xlsx
 *.csv
+*.adk
 logs
 ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
 *db.json
 
 roadmap.txt
+workspace/
+# Execution-graph run snapshots
+graph_runs/
+openhands.log
+task_tracker_data.json

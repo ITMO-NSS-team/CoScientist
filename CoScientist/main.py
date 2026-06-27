@@ -12,13 +12,16 @@ load_dotenv()
 
 import asyncio
 from typing import Optional
+import logging
 
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
-from CoScientist.agents.agents import orchestrator_agent
+from CoScientist.agents import orchestrator_agent, root_agent
+from CoScientist.agents.callbacks import cleanup_uploaded_papers
+from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
     AbstractHITLHandler,
     HITLRequest,
@@ -26,6 +29,9 @@ from CoScientist.hitl import (
 )
 
 settings = get_settings()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class CoScientistManager:
@@ -50,7 +56,6 @@ class CoScientistManager:
 
         # HITL setup
         self._hitl_handler = hitl_handler
-        self._agents = None
 
 
     async def initialize(self):
@@ -69,10 +74,13 @@ class CoScientistManager:
 
         # Runner
         self.runner = Runner(
-            agent=orchestrator_agent,
+            agent=root_agent,
             app_name=self.app_name,
             session_service=self.session_service,
         )
+
+        if self._hitl_handler:
+            hitl_toolset._handler = self._hitl_handler
 
         self._initialized = True
 
@@ -110,15 +118,17 @@ class CoScientistManager:
                 if event.content and event.content.parts:
                     final_response = event.content.parts[0].text or ""
                 elif event.actions and event.actions.escalate:
-                    final_response = f"Escalation: {event.error_message or 'Unknown error'}"
+                    final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
 
 
         return final_response
 
     async def close(self):
-        """Cleanup (placeholder)."""
-        # If you switch to persistent sessions later, close here
-        pass
+        """Cleanup session-related resources and uploaded paper artifacts."""
+        try:
+            await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
+        except Exception as exc:
+            logger.error(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
 
 # Convenience functions
 async def create_manager() -> CoScientistManager:
@@ -147,6 +157,15 @@ if __name__ == "__main__":
 
         try:
             while True:
+                print(
+                    "\n"
+                    "==============================\n"
+                    "🚀  WEB INTERFACE NOT RUNNING\n"
+                    "==============================\n"
+                    "Do not run main.py directly, run web/server.py instead.\n"
+                    "Start it with:\n\n"
+                    "    uv run CoScientist/web/server.py\n\n"
+                )
                 query = input("Enter query (or 'exit'): ")
 
                 if query.lower() in {"exit", "quit"}:

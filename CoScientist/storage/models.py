@@ -1,7 +1,5 @@
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field, model_validator
-
-from rag_tools import MCPServer
+from pydantic import BaseModel, Field
 
 class RetrievalFinalResult(BaseModel):
     """Result from a retrieval query."""
@@ -21,3 +19,12 @@ class ToolScore(BaseModel):
 
 class ToolRanking(BaseModel):
     tools: List[ToolScore]
+
+
+class MCPScore(BaseModel):
+    index: int
+    score: bool
+
+class MCPRanking(BaseModel):
+    mcp_scores: List[MCPScore]
+    reasoning: str
