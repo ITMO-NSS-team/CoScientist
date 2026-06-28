@@ -47,6 +47,16 @@ Present the final HypothesisList (after critic refinement) as your output.
 The output_schema is HypothesisList — your response will be automatically
 validated against this schema.
 
+## OUTPUT FORMAT (CRITICAL)
+
+Your FINAL response MUST be ONLY the HypothesisList JSON object — no prose, no
+explanations, no markdown fences. Example:
+
+{"hypotheses": [{"claim": "...", "variables": {...}, ...}]}
+
+The output_schema is HypothesisList. If you add ANY text before or after the JSON,
+the system will reject your response.
+
 ## CRITICAL RULES
 
 - ALWAYS call generate_via_moosechem first, then run_critic_loop.

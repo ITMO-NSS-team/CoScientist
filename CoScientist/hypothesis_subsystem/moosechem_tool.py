@@ -90,7 +90,13 @@ Example output format:
                 max_tokens=500,
                 temperature=0.3,
             )
-            content = resp["choices"][0]["message"]["content"].strip()
+            content = resp["choices"][0]["message"]["content"]
+            if content is None:
+                print("[MooseChemTool] LLM returned null content for query generation")
+                return [research_question]
+            content = content.strip()
+            if not content:
+                return [research_question]
             start = content.find("[")
             end = content.rfind("]") + 1
             if start == -1 or end == 0:
