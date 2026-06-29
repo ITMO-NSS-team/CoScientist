@@ -14,7 +14,7 @@ Flow:
      container's ``$MCP_PORT`` so the MCP server is reachable from the host.
 
 Run from anywhere:
-    python CoScientist/src/alembic/start_chain.py <repo_url>
+    python CoScientist/alembic/start_chain.py <repo_url>
 """
 from __future__ import annotations
 
@@ -22,19 +22,23 @@ import argparse
 import os
 import platform
 import random
-import re
 import secrets
 import subprocess
 import sys
 from pathlib import Path
 
-# /<root>/CoScientist/src/alembic/start_chain.py -> /<root>
-PROJECT_ROOT     = Path(__file__).resolve().parents[3]
-BASE_IMAGE       = "alembic-base:latest"
+from dotenv import dotenv_values
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from alembic.common import BASE_IMAGE, get_repo_name, ensure_base_image
+
+# /<root>/CoScientist/alembic/start_chain.py -> /<root>
+PROJECT_ROOT     = Path(__file__).resolve().parents[2]
 BASE_DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 TOOL_REPO        = "alembic-tool"
 PORT_RANGE       = (20000, 30000)
-DEFAULT_ENV_FILE = PROJECT_ROOT / "CoScientist" / "src" / ".env"
+DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
 PASSTHROUGH_ENV = (
     "OPENROUTER_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY",
@@ -48,37 +52,12 @@ def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, **kw)
 
 
-def _repo_name(repo_url: str) -> str:
-    return re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1])
-
-
-def _image_exists(name: str) -> bool:
-    r = subprocess.run(
-        ["docker", "image", "inspect", name],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    return r.returncode == 0
-
-
 def _default_platform() -> str | None:
     """linux/amd64 on Apple Silicon so old x86-only wheels (dgl 0.9, etc.)
     pull and run via Rosetta. Native everywhere else (None = no flag)."""
     if sys.platform == "darwin" and platform.machine() in ("arm64", "aarch64"):
         return "linux/amd64"
     return None
-
-
-def _ensure_base(rebuild: bool, plat: str | None) -> None:
-    if not rebuild and _image_exists(BASE_IMAGE):
-        print(f"[start-chain] base image {BASE_IMAGE} already present.")
-        return
-    cmd = ["docker", "build"]
-    if plat:
-        cmd += ["--platform", plat]
-    cmd += ["-t", BASE_IMAGE, "-f", str(BASE_DOCKERFILE), str(PROJECT_ROOT)]
-    r = _run(cmd)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
 
 
 def _random_port() -> int:
@@ -88,7 +67,9 @@ def _random_port() -> int:
 def _env_args(env_file: Path | None) -> list[str]:
     args: list[str] = []
     if env_file and env_file.exists():
-        args += ["--env-file", str(env_file)]
+        for k, v in dotenv_values(env_file).items():
+            if v is not None:
+                args += ["-e", f"{k}={v}"]
     for var in PASSTHROUGH_ENV:
         if var in os.environ:
             args += ["-e", f"{var}={os.environ[var]}"]
@@ -96,7 +77,7 @@ def _env_args(env_file: Path | None) -> list[str]:
 
 
 def build_image(repo_url: str, ns: argparse.Namespace) -> str:
-    repo       = _repo_name(repo_url)
+    repo       = get_repo_name(repo_url)
     cname      = f"alembic-build-{repo}-{secrets.token_hex(3)}"
     tool_image = f"{TOOL_REPO}:{repo}"
 
@@ -122,8 +103,32 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         )
         sys.exit(r.returncode)
 
+    # ── Pre-commit cleanup — keep secrets out of the saved image ──────
+    # 1. Wipe pipeline.log inside the container; agent stderr may have
+    #    echoed API keys passed at build time.
+    _run(
+        ["docker", "exec", cname, "sh", "-c",
+         "rm -f /work/.alembic/*/pipeline.log"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+    # 2. Build --change="ENV KEY=" for every sensitive var so it is
+    #    blanked in the committed image's Config.Env. Without this,
+    #    `docker inspect <image>` exposes every key passed via -e or
+    #    --env-file during build. Serve container still gets real
+    #    values at run-time via its own --env-file.
+    keys_to_scrub: set[str] = set(PASSTHROUGH_ENV)
+    if ns.env_file and Path(ns.env_file).exists():
+        for line in Path(ns.env_file).read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                keys_to_scrub.add(line.split("=", 1)[0].strip())
+    change_args: list[str] = []
+    for key in sorted(keys_to_scrub):
+        change_args += ["--change", f"ENV {key}="]
+
     print(f"[start-chain] committing {cname} -> {tool_image}")
-    c = _run(["docker", "commit", cname, tool_image])
+    c = _run(["docker", "commit", *change_args, cname, tool_image])
     if c.returncode != 0:
         sys.exit(c.returncode)
     _run(["docker", "rm", cname],
@@ -132,7 +137,7 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
 
 
 def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
-    repo  = _repo_name(repo_url)
+    repo  = get_repo_name(repo_url)
     port  = _random_port()
     cname = f"alembic-serve-{repo}-{secrets.token_hex(3)}"
 
@@ -194,7 +199,8 @@ def main() -> None:
                   f"Pass --platform native to override.")
     elif ns.platform == "native":
         ns.platform = None
-    _ensure_base(ns.rebuild_base, ns.platform)
+    ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT, 
+                      platform=ns.platform, rebuild=ns.rebuild_base)
     image = build_image(ns.repo_url, ns)
     if not ns.no_serve:
         serve_image(ns.repo_url, image, ns)
