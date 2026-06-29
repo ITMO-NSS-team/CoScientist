@@ -97,33 +97,49 @@ class EventLoggerPlugin(BasePlugin):
 
     def __init__(self, name: str = "event_logger") -> None:
         super().__init__(name=name)
-        # invocation_id -> text of the most recent final-response event, so the
-        # overall answer can be emitted once when the run completes.
+        # The root agent that receives the real user query. Sub-agents invoked
+        # via AgentTool spin up their own nested Runner (with the same plugins),
+        # so on_user_message/after_run fire for them too — gating on the root
+        # name keeps USER/FINAL to the one top-level exchange (and is robust to
+        # parallel sub-agent calls, unlike a shared depth counter).
+        self._root_agent_name: Optional[str] = None
+        # top-level invocation_id -> text of its latest final-response event.
         self._final_by_invocation: dict[str, str] = {}
 
+    @staticmethod
+    def _ctx_agent_name(invocation_context) -> Optional[str]:
+        agent = getattr(invocation_context, "agent", None)
+        return getattr(agent, "name", None)
+
     async def on_user_message_callback(self, *, invocation_context, user_message) -> Optional[Any]:
-        if _enabled():
+        name = self._ctx_agent_name(invocation_context)
+        # The first user message of the process goes to the root agent; remember
+        # it so every later top-level run is recognised the same way.
+        if self._root_agent_name is None:
+            self._root_agent_name = name
+        if _enabled() and name == self._root_agent_name:
             text = _content_text(user_message)
             if text:
                 _emit(f"{_BOLD}{_CYAN}🧑 USER ► {text}{_RESET}")
         return None
 
     async def on_event_callback(self, *, invocation_context, event) -> Optional[Any]:
-        # Remember the latest final response; the last one for an invocation is
-        # the system's overall answer (emitted in after_run_callback).
-        if _enabled() and getattr(event, "is_final_response", None) and event.is_final_response():
-            text = _content_text(getattr(event, "content", None))
-            if text:
-                key = getattr(invocation_context, "invocation_id", "default")
-                self._final_by_invocation[key] = text
+        # Only the root agent's final-response event is the system's answer;
+        # sub-agent finals (different agent) are skipped.
+        if not (_enabled() and getattr(event, "is_final_response", None) and event.is_final_response()):
+            return None
+        if self._ctx_agent_name(invocation_context) != self._root_agent_name:
+            return None
+        text = _content_text(getattr(event, "content", None))
+        if text:
+            self._final_by_invocation[getattr(invocation_context, "invocation_id", "default")] = text
         return None
 
     async def after_run_callback(self, *, invocation_context) -> None:
-        if _enabled():
-            key = getattr(invocation_context, "invocation_id", "default")
-            text = self._final_by_invocation.pop(key, None)
-            if text:
-                _emit(f"{_BOLD}{_GREEN}✅ FINAL RESPONSE ► {text}{_RESET}")
+        key = getattr(invocation_context, "invocation_id", "default")
+        text = self._final_by_invocation.pop(key, None)
+        if _enabled() and text:
+            _emit(f"{_BOLD}{_GREEN}✅ FINAL RESPONSE ► {text}{_RESET}")
         return None
 
     async def after_model_callback(self, *, callback_context, llm_response) -> Optional[Any]:
