@@ -57,7 +57,7 @@ agents:
       - CoderAgent
       - MedicalAgent
     callbacks:
-      before_model: [save_uploaded_artifacts, seed_coder_workspace]
+      before_model: [save_uploaded_artifacts, seed_coder_workspace, inject_original_query]
       before_agent: [before_get_task]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
@@ -230,6 +230,7 @@ agents:
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
       # corrective message instead of letting ADK crash the whole run.
       after_model: [guard_unknown_tools]
+    hitl: true
     a2a:
       key: coder
       port: 8006

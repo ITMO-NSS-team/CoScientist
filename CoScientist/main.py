@@ -20,6 +20,7 @@ from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.agents import orchestrator_agent, root_agent
+from CoScientist.tools.coder_tools import coder_toolset
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
@@ -111,6 +112,11 @@ class CoScientistManager:
 
         if self._hitl_handler:
             hitl_toolset._handler = self._hitl_handler
+            if getattr(coder_toolset, "_hitl_handler", None) is not None:
+                if hasattr(coder_toolset._hitl_handler, 'set_delegate'):
+                    coder_toolset._hitl_handler.set_delegate(self._hitl_handler)
+                else:
+                    coder_toolset._hitl_handler = self._hitl_handler
 
         self._initialized = True
 

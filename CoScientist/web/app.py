@@ -14,6 +14,7 @@ from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.agents import planner_agent
 from CoScientist.hitl.tool import hitl_toolset
+from CoScientist.tools.coder_tools import coder_toolset
 
 from google.genai import types
 from google.adk.workflow.utils._workflow_hitl_utils import (
@@ -61,11 +62,18 @@ async def _get_manager():
         if hasattr(planner_agent, 'hitl_handler') and hasattr(planner_agent.hitl_handler, 'set_delegate'):
             planner_agent.hitl_handler.set_delegate(_web_hitl_handler)
         
-        # Also update the hitl_toolset if it's delegating
+        # Update the hitl_toolset if it's delegating
         if hasattr(hitl_toolset._handler, 'set_delegate'):
             hitl_toolset._handler.set_delegate(_web_hitl_handler)
         else:
             hitl_toolset._handler = _web_hitl_handler
+
+        # Update the coder_toolset if it's delegating
+        if getattr(coder_toolset, "_hitl_handler", None) is not None:
+            if hasattr(coder_toolset._hitl_handler, 'set_delegate'):
+                coder_toolset._hitl_handler.set_delegate(_web_hitl_handler)
+            else:
+                coder_toolset._hitl_handler = _web_hitl_handler
 
         return _manager
 

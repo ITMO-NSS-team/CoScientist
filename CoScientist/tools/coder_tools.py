@@ -713,8 +713,8 @@ class CoderToolset(BaseToolset):
 # approval (git push, installs, recursive deletes, network fetches, etc.).
 _hitl_handler = None
 if settings.hitl.enabled:
-    from CoScientist.hitl.handler import ConsoleHITLHandler
-    _hitl_handler = ConsoleHITLHandler()
+    from CoScientist.hitl.handler import ConsoleHITLHandler, DelegatingHITLHandler
+    _hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 
 coder_toolset = CoderToolset(hitl_handler=_hitl_handler)
 coder_toolset_instance = coder_toolset.get_tools(None)
