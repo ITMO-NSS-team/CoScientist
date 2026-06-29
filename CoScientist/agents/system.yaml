@@ -41,7 +41,7 @@ agents:
   # ── Root ───────────────────────────────────────────────────────────────────
   OrchestratorAgent:
     class: llm
-    root: false
+    root: true
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
@@ -50,7 +50,7 @@ agents:
     # relevant tool is already available.
     tools: [retrieval, task_tracker]
     subordinates:
-      # - PlannerAgent
+      - PlannerAgent
       - HypothesesAgent
       - ResearchAgent
       - TaskExecutorAgent
@@ -73,24 +73,6 @@ agents:
         description: Coordinate scientific research agents to solve complex tasks
         tags: [orchestration, science, multi-agent]
 
-
-  InitAgent:
-    class: sequential
-    root: true
-    children:
-      - PlannerAgent
-      - OrchestratorAgent
-    enabled: true
-    hitl: true
-    description: Initialize the CoScientist system
-    a2a:
-      key: init
-      port: 8008
-      skill:
-        id: init
-        name: Init
-        description: Initialize the CoScientist system
-        tags: [init, science, multi-agent]
 
   # ── Direct subordinates ────────────────────────────────────────────────────
   PlannerAgent:

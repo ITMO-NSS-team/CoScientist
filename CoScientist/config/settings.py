@@ -130,6 +130,10 @@ class S3Settings(BaseModel):
 # OPIK
 # =========================
 class OpikSettings(BaseModel):
+    # Master switch for Opik tracing (env: OPIK__ENABLED). Off by default so the
+    # app never ships spans to a (possibly rate-limited) Opik backend unless
+    # explicitly opted in. When False, tracing is fully disabled process-wide.
+    enabled: bool = False
     api_key: Optional[str] = None
     url_override: Optional[str] = None
     opik_project_name: Optional[str] = None

@@ -1,13 +1,16 @@
 """ADK plugin that logs every agent's inner activity to stdout.
 
-Attached in two places:
+Attached everywhere the system runs:
+- the in-process Runner in ``CoScientistManager`` (``main.py``) — covers the
+  web UI and the terminal REPL;
 - each A2A server's Runner (``a2a/server.py``) — a sub-agent's reasoning and
   tool use show up on its own server's console (aggregated by run_all);
 - the ``App`` exported from ``agent.py`` — so plain ``adk web`` /
   ``adk api_server`` runs get the same console trace without A2A.
 
-This surfaces what each agent does internally — thoughts, tool calls, and tool
-results — not just the final answer.
+This surfaces the whole exchange: the user's input (🧑 USER), what each agent
+does internally — thoughts, tool calls, and tool results — and the system's
+final answer (✅ FINAL RESPONSE).
 
 The same trace is also appended to a log file (ANSI stripped) — handy when the
 terminal scrollback can't hold a long run. Path: AGENT_LOG_FILE (default
@@ -71,6 +74,15 @@ def _agent(ctx: Any) -> str:
     return getattr(ctx, "agent_name", None) or "?"
 
 
+def _content_text(content: Any) -> str:
+    """Join the text parts of a types.Content (user message / event), if any."""
+    if content is None:
+        return ""
+    parts = getattr(content, "parts", None) or []
+    texts = [p.text for p in parts if getattr(p, "text", None)]
+    return "\n".join(texts).strip()
+
+
 def _emit(line: str) -> None:
     print(line, flush=True)
     fh = _get_log_fh()
@@ -85,6 +97,34 @@ class EventLoggerPlugin(BasePlugin):
 
     def __init__(self, name: str = "event_logger") -> None:
         super().__init__(name=name)
+        # invocation_id -> text of the most recent final-response event, so the
+        # overall answer can be emitted once when the run completes.
+        self._final_by_invocation: dict[str, str] = {}
+
+    async def on_user_message_callback(self, *, invocation_context, user_message) -> Optional[Any]:
+        if _enabled():
+            text = _content_text(user_message)
+            if text:
+                _emit(f"{_BOLD}{_CYAN}🧑 USER ► {text}{_RESET}")
+        return None
+
+    async def on_event_callback(self, *, invocation_context, event) -> Optional[Any]:
+        # Remember the latest final response; the last one for an invocation is
+        # the system's overall answer (emitted in after_run_callback).
+        if _enabled() and getattr(event, "is_final_response", None) and event.is_final_response():
+            text = _content_text(getattr(event, "content", None))
+            if text:
+                key = getattr(invocation_context, "invocation_id", "default")
+                self._final_by_invocation[key] = text
+        return None
+
+    async def after_run_callback(self, *, invocation_context) -> None:
+        if _enabled():
+            key = getattr(invocation_context, "invocation_id", "default")
+            text = self._final_by_invocation.pop(key, None)
+            if text:
+                _emit(f"{_BOLD}{_GREEN}✅ FINAL RESPONSE ► {text}{_RESET}")
+        return None
 
     async def after_model_callback(self, *, callback_context, llm_response) -> Optional[Any]:
         if not _enabled() or llm_response is None or llm_response.content is None:

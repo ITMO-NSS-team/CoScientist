@@ -102,11 +102,16 @@ class CoScientistManager:
             session_id=self.session_id,
         )
 
-        # Runner
+        # Runner — attach the event logger so web/cli runs get the same local
+        # file + console trace as the A2A servers (a2a/server.py) and `adk web`
+        # (agent.py). Toggle with LOG_AGENT_EVENTS / AGENT_LOG_FILE.
+        from CoScientist.logging.event_logger import EventLoggerPlugin
+
         self.runner = Runner(
             agent=root_agent,
             app_name=self.app_name,
             session_service=self.session_service,
+            plugins=[EventLoggerPlugin()],
         )
 
         if self._hitl_handler:
@@ -240,37 +245,8 @@ __all__ = [
     "create_manager"
 ]
 
-# CLI entrypoint
+# CLI entrypoint — thin shim. Prefer: python -m CoScientist cli
 if __name__ == "__main__":
-    async def main():
+    from CoScientist.cli import run_repl
 
-        manager = await create_manager()
-
-        print("CoScientist (ADK) initialized\n")
-
-        try:
-            while True:
-                print(
-                    "\n"
-                    "==============================\n"
-                    "🚀  WEB INTERFACE NOT RUNNING\n"
-                    "==============================\n"
-                    "Do not run main.py directly, run web/server.py instead.\n"
-                    "Start it with:\n\n"
-                    "    uv run CoScientist/web/server.py\n\n"
-                )
-                query = input("Enter query (or 'exit'): ")
-
-                if query.lower() in {"exit", "quit"}:
-                    break
-
-                result = await manager.run(query)
-
-                print("\n=== Final Response ===")
-                print(result)
-                print()
-
-        finally:
-            await manager.close()
-
-    asyncio.run(main())
+    run_repl()

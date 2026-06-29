@@ -32,7 +32,7 @@ def system(config):
 # ── config validation ────────────────────────────────────────────────────────
 
 def test_config_loads_and_has_one_root(config):
-    assert config.root.name == "InitAgent"
+    assert config.root.name == "OrchestratorAgent"
     order = config.build_order()
     assert order.index("ToolRetrieverAgent") < order.index("LocalToolsExtractorAgent")
     assert set(order) == set(config.agents)
