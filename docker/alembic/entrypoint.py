@@ -35,7 +35,8 @@ def _repo_name(repo_url: str) -> str:
 def _run_build(args: list[str]) -> None:
     if not args:
         _usage()
-    os.chdir("/app")
+    os.chdir("/work")
+    os.environ["PYTHONPATH"] = "/app:" + os.environ.get("PYTHONPATH", "")
     os.execvp("python", ["python", "-m", "alembic.main", *args])
 
 

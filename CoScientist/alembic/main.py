@@ -18,7 +18,7 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from alembic.agents import explorer_agent, environment_agent, coder_agent, validator_agent
-from alembic.tools import WORKDIR
+from alembic.tools import WORKDIR, get_repo_name
 
 # ── Loguru: terminal sink ──────────────────────────────────────────────────────
 logger.remove()
@@ -68,10 +68,6 @@ APP_NAME = "alembic_app"
 USER_ID  = "user_1"
 
 TRUNC = 2000  # max chars shown for tool args / responses inline
-
-def _repo_name(repo_url: str) -> str:
-    return repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
-
 
 
 def _trunc(text: str, n: int = TRUNC) -> str:
@@ -241,7 +237,7 @@ STAGES = ("explorer", "environment", "coder", "validator")
 
 
 async def run_pipeline(repo_url: str, resume_from: str | None = None):
-    name = _repo_name(repo_url)
+    name = get_repo_name(repo_url)
     session_service = InMemorySessionService()
 
     if resume_from is None:
