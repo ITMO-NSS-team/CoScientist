@@ -195,7 +195,10 @@ class RetrievalToolSet(BaseToolset):
 
         return {
             "status": "success",
-            "result": server,
+            # model_dump(mode="json") so datetime/enum fields become JSON-native
+            # — a raw MCPServer (or its datetime fields) is not JSON serializable
+            # and would crash any json.dumps consumer (web ws, Opik trace, ADK state).
+            "result": server.model_dump(mode="json"),
         }
 
 
