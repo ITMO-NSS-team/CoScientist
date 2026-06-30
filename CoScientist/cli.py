@@ -19,6 +19,7 @@ The legacy entry modules (``CoScientist.main``, ``CoScientist.web.server``,
 here, so existing commands and muscle memory keep working.
 """
 import argparse
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -91,6 +92,37 @@ def _run_a2a(a2a_cmd: str, rest: list) -> None:
         asyncio.run(benchmark.main(rest))
 
 
+def _run_graph(graph_cmd: str, run_id: str, out: Optional[str], view: str = "execution") -> None:
+    """Knowledge-graph utilities over a snapshot (./graph_runs/<run>.json).
+
+    view=execution → the raw log graph; view=knowledge → the projected
+    knowledge graph (Question/Finding/Hypothesis/Method).
+    """
+    from CoScientist.graph import viz
+
+    if view == "memory":
+        from CoScientist.graph.memory_store import knowledge_memory
+        full = knowledge_memory.full()
+    else:
+        full = viz.load_snapshot(run_id)
+        if view == "knowledge":
+            from CoScientist.graph.knowledge import to_knowledge_graph
+            full = to_knowledge_graph(full)
+
+    if graph_cmd == "viz":
+        out = out or f"knowledge_graph_{run_id}_{view}.html"
+        path = viz.render_html(full, out)
+        print(f"Graph ({view}) written to {path}")
+    elif graph_cmd == "dot":
+        print(viz.to_dot(full))
+    else:  # show
+        nodes, edges = full.get("nodes", []), full.get("edges", [])
+        print(f"run={run_id} view={view}  nodes={len(nodes)}  edges={len(edges)}")
+        for n in nodes:
+            label = (n.get("label") or "")[:80]
+            print(f"  [{n.get('kind'):<10}] {n.get('id'):<30} {label}  ({n.get('status')})")
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -123,6 +155,13 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     a2a.add_argument("a2a_cmd", choices=["all", "serve", "bench"], help="A2A run mode.")
+
+    graph = sub.add_parser("graph", help="Knowledge-graph utilities.")
+    graph.add_argument("graph_cmd", choices=["viz", "show", "dot"], help="viz=HTML, show=text, dot=Graphviz.")
+    graph.add_argument("--run", default="session", help="run_id snapshot to load (default: session).")
+    graph.add_argument("--out", default=None, help="output file (viz writes HTML here).")
+    graph.add_argument("--view", choices=["execution", "knowledge", "memory"], default="execution",
+                       help="execution=raw log graph; knowledge=projection; memory=cross-run knowledge memory.")
     return parser
 
 
@@ -140,6 +179,8 @@ def main(argv=None) -> int:
         run_repl()
     elif args.cmd == "a2a":
         _run_a2a(args.a2a_cmd, rest)
+    elif args.cmd == "graph":
+        _run_graph(args.graph_cmd, args.run, args.out, args.view)
     return 0
 
 

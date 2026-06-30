@@ -51,6 +51,11 @@ def _fedot():
     return fedot_toolset_instance
 
 
+def _dynamic_tools():
+    from CoScientist.tools import dynamic_mcp_toolset_instance
+    return dynamic_mcp_toolset_instance
+
+
 def _medical():
     from CoScientist.tools import med_toolset_instance
     return med_toolset_instance
@@ -67,6 +72,10 @@ def _task_tracker():
 def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
+
+def _graph():
+    from CoScientist.graph.agent_tools import graph_reader_instance
+    return graph_reader_instance
 
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
@@ -168,6 +177,44 @@ REGISTRY.register_tool(ToolEntry(
 ))
 
 REGISTRY.register_tool(ToolEntry(
+    key="graph",
+    factory=_graph,
+    runtime_resolved=True,  # BaseToolset — tool surface comes from get_tools()
+    docs=(
+        ToolDoc(
+            name="read_research_graph",
+            signature="read_research_graph()",
+            purpose="Read the shared knowledge graph: roster + every step so far.",
+        ),
+        ToolDoc(
+            name="get_graph_history",
+            signature="get_graph_history(limit)",
+            purpose="Chronological history of steps taken in this session.",
+        ),
+        ToolDoc(
+            name="get_agents_info",
+            signature="get_agents_info()",
+            purpose="Structured info about all agents in the system.",
+        ),
+        ToolDoc(
+            name="search_knowledge_memory",
+            signature="search_knowledge_memory(query)",
+            purpose="Search facts learned in PRIOR runs (cross-run memory) relevant to a query.",
+        ),
+        ToolDoc(
+            name="get_entity_neighbors",
+            signature="get_entity_neighbors(entity)",
+            purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
+        ),
+        ToolDoc(
+            name="get_knowledge_memory",
+            signature="get_knowledge_memory()",
+            purpose="Full cross-run knowledge memory (entities + relations).",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
     key="create_plan_tool",
     factory=_create_plan_tool,
     docs=(
@@ -202,6 +249,22 @@ REGISTRY.register_tool(ToolEntry(
             name="fedot_tool",
             signature="fedot_tool(task_description)",
             purpose="Builds and executes a multi-agent pipeline to solve the task.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="dynamic_tools",
+    factory=_dynamic_tools,
+    runtime_resolved=True,  # tool surface is the task's MCP servers, resolved per turn from state
+    docs=(
+        ToolDoc(
+            name="<dynamic MCP tools>",
+            signature="(varies)",
+            purpose=(
+                "The MCP tools selected for THIS task by the tool-prep pipeline "
+                "(filtered_tools/deployed_mcps). Call them directly to run the work."
+            ),
         ),
     ),
 ))
@@ -385,6 +448,11 @@ def _before_get_task():
     return before_get_task
 
 
+def _inject_graph_root():
+    from CoScientist.agents.callbacks import inject_graph_root
+    return inject_graph_root
+
+
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     return SearchLimiter(max_searches=2).limit_searches
@@ -423,6 +491,8 @@ _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranke
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+# Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
+_cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.

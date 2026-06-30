@@ -93,10 +93,41 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Vendored JS/CSS (e.g. vis-network for the live graph) so the UI works
+    # offline / behind a VPN without any CDN.
+    _static_dir = WEB_DIR / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)
     async def index():
         return TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    # --- Knowledge graph (live view) ---
+    @app.get("/graph", response_class=HTMLResponse)
+    async def graph_page():
+        return (WEB_DIR / "templates" / "graph.html").read_text(encoding="utf-8")
+
+    @app.get("/api/graph")
+    async def api_graph(view: str = "execution"):
+        """Current graph (the /graph page polls this).
+
+        view=execution → the raw log graph; view=knowledge → the knowledge-graph
+        projection (Question/Finding/Hypothesis/Method entities).
+        """
+        try:
+            if view == "memory":
+                from CoScientist.graph.memory_store import knowledge_memory
+                return JSONResponse(knowledge_memory.full())
+            from CoScientist.graph.memory import knowledge_graph
+            full = knowledge_graph.full()
+            if view == "knowledge":
+                from CoScientist.graph.knowledge import to_knowledge_graph
+                return JSONResponse(to_knowledge_graph(full))
+            return JSONResponse(full)
+        except Exception as e:  # noqa: BLE001 — never break the UI
+            return JSONResponse({"nodes": [], "edges": [], "error": str(e)}, status_code=500)
 
     # --- Roadmap endpoints ---
     @app.get("/api/roadmap")
@@ -203,9 +234,15 @@ def create_app() -> FastAPI:
                             await _manager.close()
                             _manager = None
                     
-                    # Clear events log
+                    # Clear events log + per-session state (tasks + execution
+                    # graph) so a new run starts clean. Cross-run memory is kept.
                     _agent_events.clear()
-                    
+                    try:
+                        from CoScientist.main import reset_session_state
+                        reset_session_state()
+                    except Exception:  # noqa: BLE001
+                        pass
+
                     await ws.send_json({
                         "type": "status",
                         "status": "idle",

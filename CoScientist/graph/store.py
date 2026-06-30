@@ -94,6 +94,13 @@ class GraphStore:
         with self._lock:
             return list(self._graphs.keys())
 
+    def clear(self, run_id: str) -> None:
+        """Drop a run's graph (in memory and its snapshot) — used to reset the
+        per-session graph on a fresh start / interrupt."""
+        with self._lock:
+            self._graphs.pop(run_id, None)
+            self._snapshot(run_id)  # writes an empty graph for this run
+
     # ── persistence ─────────────────────────────────────────────────────────
     def _snapshot(self, run_id: str) -> None:
         if not self._snapshot_dir:

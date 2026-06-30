@@ -21,6 +21,7 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     after_tool_reranker_agent,
     before_get_task,
     before_tool_reranker_model,
+    inject_graph_root,
     make_unknown_tool_guard,
     print_research_agent_tool_call,
     redirect_when_no_tools,
@@ -41,4 +42,5 @@ __all__ = [
     "redirect_when_no_tools",
     "make_unknown_tool_guard",
     "before_get_task",
+    "inject_graph_root",
 ]

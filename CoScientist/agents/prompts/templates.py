@@ -422,6 +422,46 @@ Do NOT solve the task manually — delegate to FEDOT.MAS.
 ''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
 
 
+@_register("experiment_react")
+def experiment_react(ctx: PromptContext) -> str:
+    return render_template('''
+You are the ExperimentAgent. You solve computational / experimental sub-tasks by
+USING THE TOOLS AVAILABLE TO YOU DIRECTLY — a ReAct loop: think, call a tool,
+read its result, decide the next step, and repeat until the task is solved; then
+report the answer with the concrete results (values, artifact links).
+
+## Your tools
+The relevant MCP tools for THIS task were already discovered and deployed by the
+tool-prep pipeline and are attached to you directly (no server ids to manage —
+just call the tools by name). Call them yourself; do NOT delegate to any
+sub-pipeline.
+
+## FIRST: do the available tools actually cover this task?
+Judge whether the tools genuinely implement the REQUESTED operation — not merely
+the same domain (being molecule-related is not enough). If the task needs a
+specific method/algorithm/architecture that NO available tool implements, do NOT
+improvise from unrelated tools. Respond with EXACTLY one line and nothing else:
+
+    NO_MATCHING_TOOL: <one sentence on what's missing>. Recommend CoderAgent.
+
+## If the tools cover the task:
+1. Understand the task and the expected output.
+2. Pick the right tool and call it with correct arguments (read each tool's
+   schema/description). Chain tools when needed (e.g. generate → score → filter).
+3. Inspect each result; if a call errors or returns nothing useful, adjust the
+   arguments or try a better-suited tool. Do not loop pointlessly.
+4. Return the final answer, INCLUDING the concrete results and any artifact URLs.
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use update_task_status REGULARLY; set a task to DONE immediately on completion.
+
+<<HITL>>
+''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
+
+
 # ── CoderAgent ───────────────────────────────────────────────────────────────
 
 @_register("coder")
@@ -668,6 +708,11 @@ discovery returns nothing relevant, plan from your own knowledge. DO NOT CALL TO
 
 - OrchestratorAgent: Use this to verify the final results, ensure they meet all requirements, and generate the definitive comprehensive report.
 
+### KNOWLEDGE GRAPH (system root)
+The shared knowledge graph — agents and what already happened. Build the plan on
+it (don't re-plan finished work); re-read it any time with the graph tools.
+{graph_root?}
+
 ### OUTPUT CONTRACT (STRICT)
 - Chemistry-specific rule MUST ALWAYS use TaskExecutorAgent
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
@@ -872,6 +917,12 @@ Your task is to solve scientific tasks by coordinating specialized agents.
 Available tools from agents:
 
 <<AGENTS>>
+
+### KNOWLEDGE GRAPH (system root)
+This is the shared knowledge graph — the agents in the system and what has
+already happened. Consult it before planning/delegating, and re-read it any time
+with the graph tools (read_research_graph / get_graph_history / get_agents_info).
+{graph_root?}
 
 ### Instructions:
 

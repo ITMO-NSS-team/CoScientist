@@ -112,11 +112,41 @@ def after_fullset_reranker_agent(
     callback_context.state['retrieval_queries_mcp'] = []
     return
 
-def before_get_task(callback_context: CallbackContext):  
-    """Get task before agent is called"""  
-    active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)  
+def before_get_task(callback_context: CallbackContext):
+    """Get task before agent is called"""
+    active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)
     callback_context.state['active_tasks'] = active_tasks
-    return None 
+    return None
+
+
+def inject_graph_root(callback_context: CallbackContext):
+    """Give the agent the knowledge-graph root AND relevant prior-run memory.
+
+    state['graph_root'] (rendered via the {graph_root?} placeholder) gets:
+      1. the system root — every agent + its capabilities + this session's trace;
+      2. relevant facts the cross-run knowledge MEMORY established in earlier runs
+         (graph memory), retrieved for the current query — so agents build on
+         prior findings instead of redoing them.
+    Best-effort — the graph must never break a run.
+    """
+    parts = []
+    query = ""
+    try:
+        from CoScientist.graph.memory import knowledge_graph
+        parts.append(knowledge_graph.root_summary())
+        goals = [h for h in knowledge_graph.history(limit=50) if h.get("kind") == "goal"]
+        query = goals[-1]["label"] if goals else ""
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from CoScientist.graph.memory_store import knowledge_memory
+        mem = knowledge_memory.relevant_summary(query)
+        if mem:
+            parts.append(mem)
+    except Exception:  # noqa: BLE001
+        pass
+    callback_context.state['graph_root'] = "\n\n".join(p for p in parts if p)
+    return None
 
 # Recognisable token the orchestrator prompt / post-critic key off to re-route.
 NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"

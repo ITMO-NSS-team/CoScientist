@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CoScientist — Knowledge Graph</title>
+  <!-- Vendored locally (CoScientist/web/static) so it works offline / behind a VPN. -->
+  <script src="/static/vis-network.min.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #1e1e1e; color: #eee;
+                 font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+    #bar { position: fixed; top: 0; left: 0; right: 0; height: 42px; display: flex;
+           align-items: center; gap: 14px; padding: 0 14px; background: #252526;
+           border-bottom: 1px solid #333; z-index: 10; font-size: 13px; }
+    #bar b { color: #fff; }
+    #net { position: absolute; top: 42px; bottom: 0; left: 0; right: 0; }
+    .legend { display: flex; gap: 12px; margin-left: auto; flex-wrap: wrap; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+    label { cursor: pointer; user-select: none; }
+    #status { color: #9aa; }
+    #detail { position: fixed; top: 42px; right: 0; width: 380px; bottom: 0; background: #252526;
+              border-left: 1px solid #333; padding: 16px; overflow-y: auto; z-index: 9;
+              display: none; font-size: 13px; box-shadow: -8px 0 24px rgba(0,0,0,0.3); }
+    #detail h3 { margin: 0 0 10px; color: #00daf3; font-size: 15px; word-break: break-word; }
+    #detail .k { color: #8ab; font-weight: 600; }
+    #detail pre { white-space: pre-wrap; word-break: break-word; background: #1b1b1c; padding: 9px;
+                  border-radius: 6px; color: #ddd; font-size: 12px; line-height: 1.45; margin: 4px 0 0; }
+    #detail .close { float: right; cursor: pointer; color: #999; font-size: 18px; }
+    #detail .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; color: #111;
+                     font-weight: 700; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <b>CoScientist Knowledge Graph</b>
+    <span id="status">connecting…</span>
+    <label><input type="checkbox" id="auto" checked /> live (1.5s)</label>
+    <button id="refresh">refresh</button>
+    <label>view:
+      <select id="view">
+        <option value="execution">execution (log)</option>
+        <option value="knowledge">knowledge graph</option>
+        <option value="memory">knowledge memory (cross-run)</option>
+      </select>
+    </label>
+    <div class="legend">
+      <span><b>status:</b></span>
+      <span><i class="dot" style="background:#f1c40f"></i>running</span>
+      <span><i class="dot" style="background:#2ecc71"></i>success</span>
+      <span><i class="dot" style="background:#e74c3c"></i>failed</span>
+      <span style="margin-left:8px"><b>type:</b></span>
+      <span>⬡ system</span><span>● agent</span><span>◆ goal</span>
+      <span>⬭ agent-call</span><span>▭ tool-call</span><span>★ result</span>
+    </div>
+  </div>
+  <div id="net"></div>
+  <div id="detail"></div>
+
+  <script>
+    // Run steps are coloured by STATUS; the static structure keeps its identity.
+    const STATUS_COLOR = { running: "#f1c40f", success: "#2ecc71", failed: "#e74c3c", pruned: "#7f8c8d" };
+    const IDENTITY_COLOR = { system: "#f4c542", agent: "#7eb6ff",
+      question: "#ff9f43", hypothesis: "#b388ff", finding: "#2ecc71", method: "#1abc9c" };
+    const SHAPE = { system: "hexagon", agent: "dot", goal: "diamond",
+                    agent_call: "ellipse", tool_call: "box", result: "star",
+                    question: "diamond", finding: "star" };
+    // knowledge-memory entities are coloured/shaped by their domain type (semantic.type)
+    const ENTITY_COLOR = { target: "#e84393", molecule: "#00cec9", metric: "#fdcb6e",
+      property: "#fab1a0", paper: "#74b9ff", hypothesis: "#b388ff", method: "#1abc9c",
+      dataset: "#a29bfe", finding: "#2ecc71", gene: "#ffeaa7", organism: "#55efc4" };
+    const ENTITY_SHAPE = { target: "star", molecule: "dot", metric: "triangle", paper: "box",
+      hypothesis: "ellipse", method: "box", dataset: "database" };
+    const etype = n => (n.semantic && n.semantic.type) || "entity";
+    // stable colour for any (possibly new/dynamic) entity type
+    function hashColor(s){ let h=0; s=s||"x"; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
+      const c=v=>(120+(v&0x5F)).toString(16).padStart(2,"0"); return "#"+c(h)+c(h>>6)+c(h>>12); }
+    const colorOf = n => n.kind === "entity" ? (ENTITY_COLOR[etype(n)] || hashColor(etype(n)))
+                       : (IDENTITY_COLOR[n.kind] || STATUS_COLOR[n.status] || "#dcdde1");
+    const shapeOf = n => n.kind === "entity" ? (ENTITY_SHAPE[etype(n)] || "dot") : (SHAPE[n.kind] || "box");
+    // tool_call shows the tool name; agent nodes show the agent (caller is the parent).
+    const labelOf = n => String((["tool_call", "result", "goal", "entity"].includes(n.kind) ? n.label : (n.executor_agent || n.label)) || n.id || "").slice(0, 40);
+    const titleOf = n => [
+      "id: " + n.id, "kind: " + n.kind,
+      n.executor_agent ? "agent: " + n.executor_agent : "",
+      "status: " + (n.status || ""),
+      n.label ? "label: " + n.label : "",
+      n.output ? "output: " + String(n.output).slice(0, 400) : "",
+    ].filter(Boolean).join("\n");
+
+    const nodes = new vis.DataSet([]);
+    const edges = new vis.DataSet([]);
+    const network = new vis.Network(document.getElementById("net"), { nodes, edges }, {
+      nodes: { font: { color: "#eee", strokeWidth: 3, strokeColor: "#1e1e1e" }, borderWidth: 1 },
+      edges: { arrows: "to", color: { color: "#888" }, font: { color: "#bbb", size: 10 },
+               smooth: { type: "cubicBezier" } },
+      physics: { stabilization: false, barnesHut: { gravitationalConstant: -8000, springLength: 130 } },
+      interaction: { hover: true, tooltipDelay: 100 },
+    });
+
+    const seenEdges = new Set();
+    const nodeData = {};   // id -> full node, for the click-to-inspect panel
+    async function poll() {
+      try {
+        const r = await fetch("/api/graph?view=" + document.getElementById("view").value, { cache: "no-store" });
+        const g = await r.json();
+        (g.nodes || []).forEach(n => {
+          nodeData[n.id] = n;
+          nodes.update({
+            id: n.id, label: labelOf(n), title: titleOf(n), shape: shapeOf(n),
+            color: { background: colorOf(n), border: "#222" },
+          });
+        });
+        if (selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);  // live-refresh open panel
+        (g.edges || []).forEach(e => {
+          const id = e.src + "->" + e.dst + ":" + (e.type || "");
+          if (!seenEdges.has(id) && e.src && e.dst) {
+            seenEdges.add(id);
+            edges.update({ id, from: e.src, to: e.dst, label: e.type || "" });
+          }
+        });
+        document.getElementById("status").textContent =
+          (g.nodes || []).length + " nodes · " + (g.edges || []).length + " edges";
+      } catch (err) {
+        document.getElementById("status").textContent = "error: " + err;
+      }
+    }
+
+    // --- click a node → detailed panel ---
+    let selectedId = null;
+    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+    function showDetail(n) {
+      if (!n) return;
+      const row = (k, v) => (v || v === 0) ? `<div><span class="k">${k}:</span> ${esc(v)}</div>` : "";
+      const block = (k, v) => v ? `<div class="k" style="margin-top:10px">${k}:</div><pre>${esc(v)}</pre>` : "";
+      const dur = (n.t_start && n.t_end) ? (n.t_end - n.t_start).toFixed(2) + "s" : "";
+      const promptLabel = n.kind === "agent_call" ? "prompt the agent was called with"
+                        : (n.kind === "tool_call" ? "tool args" : "input");
+      document.getElementById("detail").innerHTML =
+        `<span class="close" onclick="closeDetail()">✕</span>`
+        + `<h3>${esc(labelOf(n))}</h3>`
+        + `<div><span class="badge" style="background:${colorOf(n)}">${esc(n.status || "")}</span></div>`
+        + row("kind", n.kind) + row("agent", n.executor_agent) + row("duration", dur) + row("id", n.id)
+        + block(promptLabel, n.input)
+        + block("output", n.output)
+        + (n.label && !["tool_call", "result", "goal"].includes(n.kind) ? block("label", n.label) : "");
+      document.getElementById("detail").style.display = "block";
+    }
+    function closeDetail() { selectedId = null; document.getElementById("detail").style.display = "none"; }
+    network.on("click", params => {
+      if (!params.nodes.length) { closeDetail(); return; }
+      selectedId = params.nodes[0];
+      showDetail(nodeData[selectedId]);
+    });
+
+    document.getElementById("refresh").onclick = poll;
+    document.getElementById("view").onchange = () => {
+      nodes.clear(); edges.clear(); seenEdges.clear();
+      for (const k in nodeData) delete nodeData[k];
+      closeDetail(); poll();
+    };
+    let timer = null;
+    function loop() { if (document.getElementById("auto").checked) poll(); timer = setTimeout(loop, 1500); }
+    poll(); loop();
+  </script>
+</body>
+</html>

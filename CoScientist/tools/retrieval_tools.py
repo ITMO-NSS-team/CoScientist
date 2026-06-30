@@ -101,13 +101,14 @@ class RetrievalToolSet(BaseToolset):
         Returns:
             List ot the most relevant tools in db which can be used to solve the task .
         """
-        embedder = APIEmbedder(settings.api_embedding)
-        api_reranker = APIReranker(settings.api_reranker)
-        bm2_reranker = BM25Reranker(settings.bm_reranker)
-        reranker = HybridReranker([api_reranker, bm2_reranker], settings.hybrid_reranker)
-        manager = await create_manager(settings, embedder, reranker)
-
+        manager = None
         try:
+            embedder = APIEmbedder(settings.api_embedding)
+            api_reranker = APIReranker(settings.api_reranker)
+            bm2_reranker = BM25Reranker(settings.bm_reranker)
+            reranker = HybridReranker([api_reranker, bm2_reranker], settings.hybrid_reranker)
+            manager = await create_manager(settings, embedder, reranker)
+
             retrieved_tools: List[RetrievalResult] = await manager.retrieve_tools(
                 query=query,
                 top_k=settings.rag.default_top_k,
@@ -133,9 +134,25 @@ class RetrievalToolSet(BaseToolset):
                 )
                 for r in retrieved_tools
             ]
+        except Exception as e:  # noqa: BLE001
+            # The tool index / DB being unreachable (e.g. no VPN, timeout) must
+            # NOT crash the whole run — return a graceful error so the agent can
+            # proceed or abstain (e.g. NO_MATCHING_TOOL → CoderAgent).
+            _logger.warning("retrieve_tools unavailable: %r", e)
+            acc = tool_context.state.get('accumulated_tools', []) if tool_context is not None else []
+            return {
+                "status": "error",
+                "result": [],
+                "accumulated_count": len(acc),
+                "message": f"Tool retrieval is unavailable right now (tool index/DB unreachable): {e}",
+            }
         finally:
             # Always release the manager's DB/HTTP connections, even on error.
-            await manager.close()
+            if manager is not None:
+                try:
+                    await manager.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
         if tool_context is None:
             return {
@@ -189,9 +206,16 @@ class RetrievalToolSet(BaseToolset):
         try:
             await postgres.initialize()
             server: MCPServer = await postgres.get_server(server_id)
+        except Exception as e:  # noqa: BLE001 — DB unreachable must not crash the run
+            _logger.warning("get_server_info unavailable: %r", e)
+            return {"status": "error", "result": None,
+                    "message": f"Server lookup unavailable (tool index/DB unreachable): {e}"}
         finally:
             # Always release the DB connection, even if the lookup raises.
-            await postgres.close()
+            try:
+                await postgres.close()
+            except Exception:  # noqa: BLE001
+                pass
 
         return {
             "status": "success",

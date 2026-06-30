@@ -34,6 +34,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def reset_session_state() -> None:
+    """Clear PER-SESSION state on a fresh start / interrupt: the planner's task
+    tracker (persisted to disk, so it would otherwise leak across runs) and the
+    in-process execution graph. The cross-run knowledge MEMORY is preserved."""
+    try:
+        from CoScientist.tools import task_tracker_instance
+        task_tracker_instance.reset()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from CoScientist.graph.memory import knowledge_graph
+        knowledge_graph.reset_session()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> str:
     """Best-effort: download a presigned-S3 CSV and return a small text preview
     (header + first rows of Smiles + key property columns). Returns '' on any failure.
@@ -92,7 +108,12 @@ class CoScientistManager:
         """Initialize session + runner."""
         if self._initialized:
             return
-    
+
+        # Fresh session: clear stale PER-SESSION state (planner tasks + the
+        # execution graph) so a previous run's context never leaks in. The
+        # cross-run knowledge MEMORY is intentionally kept.
+        reset_session_state()
+
         # Session service
         self.session_service = InMemorySessionService()
 
@@ -102,16 +123,20 @@ class CoScientistManager:
             session_id=self.session_id,
         )
 
-        # Runner — attach the event logger so web/cli runs get the same local
-        # file + console trace as the A2A servers (a2a/server.py) and `adk web`
-        # (agent.py). Toggle with LOG_AGENT_EVENTS / AGENT_LOG_FILE.
+        # Runner plugins:
+        # - EventLoggerPlugin: same local-file + console trace as the A2A
+        #   servers (a2a/server.py) and `adk web` (agent.py);
+        # - GraphMemoryPlugin: grows the shared in-process knowledge graph so any
+        #   agent can read the history/roster via the graph tools.
+        # Toggle both with LOG_AGENT_EVENTS / AGENT_LOG_FILE.
         from CoScientist.logging.event_logger import EventLoggerPlugin
+        from CoScientist.graph.plugin import GraphMemoryPlugin
 
         self.runner = Runner(
             agent=root_agent,
             app_name=self.app_name,
             session_service=self.session_service,
-            plugins=[EventLoggerPlugin()],
+            plugins=[EventLoggerPlugin(), GraphMemoryPlugin()],
         )
 
         if self._hitl_handler:
