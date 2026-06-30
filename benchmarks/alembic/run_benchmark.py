@@ -232,7 +232,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--log-dir", type=Path,
                     default=PROJECT_ROOT / "alembic_bench_logs",
                     help="Per-repo log dir (default: ./alembic_bench_logs).")
-    ap.add_argument("--json-output", type=Path, default=None,
+    ap.add_argument("--json-output", type=Path, default="bench.json",
                     help="Optional JSON dump of all per-repo records.")
     ap.add_argument("--rebuild-base", action="store_true",
                     help="Force rebuild of alembic-base:latest before workers start.")
