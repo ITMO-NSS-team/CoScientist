@@ -55,6 +55,7 @@ agents:
       - ResearchAgent
       - TaskExecutorAgent
       - CoderAgent
+      - AlembicAgent
       - MedicalAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
@@ -267,6 +268,43 @@ agents:
     output_key: dataset_results
     callbacks:
       after_model: [guard_unknown_tools]
+
+  # Turns a whole scientific GitHub repo into a running MCP server (the alembic
+  # pipeline). Engineering-heavy, so it uses the stronger coder model. Exposed
+  # over A2A so it can be served/benchmarked standalone like the other agents.
+  AlembicAgent:
+    class: llm
+    model: coder
+    description: >-
+      turns a scientific GitHub repository into a deployable MCP server: clones
+      the repo, builds its environment, generates and validates a FastMCP server
+      that exposes the repo's main functionality as tools, and launches it in an
+      isolated Docker container. Use it to make a repository's capabilities
+      callable as MCP tools when no ready-made tool/service already exists.
+    routing: >-
+      when the user wants a specific scientific repository's functionality turned
+      into a runnable tool / MCP server (e.g. "wrap repo X as an MCP server",
+      "make <repo>'s predictor callable as a tool"). NOT for merely reading a
+      repo's code (CoderAgent) or running an already-available service
+      (TaskExecutorAgent).
+    planning: |-
+      use when a step requires converting a scientific GitHub repository into a
+      deployable MCP server so its functionality becomes callable as tools.
+    prompt: alembic
+    tools: [alembic]
+    output_key: alembic_results
+    callbacks:
+      # Catch hallucinated tool names (e.g. a made-up build helper) and correct
+      # instead of letting ADK crash the run.
+      after_model: [guard_unknown_tools]
+    a2a:
+      key: alembic
+      port: 8007
+      skill:
+        id: build_mcp_server
+        name: Build MCP Server
+        description: Turn a scientific GitHub repository into a deployable, running MCP server
+        tags: [mcp, repository, codegen, docker]
 
   MedicalAgent:
     class: llm

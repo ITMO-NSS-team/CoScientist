@@ -64,6 +64,10 @@ def _task_tracker():
     from CoScientist.tools import task_tracker_instance
     return task_tracker_instance
 
+def _alembic():
+    from CoScientist.tools import alembic_toolset_instance
+    return alembic_toolset_instance
+
 def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
@@ -301,6 +305,38 @@ REGISTRY.register_tool(ToolEntry(
                 "Pip-install Python dependencies; like execute_bash it waits "
                 "inline and returns the result (a very slow install may hand "
                 "back a `job_id` for check_job)."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="alembic",
+    factory=_alembic,
+    docs=(
+        ToolDoc(
+            name="build_mcp_server",
+            signature="build_mcp_server(repo_url, serve=True)",
+            purpose=(
+                "Turn a scientific GitHub repository into a deployable MCP "
+                "server: clone it, build its environment, generate and validate "
+                "a FastMCP server exposing the repo's main functionality as "
+                "tools, and (when serve=True) launch it over HTTP. Returns the "
+                "image, the live server URL/container, the exposed tool names, "
+                "and a validation summary."
+            ),
+            usage=(
+                "Expensive and long-running (minutes to tens of minutes). Call "
+                "it ONCE per repository, then report the returned url and tools.",
+                "Use serve=False to only build the image without starting it.",
+            ),
+        ),
+        ToolDoc(
+            name="stop_mcp_server",
+            signature="stop_mcp_server(container)",
+            purpose=(
+                "Stop and remove a running MCP-server container previously "
+                "started by build_mcp_server (pass its `container` name)."
             ),
         ),
     ),

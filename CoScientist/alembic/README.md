@@ -29,6 +29,13 @@ The pipeline runs four sequential stages inside a Docker container:
 
 On success the build container is committed to `alembic-tool:<repo-name>` and launched with the MCP server listening on a random host port.
 
+### Inside CoScientist (A2A)
+
+The same pipeline is available to the CoScientist orchestrator as the
+**AlembicAgent** — an A2A service (`:8007`) whose `build_mcp_server(repo_url)`
+tool runs this whole flow and returns the live MCP server URL and its tools.
+See [docs/A2A.md](docs/A2A.md).
+
 ---
 
 ## Getting Started
@@ -104,10 +111,12 @@ Results are written to `alembic_bench.md` and per-repo logs to `alembic_bench_lo
 CoScientist/alembic/
 ├── agents.py          # Agent definitions (explorer, environment, coder, debugger, validator)
 ├── main.py            # Pipeline orchestrator (run_pipeline)
-├── start_chain.py     # CLI: build base image → run pipeline → commit → serve
+├── builder.py         # Programmatic build → commit → serve driver (shared by CLI + AlembicAgent)
+├── start_chain.py     # CLI: build base image → run pipeline → commit → serve (thin wrapper over builder.py)
 ├── run_benchmark.py   # Parallel benchmark runner
 ├── common.py          # Shared Docker helpers (ensure_base_image, get_repo_name)
 ├── instructions/      # System prompts for each agent
+├── docs/              # DESIGN.md + A2A.md (CoScientist AlembicAgent integration)
 └── tools/             # Tool implementations (fs, shell, venv, invoke, paths)
 
 docker/alembic/

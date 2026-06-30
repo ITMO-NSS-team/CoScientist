@@ -16,12 +16,12 @@ modes are assembled from the same declaration: **`CoScientist/agents/system.yaml
                 ┌────────────────────────┐
    user ───────▶│   OrchestratorAgent    │  :8000
                 │  (LlmAgent + remotes)  │
-                └──┬───┬───┬───┬───┬───┬─┘
-        A2A/HTTP   │   │   │   │   │   │
-          ┌────────┘   │   │   │   │   └──────────┐
-          ▼            ▼   ▼   ▼   ▼              ▼
-      Planner   Hypotheses Research TaskExec  Medical  Coder
-       :8001      :8002    :8003    :8004      :8005   :8006
+                └─┬──┬──┬──┬──┬──┬──┬─┘
+        A2A/HTTP   │  │  │  │  │  │  │
+          ┌────────┘  │  │  │  │  │  └────────┐
+          ▼           ▼  ▼  ▼  ▼  ▼           ▼
+      Planner  Hypotheses Research TaskExec Medical Coder  Alembic
+       :8001     :8002    :8003    :8004    :8005   :8005   :8007
 ```
 
 - The whole system — agents, tools, callbacks, prompts, AND the A2A exposure —
@@ -96,7 +96,7 @@ HYPOTHESES_PORT=9002 A2A_HOST=0.0.0.0 python -m CoScientist.a2a.run_all
 
 Env vars: `ORCHESTRATOR_PORT`, `PLANNER_PORT`, `HYPOTHESES_PORT`,
 `RESEARCH_PORT`, `TASK_EXECUTION_PORT`, `MEDICAL_PORT`, `CODER_PORT`,
-`A2A_HOST`, `A2A_DISABLE_OPIK` (set to `1` to turn off tracing).
+`ALEMBIC_PORT`, `A2A_HOST`, `A2A_DISABLE_OPIK` (set to `1` to turn off tracing).
 
 > **Restart after edits.** A running `run_all` holds the old code (and the old
 > YAML) in memory. After changing `system.yaml`, an agent, or a prompt
@@ -120,7 +120,7 @@ python -m CoScientist.a2a.benchmark --agent research \
 ```
 
 `--agent` accepts any `a2a.key`: `orchestrator`, `planner`, `hypotheses`,
-`research`, `task_execution`, `medical`, `coder`.
+`research`, `task_execution`, `medical`, `coder`, `alembic`.
 
 Traces also appear in the **Opik dashboard** under project `adk-coscientist`.
 
@@ -264,6 +264,13 @@ That's it. `run_all` picks the agent up from the YAML; check it with
   prompt section are both dropped automatically.
 - **`task_execution`** needs the RAG DB + FEDOT.MAS reachable for its
   tool-discovery step.
+- **`alembic`** drives the alembic pipeline through the **Docker CLI** (the
+  build runs in an ephemeral container — the security boundary). Its server
+  process therefore needs access to a Docker daemon (mount `/var/run/docker.sock`
+  when the A2A stack itself runs in a container). With no Docker on `PATH`,
+  `build_mcp_server` returns a structured error instead of crashing. A build is
+  expensive (minutes to tens of minutes), so the tool runs it off the event loop
+  in a worker thread. See [../alembic/docs/A2A.md](../alembic/docs/A2A.md).
 - **JSON-RPC errors return HTTP 200** with the error in the body (per spec) —
   don't treat 200 as unconditional success.
 - **Agent card endpoint:** prefer `/.well-known/agent-card.json`;

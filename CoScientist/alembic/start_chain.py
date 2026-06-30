@@ -13,155 +13,34 @@ Flow:
   4. Launch the committed image with a random host port mapped to the
      container's ``$MCP_PORT`` so the MCP server is reachable from the host.
 
+The actual Docker steps live in ``alembic.builder`` (shared with the
+CoScientist AlembicAgent toolset); this module is the thin CLI over them.
+
 Run from anywhere:
     python CoScientist/alembic/start_chain.py <repo_url>
 """
 from __future__ import annotations
 
 import argparse
-import os
-import platform
-import random
-import secrets
-import subprocess
 import sys
-from pathlib import Path
 
-from dotenv import dotenv_values
+# Import the stdlib ``logging`` NOW, while it still resolves to the stdlib —
+# putting ``CoScientist/`` on sys.path below makes ``CoScientist/logging``
+# shadow it, and ``builder`` -> ``dotenv`` does ``import logging`` transitively.
+# Caching the stdlib module in sys.modules first keeps that import correct.
+import logging  # noqa: F401
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from alembic.common import BASE_IMAGE, get_repo_name, ensure_base_image
-
-# /<root>/CoScientist/alembic/start_chain.py -> /<root>
-PROJECT_ROOT     = Path(__file__).resolve().parents[2]
-BASE_DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
-TOOL_REPO        = "alembic-tool"
-PORT_RANGE       = (20000, 30000)
-DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
-
-PASSTHROUGH_ENV = (
-    "OPENROUTER_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY",
-    "GOOGLE_API_KEY", "GEMINI_API_KEY",
-    "MODEL", "MCP_URLS", "OR_APP_NAME", "FEDOTMAS_DEFAULT_MODEL",
+from alembic.builder import (
+    AlembicBuildError,
+    DEFAULT_ENV_FILE,
+    build_image,
+    default_platform,
+    ensure_base,
+    serve_image,
 )
-
-
-def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    print(f"[start-chain] $ {' '.join(cmd)}", flush=True)
-    return subprocess.run(cmd, **kw)
-
-
-def _default_platform() -> str | None:
-    """linux/amd64 on Apple Silicon so old x86-only wheels (dgl 0.9, etc.)
-    pull and run via Rosetta. Native everywhere else (None = no flag)."""
-    if sys.platform == "darwin" and platform.machine() in ("arm64", "aarch64"):
-        return "linux/amd64"
-    return None
-
-
-def _random_port() -> int:
-    return random.randint(*PORT_RANGE)
-
-
-def _env_args(env_file: Path | None) -> list[str]:
-    args: list[str] = []
-    if env_file and env_file.exists():
-        for k, v in dotenv_values(env_file).items():
-            if v is not None:
-                args += ["-e", f"{k}={v}"]
-    for var in PASSTHROUGH_ENV:
-        if var in os.environ:
-            args += ["-e", f"{var}={os.environ[var]}"]
-    return args
-
-
-def build_image(repo_url: str, ns: argparse.Namespace) -> str:
-    repo       = get_repo_name(repo_url)
-    cname      = f"alembic-build-{repo}-{secrets.token_hex(3)}"
-    tool_image = f"{TOOL_REPO}:{repo}"
-
-    cmd = ["docker", "run", "--name", cname]
-    if ns.platform:
-        cmd += ["--platform", ns.platform]
-    if ns.gpus:
-        cmd += ["--gpus", ns.gpus]
-    cmd += _env_args(ns.env_file)
-    cmd += [BASE_IMAGE, "build", repo_url]
-    if ns.resume:
-        cmd += ["--resume", ns.resume]
-
-    r = _run(cmd)
-    if r.returncode != 0:
-        sys.stderr.write(
-            f"\n[start-chain] pipeline failed (exit {r.returncode}).\n"
-            f"  Container kept for inspection: {cname}\n"
-            f"  Inspect:  docker logs {cname}\n"
-            f"  Shell:    docker commit {cname} alembic-debug:{repo} "
-            f"&& docker run --rm -it --entrypoint /bin/bash alembic-debug:{repo}\n"
-            f"  Cleanup:  docker rm {cname}\n"
-        )
-        sys.exit(r.returncode)
-
-    # ── Pre-commit cleanup — keep secrets out of the saved image ──────
-    # 1. Wipe pipeline.log inside the container; agent stderr may have
-    #    echoed API keys passed at build time.
-    _run(
-        ["docker", "exec", cname, "sh", "-c",
-         "rm -f /work/.alembic/*/pipeline.log"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-
-    # 2. Build --change="ENV KEY=" for every sensitive var so it is
-    #    blanked in the committed image's Config.Env. Without this,
-    #    `docker inspect <image>` exposes every key passed via -e or
-    #    --env-file during build. Serve container still gets real
-    #    values at run-time via its own --env-file.
-    keys_to_scrub: set[str] = set(PASSTHROUGH_ENV)
-    if ns.env_file and Path(ns.env_file).exists():
-        for line in Path(ns.env_file).read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                keys_to_scrub.add(line.split("=", 1)[0].strip())
-    change_args: list[str] = []
-    for key in sorted(keys_to_scrub):
-        change_args += ["--change", f"ENV {key}="]
-
-    print(f"[start-chain] committing {cname} -> {tool_image}")
-    c = _run(["docker", "commit", *change_args, cname, tool_image])
-    if c.returncode != 0:
-        sys.exit(c.returncode)
-    _run(["docker", "rm", cname],
-         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return tool_image
-
-
-def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
-    repo  = get_repo_name(repo_url)
-    port  = _random_port()
-    cname = f"alembic-serve-{repo}-{secrets.token_hex(3)}"
-
-    cmd = ["docker", "run", "-d", "--name", cname, "-p", f"{port}:8000"]
-    if ns.platform:
-        cmd += ["--platform", ns.platform]
-    if ns.gpus:
-        cmd += ["--gpus", ns.gpus]
-    cmd += _env_args(ns.env_file)
-    cmd += [tool_image, "serve", repo_url]
-
-    r = _run(cmd)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
-
-    print(
-        "\n[start-chain] MCP server up.\n"
-        f"  image     : {tool_image}\n"
-        f"  container : {cname}\n"
-        f"  url       : http://localhost:{port}/mcp\n"
-        f"  logs      : docker logs -f {cname}\n"
-        f"  stop      : docker stop {cname} && docker rm {cname}\n"
-        f"  relaunch  : docker run -d -p <port>:8000 {tool_image} serve {repo_url}"
-    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -192,18 +71,47 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     ns = parse_args()
     if ns.platform is None:
-        ns.platform = _default_platform()
+        ns.platform = default_platform()
         if ns.platform:
             print(f"[start-chain] Apple Silicon detected — defaulting to "
                   f"--platform {ns.platform} (Rosetta). "
                   f"Pass --platform native to override.")
     elif ns.platform == "native":
         ns.platform = None
-    ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT, 
-                      platform=ns.platform, rebuild=ns.rebuild_base)
-    image = build_image(ns.repo_url, ns)
-    if not ns.no_serve:
-        serve_image(ns.repo_url, image, ns)
+
+    ensure_base(platform=ns.platform, rebuild=ns.rebuild_base)
+
+    try:
+        build = build_image(
+            ns.repo_url, env_file=ns.env_file, platform=ns.platform,
+            gpus=ns.gpus, resume=ns.resume,
+        )
+    except AlembicBuildError as exc:
+        sys.stderr.write(f"\n[start-chain] {exc}\n")
+        sys.exit(1)
+
+    if ns.no_serve:
+        print(f"[start-chain] built {build.image} (serve skipped).")
+        return
+
+    try:
+        served = serve_image(
+            ns.repo_url, build.image, env_file=ns.env_file,
+            platform=ns.platform, gpus=ns.gpus,
+        )
+    except AlembicBuildError as exc:
+        sys.stderr.write(f"\n[start-chain] {exc}\n")
+        sys.exit(1)
+
+    print(
+        "\n[start-chain] MCP server up.\n"
+        f"  image     : {served.image}\n"
+        f"  container : {served.container}\n"
+        f"  url       : {served.url}\n"
+        f"  logs      : docker logs -f {served.container}\n"
+        f"  stop      : docker stop {served.container} && docker rm {served.container}\n"
+        f"  relaunch  : docker run -d -p <port>:8000 {served.image} serve {ns.repo_url}"
+    )
 
 
 if __name__ == "__main__":
