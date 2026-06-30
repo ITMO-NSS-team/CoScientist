@@ -59,6 +59,10 @@ agents:
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
       before_agent: [before_get_task, inject_graph_root]
+      # Catch hallucinated tool calls (e.g. the orchestrator inventing a
+      # sub-agent's `execute_bash`) and correct them, instead of ADK raising
+      # ValueError('Tool not found') and crashing the whole run.
+      after_model: [guard_unknown_tools]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
       # `after_tool: [post_action_critique]` to enable it — the orchestrator
@@ -93,6 +97,7 @@ agents:
     output_key: planner_roadmap
     callbacks:
       before_agent: [inject_graph_root]
+      after_model: [guard_unknown_tools]
     hitl: true
     a2a:
       key: planner
@@ -114,6 +119,7 @@ agents:
     tools: [task_tracker, graph]
     callbacks:
       before_agent: [before_get_task]
+      after_model: [guard_unknown_tools]
     a2a:
       key: hypotheses
       port: 8002
@@ -146,6 +152,7 @@ agents:
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
       after_tool: [log_research_tool_calls]
+      after_model: [guard_unknown_tools]
     hitl: true
     a2a:
       key: research
@@ -271,6 +278,7 @@ agents:
     callbacks:
       before_agent: [before_get_task]
       before_model: [inject_medical_artifacts]
+      after_model: [guard_unknown_tools]
     a2a:
       key: medical
       port: 8005

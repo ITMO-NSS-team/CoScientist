@@ -460,9 +460,28 @@ def _web_search_limiter():
 
 def _guard_unknown_tools(ctx):
     """after_model guard capturing the agent's REAL tool names from its context,
-    so a hallucinated tool call is corrected instead of crashing the run."""
+    so a hallucinated tool call is corrected instead of crashing the run.
+
+    The valid set must include BOTH the agent's function tools AND its
+    subordinate AgentTools: sub-agents (e.g. CoderAgent, DatasetCollectorAgent)
+    are legitimate call targets but are attached outside `tool_entries`, so
+    leaving them out makes the guard false-block real delegations.
+
+    Agents whose tool surface is resolved at runtime (dynamic MCP toolsets,
+    e.g. ExperimentAgent) can't be guarded — their real tools aren't known at
+    build time — so skip the guard for them to avoid blocking valid calls."""
     from CoScientist.agents.callbacks import make_unknown_tool_guard
-    names = [d.name for e in ctx.tool_entries for d in e.docs]
+    docs = [d for e in ctx.tool_entries for d in e.docs]
+    # A placeholder doc (name in <angle brackets>, e.g. "<dynamic MCP tools>")
+    # marks a toolset whose real tool names are resolved per turn from state
+    # (ExperimentAgent's dynamic MCP tools) — we can't enumerate them at build
+    # time, so skip the guard rather than false-block valid calls. Fixed
+    # BaseToolsets (graph, task_tracker) are runtime_resolved too but DO declare
+    # their real tool names in docs, so they stay guarded.
+    if any(d.name.startswith("<") for d in docs):
+        return None
+    names = [d.name for d in docs]
+    names += [s.name for s in ctx.subordinates]  # subordinate AgentTools
     return make_unknown_tool_guard(names)
 
 
