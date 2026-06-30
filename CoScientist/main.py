@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
+import os
 from typing import Optional
 import logging
 
@@ -32,6 +33,26 @@ settings = get_settings()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _compaction_config():
+    """Build the events-compaction config: when an agent's prompt grows past the
+    token threshold, ADK summarizes older events (with the agent's own model),
+    keeping the last N raw events. Disable with AGENT_CONTEXT_TOKEN_THRESHOLD=0.
+    """
+    try:
+        from google.adk.apps.app import EventsCompactionConfig
+        threshold = int(os.getenv("AGENT_CONTEXT_TOKEN_THRESHOLD", "150000"))
+        if threshold <= 0:
+            return None
+        return EventsCompactionConfig(
+            compaction_interval=int(os.getenv("AGENT_COMPACTION_INTERVAL", "15")),
+            overlap_size=int(os.getenv("AGENT_COMPACTION_OVERLAP", "2")),
+            token_threshold=threshold,
+            event_retention_size=int(os.getenv("AGENT_CONTEXT_RETENTION", "12")),
+        )
+    except Exception:  # noqa: BLE001 — compaction is best-effort, never block startup
+        return None
 
 
 def reset_session_state() -> None:
@@ -129,15 +150,23 @@ class CoScientistManager:
         # - GraphMemoryPlugin: grows the shared in-process knowledge graph so any
         #   agent can read the history/roster via the graph tools.
         # Toggle both with LOG_AGENT_EVENTS / AGENT_LOG_FILE.
+        from google.adk.apps.app import App
         from CoScientist.logging.event_logger import EventLoggerPlugin
         from CoScientist.graph.plugin import GraphMemoryPlugin
+        from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
 
-        self.runner = Runner(
-            agent=root_agent,
-            app_name=self.app_name,
-            session_service=self.session_service,
-            plugins=[EventLoggerPlugin(), GraphMemoryPlugin()],
+        # An App carries the plugins + the events-compaction config (summarize the
+        # context once it crosses the token threshold). ToolResultTruncationPlugin
+        # MUST be last: ADK stops at the first non-None after_tool return, so the
+        # logger/graph observe the full result first, then truncation bounds what
+        # reaches the LLM context.
+        app = App(
+            name=self.app_name,
+            root_agent=root_agent,
+            plugins=[EventLoggerPlugin(), GraphMemoryPlugin(), ToolResultTruncationPlugin()],
+            events_compaction_config=_compaction_config(),
         )
+        self.runner = Runner(app=app, session_service=self.session_service)
 
         if self._hitl_handler:
             hitl_toolset._handler = self._hitl_handler
