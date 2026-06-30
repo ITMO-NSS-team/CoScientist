@@ -1,0 +1,12 @@
+https://github.com/Project-AgML/AgML
+https://github.com/MolecularAI/aizynthfinder
+https://github.com/ghh1125/Analyze-stroke
+https://github.com/yfyh2013/ase
+https://github.com/cosinekitty/astronomy
+https://github.com/astropy/astropy
+https://github.com/automl/auto-sklearn
+https://github.com/mementum/backtrader
+https://github.com/biopython/biopython
+https://github.com/scientisst/BioSPPy
+https://github.com/biotite-dev/biotite
+https://github.com/borisdayma/dalle-mini
