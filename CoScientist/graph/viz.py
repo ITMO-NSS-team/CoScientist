@@ -24,8 +24,9 @@ _STATUS_COLOR = {
 }
 _IDENTITY_COLOR = {
     "system": "#f4c542", "agent": "#7eb6ff",
-    # knowledge-graph view entities (status is not meaningful for these):
-    "question": "#ff9f43", "hypothesis": "#b388ff", "finding": "#2ecc71", "method": "#1abc9c",
+    # knowledge-graph view nodes (status is not meaningful for these):
+    "question": "#ff9f43", "fact": "#f6c453", "hypothesis": "#b388ff",
+    "finding": "#2ecc71", "method": "#1abc9c",
 }
 
 # Shape encodes the node KIND so type is readable without relying on colour.
@@ -37,7 +38,7 @@ _SHAPE = {
     "tool_call": "box",
     "result": "star",
     # knowledge-graph view:
-    "question": "diamond", "hypothesis": "ellipse", "finding": "star", "method": "box",
+    "question": "diamond", "fact": "box", "hypothesis": "ellipse", "finding": "star", "method": "box",
 }
 
 
@@ -81,7 +82,7 @@ def _shape(node: Dict[str, Any]) -> str:
 def _label(node: Dict[str, Any]) -> str:
     # tool_call: show WHAT tool; agent nodes: show WHICH agent. Who called a tool
     # is obvious from its parent agent node, so we don't repeat the caller.
-    if node.get("kind") in ("tool_call", "result", "goal", "entity"):
+    if node.get("kind") in ("tool_call", "result", "goal", "entity", "fact", "question"):
         base = node.get("label") or node.get("id", "")
     else:
         base = node.get("executor_agent") or node.get("label") or node.get("id", "")

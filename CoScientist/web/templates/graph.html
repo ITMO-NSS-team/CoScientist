@@ -60,10 +60,10 @@
     // Run steps are coloured by STATUS; the static structure keeps its identity.
     const STATUS_COLOR = { running: "#f1c40f", success: "#2ecc71", failed: "#e74c3c", pruned: "#7f8c8d" };
     const IDENTITY_COLOR = { system: "#f4c542", agent: "#7eb6ff",
-      question: "#ff9f43", hypothesis: "#b388ff", finding: "#2ecc71", method: "#1abc9c" };
+      question: "#ff9f43", fact: "#f6c453", hypothesis: "#b388ff", finding: "#2ecc71", method: "#1abc9c" };
     const SHAPE = { system: "hexagon", agent: "dot", goal: "diamond",
                     agent_call: "ellipse", tool_call: "box", result: "star",
-                    question: "diamond", finding: "star" };
+                    question: "diamond", fact: "box", finding: "star" };
     // knowledge-memory entities are coloured/shaped by their domain type (semantic.type)
     const ENTITY_COLOR = { target: "#e84393", molecule: "#00cec9", metric: "#fdcb6e",
       property: "#fab1a0", paper: "#74b9ff", hypothesis: "#b388ff", method: "#1abc9c",
@@ -78,7 +78,7 @@
                        : (IDENTITY_COLOR[n.kind] || STATUS_COLOR[n.status] || "#dcdde1");
     const shapeOf = n => n.kind === "entity" ? (ENTITY_SHAPE[etype(n)] || "dot") : (SHAPE[n.kind] || "box");
     // tool_call shows the tool name; agent nodes show the agent (caller is the parent).
-    const labelOf = n => String((["tool_call", "result", "goal", "entity"].includes(n.kind) ? n.label : (n.executor_agent || n.label)) || n.id || "").slice(0, 40);
+    const labelOf = n => String((["tool_call", "result", "goal", "entity", "fact", "question"].includes(n.kind) ? n.label : (n.executor_agent || n.label)) || n.id || "").slice(0, 40);
     const titleOf = n => [
       "id: " + n.id, "kind: " + n.kind,
       n.executor_agent ? "agent: " + n.executor_agent : "",
