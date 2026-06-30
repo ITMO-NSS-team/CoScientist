@@ -33,9 +33,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
-from alembic.common import get_repo_name, ensure_base_image
+from CoScientist.alembic.common import get_repo_name, ensure_base_image
 
 # /<root>/CoScientist/alembic/start_chain.py -> /<root>
 PROJECT_ROOT       = Path(__file__).resolve().parents[2]
