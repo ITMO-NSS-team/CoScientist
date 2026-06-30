@@ -714,7 +714,6 @@ it (don't re-plan finished work); re-read it any time with the graph tools.
 {graph_root?}
 
 ### OUTPUT CONTRACT (STRICT)
-- Chemistry-specific rule MUST ALWAYS use TaskExecutorAgent
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
 - You MUST use the `create_plan` tool to register ALL steps of your plan in one go.
 - Once you have successfully registered all tasks using `create_plan`, you can finish your turn.
