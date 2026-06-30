@@ -9,13 +9,13 @@ can ``docker run`` them later.
 
 Usage:
     # parallel run, default 4 workers
-    python CoScientist/alembic/run_benchmark.py \\
+    python benchmarks/alembic/run_benchmark.py \\
         --repos https://github.com/Roestlab/massformer \\
                 https://github.com/whitead/synspace \\
                 https://github.com/CrystalEye42/OpenChemIE
 
     # from a file (one URL per line, '#' = comment), 8 workers, JSON dump
-    python CoScientist/alembic/run_benchmark.py \\
+    python benchmarks/alembic/run_benchmark.py \\
         --repos-file repos.txt \\
         --parallel 8 \\
         --json-output bench.json
@@ -33,13 +33,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# benchmarks/alembic/run_benchmark.py → project root is 2 levels up
+PROJECT_ROOT    = Path(__file__).resolve().parents[2]
+COSCIENTIST_DIR = PROJECT_ROOT / "CoScientist"
 
-from CoScientist.alembic.common import get_repo_name, ensure_base_image
+sys.path.insert(0, str(COSCIENTIST_DIR))
 
-# /<root>/CoScientist/alembic/start_chain.py -> /<root>
-PROJECT_ROOT       = Path(__file__).resolve().parents[2]
-START_CHAIN = Path(__file__).resolve().parent / "start_chain.py"
+from alembic.common import get_repo_name, ensure_base_image
+
+START_CHAIN = COSCIENTIST_DIR / "alembic" / "start_chain.py"
 DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 
 
