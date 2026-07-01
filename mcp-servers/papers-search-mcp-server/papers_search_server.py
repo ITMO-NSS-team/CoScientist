@@ -4,14 +4,10 @@ from io import BytesIO
 import logging
 
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 
 from CoScientist.paper_parser.s3_connection import S3BucketService
 from openalex_client import OpenAlexClient
-
-OPENALEX_EMAIL = os.getenv("OPENALEX_EMAIL")
-OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY")
-
-openalex_client = OpenAlexClient(email=OPENALEX_EMAIL)
 
 s3_service = S3BucketService(
     endpoint=os.getenv("ENDPOINT_URL"),
@@ -23,6 +19,12 @@ s3_service = S3BucketService(
 mcp = FastMCP("PapersSearch")
 
 
+def _get_credentials() -> tuple[str | None, str | None]:
+    """Return (email, api_key) from request headers."""
+    headers = get_http_request().headers
+    return headers.get("x-openalex-email"), headers.get("x-openalex-api-key")
+
+
 def _sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
@@ -31,12 +33,14 @@ def search_entity(entity_type: str, entity_name: str) -> dict:
     """
     Search for an entity (author, source, institution) in OpenAlex and return its ID.
     This ID can be further used to search for papers using the search_papers or download_papers_from_search tools.
-    
+
     Args:
         entity_type: Type of entity to search for ("author", "source", "institution")
         entity_name: Name of the entity to search for (e.g., author name, journal name, institution name)
     """
-    result = openalex_client.search_entity(entity_type=entity_type, entity_name=entity_name)
+    email, _ = _get_credentials()
+    client = OpenAlexClient(email=email)
+    result = client.search_entity(entity_type=entity_type, entity_name=entity_name)
     if result:
         return {'answer': f'Entity ID: {result["id"]}'}
     else:
@@ -69,7 +73,9 @@ def search_papers(
         limit: Max number of results
         sort: OpenAlex sort field (e.g., "cited_by_count:desc")
     """
-    response = openalex_client.search_works(
+    email, _ = _get_credentials()
+    client = OpenAlexClient(email=email)
+    response = client.search_works(
         keywords=keywords,
         author_id=author_id,
         institution_id=institution_id,
@@ -88,7 +94,6 @@ def search_papers(
     papers = []
     for work in works:
         location = work.get("primary_location") or {}
-        primary_loc = work.get("primary_location") or {}
         papers.append(
             {
                 "title": work.get("title"),
@@ -119,7 +124,9 @@ def download_papers_from_search(
     user_id: str = "1",
 ) -> dict:
     """Search papers in OpenAlex and upload found PDFs directly to S3."""
-    response = openalex_client.search_works(
+    email, api_key = _get_credentials()
+    client = OpenAlexClient(email=email)
+    response = client.search_works(
         keywords=keywords,
         author_id=author_id,
         institution_id=institution_id,
@@ -147,7 +154,7 @@ def download_papers_from_search(
         file_name = f"{_sanitize_filename(title)}.pdf"
         s3_key = f"{s3_prefix.rstrip('/')}/{file_name}"
 
-        response = openalex_client.request_with_retry(endpoint=pdf_url, params={"api_key": OPENALEX_API_KEY})
+        response = client.request_with_retry(endpoint=pdf_url, params={"api_key": api_key})
         destination_path = f"{s3_prefix.rstrip('/')}/{file_name}"
         s3_client.upload_fileobj(BytesIO(response.content), s3_service.bucket_name, destination_path)
         logging.info(f"Uploaded paper '{title}' to S3 at {destination_path}")
@@ -173,4 +180,3 @@ def download_papers_from_search(
 
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=7331, path="/mcp")
-

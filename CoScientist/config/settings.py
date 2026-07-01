@@ -49,6 +49,7 @@ class LLMSettings(BaseModel):
 class ServicesSettings(BaseModel):
     tavily_api_key: Optional[str] = None
     openalex_api_key: Optional[str] = None
+    openalex_email: Optional[str] = None
 
 
 # =========================
