@@ -120,12 +120,13 @@ async def _run_agent_once(
     session_id: str,
     message: str,
     required_report: str | None,
-) -> tuple[str, bool]:
-    """Run one invocation. Returns (final_text, wrote_report)."""
+) -> tuple[str, bool, int, int]:
+    """Run one invocation. Returns (final_text, wrote_report, steps, total_tokens)."""
     content      = types.Content(role="user", parts=[types.Part(text=message)])
     final        = "Agent did not produce a final response."
     wrote_report = False
     step         = 0
+    total_tokens = 0
     last_call    = None
     tool_repeats = 0
 
@@ -135,6 +136,11 @@ async def _run_agent_once(
         ):
             step += 1
             _log_event(agent.name, event)
+
+            # accumulate token usage when the model reports it
+            usage = getattr(event, "usage_metadata", None)
+            if usage:
+                total_tokens += getattr(usage, "total_token_count", 0) or 0
 
             if event.content:
                 for part in event.content.parts:
@@ -148,7 +154,7 @@ async def _run_agent_once(
                                 f"[{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
                                 f"called {tool_repeats}x with identical args — breaking loop."
                             )
-                            return final, wrote_report
+                            return final, wrote_report, step, total_tokens
 
                     fr = getattr(part, "function_response", None)
                     if fr and fr.name == "write_report" and required_report:
@@ -158,7 +164,7 @@ async def _run_agent_once(
 
             if step >= MAX_STEPS:
                 logger.warning(f"[{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
-                return final, wrote_report
+                return final, wrote_report, step, total_tokens
 
             if event.is_final_response():
                 if event.content and event.content.parts:
@@ -173,7 +179,7 @@ async def _run_agent_once(
     except Exception:
         logger.exception(f"[{agent.name}] ERROR in event loop:")
 
-    return final, wrote_report
+    return final, wrote_report, step, total_tokens
 
 
 async def run_agent(
@@ -183,16 +189,23 @@ async def run_agent(
     message: str,
     required_report: str | None = None,
     venv_guard_path: str | None = None,
-) -> str:
-    """Run an agent, retrying if guards (write_report / venv) are not satisfied."""
-    runner = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
-    final  = "Agent did not produce a final response."
+) -> tuple[str, int, int]:
+    """Run an agent, retrying if guards (write_report / venv) are not satisfied.
+
+    Returns (final_text, total_steps, total_tokens).
+    """
+    runner       = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
+    final        = "Agent did not produce a final response."
+    total_steps  = 0
+    total_tokens = 0
 
     current_message = message
     for attempt in range(MAX_GUARD_RETRIES + 1):
-        final, wrote_report = await _run_agent_once(
+        final, wrote_report, steps, tokens = await _run_agent_once(
             agent, runner, session_id, current_message, required_report
         )
+        total_steps  += steps
+        total_tokens += tokens
 
         nudges = []
         if required_report and not wrote_report:
@@ -217,7 +230,7 @@ async def run_agent(
         current_message = "IMPORTANT: " + " ".join(nudges)
         logger.warning(f"[guard] Retry {attempt + 1}/{MAX_GUARD_RETRIES}: {current_message[:120]}")
 
-    return final
+    return final, total_steps, total_tokens
 
 
 def _banner(stage: int, label: str) -> None:
@@ -269,6 +282,13 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             app_name=APP_NAME, user_id=USER_ID, session_id=sid
         )
 
+    pipeline_metrics: dict = {
+        "actions_per_stage": {},
+        "tokens_per_stage":  {},
+        "total_actions":     0,
+        "total_tokens":      0,
+    }
+
     def _should_run(stage: str) -> bool:
         if resume_from is None:
             return True
@@ -279,7 +299,7 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
         """Wrap run_agent in a wall-clock timeout. Returns final text or
         an empty string when the stage timed out (pipeline continues)."""
         try:
-            return await asyncio.wait_for(
+            final, steps, tokens = await asyncio.wait_for(
                 run_agent(agent, session_service, f"{name}_{sid_suffix}",
                           message, **kwargs),
                 timeout=STAGE_TIMEOUT[stage],
@@ -290,6 +310,11 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                 f"aborting stage, pipeline continues to next stage."
             )
             return ""
+        pipeline_metrics["actions_per_stage"][stage] = steps
+        pipeline_metrics["tokens_per_stage"][stage]  = tokens
+        pipeline_metrics["total_actions"]           += steps
+        pipeline_metrics["total_tokens"]            += tokens
+        return final
 
     def _coder_artefacts_present() -> tuple[bool, list[str]]:
         required = [
@@ -355,6 +380,30 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                 )
 
     finally:
+        import sys as _sys
+        import traceback as _tb
+        exc_type, exc_val, exc_tb = _sys.exc_info()
+
+        reports_dir = base / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+
+        reports_dir.joinpath("metrics.json").write_text(
+            json.dumps(pipeline_metrics, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        if exc_val is not None:
+            error_payload = {
+                "exception": type(exc_val).__name__,
+                "message":   str(exc_val),
+                "traceback": "".join(_tb.format_exception(exc_type, exc_val, exc_tb)),
+            }
+            reports_dir.joinpath("error.json").write_text(
+                json.dumps(error_payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            logger.error(f"[pipeline] error saved → {reports_dir}/error.json")
+
         logger.remove(_file_sink_id)
 
 

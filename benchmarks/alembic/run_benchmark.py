@@ -9,13 +9,13 @@ can ``docker run`` them later.
 
 Usage:
     # parallel run, default 4 workers
-    python CoScientist/alembic/run_benchmark.py \\
+    python benchmarks/alembic/run_benchmark.py \\
         --repos https://github.com/Roestlab/massformer \\
                 https://github.com/whitead/synspace \\
                 https://github.com/CrystalEye42/OpenChemIE
 
     # from a file (one URL per line, '#' = comment), 8 workers, JSON dump
-    python CoScientist/alembic/run_benchmark.py \\
+    python benchmarks/alembic/run_benchmark.py \\
         --repos-file repos.txt \\
         --parallel 8 \\
         --json-output bench.json
@@ -33,13 +33,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# benchmarks/alembic/run_benchmark.py → project root is 2 levels up
+PROJECT_ROOT    = Path(__file__).resolve().parents[2]
+COSCIENTIST_DIR = PROJECT_ROOT / "CoScientist"
+
+sys.path.insert(0, str(COSCIENTIST_DIR))
 
 from alembic.common import get_repo_name, ensure_base_image
 
-# /<root>/CoScientist/alembic/start_chain.py -> /<root>
-PROJECT_ROOT       = Path(__file__).resolve().parents[2]
-START_CHAIN = Path(__file__).resolve().parent / "start_chain.py"
+START_CHAIN = COSCIENTIST_DIR / "alembic" / "start_chain.py"
 DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 
 
@@ -66,10 +68,17 @@ def run_one(repo_url: str, extra_args: list[str], log_dir: Path,
         "elapsed_sec":  round(elapsed, 1),
         "exit_code":    r.returncode,
         "log":          str(log_path),
+        "error_tail":   None,
         "validation":   None,
     }
     if r.returncode == 0:
         record["validation"] = extract_validation(name)
+    else:
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            record["error_tail"] = "\n".join(lines[-60:])
+        except OSError:
+            pass
 
     status = "ok" if r.returncode == 0 else f"exit={r.returncode}"
     print(f"[bench] ↓ done   {name}  ({elapsed:.0f}s, {status})",
@@ -78,16 +87,30 @@ def run_one(repo_url: str, extra_args: list[str], log_dir: Path,
 
 
 def extract_validation(repo: str) -> dict:
-    """Pull validation.md out of the just-committed image and parse it."""
+    """Pull validation.md (and metrics.json) from the committed image and parse them."""
     image = f"alembic-tool:{repo}"
-    path  = f"/work/.alembic/{repo}/reports/validation.md"
+    base  = f"/work/.alembic/{repo}/reports"
+
     r = subprocess.run(
-        ["docker", "run", "--rm", "--entrypoint", "cat", image, path],
+        ["docker", "run", "--rm", "--entrypoint", "cat", image, f"{base}/validation.md"],
         capture_output=True, text=True,
     )
     if r.returncode != 0:
         return {"error": "validation.md not readable", "stderr": r.stderr[-300:]}
-    return parse_validation(r.stdout)
+    result = parse_validation(r.stdout)
+
+    for fname, key in [("metrics.json", "pipeline_metrics"), ("error.json", "pipeline_error")]:
+        c = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "cat", image, f"{base}/{fname}"],
+            capture_output=True, text=True,
+        )
+        if c.returncode == 0:
+            try:
+                result[key] = json.loads(c.stdout)
+            except json.JSONDecodeError:
+                pass
+
+    return result
 
 
 def parse_validation(md: str) -> dict:
@@ -110,15 +133,35 @@ def parse_validation(md: str) -> dict:
 
     tools: list[dict] = []
     for line in sections.get("Tool Invocations", "").splitlines():
-        m = re.match(r"^-\s+\*\*(.+?)\*\*\s+—\s+(\w+)", line.strip())
+        m = re.match(r"^-\s+\*\*(.+?)\*\*\s+—\s+(\w+)(.*)", line.strip())
         if m:
-            tools.append({"name": m.group(1), "status": m.group(2)})
+            reason = m.group(3).strip().lstrip("(").rstrip(")").strip()
+            entry: dict = {"name": m.group(1), "status": m.group(2)}
+            if reason:
+                entry["reason"] = reason
+            tools.append(entry)
+
+    # parse "PASSED — 16 passed, 0 failed" into integers
+    tests_str = first_line(sections.get("Tests", ""))
+    tests_passed = tests_failed = None
+    tm = re.search(r"(\d+)\s+passed", tests_str)
+    if tm:
+        tests_passed = int(tm.group(1))
+    tf = re.search(r"(\d+)\s+failed", tests_str)
+    if tf:
+        tests_failed = int(tf.group(1))
 
     return {
-        "syntax":  first_line(sections.get("Syntax & Imports", "")),
-        "tests":   first_line(sections.get("Tests", "")),
-        "overall": first_line(sections.get("Overall", "")),
-        "tools":   tools,
+        "syntax":          first_line(sections.get("Syntax & Imports", "")),
+        "tests":           tests_str,
+        "tests_passed":    tests_passed,
+        "tests_failed":    tests_failed,
+        "overall":         first_line(sections.get("Overall", "")),
+        "tools":           tools,
+        "tools_created":   len(tools),
+        "tools_invoked_ok":      sum(1 for t in tools if t["status"] == "PASSED"),
+        "tools_invoked_failed":  sum(1 for t in tools if t["status"] == "FAILED"),
+        "tools_invoked_skipped": sum(1 for t in tools if t["status"] == "SKIPPED"),
     }
 
 
@@ -189,7 +232,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--log-dir", type=Path,
                     default=PROJECT_ROOT / "alembic_bench_logs",
                     help="Per-repo log dir (default: ./alembic_bench_logs).")
-    ap.add_argument("--json-output", type=Path, default=None,
+    ap.add_argument("--json-output", type=Path, default="bench.json",
                     help="Optional JSON dump of all per-repo records.")
     ap.add_argument("--rebuild-base", action="store_true",
                     help="Force rebuild of alembic-base:latest before workers start.")
