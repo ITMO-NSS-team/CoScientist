@@ -1,0 +1,131 @@
+# Alembic — Improvement Spec
+
+Consolidated, deduplicated spec of features alembic could adopt, drawn from the ToolRosella and ToolMaker comparisons ([TOOLROSELLA_COMPARISON.md](./TOOLROSELLA_COMPARISON.md), [TOOLMAKER_COMPARISON.md](./TOOLMAKER_COMPARISON.md)) and alembic's current design ([DESIGN.md](./DESIGN.md)). Goal: maximize **stability/robustness** and produce the metrics a paper needs, **without giving up** alembic's edge (autonomous multi-tool, served MCP, two-venv, real in-loop invocation).
+
+## Priority summary
+
+| # | Feature | Robustness ↑ | Effort | Source |
+|---|---|---|---|---|
+| F1 | Static import/symbol AST gate | High | Low | ToolRosella |
+| F2 | Semantic output-correctness gate | High | Low–Med | ToolMaker |
+| F3 | Held-out validation invocation | High | Med | ToolMaker |
+| F4 | Bounded, AST-verified tool selection | Med–High | Med | ToolRosella |
+| F5 | First-class conda / `environment.yml` | Med | Med | ToolRosella |
+| F6 | External resource acquisition (weights/datasets) | High | Med–High | ToolMaker |
+| F7 | Declared, allowlisted repo-secret injection | Med | Low–Med | ToolMaker |
+| F8 | Reproducible image from recorded `install.sh` | High | Med | ToolMaker |
+| F9 | Fresh-checkpoint isolation per attempt | High | Med | ToolMaker |
+| F10 | Persistent failure-memory across debug | Med | Low | ToolMaker |
+| F11 | Tiered model routing | Med | Low | ToolMaker |
+| F12 | Structured run metrics + error taxonomy | High (paper) | Low | both |
+| F13 | Success-memoized, resumable runner | Med | Low | ToolRosella |
+
+Suggested first wave (cheap, high-leverage): **F1, F2, F12, F10**. Second wave (the robustness core): **F9, F8, F6, F4, F3**.
+
+---
+
+## Validation & correctness
+
+### F1 — Static import/symbol AST gate
+**Problem.** The coder can hallucinate function/class names; alembic only catches this at `validate_syntax` (module import) or later via the debugger — expensive.
+**Spec.** New deterministic tool `check_symbols(repo_url)` run between coder and validator: AST-scan the cloned repo for public exported symbols per module; AST-parse `server.py` + `helpers/*.py`; flag every `from <mod> import <sym>` (and wrapped call) where `<mod>` is a repo module but `<sym>` isn't exported. Return structured issues; on issues, route back to coder (or debugger Class C) **before** any venv execution.
+**Integration.** Add as a tool + a thin gate stage in `main.py` after Coder; reuse `tools/scripts/compat_check.py`-style AST walking.
+**Effort.** Low.
+
+### F2 — Semantic output-correctness gate
+**Problem.** `invoke_mcp_tool` only reports `{ok: True/False}` (no exception). A tool can run cleanly and return garbage — common for scientific tools.
+**Spec.** After a successful `invoke_mcp_tool`, add an LLM judge that checks the **returned value** against the explorer's documented "Returns"/example: is it plausible, and does it have the expected keys/types/shapes? Emit `{successful, reasoning}`. A `False` verdict triggers the debugger just like an exception.
+**Integration.** New step in the Validator instruction + a small `assess_output` helper; feed it the sample's expected-output description from the coder's `samples:` block.
+**Effort.** Low–Medium.
+
+### F3 — Held-out validation invocation
+**Problem.** Alembic validates with the same samples the coder declared, so a tool that hard-codes the demo path/file passes.
+**Spec.** Require the explorer/coder to emit, per tool, **two** invocations with *different* real inputs (e.g. a second sample file, different params). Validator must pass **both**; a tool that only passes its own demo args is marked FAILED (overfit).
+**Integration.** Extend the coder `samples:` schema to `examples: [primary, holdout]`; Validator Step 4 loops over both.
+**Effort.** Medium (depends on repos shipping ≥2 inputs; fall back to param variation).
+
+---
+
+## Tool selection
+
+### F4 — Bounded, confidence-ranked, AST-verified tool selection
+**Problem.** The explorer proposes "1–5 scenarios" via prompt only — uncapped, unverified, signatures guessed.
+**Spec.** Deterministic post-processing of explorer output: (a) hard cap on total tools (e.g. ≤12); (b) per-tool confidence tiers with per-tier caps (high→5/med→3/low→1); (c) **intersect** proposed function/class names with the repo's actual AST symbols, dropping `test`/`example`/private; (d) capture each kept symbol's **real parameter names** and pass them into the coder so wrappers use correct argv (pre-empts wrong-kwarg `TypeError`s the debugger currently fixes reactively).
+**Integration.** Run between Explorer and Coder; reuse F1's AST symbol scan; thread `function_signatures` into the coder prompt.
+**Effort.** Medium.
+
+---
+
+## Environment & resources
+
+### F5 — First-class conda / `environment.yml` path
+**Problem.** Alembic reaches conda only as "Attempt 3"; scientific repos (rdkit, openbabel, pinned CUDA) often need it.
+**Spec.** Promote conda + `environment.yml` to a primary environment strategy alongside uv: detect `environment.yml`, honor channels, use `--solver=libmamba`, install conda deps then the pip section. Keep two-venv semantics (conda env = repo venv; server venv stays Py≥3.10 with fastmcp).
+**Integration.** Extend `tools/venv.py` (`setup_venv`) + the Environment instruction's decision tree.
+**Effort.** Medium.
+
+### F6 — External resource acquisition (weights download, dataset mounts)
+**Problem.** Neither alembic nor ToolRosella fetches pretrained weights/models or README-only-mentioned downloads — a dominant failure cause for ML repos.
+**Spec.** Add a resource step in the Environment/build phase: (a) the agent may **download model weights** (README-driven, `huggingface-cli`/`wget`/`gdown`, gated by `HF_TOKEN` via F7), recording fetches so they're baked into the image; (b) **datasets/large inputs are NOT baked** — declare them as mount points / sample paths supplied at invocation time. Explorer notes required artifacts in `exploration.md`; Environment acts on "download weights" but defers "needs dataset" to a mount.
+**Integration.** New Environment instruction section + allow `bash_env` to run download CLIs; document a `mounts:`/inputs convention for the served container.
+**Effort.** Medium–High.
+
+### F7 — Declared, allowlisted repo-secret injection
+**Problem.** Alembic injects only its own LLM keys (and scrubs them); a repo-required runtime secret (HF token, inference API key) has no channel, so token-gated tools can't be built or served.
+**Spec.** Support a per-repo `env:` declaration (config/task-level) of required secret names; resolve from host env via an **allowlist** substitution (e.g. `${env:HF_TOKEN}`); inject into build + serve containers; keep them out of the committed image (bake-then-remove, combined with alembic's existing secret scrub). Surface available var names to the agents in prompts.
+**Integration.** Extend `start_chain.py` env passthrough + add a substitution util; mention available vars in Environment/Coder instructions.
+**Effort.** Low–Medium.
+
+---
+
+## Reproducibility & isolation
+
+### F8 — Reproducible image from a recorded `install.sh`
+**Problem.** Alembic `docker commit`s the mutated build container — opaque, large, hard to audit/reproduce.
+**Spec.** Record the Environment agent's **successful** setup commands (venv creation, installs, apt-get, downloads) into an ordered `install.sh` / generated Dockerfile; build the served image with a clean `docker build` from that script instead of committing the dirty container. Keeps the image minimal, reviewable, and deterministically rebuildable.
+**Integration.** Log env-agent commands (already partly in `pipeline.log`) into a structured script; swap the commit step in `start_chain.py` for a build step.
+**Effort.** Medium.
+
+### F9 — Fresh-checkpoint isolation per validate/debug attempt
+**Problem.** Validator/debugger mutate one shared workdir; accumulated side-effects can mask or fabricate failures across iterations.
+**Spec.** Freeze the post-install state as a checkpoint (image from F8, or a snapshot of `output/`+venv); before **each** validation/debug attempt, reset the runtime to that checkpoint so every attempt runs against the same clean installed environment. Debug exploration is allowed but discarded; only the code edit persists.
+**Integration.** Wrap the Validator loop with a `reset_runtime()` step; pairs naturally with F8.
+**Effort.** Medium.
+
+---
+
+## Agent-loop quality
+
+### F10 — Persistent failure-memory across debug iterations
+**Problem.** The debugger is largely stateless per call; alembic only guards with "stop on identical error," allowing oscillating fixes.
+**Spec.** Maintain a running list of compact `problem_summaries` (diagnosis + attempted fix) and feed it into each subsequent debug/diagnose prompt ("avoid repeating these"). Use it to detect near-duplicate diagnoses, not just byte-identical errors.
+**Integration.** Thread a summaries list through the Validator↔Debugger calls in `main.py`/instructions.
+**Effort.** Low.
+
+### F11 — Tiered model routing
+**Problem.** One `MODEL` drives every agent; planning/first-implementation benefit from stronger reasoning, the repair loop does not.
+**Spec.** Allow per-role model selection: a reasoning model for Explorer planning + initial Coder implementation, a cheaper/faster model for Validator/Debugger iterations. Configurable via env (`MODEL_REASONING`, `MODEL`).
+**Integration.** `agents.py` already centralizes `MODEL`; add a second constant and assign per agent.
+**Effort.** Low.
+
+---
+
+## Observability & benchmarking
+
+### F12 — Structured run metrics + error taxonomy
+**Problem.** Alembic logs human-readable events but emits no structured per-run metrics or failure classification — exactly the data a paper needs.
+**Spec.** Per run, emit a JSON record: per-stage durations, step/tool-call counts, LLM call/token/retry stats, guard/timeout firings, and **every failure classified into a taxonomy** (`ModuleNotFound`/`Import`/`Environment`/`Build`/`Syntax`/`Runtime`/`AttributeError`/`FileNotFound`/…). Aggregate across a benchmark into pass-rate-by-stage and error-distribution tables.
+**Integration.** Add a metrics sink alongside the loguru file sink in `main.py`; classify in the Validator/Debugger; aggregate in `run_benchmark.py`.
+**Effort.** Low.
+
+### F13 — Success-memoized, resumable runner
+**Problem.** Alembic wipes the workdir each run; re-benchmarking reprocesses already-solved repos.
+**Spec.** Persist a `processed_repos.json` keyed by repo URL + commit; skip repos already converted successfully; combine with the existing `--resume <stage>` for partial reruns. Record per-repo status/artifact path/message.
+**Integration.** Wrap `run_benchmark.py` (and optionally `start_chain.py`) with a memo check; reuse the existing resume machinery.
+**Effort.** Low.
+
+---
+
+## Out of scope / explicitly not recommended
+- **gitingest / DeepWiki external analysis (ToolRosella).** Fragile (rate limits, "Loading…" states, `verify=False`). Alembic's direct file-reading explorer is more robust; treat external knowledge as optional augmentation only.
+- **Single-function / task-spec model (ToolMaker).** Do **not** drop autonomous multi-tool discovery — it is alembic's core advantage; borrow ToolMaker's *validation/isolation* mechanisms, not its task-scoped generation model.
