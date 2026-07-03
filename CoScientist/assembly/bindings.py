@@ -437,9 +437,11 @@ _cb("post_action_critique", "after_tool", factory=_post_action_critique)
 def _register_classes() -> None:
     from CoScientist.agents.custom_agents import WebToolsDeployerAgent
     from CoScientist.hitl.session_agent import SessionAgent
+    from CoScientist.hypothesis_subsystem import HypothesisSubsystemAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
+    REGISTRY.register_agent_class("hypothesis_subsystem", HypothesisSubsystemAgent)
 
 
 def _register_schemas() -> None:

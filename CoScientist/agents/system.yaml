@@ -120,14 +120,21 @@ agents:
         tags: [planning, roadmap, science]
 
   HypothesesAgent:
-    class: llm
-    description: generates ideas and hypotheses.
-    routing: when the direction is unclear or multiple approaches need to be proposed.
+    class: custom:hypothesis_subsystem
+    description: >-
+      generates structured, falsifiable scientific hypotheses using PubMed
+      literature mining, LLM generation, and iterative critic refinement;
+      always delegates hypothesis generation to its internal tool pipeline
+      (MooseChem → critic loop) — never fabricates hypotheses from its own
+      knowledge.
+    routing: >-
+      when the user asks to generate or propose a new hypothesis.
+      The agent produces testable hypotheses with concrete verification plans
+      and Popperian refutation criteria.
     planning: |-
-      Use this to generate and test hypotheses.
-    prompt: hypotheses
+      Use this to generate and test hypotheses with built-in critic validation.
+      The agent always delegates generation to its internal tool pipeline.
     output_key: hypotheses
-    tools: [task_tracker]
     callbacks:
       before_agent: [before_get_task]
     a2a:
