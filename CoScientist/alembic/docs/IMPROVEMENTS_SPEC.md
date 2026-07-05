@@ -22,6 +22,16 @@ Consolidated, deduplicated spec of features alembic could adopt, drawn from the 
 
 Suggested first wave (cheap, high-leverage): **F1, F2, F12, F10**. Second wave (the robustness core): **F9, F8, F6, F4, F3**.
 
+**Update (2026-07-06), after the 12-repo bench run** (see `benchmarks/alembic/base_results.md`, logs in `alembic_bench_logs/`): five more bugs were caught red-handed rather than inferred from comparison, and they are cheaper and higher-confidence than F1–F13 because we have the exact traceback. **F14–F18 below should run before F1–F13** — several of them are the actual reason today's pass rate looks worse than the pipeline's real capability.
+
+| # | Feature | Robustness ↑ | Effort | Source |
+|---|---|---|---|---|
+| F14 | Validator must not blanket-skip all tools on one test failure | High | Low | bench run (auto-sklearn, biotite) |
+| F15 | Debugger request must always carry `repo_url` | Med | Low | bench run (biotite) |
+| F16 | Per-debugger-call timeout, distinct from stage timeout | High | Low | bench run (biopython) |
+| F17 | Retry once on transient LLM/API error before counting a real failure | Med | Low | bench run (BioSPPy) |
+| F18 | Explorer must propose realistic, domain-sized sample inputs | High | Low | bench run (BioSPPy) |
+
 ---
 
 ## Validation & correctness
@@ -123,6 +133,35 @@ Suggested first wave (cheap, high-leverage): **F1, F2, F12, F10**. Second wave (
 **Spec.** Persist a `processed_repos.json` keyed by repo URL + commit; skip repos already converted successfully; combine with the existing `--resume <stage>` for partial reruns. Record per-repo status/artifact path/message.
 **Integration.** Wrap `run_benchmark.py` (and optionally `start_chain.py`) with a memo check; reuse the existing resume machinery.
 **Effort.** Low.
+
+---
+
+## Bugs caught in the 2026-06-30 bench run (F14–F18)
+
+### F14 — Validator must not blanket-skip all tools on one test failure
+**Problem.** `auto-sklearn` (1 of 17 pytest cases failed on an unrelated kwarg mismatch) and `biotite` (a one-character `SyntaxError` in the generated test file) both ended with **all 4 declared tools marked SKIPPED** — `invoke_mcp_tool` was never called for any of them. The Validator instruction's Step 3 wording ("record the error and proceed to Step 5") is evidently being read as "skip Step 4 entirely" rather than "skip only the affected tool." This directly produced 2 of the 5 FAILED rows in `base_results.md` and understates the true pass rate — several of those 4×2=8 SKIPped tools likely work fine.
+**Spec.** Make per-tool invocation independent of overall `run_tests` pass/fail: only the specific tool(s) implicated by a failing test should be withheld from `invoke_mcp_tool`; every other declared sample must still be invoked and scored PASS/FAIL on its own merits.
+**Effort.** Low — tighten the Validator instruction's Step 3→Step 4 transition logic.
+
+### F15 — Debugger request must always carry `repo_url`
+**Problem.** In `biotite`, the Validator's one debugger call omitted the repo URL prefix that every other observed call includes; the Debugger replied "cannot locate test_server.py... verify repository URL" and gave up on try 1 of 3 — turning a trivial missing-brace fix into a total stage failure (all 4 tools SKIPPED). The `debugger` `AgentTool` takes a free-text `request: str` with nothing enforcing that `repo_url` is present.
+**Spec.** Either make `repo_url` a required structured field on the debugger call (not embedded in free text), or add a pre-flight check that rejects/re-prompts a debugger request missing it.
+**Effort.** Low.
+
+### F16 — Per-debugger-call timeout, distinct from the stage timeout
+**Problem.** `biopython`'s Validator stage hit its full 30-minute wall-clock timeout while a single debugger call was stuck chasing an `ImportError` (helper scripts `sys.path.insert`-ing into the raw cloned source instead of an installed package, so compiled C-extensions were missing) — the whole budget was consumed with **zero** `validation.md` written, losing all signal for that repo.
+**Spec.** Bound each individual debugger round-trip (e.g. 3–5 min) independent of the stage-level timeout, so a stuck call fails fast and the stage can still write a partial report instead of losing everything.
+**Effort.** Low — wrap the debugger `AgentTool` invocation with its own timeout in `main.py`.
+
+### F17 — Retry once on transient LLM/API error
+**Problem.** In `BioSPPy`, the first debugger call for `process_ecg_signal` never returned: OpenRouter/LiteLLM returned an empty body mid-call → `JSONDecodeError`/`OpenAIError`, caught by `main.py`'s blanket `except Exception: logger.exception(...)`, which silently burned one of the tool's ≤2 debugger attempts with zero diagnostic value.
+**Spec.** Classify transient provider errors (empty response, 5xx, rate limit) separately from real failures and retry once (with backoff) before charging it against the attempt budget.
+**Effort.** Low.
+
+### F18 — Explorer must propose realistic, domain-sized sample inputs
+**Problem.** `BioSPPy` failed 4 of 5 tools because the Explorer's example inputs were toy arrays (a 5-element list for an ECG filter requiring `padlen=4503`, a 5 ms segment where `assess_ecg_quality` requires ≥5 s) — the tools are correct, the *samples* violate the domain's basic preconditions. This is a distinct, cheaper problem than F3's held-out-invocation generalization concern: today's single sample isn't even large enough to exercise the tool once.
+**Spec.** Explorer instruction should require sample data sized to the domain (signal duration/length, image dimensions, sequence length) inferred from the repo's own docs/tests/example data, not an arbitrary placeholder shape.
+**Effort.** Low — instruction change plus, where the repo ships its own example/test fixtures, prefer sampling from those over synthesizing new toy data.
 
 ---
 
