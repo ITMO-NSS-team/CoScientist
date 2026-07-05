@@ -1,7 +1,7 @@
 \section{Comparison with Existing Systems}
 \label{sec:related}
 
-Two recent systems address closely related problems. \textbf{ToolMaker} \citep{toolmaker2025} converts a repository into a single Python function given a human-authored task specification (target function name, argument list, and one example invocation), then closes an iterative implement–run–diagnose–rewrite loop around that one function inside a reproducible, \texttt{install.sh}-built Docker image. \textbf{ToolRosella} \citep{toolrosella2026} (its \texttt{code2mcp} component) is closest in output format: a LangGraph pipeline that statically analyzes a repository, generates an MCP scaffold, and repairs it through a review–revise–fix loop driven by traceback analysis, but validation stops at import-level smoke testing and the artifact is a local folder rather than a container image.
+Two recent systems address closely related problems. \textbf{ToolMaker} \citep{toolmaker2025} converts a repository into a single Python function given a human-authored task specification (target function name, argument list, and one example invocation), then closes an iterative implement–run–diagnose–rewrite loop around that one function inside a reproducible, \texttt{install.sh}-built Docker image. \textbf{ToolRosella} \citep{toolrosella2026} is closest in output format: its \texttt{code2mcp} conversion workflow, first introduced as a standalone system by \citet{code2mcp2025}, statically analyzes a repository via a LangGraph pipeline, generates an MCP scaffold, and repairs it through a review–revise–fix loop driven by traceback analysis, but validation stops at import-level smoke testing and the artifact is a local folder rather than a container image.
 
 Table~\ref{tab:comparison} summarizes the key differences.
 
@@ -24,3 +24,5 @@ Table~\ref{tab:comparison} summarizes the key differences.
 \end{table*}
 
 The systems are complementary rather than strictly ordered: ToolMaker's task-specified, single-function setup buys stronger correctness guarantees (held-out unit tests, an LLM judge) at the cost of requiring a human to specify the target signature per tool, which is a different point on the autonomy/verifiability trade-off than Alembic's fully autonomous, multi-tool discovery.
+
+More broadly, LATM \citep{latm2024}, TroVE \citep{trove2024}, and ReGAL \citep{regal2024} also have LLMs write reusable tools, but they grow or refactor a Python function library \emph{across many solved tasks} using execution traces as feedback; Alembic instead performs a single, no-history synthesis pass over one repository and its output is a served MCP endpoint rather than an in-context callable. On the delivery side, a growing set of OpenAPI-to-MCP generators (e.g., Speakeasy, \texttt{mcp-generator-cli}) convert already-typed REST specs into MCP servers — a fundamentally easier input than the undocumented, dependency-heavy research code Alembic targets.
