@@ -1,0 +1,65 @@
+% Alembic — EMNLP 2026 System Demonstrations submission
+%
+% Built on the official ACL style files (github.com/acl-org/acl-style-files).
+% EMNLP reuses the shared *ACL template; do not modify acl.sty / acl_natbib.bst.
+%
+% Demo track is SINGLE-BLIND (see https://2026.emnlp.org/calls/demos/):
+% authors need not anonymize and self-references are permitted, so we load
+% the "preprint" variant (non-anonymous, page numbers, no line numbers).
+% Switch to the bare \usepackage{acl} (no options) for the camera-ready copy.
+%
+% Body text lives in sections/*.tex (one file per section) — edit those,
+% not this file, for content changes. This file is preamble + \input wiring.
+\documentclass[11pt]{article}
+\usepackage[preprint]{acl}
+
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+
+% TODO(authors): fill in the real GitHub URL and screencast link before submission.
+\newcommand{\repourl}{https://github.com/aimclub/CoScientist}
+\newcommand{\demourl}{TODO-screencast-url}
+
+\title{Alembic: Autonomous Synthesis of MCP Servers from Scientific GitHub Repositories}
+
+% Single-blind review: real author list is permitted at submission time.
+\author{
+  First Author \\
+  ITMO University \\
+  \texttt{email@domain} \\\And
+  Second Author \\
+  ITMO University \\
+  \texttt{email@domain} \\
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\input{sections/intro}
+\input{sections/system}
+\input{sections/demo}
+\input{sections/comparison}
+\input{sections/availability}
+\input{sections/evaluation}
+\input{sections/limitations}
+\input{sections/ethics}
+\input{sections/acknowledgments}
+
+\bibliography{custom}
+
+\appendix
+\input{sections/appendix}
+
+\end{document}

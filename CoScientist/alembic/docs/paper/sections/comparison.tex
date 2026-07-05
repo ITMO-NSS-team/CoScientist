@@ -1,0 +1,26 @@
+\section{Comparison with Existing Systems}
+\label{sec:related}
+
+Two recent systems address closely related problems. \textbf{ToolMaker} \citep{toolmaker2025} converts a repository into a single Python function given a human-authored task specification (target function name, argument list, and one example invocation), then closes an iterative implement–run–diagnose–rewrite loop around that one function inside a reproducible, \texttt{install.sh}-built Docker image. \textbf{ToolRosella} \citep{toolrosella2026} (its \texttt{code2mcp} component) is closest in output format: a LangGraph pipeline that statically analyzes a repository, generates an MCP scaffold, and repairs it through a review–revise–fix loop driven by traceback analysis, but validation stops at import-level smoke testing and the artifact is a local folder rather than a container image.
+
+Table~\ref{tab:comparison} summarizes the key differences.
+
+\begin{table*}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}p{2.3cm}p{4cm}p{4cm}p{4cm}@{}}
+    \toprule
+    & \textbf{ToolMaker} & \textbf{ToolRosella} & \textbf{Alembic} \\
+    \midrule
+    Tool surface & human-specified, single function & auto-discovered, capped list & auto-discovered, 1--5 tools \\
+    Environment strategy & single global pip install & uv $\to$ conda $\to$ venv & uv/venv, two-venv fallback \\
+    End-to-end validation & LLM judge on 1 example & import smoke test only & live invocation, every tool \\
+    Repair loop & implement--diagnose--rewrite ($\le$30) & review--revise--fix ($\le$5) & debugger sub-agent ($\le$2/tool) \\
+    Delivered artifact & reproducible Docker image, in-container function & local folder (\texttt{mcp\_output/}) & versioned Docker image, live MCP server \\
+    \bottomrule
+  \end{tabular}
+  \caption{Alembic against the two closest repo-to-tool systems. See Appendix~\ref{sec:appendix-comparison} for the full axis-by-axis comparison.}
+  \label{tab:comparison}
+\end{table*}
+
+The systems are complementary rather than strictly ordered: ToolMaker's task-specified, single-function setup buys stronger correctness guarantees (held-out unit tests, an LLM judge) at the cost of requiring a human to specify the target signature per tool, which is a different point on the autonomy/verifiability trade-off than Alembic's fully autonomous, multi-tool discovery.

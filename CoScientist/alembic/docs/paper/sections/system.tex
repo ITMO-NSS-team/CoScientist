@@ -1,0 +1,43 @@
+\section{System Overview}
+\label{sec:system}
+
+\begin{figure}[t]
+  \centering
+  % TODO(authors): swap for a polished figure if desired; this TikZ diagram
+  % compiles as-is and mirrors docs/DESIGN.md's architecture sketch.
+  \resizebox{\columnwidth}{!}{%
+  \begin{tikzpicture}[
+      node distance=6mm and 8mm,
+      stage/.style={draw, rounded corners, fill=black!5, align=center, inner sep=3pt, font=\scriptsize},
+      >={Stealth[length=2mm]}
+    ]
+    \node[stage] (explorer) {Explorer};
+    \node[stage, right=of explorer] (env) {Environment};
+    \node[stage, right=of env] (coder) {Coder};
+    \node[stage, right=of coder] (validator) {Validator};
+    \node[stage, below=of validator] (debugger) {Debugger};
+    \node[stage, below=8mm of env, xshift=8mm] (serve) {MCP server\\(\texttt{docker commit} + serve)};
+
+    \draw[->] (explorer) -- (env);
+    \draw[->] (env) -- (coder);
+    \draw[->] (coder) -- (validator);
+    \draw[->] (validator) edge[bend left=20] (debugger);
+    \draw[->] (debugger) edge[bend left=20] (validator);
+    \draw[->] (validator.south) -- ++(0,-4mm) -| (serve.north);
+  \end{tikzpicture}%
+  }
+  \caption{Alembic pipeline: four sequential agents run inside a build container, with a Debugger sub-agent invoked on failure; on success the container is committed and re-launched as an MCP server.}
+  \label{fig:pipeline}
+\end{figure}
+
+Alembic is built on Google's Agent Development Kit (ADK) and LiteLLM, so all agents share one configurable underlying model. The four stages communicate only through markdown hand-off reports (\texttt{reports/*.md}) written to a shared working directory — there is no shared chat history across agents — which keeps each agent's context focused on its own sub-task and makes intermediate state inspectable.
+
+\paragraph{Explorer.} Clones the repository, reads the README and a small budget of key files (setup/packaging files, entry-point scripts, configs), and writes a report describing the repository's purpose, its environment requirements, and one to five candidate MCP tool usage scenarios with concrete example inputs.
+
+\paragraph{Environment.} Builds an isolated environment satisfying the repository's declared dependencies, falling back across strategies (\texttt{uv}, pip, conda, \texttt{apt-get} for system libraries) and, for repositories requiring an older Python than the server itself, maintaining two separate virtual environments. A compatibility check replays the repository's own imports inside the built environment to catch version conflicts before code generation starts.
+
+\paragraph{Coder.} Reads the Explorer's report, verifies the real function signatures it plans to wrap by inspecting the source, and generates a FastMCP server plus a pytest suite. Each generated tool shells out to the repository's own environment rather than re-implementing repository logic, which keeps the generated wrapper thin and keeps correctness tied to the original code.
+
+\paragraph{Validator (+ Debugger).} Statically checks the generated server, runs the generated test suite, and then \emph{actually invokes every generated tool} against the sample inputs from the hand-off report — catching runtime faults (missing binaries, missing dependencies, argument-parsing bugs) that a mocked unit test cannot. On failure, a Debugger sub-agent classifies the failure (missing binary, missing package, code bug, or unrecoverable environment fault) and fixes only that class before the Validator re-checks, bounded by a small retry budget.
+
+On success, the build container is committed to a versioned image and re-launched in \emph{serve} mode, exposing the generated tools as an MCP server over \texttt{streamable-http}.

@@ -1,0 +1,10 @@
+\section{Demonstration}
+\label{sec:demo}
+
+\paragraph{Target audience.} Alembic targets two groups: (i) engineers building agent-based scientific assistants who need a growing library of callable tools without hand-writing a wrapper per repository, and (ii) maintainers of scientific software who want a low-effort path to making their tool agent-accessible.
+
+\paragraph{Functionality shown in the demo.} A single command,
+\begin{quote}
+\small\texttt{start\_chain.py <repo-url>}
+\end{quote}
+takes a public GitHub URL and produces a running MCP server; the screencast (Section~\ref{sec:availability}) shows this end to end on a real scientific repository, including the generated server code, the validation report, and a live tool call against the resulting MCP endpoint from an MCP client. We also show the \texttt{--resume <stage>} flag, which restarts the pipeline from any stage while preserving prior artifacts, and a batch mode (\texttt{run\_benchmark.py}) that runs the pipeline over many repositories in parallel and reports per-repository success.
