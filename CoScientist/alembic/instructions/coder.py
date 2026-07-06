@@ -378,6 +378,9 @@ The report must contain:
     `examples/`, or `data/` directories over synthesizing an array from
     scratch — fixtures used by the repo's own test suite are guaranteed
     to satisfy its preconditions.
-  - Do NOT invent paths. If the repo does not include sample data,
+  - Do NOT invent paths. A plausible-looking name like `example.fasta`
+    or `example.pdb` is still invented if you have not actually seen it
+    in a directory listing or `read_file` result for this repo — verify
+    the exact path first. If the repo does not include sample data,
     use SKIP.
 '''

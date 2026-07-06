@@ -47,6 +47,12 @@ class _UnknownToolStub:
     def __init__(self, called_name: str, available: list):
         self.name = called_name
         self.description = f"Unknown tool stub for '{called_name}'."
+        # Mirror BaseTool's full public attribute surface (name, description,
+        # is_long_running, custom_metadata) since ADK introspects duck-typed
+        # tool objects — a partial stub just trades one AttributeError for
+        # another the next time a different code path is hit.
+        self.is_long_running = False
+        self.custom_metadata = None
         self._msg = (
             f"Tool '{called_name}' does not exist. "
             f"You MUST use one of these exact names: "
@@ -334,29 +340,32 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
         # ── Stage 1: Explorer ──────────────────────────────────────────────
         if _should_run("explorer"):
             _banner(1, f"Explorer  ({repo_url})")
-            await _run_stage("explorer", explorer_agent, "explorer", repo_url,
+            explorer_final = await _run_stage("explorer", explorer_agent, "explorer", repo_url,
                              required_report="exploration")
-            logger.info(f"[Explorer done] report → {base}/reports/exploration.md")
+            if explorer_final:
+                logger.info(f"[Explorer done] report → {base}/reports/exploration.md")
 
         # ── Stage 2: Environment ───────────────────────────────────────────
         if _should_run("environment"):
             _banner(2, f"Environment ({repo_url})")
-            await _run_stage(
+            environment_final = await _run_stage(
                 "environment", environment_agent, "environment", repo_url,
                 required_report="environment", venv_guard_path=venv_python,
             )
-            logger.info(f"[Environment done] report → {base}/reports/environment.md")
+            if environment_final:
+                logger.info(f"[Environment done] report → {base}/reports/environment.md")
 
         # ── Stage 3: Coder ─────────────────────────────────────────────────
         if _should_run("coder"):
             _banner(3, f"Coder  ({repo_url})")
-            await _run_stage(
+            coder_final = await _run_stage(
                 "coder", coder_agent, "coder", repo_url,
                 required_report="server",
             )
-            logger.info(f"[Coder done] server → {base}/output/server.py")
-            logger.info(f"             tests  → {base}/output/tests/test_server.py")
-            logger.info(f"             report → {base}/reports/server.md")
+            if coder_final:
+                logger.info(f"[Coder done] server → {base}/output/server.py")
+                logger.info(f"             tests  → {base}/output/tests/test_server.py")
+                logger.info(f"             report → {base}/reports/server.md")
 
         # ── Stage 4: Validator (calls Debugger internally on failures) ─────
         if _should_run("validator"):
@@ -372,17 +381,32 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                     "validator", validator_agent, "validator", repo_url,
                     required_report="validation",
                 )
-                logger.info(f"[Validator done] report → {base}/reports/validation.md")
 
                 sep = "=" * 60
-                logger.success(
-                    f"\n{sep}\n  Pipeline complete: {name}\n"
-                    f"  Reports : {base}/reports/\n"
-                    f"  Output  : {base}/output/\n"
-                    f"  Log     : {log_file}\n{sep}\n\n"
-                    f"--- Validator summary ---\n\n"
-                    + textwrap.indent((validator_response or "").strip(), "  ")
-                )
+                # _run_stage returns "" only on the asyncio.wait_for timeout
+                # branch (a normal completion always yields at least the
+                # "Agent did not produce a final response." fallback) — so
+                # this reliably distinguishes "timed out" from "finished",
+                # unlike unconditionally logging success/report-path lines.
+                if validator_response:
+                    logger.info(f"[Validator done] report → {base}/reports/validation.md")
+                    logger.success(
+                        f"\n{sep}\n  Pipeline complete: {name}\n"
+                        f"  Reports : {base}/reports/\n"
+                        f"  Output  : {base}/output/\n"
+                        f"  Log     : {log_file}\n{sep}\n\n"
+                        f"--- Validator summary ---\n\n"
+                        + textwrap.indent((validator_response or "").strip(), "  ")
+                    )
+                else:
+                    logger.error(
+                        f"\n{sep}\n  Pipeline incomplete: {name}\n"
+                        f"  Validator stage timed out — no {base}/reports/validation.md "
+                        f"was written.\n"
+                        f"  Reports so far : {base}/reports/\n"
+                        f"  Output  : {base}/output/\n"
+                        f"  Log     : {log_file}\n{sep}\n"
+                    )
 
     finally:
         import sys as _sys

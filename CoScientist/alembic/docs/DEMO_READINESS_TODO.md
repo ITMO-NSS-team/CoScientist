@@ -4,13 +4,17 @@ Submission deadline: **2026-07-10, 11:59 PM UTC-12h** — roughly 4 days out fro
 when this was written. Sequencing below is chosen so that a hard stop after
 any "must-have" block still leaves a submittable paper.
 
-Sources: [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md) (F1–F19),
-[benchmarks/alembic/base_results.md](../../../benchmarks/alembic/base_results.md)
-+ `alembic_bench_logs/*.log` (12-repo baseline run, 2026-06-30),
-[benchmarks/alembic/rerun_f14_f18.md](../../../benchmarks/alembic/rerun_f14_f18.md)
-+ `alembic_bench_logs_rerun/*.log` (same 12 repos, re-run 2026-07-06 after
-F14–F18), and a review of [ToolArena](https://github.com/KatherLab/ToolArena)
-(TM-Bench's harness repo) at commit `0b275a266e01b38f13a8e7041489f5762887cd65`.
+Sources: [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md) (F1–F23), the
+per-run summaries + logs under
+[benchmarks/alembic/runs/](../../../benchmarks/alembic/runs/) —
+`2026-06-30_baseline/` (12-repo baseline, 2026-06-30),
+`2026-07-06_rerun1_f14-f18/` (same 12 repos after F14–F18),
+`2026-07-06_rerun2_f14-f19/` (11 repos, F18 confirmed at scale + F19-v1/F21
+found), `2026-07-06_rerun3_f19-f21-targeted/` (3-repo targeted re-verify of
+F19-v2/F20/F21, also surfaced F22/F23) — each folder holds `summary.md`,
+`summary.json`, and `logs/*.log`. Also a review of
+[ToolArena](https://github.com/KatherLab/ToolArena) (TM-Bench's harness
+repo) at commit `0b275a266e01b38f13a8e7041489f5762887cd65`.
 
 ---
 
@@ -48,27 +52,110 @@ below reflects what the rerun actually confirmed, not just what was patched.
   attempt for nothing). **Confirmed fixed by rerun**: fired in `ase` and
   `backtrader` (`"transient error (...), retrying once"`); backtrader's
   retry succeeded outright and its tool went on to PASS.
-- [x] **F18** — Explorer must propose realistically-sized sample inputs.
-  **First patch (Explorer-only) did NOT work** — rerun `BioSPPy` still used
-  `signal=[0.1, 0.2, 0.3]`-style arrays and failed the same way. Root cause:
+- [x] **F18** — Explorer/Coder must propose realistically-sized, real
+  sample inputs. **First patch (Explorer-only) did NOT work** — rerun
+  `BioSPPy` still used `signal=[0.1, 0.2, 0.3]`-style arrays. Root cause:
   the concrete `samples:` block `invoke_mcp_tool` runs is written by the
   **Coder**, not the Explorer, and `instructions/coder.py` had its own,
   directly conflicting rule — *"Use the most minimal args you can."*
   Re-patched `coder.py` to distinguish "cheap to run" from "smaller than
-  the function's precondition." **Not yet re-benchmarked after this second
-  patch** — do that before checking this box for real.
+  the function's precondition." **Confirmed fixed at scale by rerun2**
+  (11 repos): every `invoke_mcp_tool` call now uses real repo-bundled data
+  or realistic parameters — `BioSPPy`'s `examples/ecg.txt`, `astropy`'s
+  bundled `.fits` fixtures, `auto-sklearn`'s own `load_breast_cancer`
+  example, real physical/chemical/financial parameters elsewhere. No tiny
+  placeholder array recurred anywhere. F18 is closed.
 - [x] **F19** *(new, found during the rerun, not in the original bench)* —
   `_UnknownToolStub` (the hallucinated-tool-name stub in `main.py`) was
-  missing a `.description` attribute, causing `AttributeError:
-  '_UnknownToolStub' object has no attribute 'description'` when ADK
-  introspected it — observed in `backtrader`, masked there by F17's retry
-  succeeding on the next attempt, but a wasted attempt otherwise. One-line
-  fix applied (`main.py`).
+  missing attributes ADK's `BaseTool` exposes, causing
+  `AttributeError: '_UnknownToolStub' object has no attribute '...'`
+  whenever ADK introspected it. **v1 (added `.description`) was
+  incomplete** — rerun2 hit the identical failure class again for a
+  *different* attribute, `is_long_running`, in `AgML` (unresolved after
+  retry, a genuinely lost debugger attempt) and `BioSPPy` (retry hung
+  until the 1800s stage timeout, truncating validation to 1 of 5 tools —
+  see F20). **v2** now sets the stub's full `BaseTool` surface
+  (`is_long_running=False`, `custom_metadata=None`) so no further
+  attribute can be missing regardless of which code path introspects it.
+  **Confirmed fixed by targeted rerun3** (`AgML`, `BioSPPy`, `biotite`):
+  zero `_UnknownToolStub`/`AttributeError` occurrences across all three
+  logs. F19 closed.
+- [x] **F20** *(new, found during rerun2)* — Stage-timeout handling in
+  `main.py` logged `"[Validator done] report → .../validation.md"` and a
+  `"Pipeline complete"` success banner **unconditionally**, even when
+  `_run_stage()` had just returned early on a timeout with nothing
+  written. Confirmed via `docker run --rm --entrypoint cat
+  alembic-tool:BioSPPy .../validation.md` → file did not exist, despite
+  the log claiming success. This is what produced the benchmark summary's
+  bare `"validation.md not readable"` row with no visible cause. Fixed:
+  gated all four stages' "done" logs on the stage's actual return value
+  (a real completion always returns a non-empty string; only the timeout
+  path returns `""`), and replaced the false success banner with an
+  honest "Pipeline incomplete — stage timed out" one. Also generalized
+  `run_benchmark.py`'s `write_summary()` so the Overall column shows
+  `ERROR — <reason>` for *any* validation-extraction failure, not only
+  the repo-unreachable case already handled — same "don't hide the reason
+  behind a bare `—`" fix applied more broadly. **Confirmed fixed by
+  rerun3**: `AgML`'s Validator stage and `BioSPPy`'s Coder stage both
+  genuinely timed out again in this run (real slow repos / real F22
+  latency, not new regressions), and both times the log printed an
+  honest "Pipeline incomplete"/"STAGE TIMEOUT" message with no false
+  success claim, and the summary table showed `ERROR — validation.md not
+  readable` instead of a bare `—`. F20 closed.
+- [x] **F21** *(new, found during rerun2)* — Coder invented
+  plausible-but-nonexistent sample file paths (`biotite`: `example.fasta`,
+  `example.pdb`, `fixed.pdb`/`mobile.pdb`) instead of the real bundled
+  files it had already seen via `read_file`/`ls`, failing 4/5 tools.
+  `coder.py` already said "Do NOT invent paths" — this is an
+  instruction-following miss, not a missing rule. Strengthened the
+  wording with the concrete counter-example and an explicit
+  verify-before-use requirement. **Confirmed fixed by rerun3**: `biotite`
+  now uses real repo test-fixture paths throughout
+  (`tests/structure/data/pdb/4gxy.pdb` etc.); its 2 remaining tool
+  failures are genuine (a real structural PDB mismatch and a real
+  Python ≥3.12-vs-3.11.15 environment gap), not invented filenames. F21
+  closed for the observed case; a deterministic file-existence gate
+  (F1/F4) remains the durable general fix.
+- [ ] **F22** *(new, found during rerun3, deferred — not blocking the
+  2026-07-10 submission)* — A rare (1 of ~15 runs so far) OpenRouter/
+  LiteLLM fault: an upstream provider error surfaces as an unmapped
+  `finish_reason: "error"`, which `litellm`'s `map_finish_reason()`
+  silently defaults to `"stop"` instead of raising — so ADK treats a
+  stub/garbage response as a normal completed turn. Cost `BioSPPy`'s
+  Coder stage ~8 of its 25 minutes across two occurrences, recovered
+  only by accident via an unrelated guard-retry nudge; a 3rd occurrence
+  in the same stage would have exhausted the guard-retry budget and
+  killed the stage outright. Not caught by F17 (whose retry-once is
+  scoped only to Debugger calls, and only catches *raised* exceptions —
+  this fault never raises). Full root cause, exact code location
+  (`litellm/litellm_core_utils/core_helpers.py:107`), and a concrete
+  3-step implementation path are written up in
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f22) for whenever this
+  gets picked up post-submission.
+- [ ] **F23** *(new, found during rerun3, deferred)* — `AgML`'s Validator
+  stage produced no report at all this run (vs. rerun2's clean 0/2/3
+  verdicts on the same repo) because F16's 600s per-debugger-call timeout
+  appears **not to have fired**: a debugger call sent at `09:34:47` (to
+  re-investigate a missing `ensemble-boxes` package) produced zero log
+  output for ~20 minutes — not even F16's own "call timed out after 600s"
+  message — before the *outer* 1800s stage timeout finally fired, itself
+  ~2 minutes late. Root cause (inferred from timing, not yet confirmed
+  against ADK internals): every individual subprocess call already has
+  its own bound (15s–900s depending on the tool), but if the debugger
+  sub-agent chains several of those within one turn (e.g. a few
+  sequential install attempts) before yielding control, `asyncio.wait_for`
+  can't actually cancel until that chain finishes — so the 600s ceiling
+  is real on paper but defeatable in practice. This is a genuine gap in
+  F16, not caused by F19/F20/F21 (which don't touch timeouts/retries) and
+  not the same fault as F22 (which is an LLM/provider issue, not a
+  subprocess-chaining one). Full evidence and fix options in
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f23), deferred
+  post-submission like F22.
 - [ ] **F12** — Structured per-run JSON metrics + failure taxonomy. Needed
   so the Evaluation section reports a clean table instead of hand-parsed
   logs (which is how this TODO's own failure analysis had to be done).
 
-## 1a. Rerun results (2026-07-06, same 12 repos as `base_results.md`)
+## 1a. Rerun results (2026-07-06, same 12 repos as the baseline run)
 
 Headline: `astronomy` and `astropy`'s tool-invocation layer newly PASS
 outright (5/5, and tools-only-PASSED-despite-test-failure respectively);
@@ -77,9 +164,9 @@ individually-diagnosable verdicts (see F14 above) — a materially more
 trustworthy signal than the baseline even where the overall row is still
 FAILED. Caveat: each run regenerates server code from scratch via the LLM,
 so this is not a controlled code-for-code diff — some swings are ordinary
-LLM-generation variance, not caused by F14–F19.
+LLM-generation variance, not caused by F14–F21.
 
-New/unrelated issues surfaced by the rerun (not F14–F19's scope, logged for
+New/unrelated issues surfaced by the rerun (not F14–F21's scope, logged for
 later): `astropy`'s generated test file never imports the tool functions it
 tests (`NameError` on all 18 tests, while direct invocation still passes —
 a Coder bug); `aizynthfinder`'s `create_interactive_app` helper emits no
@@ -89,11 +176,39 @@ reading a binary `.traj` file as text. `dalle-mini` and `Analyze-stroke`
 reproduce their exact baseline root causes (unresolvable jaxlib/Python 3.8
 deadlock; inaccessible git remote) unchanged.
 
+### Rerun2 (11 repos, F14–F18 + F19-v1 in place)
+
+Re-ran the same set (`Analyze-stroke` auto-skipped by the new availability
+check — see below) with `coder.py`'s F18 fix and `main.py`'s F19-v1 fix
+baked into a rebuilt image. F18 confirmed working at scale (see above).
+F19-v1 turned out incomplete, and its `BioSPPy` failure mode (a hung retry
+eating the full 30-min stage timeout) directly caused F20's misleading
+"pipeline complete" logging to surface. `biotite` regressed to inventing
+nonexistent sample paths (F21) — a different failure mode than F18's
+sizing issue, on the same repo family (real-file selection, not real-file
+sizing). Net effect: F18 and the repo-availability check are now solid;
+F19/F20/F21 fixes are applied but pending a final targeted re-verification
+run (`AgML`, `BioSPPy`, `biotite`) before this section can be closed out.
+
+### Rerun3 (targeted, 3 repos: `AgML`, `BioSPPy`, `biotite`)
+
+Ran only the 3 repos affected by F19/F20/F21 (not the full 11) to confirm
+those fixes cheaply. All three confirmed fixed — see F19/F20/F21 entries
+above. `AgML`'s Validator stage and `BioSPPy`'s Coder stage both timed out
+again in this run, but for real, unrelated reasons (a genuinely slow/hard
+repo, and a rare OpenRouter/LiteLLM fault — F22, deferred) rather than
+F19/F20 recurring; the important signal is that both timeouts were now
+*reported honestly* instead of masked as success. §1's fix backlog
+(F14–F21) is now closed and confirmed by log evidence; F22 is documented
+and deferred post-submission. F12 remains the only open must-have item
+below.
+
 ## 2. Must-have — re-run the benchmark, write the Evaluation section
 
 - [ ] Re-run `benchmarks/alembic/run_benchmark.py` on at least the current
   12-repo set (ideally the full `toolrosella_subset.txt`, 12 more repos)
-  after §1's fixes land, and diff against `base_results.md` to confirm the
+  after §1's fixes land, and diff against
+  `benchmarks/alembic/runs/2026-06-30_baseline/summary.md` to confirm the
   SKIP rows resolve to real PASS/FAIL.
 - [ ] Fill in `docs/paper/sections/evaluation.tex` with the real table
   (per-repo stage success + tool pass rate) and a headline number. **This
