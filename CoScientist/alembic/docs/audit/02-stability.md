@@ -18,10 +18,18 @@ Sources 1–4 are all cheap and mostly untracked. Do them first.
 
 ---
 
-## N1 — Kill the nondeterminism (config, ~1h)
+## N1 — Kill the nondeterminism (config, ~1h) — ✅ IMPLEMENTED 2026-07-06
 
-Confirmed: no agent sets a sampling temperature. This is the largest single
+Confirmed: no agent set a sampling temperature. This is the largest single
 contributor to "it passed yesterday and fails today."
+
+**Implemented (code part):** `agents.py` now builds every agent via a `_model()`
+factory = `LiteLlm(model=MODEL, temperature=MODEL_TEMPERATURE, top_p=MODEL_TOP_P)`,
+defaulting to `temperature=0`, `top_p=1` (env-overridable via `MODEL_TEMPERATURE`
+/ `MODEL_TOP_P` for seed/variance experiments). LiteLlm forwards these kwargs to
+`litellm.completion()`, so they reach the provider. Still to do (run methodology,
+not code): report the benchmark as mean ± std / pass@k over k≥3 runs, and persist
+each run's generated `server.py` + samples as artifacts.
 
 **Do:**
 1. Set `temperature=0` and a fixed `top_p` on each agent's model (ADK
@@ -75,9 +83,17 @@ Optionally extend the same gate to cheap precondition checks the coder recorded
 concrete home. This is the durable version of F18/F21 the docs keep deferring to
 "F1/F4 territory" — but as a ~30-line resolver it needs neither.
 
-## N4 — Explorer must read the repo's own tests/examples (instruction, ~1h)
+## N4 — Explorer must read the repo's own tests/examples (instruction, ~1h) — ✅ IMPLEMENTED 2026-07-06
 
-Direct contradiction in the current prompts:
+**Implemented:** `instructions/explorer.py` now (1) lists the repo's own
+`tests/`/`examples/`/`demo*.py` as a high-priority read with "READ AT LEAST ONE",
+(2) requires extracting real call signatures + real fixture paths + real input
+sizes from them, (3) points the "Examples" block at that harvest as the preferred
+source, and (4) the final line no longer skips tests (only migrations/CI/internal
+detail), and the call budget was raised 20→25 with the test/example read made
+mandatory before writing the report.
+
+Original finding — a direct contradiction in the prompts:
 
 - `instructions/explorer.py` line 124: *"Skip: tests, migrations, CI configs …"*
 - `instructions/coder.py` (F18/F21): *"Prefer real sample data the repo ships in

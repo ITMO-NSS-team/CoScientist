@@ -25,6 +25,24 @@ from alembic.instructions import (
 )
 MODEL = os.environ.get("MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
 
+# N1 (docs/audit/02-stability.md): pin sampling so a run is reproducible.
+# Previously every agent used `LiteLlm(model=MODEL)` with no sampling params,
+# so the provider default (~0.7-1.0 for Qwen via OpenRouter) applied and each
+# run was an independent sample — the dominant cause of the run-to-run
+# tool-pass swing (31.9 -> 45.5 -> 54.5% across three "identical" benchmark
+# runs, see docs/DEMO_READINESS_TODO.md §1a Final-eval). Deterministic by
+# default; override via env to run seed/variance experiments without editing
+# code. Extra kwargs on LiteLlm are forwarded to the underlying
+# litellm.completion() call, so temperature/top_p reach the provider.
+MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0"))
+MODEL_TOP_P       = float(os.environ.get("MODEL_TOP_P", "1"))
+
+
+def _model() -> LiteLlm:
+    """A LiteLlm wrapper with pinned sampling (see MODEL_TEMPERATURE above)."""
+    return LiteLlm(model=MODEL, temperature=MODEL_TEMPERATURE, top_p=MODEL_TOP_P)
+
+
 # Set once per pipeline run (main.py, before any stage) so the debugger
 # AgentTool wrapper below can always stamp the repo URL onto its calls,
 # regardless of what the validator LLM remembers to include (F15).
@@ -146,7 +164,7 @@ class _DebuggerAgentTool(AgentTool):
 
 explorer_agent = Agent(
     name="explorer",
-    model=LiteLlm(model=MODEL),
+    model=_model(),
     description="Clones a scientific GitHub repo and writes a Markdown report of its functionality and MCP usage scenarios.",
     instruction=explorer_instruction,
     tools=[clone_repo, read_file, bash, search, write_report],
@@ -154,7 +172,7 @@ explorer_agent = Agent(
 
 environment_agent = Agent(
     name="environment",
-    model=LiteLlm(model=MODEL),
+    model=_model(),
     description="Reads the explorer report and sets up the Python virtual environment for the repository, retrying until successful.",
     instruction=environment_instruction,
     tools=[read_report, setup_venv, bash_env, check_venv_compat, write_report],
@@ -162,7 +180,7 @@ environment_agent = Agent(
 
 coder_agent = Agent(
     name="coder",
-    model=LiteLlm(model=MODEL),
+    model=_model(),
     description="Reads an explorer report and implements a FastMCP server with pytest tests for the repository.",
     instruction=coder_instruction,
     tools=[read_report, bash, read_file, write_file, write_report],
@@ -170,7 +188,7 @@ coder_agent = Agent(
 
 debugger_agent = Agent(
     name="debugger",
-    model=LiteLlm(model=MODEL),
+    model=_model(),
     description="Receives a repo URL and an error message, fixes the bug — either by installing a missing system/pip dep or by editing server.py/helpers — and re-runs the failing tool to confirm.",
     instruction=debugger_instruction,
     tools=[read_output_file, update_file, bash, bash_env, invoke_mcp_tool],
@@ -185,7 +203,7 @@ debugger_agent = Agent(
 
 validator_agent = Agent(
     name="validator",
-    model=LiteLlm(model=MODEL),
+    model=_model(),
     description="Validates the generated MCP server via syntax checks, pytest, and real tool invocations, calling the debugger agent on failures, then writes a validation report.",
     instruction=validator_instruction,
     tools=[read_report, validate_syntax, run_tests, invoke_mcp_tool, write_report, _DebuggerAgentTool(agent=debugger_agent)],

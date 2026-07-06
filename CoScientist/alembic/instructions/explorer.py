@@ -17,20 +17,39 @@ If README.md is absent, try README.rst or README.
 Get a full directory tree to understand the repo layout:
     bash("ls -R <local_path>")
 
-**Budget rule: you have at most 20 tool calls total across all steps. Once you
-have read the README, tree, and a handful of key files, stop exploring and write
+**Budget rule: you have at most 25 tool calls total across all steps. Once you
+have read the README, tree, a handful of key files, AND at least one of the
+repo's own test files or example scripts (see Step 4), stop exploring and write
 the report — even if some information is incomplete. A partial report is better
-than no report.**
+than no report. For a large repo, spend the budget on breadth then stop — but do
+NOT skip the one test/example read to save calls; it is the highest-signal file
+in the repo.**
 
 ### Step 4 — Explore key files
-Using the file list and tree, select up to 7 additional files that best
+Using the file list and tree, select up to 8 additional files that best
 reveal how to *use* the repo. Priority order:
   - setup.py, pyproject.toml, setup.cfg   (entry points, dependencies)
+  - **The repo's own tests and example scripts** — `tests/`, `test_*.py`,
+    `examples/`, `demo*.py` (or the notebooks below). READ AT LEAST ONE. These
+    are the single best source of *real* call signatures, *real* fixture-file
+    paths, and *real* input sizes — the exact information the coder and
+    validator stages need and most often get wrong when it is guessed
+    (inventing `example.pdb`, passing a 3-element array to a filter that needs
+    hundreds). Do not skip them to save budget.
   - Shell scripts (*.sh) in any directory  (exact run commands)
   - Scripts named run_*, train_*, predict_*, eval_*, infer_*, main.py
   - Config files (*.yaml, *.yml, *.json) in config/ or root
   - Jupyter notebooks (*.ipynb)
   - __init__.py of the top-level package only
+
+When you read a test or example file, extract and carry into the report:
+  - the exact function/class names and argument names actually called (not what
+    you would guess from the method name or the docs),
+  - the exact paths of any fixture/sample data the repo ships and its own tests
+    load (e.g. `tests/structure/data/pdb/1o1z.pdb`, `examples/ecg.txt`),
+  - the sizes/shapes of real inputs (signal length, sequence length, image
+    dims) so a later sample is large enough to satisfy the function's own
+    preconditions rather than being a valid-but-too-small placeholder.
 
 Useful tool patterns:
   search(repo_url, "**/*.yaml")                               # find config files
@@ -97,7 +116,10 @@ The report must contain:
   - What input parameters the MCP tool would receive, with types and defaults
   - What command / script it would wrap (direct run or as part of a script)
   - What output it would return
-  - **Examples** — If the repo ships sample data or links to demo inputs, reference those
+  - **Examples** — Prefer the real call signatures and fixture paths you
+    harvested from the repo's own tests/examples in Step 4 — those are
+    guaranteed to exist and to satisfy the function's preconditions. Otherwise,
+    if the repo ships sample data or links to demo inputs, reference those
     exact paths/URLs in 1-2 concrete call examples using real parameter values found
     in the repo's README, notebooks, scripts, sample data, or provided links.
     Use actual file paths, URLs, model names, SMILES strings, image paths, or
@@ -121,5 +143,7 @@ The report must contain:
     the example accordingly rather than using an arbitrarily short
     placeholder.
 
-Skip: tests, migrations, CI configs, and internal implementation details.
+Do NOT turn tests into tools — but DO read at least one test/example file for
+the real call examples above (Step 4). Skip only: migrations, CI configs, and
+internal implementation details irrelevant to *using* the repo.
 '''
