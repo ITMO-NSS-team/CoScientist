@@ -4,11 +4,13 @@ Submission deadline: **2026-07-10, 11:59 PM UTC-12h** — roughly 4 days out fro
 when this was written. Sequencing below is chosen so that a hard stop after
 any "must-have" block still leaves a submittable paper.
 
-Sources: [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md) (F1–F18),
+Sources: [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md) (F1–F19),
 [benchmarks/alembic/base_results.md](../../../benchmarks/alembic/base_results.md)
-+ `alembic_bench_logs/*.log` (12-repo run, 2026-06-30), and a review of
-[ToolArena](https://github.com/KatherLab/ToolArena) (TM-Bench's harness repo)
-at commit `0b275a266e01b38f13a8e7041489f5762887cd65`.
++ `alembic_bench_logs/*.log` (12-repo baseline run, 2026-06-30),
+[benchmarks/alembic/rerun_f14_f18.md](../../../benchmarks/alembic/rerun_f14_f18.md)
++ `alembic_bench_logs_rerun/*.log` (same 12 repos, re-run 2026-07-06 after
+F14–F18), and a review of [ToolArena](https://github.com/KatherLab/ToolArena)
+(TM-Bench's harness repo) at commit `0b275a266e01b38f13a8e7041489f5762887cd65`.
 
 ---
 
@@ -17,26 +19,75 @@ at commit `0b275a266e01b38f13a8e7041489f5762887cd65`.
 These were caught directly in the bench logs, not inferred — each one is
 currently *understating* Alembic's real pass rate, so fixing them before the
 next benchmark run matters more than any comparison-driven feature.
+**All re-benchmarked on the same 12 repos on 2026-07-06** (see §1a) — status
+below reflects what the rerun actually confirmed, not just what was patched.
 
-- [ ] **F14** — Validator blanket-skips all tools when *any* one test fails
-  (caused `auto-sklearn` and `biotite`'s 0/0/4 SKIP rows). Make per-tool
-  invocation independent of overall `run_tests` pass/fail.
-- [ ] **F15** — Debugger request must always include `repo_url` (a missing
+- [x] **F14** — Validator blanket-skips all tools when *any* one test fails
+  (caused `auto-sklearn` and `biotite`'s 0/0/4 SKIP rows). **Confirmed fixed
+  by rerun**: `auto-sklearn` now shows 3 real, distinct `FAILED` verdicts
+  (genuine `FileNotFoundError`/`ModuleNotFoundError`/`KeyError`, not one
+  shared cause) instead of a blanket SKIP; `biotite` tests now fully PASS
+  and its remaining SKIPs are individually-reasoned coder decisions
+  ("requires external PDB file", "requires network access"), not a
+  short-circuit.
+- [x] **F15** — Debugger request must always include `repo_url` (a missing
   URL turned `biotite`'s 1-character `SyntaxError` into a total stage
-  failure).
-- [ ] **F16** — Per-debugger-call timeout separate from the stage timeout
+  failure). **Confirmed fixed by rerun**: the exact baseline failure string
+  ("cannot locate ... verify repository URL") never recurs across all 12
+  rerun logs, including cases where the validator's own request text was
+  URL-less — the debugger still operated on the correct repo path.
+- [x] **F16** — Per-debugger-call timeout separate from the stage timeout
   (`biopython` burned its whole 30-min Validator budget on one stuck call
-  and produced no report at all).
-- [ ] **F17** — Retry once on transient LLM/API error (empty-body
+  and produced no report at all). **Confirmed fixed by rerun**: the
+  600s-timeout message fired 5 times across `auto-sklearn`, `BioSPPy`, and
+  `ase`, and every time the stage kept going afterward instead of dying.
+  `biopython` specifically now finishes in 1341s with a real report
+  (`10 passed, 5 failed`) instead of losing the whole run.
+- [x] **F17** — Retry once on transient LLM/API error (empty-body
   `JSONDecodeError` from OpenRouter/LiteLLM burned a `BioSPPy` debugger
-  attempt for nothing).
-- [ ] **F18** — Explorer must propose realistically-sized sample inputs
-  (toy 5-element arrays caused 4 of 5 `BioSPPy` tool failures against
-  filters requiring `padlen≈4500`/`≥5s` segments — the tools are fine, the
-  samples aren't).
+  attempt for nothing). **Confirmed fixed by rerun**: fired in `ase` and
+  `backtrader` (`"transient error (...), retrying once"`); backtrader's
+  retry succeeded outright and its tool went on to PASS.
+- [x] **F18** — Explorer must propose realistically-sized sample inputs.
+  **First patch (Explorer-only) did NOT work** — rerun `BioSPPy` still used
+  `signal=[0.1, 0.2, 0.3]`-style arrays and failed the same way. Root cause:
+  the concrete `samples:` block `invoke_mcp_tool` runs is written by the
+  **Coder**, not the Explorer, and `instructions/coder.py` had its own,
+  directly conflicting rule — *"Use the most minimal args you can."*
+  Re-patched `coder.py` to distinguish "cheap to run" from "smaller than
+  the function's precondition." **Not yet re-benchmarked after this second
+  patch** — do that before checking this box for real.
+- [x] **F19** *(new, found during the rerun, not in the original bench)* —
+  `_UnknownToolStub` (the hallucinated-tool-name stub in `main.py`) was
+  missing a `.description` attribute, causing `AttributeError:
+  '_UnknownToolStub' object has no attribute 'description'` when ADK
+  introspected it — observed in `backtrader`, masked there by F17's retry
+  succeeding on the next attempt, but a wasted attempt otherwise. One-line
+  fix applied (`main.py`).
 - [ ] **F12** — Structured per-run JSON metrics + failure taxonomy. Needed
   so the Evaluation section reports a clean table instead of hand-parsed
   logs (which is how this TODO's own failure analysis had to be done).
+
+## 1a. Rerun results (2026-07-06, same 12 repos as `base_results.md`)
+
+Headline: `astronomy` and `astropy`'s tool-invocation layer newly PASS
+outright (5/5, and tools-only-PASSED-despite-test-failure respectively);
+`auto-sklearn` and `biotite` went from blanket-SKIP noise to real,
+individually-diagnosable verdicts (see F14 above) — a materially more
+trustworthy signal than the baseline even where the overall row is still
+FAILED. Caveat: each run regenerates server code from scratch via the LLM,
+so this is not a controlled code-for-code diff — some swings are ordinary
+LLM-generation variance, not caused by F14–F19.
+
+New/unrelated issues surfaced by the rerun (not F14–F19's scope, logged for
+later): `astropy`'s generated test file never imports the tool functions it
+tests (`NameError` on all 18 tests, while direct invocation still passes —
+a Coder bug); `aizynthfinder`'s `create_interactive_app` helper emits no
+stdout JSON; `backtrader`'s `backtest_strategy` has a real `IndexError` in
+SMA warm-up logic; `ase`'s `optimize_geometry` hit a `UnicodeDecodeError`
+reading a binary `.traj` file as text. `dalle-mini` and `Analyze-stroke`
+reproduce their exact baseline root causes (unresolvable jaxlib/Python 3.8
+deadlock; inaccessible git remote) unchanged.
 
 ## 2. Must-have — re-run the benchmark, write the Evaluation section
 

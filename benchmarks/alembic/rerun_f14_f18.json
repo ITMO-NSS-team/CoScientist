@@ -1,0 +1,653 @@
+[
+  {
+    "repo": "Analyze-stroke",
+    "url": "https://github.com/ghh1125/Analyze-stroke",
+    "elapsed_sec": 133.5,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/Analyze-stroke.log",
+    "error_tail": null,
+    "validation": {
+      "error": "validation.md not readable",
+      "stderr": "cat: /work/.alembic/Analyze-stroke/reports/validation.md: No such file or directory\n"
+    }
+  },
+  {
+    "repo": "AgML",
+    "url": "https://github.com/Project-AgML/AgML",
+    "elapsed_sec": 334.1,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/AgML.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "PASSED — 14 passed, 0 failed",
+      "tests_passed": 14,
+      "tests_failed": 0,
+      "overall": "PASSED",
+      "tools": [
+        {
+          "name": "load_and_preprocess_dataset",
+          "status": "PASSED"
+        },
+        {
+          "name": "train_detection_model",
+          "status": "SKIPPED",
+          "reason": "requires a pre-saved dataset loader path which is not provided in the repo"
+        },
+        {
+          "name": "run_inference",
+          "status": "SKIPPED",
+          "reason": "requires a user image file not bundled in the repo"
+        },
+        {
+          "name": "evaluate_model",
+          "status": "SKIPPED",
+          "reason": "requires a pre-saved dataset loader path"
+        },
+        {
+          "name": "visualize_dataset_samples",
+          "status": "PASSED"
+        }
+      ],
+      "tools_created": 5,
+      "tools_invoked_ok": 2,
+      "tools_invoked_failed": 0,
+      "tools_invoked_skipped": 3,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 39,
+          "environment": 15,
+          "coder": 29,
+          "validator": 17
+        },
+        "tokens_per_stage": {
+          "explorer": 784455,
+          "environment": 52714,
+          "coder": 378178,
+          "validator": 43270
+        },
+        "total_actions": 100,
+        "total_tokens": 1258617
+      }
+    }
+  },
+  {
+    "repo": "aizynthfinder",
+    "url": "https://github.com/MolecularAI/aizynthfinder",
+    "elapsed_sec": 1034.5,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/aizynthfinder.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "PASSED — 11 passed, 0 failed",
+      "tests_passed": 11,
+      "tests_failed": 0,
+      "overall": "FAILED — Tool invocations: `create_interactive_app` failed with JSONDecodeError after fix attempt",
+      "tools": [
+        {
+          "name": "single_retrosynthesis",
+          "status": "PASSED"
+        },
+        {
+          "name": "batch_retrosynthesis",
+          "status": "PASSED"
+        },
+        {
+          "name": "download_pretrained_models",
+          "status": "PASSED"
+        },
+        {
+          "name": "create_interactive_app",
+          "status": "FAILED"
+        }
+      ],
+      "tools_created": 4,
+      "tools_invoked_ok": 3,
+      "tools_invoked_failed": 1,
+      "tools_invoked_skipped": 0,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 39,
+          "environment": 21,
+          "coder": 25,
+          "validator": 25
+        },
+        "tokens_per_stage": {
+          "explorer": 321785,
+          "environment": 72736,
+          "coder": 217813,
+          "validator": 64658
+        },
+        "total_actions": 110,
+        "total_tokens": 676992
+      }
+    }
+  },
+  {
+    "repo": "astronomy",
+    "url": "https://github.com/cosinekitty/astronomy",
+    "elapsed_sec": 1003.1,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/astronomy.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "PASSED — 11 passed, 0 failed",
+      "tests_passed": 11,
+      "tests_failed": 0,
+      "overall": "PASSED",
+      "tools": [
+        {
+          "name": "calculate_lunar_phase",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_rise_set",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_solstices_equinoxes",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_celestial_positions",
+          "status": "PASSED"
+        },
+        {
+          "name": "predict_lunar_eclipses",
+          "status": "PASSED"
+        },
+        {
+          "name": "predict_solar_eclipses",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_jupiter_moons",
+          "status": "PASSED"
+        }
+      ],
+      "tools_created": 7,
+      "tools_invoked_ok": 7,
+      "tools_invoked_failed": 0,
+      "tools_invoked_skipped": 0,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 59,
+          "environment": 9,
+          "coder": 43,
+          "validator": 47
+        },
+        "tokens_per_stage": {
+          "explorer": 1041931,
+          "environment": 32621,
+          "coder": 301605,
+          "validator": 180295
+        },
+        "total_actions": 158,
+        "total_tokens": 1556452
+      }
+    }
+  },
+  {
+    "repo": "ase",
+    "url": "https://github.com/yfyh2013/ase",
+    "elapsed_sec": 1314.3,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/ase.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "PASSED — 18 passed, 0 failed",
+      "tests_passed": 18,
+      "tests_failed": 0,
+      "overall": "FAILED (optimize_geometry tool failed after two debugger attempts)",
+      "tools": [
+        {
+          "name": "build_crystal",
+          "status": "PASSED"
+        },
+        {
+          "name": "build_molecule",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_eos",
+          "status": "PASSED"
+        },
+        {
+          "name": "optimize_geometry",
+          "status": "FAILED",
+          "reason": "Debugger call timed out for optimize_geometry after second attempt"
+        },
+        {
+          "name": "launch_gui",
+          "status": "PASSED"
+        }
+      ],
+      "tools_created": 5,
+      "tools_invoked_ok": 4,
+      "tools_invoked_failed": 1,
+      "tools_invoked_skipped": 0,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 53,
+          "environment": 59,
+          "coder": 48,
+          "validator": 41
+        },
+        "tokens_per_stage": {
+          "explorer": 842435,
+          "environment": 275128,
+          "coder": 809254,
+          "validator": 167152
+        },
+        "total_actions": 201,
+        "total_tokens": 2093969
+      }
+    }
+  },
+  {
+    "repo": "BioSPPy",
+    "url": "https://github.com/scientisst/BioSPPy",
+    "elapsed_sec": 1643.5,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/BioSPPy.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "FAILED — 17 passed, 3 failed",
+      "tests_passed": 17,
+      "tests_failed": 3,
+      "overall": "FAILED (Syntax passed, but tests and all tool invocations failed)",
+      "tools": [
+        {
+          "name": "ecg_processing",
+          "status": "FAILED",
+          "reason": "The length of the input vector x must be greater than padlen, which is 4503."
+        },
+        {
+          "name": "hrv_analysis",
+          "status": "FAILED",
+          "reason": "JSONDecodeError: Expecting value: line 1 column 1 (char 0"
+        },
+        {
+          "name": "quality_assessment",
+          "status": "FAILED",
+          "reason": "Segment must be 5s long"
+        },
+        {
+          "name": "af_detection",
+          "status": "FAILED",
+          "reason": "ModuleNotFoundError: No module named 'tensorflow'"
+        },
+        {
+          "name": "eda_processing",
+          "status": "FAILED",
+          "reason": "The length of the input vector x must be greater than padlen, which is 15."
+        }
+      ],
+      "tools_created": 5,
+      "tools_invoked_ok": 0,
+      "tools_invoked_failed": 5,
+      "tools_invoked_skipped": 0,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 37,
+          "environment": 9,
+          "coder": 33,
+          "validator": 23
+        },
+        "tokens_per_stage": {
+          "explorer": 534407,
+          "environment": 35682,
+          "coder": 592390,
+          "validator": 64853
+        },
+        "total_actions": 102,
+        "total_tokens": 1227332
+      }
+    }
+  },
+  {
+    "repo": "astropy",
+    "url": "https://github.com/astropy/astropy",
+    "elapsed_sec": 1028.1,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/astropy.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "FAILED — 0 passed, 18 failed",
+      "tests_passed": 0,
+      "tests_failed": 18,
+      "overall": "PASSED",
+      "tools": [
+        {
+          "name": "convert_coordinate",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_separation",
+          "status": "PASSED"
+        },
+        {
+          "name": "convert_quantity",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_distance",
+          "status": "PASSED"
+        },
+        {
+          "name": "photon_energy_to_wavelength",
+          "status": "PASSED"
+        }
+      ],
+      "tools_created": 5,
+      "tools_invoked_ok": 5,
+      "tools_invoked_failed": 0,
+      "tools_invoked_skipped": 0,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 35,
+          "environment": 23,
+          "coder": 35,
+          "validator": 41
+        },
+        "tokens_per_stage": {
+          "explorer": 1007949,
+          "environment": 318947,
+          "coder": 531335,
+          "validator": 209335
+        },
+        "total_actions": 134,
+        "total_tokens": 2067566
+      }
+    }
+  },
+  {
+    "repo": "biotite",
+    "url": "https://github.com/biotite-dev/biotite",
+    "elapsed_sec": 599.7,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/biotite.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "PASSED — 13 passed, 0 failed",
+      "tests_passed": 13,
+      "tests_failed": 0,
+      "overall": "PASSED",
+      "tools": [
+        {
+          "name": "create_multiple_sequence_alignment",
+          "status": "PASSED"
+        },
+        {
+          "name": "calculate_distances",
+          "status": "SKIPPED",
+          "reason": "sample requires external PDB file"
+        },
+        {
+          "name": "perform_homology_search",
+          "status": "SKIPPED",
+          "reason": "requires network access to NCBI"
+        },
+        {
+          "name": "analyze_hydrogen_bonds",
+          "status": "SKIPPED",
+          "reason": "sample requires external PDB file"
+        },
+        {
+          "name": "superimpose_structures",
+          "status": "SKIPPED",
+          "reason": "sample requires two external PDB files"
+        }
+      ],
+      "tools_created": 5,
+      "tools_invoked_ok": 1,
+      "tools_invoked_failed": 0,
+      "tools_invoked_skipped": 4,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 110,
+          "environment": 19,
+          "coder": 59,
+          "validator": 21
+        },
+        "tokens_per_stage": {
+          "explorer": 3035421,
+          "environment": 71850,
+          "coder": 815765,
+          "validator": 50352
+        },
+        "total_actions": 209,
+        "total_tokens": 3973388
+      }
+    }
+  },
+  {
+    "repo": "backtrader",
+    "url": "https://github.com/mementum/backtrader",
+    "elapsed_sec": 1499.5,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/backtrader.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "FAILED — 15 passed, 1 failed",
+      "tests_passed": 15,
+      "tests_failed": 1,
+      "overall": "FAILED",
+      "tools": [
+        {
+          "name": "backtest_strategy",
+          "status": "FAILED",
+          "reason": ": IndexError during SMA calculation due to insufficient data points for the period"
+        },
+        {
+          "name": "optimize_strategy",
+          "status": "PASSED"
+        },
+        {
+          "name": "add_indicator",
+          "status": "PASSED"
+        }
+      ],
+      "tools_created": 3,
+      "tools_invoked_ok": 2,
+      "tools_invoked_failed": 1,
+      "tools_invoked_skipped": 0,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 121,
+          "environment": 21,
+          "coder": 37,
+          "validator": 33
+        },
+        "tokens_per_stage": {
+          "explorer": 3544649,
+          "environment": 58484,
+          "coder": 400943,
+          "validator": 139667
+        },
+        "total_actions": 212,
+        "total_tokens": 4143743
+      }
+    }
+  },
+  {
+    "repo": "biopython",
+    "url": "https://github.com/biopython/biopython",
+    "elapsed_sec": 1341.7,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/biopython.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "FAILED — 10 passed, 5 failed",
+      "tests_passed": 10,
+      "tests_failed": 5,
+      "overall": "FAILED",
+      "tools": [
+        {
+          "name": "read_fasta",
+          "status": "FAILED",
+          "reason": "ImportError: cannot import name '_aligncore' from partially initialized module 'Bio.Align'"
+        },
+        {
+          "name": "perform_blast",
+          "status": "SKIPPED",
+          "reason": "sample marked SKIP due to network dependency"
+        },
+        {
+          "name": "fetch_entrez",
+          "status": "SKIPPED",
+          "reason": "sample marked SKIP due to network dependency"
+        },
+        {
+          "name": "parse_blast_xml",
+          "status": "SKIPPED",
+          "reason": "test failure in test_parse_blast_xml_invalid_input suggests underlying import issues"
+        },
+        {
+          "name": "parse_genbank",
+          "status": "SKIPPED",
+          "reason": "test failure in test_parse_genbank_invalid_input suggests underlying issues"
+        }
+      ],
+      "tools_created": 5,
+      "tools_invoked_ok": 0,
+      "tools_invoked_failed": 1,
+      "tools_invoked_skipped": 4,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 109,
+          "environment": 9,
+          "coder": 35,
+          "validator": 13
+        },
+        "tokens_per_stage": {
+          "explorer": 5385418,
+          "environment": 31068,
+          "coder": 790719,
+          "validator": 42390
+        },
+        "total_actions": 166,
+        "total_tokens": 6249595
+      }
+    }
+  },
+  {
+    "repo": "dalle-mini",
+    "url": "https://github.com/borisdayma/dalle-mini",
+    "elapsed_sec": 510.6,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/dalle-mini.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "PASSED — 21 passed, 0 failed",
+      "tests_passed": 21,
+      "tests_failed": 0,
+      "overall": "FAILED — All 4 invoked tools failed due to unresolvable environment dependency (Python 3.8 incompatibility with jaxlib).",
+      "tools": [
+        {
+          "name": "dalle_mini_generate_image",
+          "status": "FAILED",
+          "reason": "RuntimeError: generate_image.py failed due to missing jaxlib; Python version incompatibility"
+        },
+        {
+          "name": "dalle_mini_generate_images",
+          "status": "FAILED",
+          "reason": "RuntimeError: generate_images.py failed due to missing jaxlib; Python version incompatibility"
+        },
+        {
+          "name": "dalle_mini_load_model",
+          "status": "FAILED",
+          "reason": "RuntimeError: load_model.py failed due to missing 'dalle_mini' module; requires jaxlib which is incompatible with Python 3.8"
+        },
+        {
+          "name": "dalle_mini_tokenize",
+          "status": "FAILED",
+          "reason": "RuntimeError: tokenize_text.py failed due to missing jaxlib; Python version incompatibility"
+        },
+        {
+          "name": "dalle_mini_decode_image",
+          "status": "SKIPPED",
+          "reason": "Sample marked as SKIP in generator: requires latent code file not provided in repo"
+        }
+      ],
+      "tools_created": 5,
+      "tools_invoked_ok": 0,
+      "tools_invoked_failed": 4,
+      "tools_invoked_skipped": 1,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 29,
+          "environment": 45,
+          "coder": 31,
+          "validator": 25
+        },
+        "tokens_per_stage": {
+          "explorer": 179715,
+          "environment": 254110,
+          "coder": 263747,
+          "validator": 97462
+        },
+        "total_actions": 130,
+        "total_tokens": 795034
+      }
+    }
+  },
+  {
+    "repo": "auto-sklearn",
+    "url": "https://github.com/automl/auto-sklearn",
+    "elapsed_sec": 2485.2,
+    "exit_code": 0,
+    "log": "alembic_bench_logs_rerun/auto-sklearn.log",
+    "error_tail": null,
+    "validation": {
+      "syntax": "PASSED",
+      "tests": "FAILED — 11 passed, 1 failed",
+      "tests_passed": 11,
+      "tests_failed": 1,
+      "overall": "FAILED",
+      "tools": [
+        {
+          "name": "run_classification",
+          "status": "FAILED"
+        },
+        {
+          "name": "run_regression",
+          "status": "FAILED"
+        },
+        {
+          "name": "evaluate_model",
+          "status": "FAILED"
+        }
+      ],
+      "tools_created": 3,
+      "tools_invoked_ok": 0,
+      "tools_invoked_failed": 3,
+      "tools_invoked_skipped": 0,
+      "pipeline_metrics": {
+        "actions_per_stage": {
+          "explorer": 41,
+          "environment": 39,
+          "coder": 29,
+          "validator": 31
+        },
+        "tokens_per_stage": {
+          "explorer": 753280,
+          "environment": 214714,
+          "coder": 322315,
+          "validator": 112344
+        },
+        "total_actions": 140,
+        "total_tokens": 1402653
+      }
+    }
+  }
+]

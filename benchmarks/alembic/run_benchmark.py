@@ -44,6 +44,27 @@ from alembic.common import get_repo_name, ensure_base_image
 START_CHAIN = COSCIENTIST_DIR / "alembic" / "start_chain.py"
 DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 
+AVAILABILITY_TIMEOUT = 15  # seconds — cheap network check, no clone
+
+
+def check_repo_available(repo_url: str, timeout: int = AVAILABILITY_TIMEOUT) -> tuple[bool, str]:
+    """True if ``repo_url`` is reachable and has at least one ref, via
+    ``git ls-remote`` — no clone, so a dead/private/empty repo (e.g. the
+    Analyze-stroke case: ``fatal: could not read Username``) is caught in
+    seconds instead of burning a full pipeline run before the Explorer's
+    own clone fails."""
+    try:
+        r = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "--heads", repo_url],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"timed out after {timeout}s"
+    if r.returncode == 0:
+        return True, ""
+    lines = [l.strip() for l in (r.stderr or r.stdout).splitlines() if l.strip()]
+    return False, (lines[0] if lines else f"git ls-remote exit {r.returncode}")
+
 
 def run_one(repo_url: str, extra_args: list[str], log_dir: Path,
             idx: int, total: int) -> dict:
@@ -177,29 +198,32 @@ def write_summary(records: list[dict], out: Path) -> None:
     ]
     for r in sorted(records, key=lambda x: x["repo"]):
         v = r.get("validation") or {}
+        not_run = r["exit_code"] is None  # skipped by the availability check
         tools = v.get("tools", [])
         passed  = sum(1 for t in tools if t["status"] == "PASSED")
         failed  = sum(1 for t in tools if t["status"] == "FAILED")
         skipped = sum(1 for t in tools if t["status"] == "SKIPPED")
+        overall = f"N/A — {v['error']}" if not_run and v.get("error") else v.get("overall", "—")
         lines.append(
             f"| {r['repo']} "
             f"| {r['elapsed_sec']:.0f}s "
-            f"| {r['exit_code']} "
+            f"| {'—' if not_run else r['exit_code']} "
             f"| {v.get('syntax','—')} "
             f"| {v.get('tests','—')} "
             f"| {passed}/{failed}/{skipped} "
-            f"| {v.get('overall','—')} |"
+            f"| {overall} |"
         )
 
     lines += ["", "## Per-repo details"]
     for r in sorted(records, key=lambda x: x["repo"]):
+        not_run = r["exit_code"] is None
         lines += [
             "",
             f"### {r['repo']}",
             f"- URL: {r['url']}",
             f"- Duration: {r['elapsed_sec']}s",
-            f"- Exit code: {r['exit_code']}",
-            f"- Log: {r.get('log','—')}",
+            f"- Exit code: {'N/A — pipeline not run' if not_run else r['exit_code']}",
+            f"- Log: {r.get('log') or '—'}",
         ]
         v = r.get("validation") or {}
         if not v:
@@ -238,6 +262,9 @@ def parse_args() -> argparse.Namespace:
                     help="Force rebuild of alembic-base:latest before workers start.")
     ap.add_argument("--platform", default=None,
                     help="Pass-through to docker --platform (build + run).")
+    ap.add_argument("--skip-availability-check", action="store_true",
+                    help="Skip the pre-flight 'git ls-remote' reachability "
+                         "check and run the pipeline on every repo as-is.")
     return ap.parse_args()
 
 
@@ -260,15 +287,47 @@ def main() -> None:
     print(f"[bench] logs   → {ns.log_dir}")
     print(f"[bench] summary→ {ns.output}")
 
+    records: list[dict] = []
+    lock = threading.Lock()
+
+    if ns.skip_availability_check:
+        available = repos
+    else:
+        print(f"[bench] checking reachability of {len(repos)} repos "
+              f"(git ls-remote, {AVAILABILITY_TIMEOUT}s timeout each)...")
+        available = []
+        with ThreadPoolExecutor(max_workers=ns.parallel) as pool:
+            checks = {pool.submit(check_repo_available, url): url for url in repos}
+            for fut in as_completed(checks):
+                url = checks[fut]
+                ok, reason = fut.result()
+                name = get_repo_name(url)
+                if ok:
+                    available.append(url)
+                else:
+                    print(f"[bench] ✗ skip    {name}  — unreachable: {reason}",
+                          flush=True)
+                    records.append({
+                        "repo":        name,
+                        "url":         url,
+                        "elapsed_sec": 0,
+                        "exit_code":   None,
+                        "log":         None,
+                        "validation":  {"error": f"repo unreachable: {reason}"},
+                    })
+        if not available:
+            write_summary(records, ns.output)
+            sys.exit("[bench] no reachable repos — nothing to run")
+        print(f"[bench] {len(available)}/{len(repos)} repos reachable, "
+              f"{len(repos) - len(available)} skipped")
+
     ensure_base_image(DOCKERFILE, PROJECT_ROOT, platform=ns.platform, rebuild=ns.rebuild_base)
 
     extra: list[str] = []
     if ns.platform:
         extra += ["--platform", ns.platform]
 
-    records: list[dict] = []
-    lock = threading.Lock()
-    total = len(repos)
+    total = len(available)
 
     def flush_outputs() -> None:
         with lock:
@@ -283,7 +342,7 @@ def main() -> None:
         with ThreadPoolExecutor(max_workers=ns.parallel) as pool:
             futures = {
                 pool.submit(run_one, url, extra, ns.log_dir, i + 1, total): url
-                for i, url in enumerate(repos)
+                for i, url in enumerate(available)
             }
             for fut in as_completed(futures):
                 try:

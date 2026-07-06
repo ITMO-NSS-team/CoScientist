@@ -1,5 +1,9 @@
+import asyncio
+import contextvars
 import os
+
 import litellm
+from loguru import logger
 
 litellm.suppress_debug_info = True
 
@@ -19,6 +23,74 @@ from alembic.instructions import (
     environment_instruction,
 )
 MODEL = os.environ.get("MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
+
+# Set once per pipeline run (main.py, before any stage) so the debugger
+# AgentTool wrapper below can always stamp the repo URL onto its calls,
+# regardless of what the validator LLM remembers to include (F15).
+_current_repo_url: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_repo_url", default=""
+)
+
+
+def set_current_repo_url(repo_url: str) -> None:
+    _current_repo_url.set(repo_url)
+
+
+# Bounds a single debugger call so a stuck LLM/tool turn can't consume the
+# whole Validator stage budget (F16). Generous enough for a normal
+# multi-step fix (a couple of bash_env installs + an edit + a re-invoke)
+# while leaving room for several calls within the 1800s validator timeout.
+DEBUGGER_CALL_TIMEOUT = 600  # seconds
+
+
+class _DebuggerAgentTool(AgentTool):
+    """Hardens the raw AgentTool call into the debugger sub-agent.
+
+    The AgentTool's generic ``{"request": str}`` schema has no field that
+    forces the repo URL to be present, and the validator has been observed
+    omitting it, leaving the debugger unable to locate the repo at all
+    (F15). It has also been observed hitting the full stage timeout stuck
+    on one call (F16) and burning an attempt on a transient provider error
+    with zero diagnostic value (F17). See docs/IMPROVEMENTS_SPEC.md.
+    """
+
+    async def run_async(self, *, args, tool_context):
+        repo_url = _current_repo_url.get()
+        request = (args.get("request") or "").strip()
+        if repo_url:
+            request = f"Repository: {repo_url}\n\n{request}"
+        call_args = {**args, "request": request}
+
+        for attempt in range(2):
+            try:
+                return await asyncio.wait_for(
+                    super().run_async(args=call_args, tool_context=tool_context),
+                    timeout=DEBUGGER_CALL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[debugger] call timed out after {DEBUGGER_CALL_TIMEOUT}s"
+                )
+                return (
+                    f"Debugger call timed out after {DEBUGGER_CALL_TIMEOUT}s "
+                    "without a resolution. Treat this as an unresolved "
+                    "failure for this stage/tool and move on."
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(
+                        f"[debugger] transient error ({e!r}), retrying once"
+                    )
+                    continue
+                logger.warning(f"[debugger] error persisted after retry: {e!r}")
+                return (
+                    f"Debugger call failed twice ({type(e).__name__}: {e}) "
+                    "with no diagnostic content. Treat this as an unresolved "
+                    "failure for this stage/tool and move on."
+                )
+
 
 explorer_agent = Agent(
     name="explorer",
@@ -57,5 +129,5 @@ validator_agent = Agent(
     model=LiteLlm(model=MODEL),
     description="Validates the generated MCP server via syntax checks, pytest, and real tool invocations, calling the debugger agent on failures, then writes a validation report.",
     instruction=validator_instruction,
-    tools=[read_report, validate_syntax, run_tests, invoke_mcp_tool, write_report, AgentTool(agent=debugger_agent)],
+    tools=[read_report, validate_syntax, run_tests, invoke_mcp_tool, write_report, _DebuggerAgentTool(agent=debugger_agent)],
 )

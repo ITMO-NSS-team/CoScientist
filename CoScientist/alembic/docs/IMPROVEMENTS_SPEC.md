@@ -163,6 +163,13 @@ Suggested first wave (cheap, high-leverage): **F1, F2, F12, F10**. Second wave (
 **Spec.** Explorer instruction should require sample data sized to the domain (signal duration/length, image dimensions, sequence length) inferred from the repo's own docs/tests/example data, not an arbitrary placeholder shape.
 **Effort.** Low — instruction change plus, where the repo ships its own example/test fixtures, prefer sampling from those over synthesizing new toy data.
 
+**2026-07-06 rerun finding — first attempt at F18 (Explorer-only) did not work.** Re-running `BioSPPy` after patching only `instructions/explorer.py` still produced `ecg_processing(signal=[0.1, 0.2, 0.3])` and other 3-5-element arrays, failing with the exact same "signal too short" class of error. Root cause: the concrete `samples:` block that `invoke_mcp_tool` actually runs is written by the **Coder**, not the Explorer, and `instructions/coder.py` had its own, directly conflicting instruction: *"Use the most minimal args you can."* The Coder was never reading the Explorer's sizing guidance for this — it was independently told to minimize. Fixed by rewording `coder.py`'s sample-writing rules to distinguish "cheap to run" (small batch size, CPU device) from "smaller than the function's own precondition," and to check the wrapped function's docstring/call-sites for a minimum size before synthesizing a value. Not yet re-benchmarked after this second patch — do that before relying on F18 being closed.
+
+### F19 — `_UnknownToolStub` missing `.description` attribute
+**Problem.** Found in the 2026-07-06 rerun (`backtrader.log`): when the LLM hallucinates a tool name, `main.py`'s `_safe_get_tool` patch returns an `_UnknownToolStub` with only `.name` and `.run_async`; something in ADK's flow also reads `.description` on a tool object, producing `AttributeError: '_UnknownToolStub' object has no attribute 'description'`. This burned a debugger attempt (masked by F17's retry-once, which happened to succeed on the next try — without F17 this would have been a silent wasted attempt like the original BioSPPy case).
+**Spec/fix.** Add a `description` attribute to `_UnknownToolStub.__init__`. Trivial, applied directly (`main.py`).
+**Effort.** Trivial (already fixed).
+
 ---
 
 ## Out of scope / explicitly not recommended

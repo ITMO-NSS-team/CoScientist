@@ -357,9 +357,27 @@ The report must contain:
   - For tools that need external user input (a user PDF / weights file /
     network resource not bundled in the repo) write `SKIP` and add one
     line under the YAML explaining why.
-  - Use the most minimal args you can — small `num_pages`, small
-    `batch_size`, `device: -1` for CPU. Validator runs these on a CPU
-    container; long inference / GPU calls will time out.
+  - Keep args cheap to RUN, not small in absolute size: small
+    `num_pages`, small `batch_size`, `device: -1` for CPU. Validator runs
+    these on a CPU container; long inference / GPU calls will time out.
+  - **"Cheap" is not the same as "tiny" — do not shrink a value below
+    what the function itself requires to execute.** Many scientific
+    functions have hard preconditions on argument SIZE, not just type:
+    a filter needs a signal longer than its `padlen`/window length, a
+    segment-quality check needs a minimum duration, an alignment needs a
+    minimum sequence length. An array like `[0.1, 0.2, 0.3]` is cheap to
+    run but will raise on such a function even though the code is
+    correct — that is a bad sample, not a bug to fix later. Before
+    writing a synthetic value, check the wrapped function's own
+    docstring/signature or its call sites in the repo for a minimum
+    size/duration/length, and size the sample accordingly (a few hundred
+    points instead of 3-5, a few real seconds instead of a few
+    milliseconds) — this is still "minimal," just minimal-and-valid
+    rather than minimal-and-broken.
+  - Prefer real sample data the repo ships in its own `tests/`,
+    `examples/`, or `data/` directories over synthesizing an array from
+    scratch — fixtures used by the repo's own test suite are guaranteed
+    to satisfy its preconditions.
   - Do NOT invent paths. If the repo does not include sample data,
     use SKIP.
 '''

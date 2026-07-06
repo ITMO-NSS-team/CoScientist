@@ -17,7 +17,10 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
-from alembic.agents import explorer_agent, environment_agent, coder_agent, validator_agent
+from alembic.agents import (
+    explorer_agent, environment_agent, coder_agent, validator_agent,
+    set_current_repo_url,
+)
 from alembic.tools import WORKDIR, get_repo_name
 
 # ── Loguru: terminal sink ──────────────────────────────────────────────────────
@@ -43,6 +46,7 @@ class _UnknownToolStub:
     """Returned in place of a missing tool; feeds an error back to the LLM."""
     def __init__(self, called_name: str, available: list):
         self.name = called_name
+        self.description = f"Unknown tool stub for '{called_name}'."
         self._msg = (
             f"Tool '{called_name}' does not exist. "
             f"You MUST use one of these exact names: "
@@ -251,6 +255,7 @@ STAGES = ("explorer", "environment", "coder", "validator")
 
 async def run_pipeline(repo_url: str, resume_from: str | None = None):
     name = get_repo_name(repo_url)
+    set_current_repo_url(repo_url)  # F15: debugger AgentTool stamps this on every call
     session_service = InMemorySessionService()
 
     if resume_from is None:

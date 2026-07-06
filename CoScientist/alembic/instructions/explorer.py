@@ -106,5 +106,20 @@ The report must contain:
     Format each as a Python function call:
       tool_name(param1="real_value", param2=42)
 
+    **Size/duration matters, not just realism of type.** A syntactically
+    real-looking example can still be too small to satisfy the function's
+    own preconditions (e.g. a 5-sample array passed to a filter that
+    requires hundreds of samples, or a 5ms audio/signal clip passed to a
+    function documented as needing several seconds) — this fails at
+    runtime even though the tool and the example are both individually
+    correct. Prefer sample data the repo ships in its own `tests/`,
+    `examples/`, or `data/` directories (real fixtures used by the repo's
+    own test suite are guaranteed to satisfy its preconditions); if you
+    must construct a synthetic example, check the target function's
+    docstring/signature or its own tests for minimum-size requirements
+    (window lengths, minimum duration, minimum sequence length) and size
+    the example accordingly rather than using an arbitrarily short
+    placeholder.
+
 Skip: tests, migrations, CI configs, and internal implementation details.
 '''

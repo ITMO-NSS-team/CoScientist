@@ -49,10 +49,19 @@ If it returns {"passed": False, ...}:
     Pass repo_url + the full pytest output to the debugger.
   - After the debugger returns, call run_tests again.
   - Repeat up to 3 times. Stop early if the failing-test list repeats. If
-    still failing, record the error and proceed to Step 5, marking the
-    stage as FAILED.
+    still failing, record the error and proceed to **Step 4 anyway** —
+    do NOT skip Step 4 (see the rule immediately below).
 
-### Step 4 — Invoke each tool end-to-end
+**A Step 3 failure is never, by itself, a reason to withhold Step 4 from
+any tool.** A failing test suite most often implicates ONE tool (whichever
+test function failed); every OTHER tool's sample must still be invoked and
+judged on its own merits. Only mark a specific tool's Step 4 as SKIPPED
+because of Step 3 if you can point to that exact tool's own helper/test as
+the one that failed — never as a blanket "tests failed so I won't invoke
+anything" decision. If Step 3 fails and you cannot tell which tool it
+implicates, invoke every tool anyway and let Step 4 be the tie-breaker.
+
+### Step 4 — Invoke each tool end-to-end (mandatory, regardless of Step 3's outcome)
 
 For every entry in the coder report's ``samples:`` block that is NOT marked
 ``SKIP``:
