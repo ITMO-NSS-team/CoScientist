@@ -70,4 +70,49 @@ for stmt in stmts.values():
     except Exception as e:
         conflicts[stmt] = {"error": type(e).__name__ + ": " + str(e)}
 
-print(json.dumps({"conflicts": conflicts, "checked": len(stmts)}))
+# Smoke-import of the repo's own top-level packages.
+# Without this, a venv where the install command silently truncated
+# (timeout, partial pip failure) still reports "0 conflicts" because
+# nothing is installed → no imports to check. Importing the repo's
+# entry package forces all transitive deps to be resolved, surfacing
+# any genuinely missing module that the install command was supposed
+# to provide (torchvision, hydra, evaluate, sentence_transformers, ...).
+repo_imports = {}
+SKIP_DIRS = {
+    "tests", "test", "docs", "doc", "scripts", "examples", "example",
+    "data", "build", "dist", "ci", "tools", "notebooks", "img",
+    "assets", "benchmark", "benchmarks", ".github",
+}
+for child in sorted(repo_path.iterdir()):
+    if not child.is_dir():
+        continue
+    if child.name.startswith((".", "_")):
+        continue
+    if child.name in SKIP_DIRS:
+        continue
+    if not (child / "__init__.py").is_file():
+        continue
+
+    sys.path.insert(0, str(repo_path))
+    try:
+        __import__(child.name)
+        repo_imports[child.name] = "ok"
+    except Exception as e:
+        repo_imports[child.name] = type(e).__name__ + ": " + str(e)[:400]
+    finally:
+        if str(repo_path) in sys.path:
+            sys.path.remove(str(repo_path))
+
+# A failing repo-import is a HARD failure: it means a dep the install
+# command was meant to put in the venv is actually missing (or an ABI
+# conflict blocks it). Surface as a synthetic conflict so the env-agent
+# treats it as such and does not stop at "0 conflicts".
+for pkg, result in repo_imports.items():
+    if result != "ok":
+        conflicts[f"import {pkg}  # repo top-level"] = {"error": result}
+
+print(json.dumps({
+    "conflicts": conflicts,
+    "checked": len(stmts),
+    "repo_imports": repo_imports,
+}))

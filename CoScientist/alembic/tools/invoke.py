@@ -8,7 +8,15 @@ from alembic.tools.paths import INVOKE_TOOL_SCRIPT, MAX_BYTES, output_dir, venv_
 
 
 def validate_syntax(repo_url: str) -> dict:
-    """Check server.py for syntax errors and failed imports.
+    """Check server.py AND helpers/*.py for syntax errors, then verify
+    server.py imports cleanly.
+
+    Helper scripts are compiled too because coder occasionally emits
+    literal typos (extra chars, missing function bodies) that never
+    surface via pytest — the helpers are only exec'd via subprocess at
+    tool-call time, so a broken helper stays invisible until the
+    validator's invoke_mcp_tool stage. Catching it here saves a full
+    debug round-trip.
 
     Example:
         validate_syntax("https://github.com/Roestlab/massformer")
@@ -19,13 +27,20 @@ def validate_syntax(repo_url: str) -> dict:
     if not server.exists():
         return {"passed": False, "stage": "syntax", "error": f"server.py not found at {server}"}
 
+    # 1. Compile server.py + every helpers/*.py in one go.
+    helpers_dir = out_dir / "helpers"
+    to_compile: list[str] = [str(server)]
+    if helpers_dir.is_dir():
+        to_compile += sorted(str(p) for p in helpers_dir.glob("*.py"))
+
     r1 = subprocess.run(
-        [python, "-m", "py_compile", str(server)],
+        [python, "-m", "py_compile", *to_compile],
         capture_output=True, text=True,
     )
     if r1.returncode != 0:
         return {"passed": False, "stage": "syntax", "error": r1.stderr.strip()}
 
+    # 2. Import server.py to catch missing modules / top-level errors.
     load_snippet = (
         "import importlib.util as _u, sys as _s; "
         f"_s.path.insert(0, r'{server.parent}'); "
