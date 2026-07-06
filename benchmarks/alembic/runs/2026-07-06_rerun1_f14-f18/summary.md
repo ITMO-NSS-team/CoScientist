@@ -23,7 +23,7 @@ Repos processed: 12
 - URL: https://github.com/Project-AgML/AgML
 - Duration: 334.1s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/AgML.log
+- Log: logs/AgML.log
   - load_and_preprocess_dataset: PASSED
   - train_detection_model: SKIPPED
   - run_inference: SKIPPED
@@ -34,14 +34,14 @@ Repos processed: 12
 - URL: https://github.com/ghh1125/Analyze-stroke
 - Duration: 133.5s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/Analyze-stroke.log
+- Log: logs/Analyze-stroke.log
 - validation.md not readable
 
 ### BioSPPy
 - URL: https://github.com/scientisst/BioSPPy
 - Duration: 1643.5s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/BioSPPy.log
+- Log: logs/BioSPPy.log
   - ecg_processing: FAILED
   - hrv_analysis: FAILED
   - quality_assessment: FAILED
@@ -52,7 +52,7 @@ Repos processed: 12
 - URL: https://github.com/MolecularAI/aizynthfinder
 - Duration: 1034.5s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/aizynthfinder.log
+- Log: logs/aizynthfinder.log
   - single_retrosynthesis: PASSED
   - batch_retrosynthesis: PASSED
   - download_pretrained_models: PASSED
@@ -62,7 +62,7 @@ Repos processed: 12
 - URL: https://github.com/yfyh2013/ase
 - Duration: 1314.3s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/ase.log
+- Log: logs/ase.log
   - build_crystal: PASSED
   - build_molecule: PASSED
   - calculate_eos: PASSED
@@ -73,7 +73,7 @@ Repos processed: 12
 - URL: https://github.com/cosinekitty/astronomy
 - Duration: 1003.1s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/astronomy.log
+- Log: logs/astronomy.log
   - calculate_lunar_phase: PASSED
   - calculate_rise_set: PASSED
   - calculate_solstices_equinoxes: PASSED
@@ -86,7 +86,7 @@ Repos processed: 12
 - URL: https://github.com/astropy/astropy
 - Duration: 1028.1s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/astropy.log
+- Log: logs/astropy.log
   - convert_coordinate: PASSED
   - calculate_separation: PASSED
   - convert_quantity: PASSED
@@ -97,7 +97,7 @@ Repos processed: 12
 - URL: https://github.com/automl/auto-sklearn
 - Duration: 2485.2s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/auto-sklearn.log
+- Log: logs/auto-sklearn.log
   - run_classification: FAILED
   - run_regression: FAILED
   - evaluate_model: FAILED
@@ -106,7 +106,7 @@ Repos processed: 12
 - URL: https://github.com/mementum/backtrader
 - Duration: 1499.5s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/backtrader.log
+- Log: logs/backtrader.log
   - backtest_strategy: FAILED
   - optimize_strategy: PASSED
   - add_indicator: PASSED
@@ -115,7 +115,7 @@ Repos processed: 12
 - URL: https://github.com/biopython/biopython
 - Duration: 1341.7s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/biopython.log
+- Log: logs/biopython.log
   - read_fasta: FAILED
   - perform_blast: SKIPPED
   - fetch_entrez: SKIPPED
@@ -126,7 +126,7 @@ Repos processed: 12
 - URL: https://github.com/biotite-dev/biotite
 - Duration: 599.7s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/biotite.log
+- Log: logs/biotite.log
   - create_multiple_sequence_alignment: PASSED
   - calculate_distances: SKIPPED
   - perform_homology_search: SKIPPED
@@ -137,7 +137,7 @@ Repos processed: 12
 - URL: https://github.com/borisdayma/dalle-mini
 - Duration: 510.6s
 - Exit code: 0
-- Log: alembic_bench_logs_rerun/dalle-mini.log
+- Log: logs/dalle-mini.log
   - dalle_mini_generate_image: FAILED
   - dalle_mini_generate_images: FAILED
   - dalle_mini_load_model: FAILED

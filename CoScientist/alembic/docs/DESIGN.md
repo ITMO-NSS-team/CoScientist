@@ -107,4 +107,4 @@ Triages the error into one class and fixes only that: **(A)** missing OS binary 
 3. On success: scrub `pipeline.log`, blank secret env vars via `--change`, `docker commit` → `alembic-tool:<repo>`.
 4. **serve mode** (`entrypoint.py serve` → `serve.py`) loads `server.py` in the server venv and runs FastMCP over `streamable-http` on `$MCP_PORT` (8000), mapped to a random host port.
 
-`run_benchmark.py` runs the whole flow over many repos in parallel and writes `alembic_bench.md` + per-repo logs.
+`benchmarks/alembic/run_benchmark.py` runs the whole flow over many repos in parallel (after a `git ls-remote` reachability pre-check) and writes a summary + per-repo logs under `benchmarks/alembic/runs/<timestamp>/`.

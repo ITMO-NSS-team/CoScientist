@@ -78,23 +78,26 @@ python CoScientist/alembic/start_chain.py <repo_url> --gpus all
 
 ## Running a Benchmark
 
-`run_benchmark.py` processes multiple repos in parallel and writes a Markdown summary.
+`benchmarks/alembic/run_benchmark.py` processes multiple repos in parallel
+(with a `git ls-remote` reachability pre-check) and writes a Markdown
+summary.
 
 ```bash
 # Explicit list, 4 parallel workers (default)
-python CoScientist/alembic/run_benchmark.py \
+python benchmarks/alembic/run_benchmark.py \
     --repos https://github.com/Roestlab/massformer \
             https://github.com/whitead/synspace \
             https://github.com/CrystalEye42/OpenChemIE
 
-# From a file (one URL per line, '#' = comment), 8 workers, JSON dump
-python CoScientist/alembic/run_benchmark.py \
+# From a file (one URL per line, '#' = comment), 8 workers
+python benchmarks/alembic/run_benchmark.py \
     --repos-file repos.txt \
-    --parallel 8 \
-    --json-output bench.json
+    --parallel 8
 ```
 
-Results are written to `alembic_bench.md` and per-repo logs to `alembic_bench_logs/`.
+Results default to `benchmarks/alembic/runs/<timestamp>/` (`summary.md`,
+`summary.json`, `logs/*.log`) — pass `--output`/`--json-output`/`--log-dir`
+to override.
 
 ---
 

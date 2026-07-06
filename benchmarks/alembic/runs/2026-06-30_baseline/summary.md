@@ -24,7 +24,7 @@ Repos processed: 12
 - URL: https://github.com/Project-AgML/AgML
 - Duration: 1970.5s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/AgML.log
+- Log: logs/AgML.log
   - load_dataset: PASSED
   - load_detection_model: PASSED
   - evaluate_detection_model: PASSED
@@ -35,14 +35,14 @@ Repos processed: 12
 - URL: https://github.com/ghh1125/Analyze-stroke
 - Duration: 134.7s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/Analyze-stroke.log
+- Log: logs/Analyze-stroke.log
 - validation.md not readable
 
 ### BioSPPy
 - URL: https://github.com/scientisst/BioSPPy
 - Duration: 824.1s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/BioSPPy.log
+- Log: logs/BioSPPy.log
   - process_ecg_signal: FAILED
   - extract_eda_scrs: PASSED
   - compute_eeg_features: FAILED
@@ -53,7 +53,7 @@ Repos processed: 12
 - URL: https://github.com/MolecularAI/aizynthfinder
 - Duration: 1863.6s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/aizynthfinder.log
+- Log: logs/aizynthfinder.log
   - aizynthcli: PASSED
   - download_public_data: PASSED
   - do_expansion: PASSED
@@ -62,7 +62,7 @@ Repos processed: 12
 - URL: https://github.com/yfyh2013/ase
 - Duration: 714.0s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/ase.log
+- Log: logs/ase.log
   - convert_structure: PASSED
   - get_structure_info: PASSED
   - build_surface: PASSED
@@ -73,7 +73,7 @@ Repos processed: 12
 - URL: https://github.com/cosinekitty/astronomy
 - Duration: 1287.3s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/astronomy.log
+- Log: logs/astronomy.log
   - calculate_moon_phase: PASSED
   - find_lunar_eclipses: PASSED
   - calculate_celestial_positions: PASSED
@@ -84,7 +84,7 @@ Repos processed: 12
 - URL: https://github.com/astropy/astropy
 - Duration: 1301.7s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/astropy.log
+- Log: logs/astropy.log
   - parse_and_transform_sky_coord: PASSED
   - create_and_convert_quantity: PASSED
   - access_constant: PASSED
@@ -95,7 +95,7 @@ Repos processed: 12
 - URL: https://github.com/automl/auto-sklearn
 - Duration: 1435.3s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/auto-sklearn.log
+- Log: logs/auto-sklearn.log
   - fit_classification_model: SKIPPED
   - predict_classification_model: SKIPPED
   - fit_regression_model: SKIPPED
@@ -105,7 +105,7 @@ Repos processed: 12
 - URL: https://github.com/mementum/backtrader
 - Duration: 796.7s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/backtrader.log
+- Log: logs/backtrader.log
   - run_sma_crossover: FAILED
   - optimize_sma_range: FAILED
   - load_csv_data: PASSED
@@ -116,14 +116,14 @@ Repos processed: 12
 - URL: https://github.com/biopython/biopython
 - Duration: 2312.9s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/biopython.log
+- Log: logs/biopython.log
 - validation.md not readable
 
 ### biotite
 - URL: https://github.com/biotite-dev/biotite
 - Duration: 688.9s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/biotite.log
+- Log: logs/biotite.log
   - fetch_sequence: SKIPPED
   - pairwise_alignment: SKIPPED
   - blast_search: SKIPPED
@@ -133,7 +133,7 @@ Repos processed: 12
 - URL: https://github.com/borisdayma/dalle-mini
 - Duration: 538.1s
 - Exit code: 0
-- Log: /var/essdata/CoScientist/alembic_bench_logs/dalle-mini.log
+- Log: logs/dalle-mini.log
   - generate_images: FAILED
   - rank_images_by_clip: SKIPPED
   - query_backend: SKIPPED

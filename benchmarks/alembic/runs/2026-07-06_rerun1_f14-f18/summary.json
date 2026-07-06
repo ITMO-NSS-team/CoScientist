@@ -4,7 +4,7 @@
     "url": "https://github.com/ghh1125/Analyze-stroke",
     "elapsed_sec": 133.5,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/Analyze-stroke.log",
+    "log": "logs/Analyze-stroke.log",
     "error_tail": null,
     "validation": {
       "error": "validation.md not readable",
@@ -16,7 +16,7 @@
     "url": "https://github.com/Project-AgML/AgML",
     "elapsed_sec": 334.1,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/AgML.log",
+    "log": "logs/AgML.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -76,7 +76,7 @@
     "url": "https://github.com/MolecularAI/aizynthfinder",
     "elapsed_sec": 1034.5,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/aizynthfinder.log",
+    "log": "logs/aizynthfinder.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -129,7 +129,7 @@
     "url": "https://github.com/cosinekitty/astronomy",
     "elapsed_sec": 1003.1,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/astronomy.log",
+    "log": "logs/astronomy.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -194,7 +194,7 @@
     "url": "https://github.com/yfyh2013/ase",
     "elapsed_sec": 1314.3,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/ase.log",
+    "log": "logs/ase.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -252,7 +252,7 @@
     "url": "https://github.com/scientisst/BioSPPy",
     "elapsed_sec": 1643.5,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/BioSPPy.log",
+    "log": "logs/BioSPPy.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -314,7 +314,7 @@
     "url": "https://github.com/astropy/astropy",
     "elapsed_sec": 1028.1,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/astropy.log",
+    "log": "logs/astropy.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -371,7 +371,7 @@
     "url": "https://github.com/biotite-dev/biotite",
     "elapsed_sec": 599.7,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/biotite.log",
+    "log": "logs/biotite.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -432,7 +432,7 @@
     "url": "https://github.com/mementum/backtrader",
     "elapsed_sec": 1499.5,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/backtrader.log",
+    "log": "logs/backtrader.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -482,7 +482,7 @@
     "url": "https://github.com/biopython/biopython",
     "elapsed_sec": 1341.7,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/biopython.log",
+    "log": "logs/biopython.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -544,7 +544,7 @@
     "url": "https://github.com/borisdayma/dalle-mini",
     "elapsed_sec": 510.6,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/dalle-mini.log",
+    "log": "logs/dalle-mini.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",
@@ -606,7 +606,7 @@
     "url": "https://github.com/automl/auto-sklearn",
     "elapsed_sec": 2485.2,
     "exit_code": 0,
-    "log": "alembic_bench_logs_rerun/auto-sklearn.log",
+    "log": "logs/auto-sklearn.log",
     "error_tail": null,
     "validation": {
       "syntax": "PASSED",

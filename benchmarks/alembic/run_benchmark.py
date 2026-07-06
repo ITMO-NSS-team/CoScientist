@@ -8,17 +8,21 @@ are not launched; the produced ``alembic-tool:<repo>`` images stay so you
 can ``docker run`` them later.
 
 Usage:
-    # parallel run, default 4 workers
+    # parallel run, default 4 workers — outputs land under
+    # benchmarks/alembic/runs/<timestamp>/{summary.md,summary.json,logs/}
     python benchmarks/alembic/run_benchmark.py \\
         --repos https://github.com/Roestlab/massformer \\
                 https://github.com/whitead/synspace \\
                 https://github.com/CrystalEye42/OpenChemIE
 
-    # from a file (one URL per line, '#' = comment), 8 workers, JSON dump
+    # from a file (one URL per line, '#' = comment), 8 workers, explicit
+    # output paths instead of the timestamped default
     python benchmarks/alembic/run_benchmark.py \\
         --repos-file repos.txt \\
         --parallel 8 \\
-        --json-output bench.json
+        --output benchmarks/alembic/runs/my-run/summary.md \\
+        --json-output benchmarks/alembic/runs/my-run/summary.json \\
+        --log-dir benchmarks/alembic/runs/my-run/logs
 """
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ from pathlib import Path
 # benchmarks/alembic/run_benchmark.py → project root is 2 levels up
 PROJECT_ROOT    = Path(__file__).resolve().parents[2]
 COSCIENTIST_DIR = PROJECT_ROOT / "CoScientist"
+RUNS_DIR        = Path(__file__).resolve().parent / "runs"
 
 sys.path.insert(0, str(COSCIENTIST_DIR))
 
@@ -203,7 +208,12 @@ def write_summary(records: list[dict], out: Path) -> None:
         passed  = sum(1 for t in tools if t["status"] == "PASSED")
         failed  = sum(1 for t in tools if t["status"] == "FAILED")
         skipped = sum(1 for t in tools if t["status"] == "SKIPPED")
-        overall = f"N/A — {v['error']}" if not_run and v.get("error") else v.get("overall", "—")
+        if not_run and v.get("error"):
+            overall = f"N/A — {v['error']}"
+        elif v.get("error"):
+            overall = f"ERROR — {v['error']}"
+        else:
+            overall = v.get("overall", "—")
         lines.append(
             f"| {r['repo']} "
             f"| {r['elapsed_sec']:.0f}s "
@@ -250,14 +260,15 @@ def parse_args() -> argparse.Namespace:
 
     ap.add_argument("--parallel", type=int, default=4,
                     help="How many pipelines to run concurrently (default 4).")
-    ap.add_argument("--output", type=Path,
-                    default=PROJECT_ROOT / "alembic_bench.md",
-                    help="Markdown summary path (default: ./alembic_bench.md).")
-    ap.add_argument("--log-dir", type=Path,
-                    default=PROJECT_ROOT / "alembic_bench_logs",
-                    help="Per-repo log dir (default: ./alembic_bench_logs).")
-    ap.add_argument("--json-output", type=Path, default="bench.json",
-                    help="Optional JSON dump of all per-repo records.")
+    ap.add_argument("--output", type=Path, default=None,
+                    help="Markdown summary path (default: "
+                         "benchmarks/alembic/runs/<timestamp>/summary.md).")
+    ap.add_argument("--log-dir", type=Path, default=None,
+                    help="Per-repo log dir (default: "
+                         "benchmarks/alembic/runs/<timestamp>/logs).")
+    ap.add_argument("--json-output", type=Path, default=None,
+                    help="Optional JSON dump of all per-repo records (default: "
+                         "benchmarks/alembic/runs/<timestamp>/summary.json).")
     ap.add_argument("--rebuild-base", action="store_true",
                     help="Force rebuild of alembic-base:latest before workers start.")
     ap.add_argument("--platform", default=None,
@@ -270,6 +281,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     ns = parse_args()
+
+    # Default all three outputs into one shared, timestamped run folder so
+    # ad-hoc invocations self-organize under benchmarks/alembic/runs/
+    # instead of scattering files at the project root.
+    if ns.output is None or ns.log_dir is None or ns.json_output is None:
+        run_dir = RUNS_DIR / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        if ns.output is None:
+            ns.output = run_dir / "summary.md"
+        if ns.log_dir is None:
+            ns.log_dir = run_dir / "logs"
+        if ns.json_output is None:
+            ns.json_output = run_dir / "summary.json"
 
     if ns.repos:
         repos = ns.repos
