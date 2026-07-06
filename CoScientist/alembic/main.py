@@ -49,10 +49,15 @@ def _clean_workdir(name: str) -> None:
 STAGES = ("explorer", "environment", "coder", "validator")
 
 
-async def run_pipeline(repo_url: str, resume_from: str | None = None):
+async def run_pipeline(repo_url: str, resume_from: str | None = None,
+                       stop_after: str | None = None):
     name = get_repo_name(repo_url)
     set_current_repo_url(repo_url)  # F15: debugger AgentTool stamps this on every call
     session_service = InMemorySessionService()
+
+    if stop_after is not None and stop_after not in STAGES:
+        logger.error(f"Unknown --until stage '{stop_after}'. Valid: {', '.join(STAGES)}")
+        return
 
     if resume_from is None:
         _clean_workdir(name)
@@ -61,6 +66,15 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             logger.error(f"Unknown stage '{resume_from}'. Valid: {', '.join(STAGES)}")
             return
         logger.info(f"[Resume] starting from stage: {resume_from}  (workdir preserved)")
+
+    if (resume_from is not None and stop_after is not None
+            and STAGES.index(stop_after) < STAGES.index(resume_from)):
+        logger.error(
+            f"--until '{stop_after}' is before --resume '{resume_from}' — nothing to run."
+        )
+        return
+    if stop_after is not None:
+        logger.info(f"[Until] will stop after completing stage: {stop_after}")
 
     base = WORKDIR / name
     venv_python = str((base / "output" / ".venv" / "bin" / "python").resolve())
@@ -100,9 +114,12 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
     }
 
     def _should_run(stage: str) -> bool:
-        if resume_from is None:
-            return True
-        return STAGES.index(stage) >= STAGES.index(resume_from)
+        idx = STAGES.index(stage)
+        if resume_from is not None and idx < STAGES.index(resume_from):
+            return False
+        if stop_after is not None and idx > STAGES.index(stop_after):
+            return False
+        return True
 
     async def _run_stage(stage: str, agent, sid_suffix: str, message: str,
                          **kwargs) -> str:
@@ -250,23 +267,31 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        logger.error(f"Usage: ./main.py <repo_url> [--resume <stage>]")
+        logger.error(f"Usage: ./main.py <repo_url> [--resume <stage>] [--until <stage>]")
         logger.error(f"       stages: {', '.join(STAGES)}")
+        logger.error(f"       --resume <stage>: start from <stage> (workdir preserved)")
+        logger.error(f"       --until  <stage>: stop after completing <stage>")
         logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer")
         logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer --resume validator")
+        logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer --until explorer")
         sys.exit(1)
 
-    repo_url    = sys.argv[1]
-    resume_from = None
-    if "--resume" in sys.argv:
-        idx = sys.argv.index("--resume")
+    repo_url = sys.argv[1]
+
+    def _stage_arg(flag: str) -> str | None:
+        if flag not in sys.argv:
+            return None
+        idx = sys.argv.index(flag)
         if idx + 1 >= len(sys.argv):
-            logger.error("--resume requires a stage name")
+            logger.error(f"{flag} requires a stage name")
             sys.exit(1)
-        resume_from = sys.argv[idx + 1]
+        return sys.argv[idx + 1]
+
+    resume_from = _stage_arg("--resume")
+    stop_after  = _stage_arg("--until")
 
     try:
-        asyncio.run(run_pipeline(repo_url, resume_from=resume_from))
+        asyncio.run(run_pipeline(repo_url, resume_from=resume_from, stop_after=stop_after))
     except Exception:
         logger.exception("Pipeline error:")
         raise

@@ -342,6 +342,15 @@ def parse_args() -> argparse.Namespace:
                     help="Force rebuild of alembic-base:latest before workers start.")
     ap.add_argument("--platform", default=None,
                     help="Pass-through to docker --platform (build + run).")
+    ap.add_argument("--until", default=None,
+                    choices=("explorer", "environment", "coder", "validator"),
+                    help="Stop each repo's pipeline after completing this stage "
+                         "(forwarded to start_chain --until). E.g. --until "
+                         "explorer runs only exploration across all repos. Note: "
+                         "for stages before 'validator' there is no validation.md, "
+                         "so the summary's tool columns read ERROR while the "
+                         "per-stage metrics (durations, stage completion) are "
+                         "still collected from metrics.json.")
     ap.add_argument("--skip-availability-check", action="store_true",
                     help="Skip the pre-flight 'git ls-remote' reachability "
                          "check and run the pipeline on every repo as-is.")
@@ -418,6 +427,8 @@ def main() -> None:
     extra: list[str] = []
     if ns.platform:
         extra += ["--platform", ns.platform]
+    if ns.until:
+        extra += ["--until", ns.until]
 
     total = len(available)
 

@@ -90,6 +90,8 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     cmd += [BASE_IMAGE, "build", repo_url]
     if ns.resume:
         cmd += ["--resume", ns.resume]
+    if ns.until:
+        cmd += ["--until", ns.until]
 
     r = _run(cmd)
     if r.returncode != 0:
@@ -182,6 +184,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--resume", default=None,
                     choices=("explorer", "environment", "coder", "validator"),
                     help="Resume the alembic pipeline from a specific stage")
+    ap.add_argument("--until", default=None,
+                    choices=("explorer", "environment", "coder", "validator"),
+                    help="Stop the pipeline after completing this stage "
+                         "(e.g. --until explorer runs only exploration). "
+                         "Forwarded to alembic.main; implies no serve unless "
+                         "it is 'validator'.")
     ap.add_argument("--no-serve", action="store_true",
                     help="Build and commit only; do not launch the MCP server")
     ap.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE,
@@ -202,8 +210,13 @@ def main() -> None:
     ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT, 
                       platform=ns.platform, rebuild=ns.rebuild_base)
     image = build_image(ns.repo_url, ns)
-    if not ns.no_serve:
-        serve_image(ns.repo_url, image, ns)
+    if ns.no_serve:
+        return
+    if ns.until and ns.until != "validator":
+        print(f"[start-chain] --until {ns.until}: not serving "
+              f"(server.py is only produced by the coder stage).")
+        return
+    serve_image(ns.repo_url, image, ns)
 
 
 if __name__ == "__main__":
