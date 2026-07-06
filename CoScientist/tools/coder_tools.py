@@ -709,8 +709,6 @@ class CoderToolset(BaseToolset):
         return await self.execute_bash(cmd, timeout=600, tool_context=tool_context)
 
 
-# When HITL is enabled, gate outward-facing/destructive commands behind human
-# approval (git push, installs, recursive deletes, network fetches, etc.).
 _hitl_handler = None
 if settings.hitl.enabled:
     from CoScientist.hitl.handler import ConsoleHITLHandler, DelegatingHITLHandler
