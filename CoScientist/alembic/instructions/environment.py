@@ -208,15 +208,37 @@ conflicts. Apply fixes from the table in Step 4 below.
 
 ### Step 4 — Post-install compatibility check
 
+**This step is MANDATORY, not optional.** `bash_env` returning exit-code 0
+does NOT prove that packages are usable — installs get truncated on
+timeout, dependency resolution can silently skip conflicting extras, and
+missing transitive deps (torchvision, hydra, sentence-transformers,
+evaluate, cv2, …) never appear in `requirements.txt`. Only
+`check_venv_compat` tells you the venv actually works.
+
+Rule of thumb: **treat every install command as tentative, and every
+`check_venv_compat` result as the source of truth.** You cannot skip
+this step and you cannot proceed to Step 5 until `has_conflicts` is
+False for every venv you created.
+
 For each venv you created, run:
     check_venv_compat(repo_url, venv_name=".venv")
     check_venv_compat(repo_url, venv_name=".venv-repo")  # only if two-venv mode
 
-The result contains `conflicts` — a dict keyed by the failing import
-statement (e.g. `"from transformers import AdamW"`). If `has_conflicts`
-is True, apply the fix below for each conflict, then run check_venv_compat
-again. Repeat at most 2 rounds per venv. If a conflict remains in a package
-not actually used by the generated server, note it and continue.
+The result contains:
+- `conflicts` — dict keyed by the failing import statement
+  (e.g. `"from transformers import AdamW"`). Ordinary transitive
+  breakage.
+- Synthetic entries `"import <pkg>  # repo top-level"` — these mean
+  the repo's own top-level package cannot be imported at all. THIS
+  IS ALWAYS A HARD FAILURE: it means an install command silently
+  truncated or a required dep was never listed. Fix these before
+  anything else.
+- `has_conflicts` — True as long as at least one conflict remains.
+
+If `has_conflicts` is True: apply the fix below for each conflict,
+then run check_venv_compat AGAIN. **Loop until has_conflicts is False**
+(up to 5 rounds per venv). Do NOT declare the environment ready while
+a repo top-level import is still broken.
 
 When applying a fix, target the right venv:
 - Conflict in `.venv` → install into `.venv/bin/python`.

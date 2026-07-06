@@ -147,15 +147,37 @@ arguments and prints JSON to stdout.
 runtime-interpolated values. All dynamic data flows in as argv and out as
 printed JSON.**
 
+**MANDATORY layout of every helper — no exceptions.** Every helper.py MUST
+begin with these three lines, in this order:
+
+```python
+import sys, json, argparse
+sys.path.insert(0, sys.argv[1])         # ← always FIRST argv, always FIRST import
+from <repo-package> import <thing>       # ← only THEN import from repo
+```
+
+The `sys.path.insert(0, sys.argv[1])` line is not optional and not "the
+example does this". Without it, `from code.tissue_analysis import ...`,
+`from mymodule import ...`, `from <repo_pkg>.submod import ...` fail
+with `ModuleNotFoundError` — because the helper's subprocess starts with
+`cwd=REPO_PATH` but Python's `sys.path` does NOT auto-include cwd for
+scripts (only for `-m module` invocations). The repo path must be
+inserted explicitly, and it must be the FIRST thing after the stdlib
+imports, before any `from <repo> import ...` statement.
+
+Server.py MUST correspondingly pass `str(REPO_PATH)` as the FIRST
+positional argument in every subprocess.run argv (see Step 2 template
+below).
+
 Step 1 — write the helper (do this before writing server.py):
 ```python
 write_file(repo_url, "helpers/run_analysis.py", """
 import sys, json, argparse
-sys.path.insert(0, sys.argv[1])  # REPO_PATH passed as first positional arg
+sys.path.insert(0, sys.argv[1])          # REPO_PATH — MANDATORY first line after imports
 from mymodule import MyClass
 
 parser = argparse.ArgumentParser()
-parser.add_argument("repo_path")
+parser.add_argument("repo_path")          # matches the sys.argv[1] positional above
 parser.add_argument("image_path")
 parser.add_argument("--model", default="models/best.pth")
 args = parser.parse_args()
