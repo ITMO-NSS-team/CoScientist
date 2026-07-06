@@ -119,38 +119,6 @@ def before_get_task(callback_context: CallbackContext):
     return None 
 
 
-def inject_original_query(
-    callback_context: CallbackContext, llm_request: LlmRequest
-) -> None:
-    """Replace the last message in llm_request.contents with the original query."""
-
-    original = getattr(callback_context, "user_content", None)
-    if original is None or not original.parts:
-        return
-
-    # Extract original text
-    original_text = None
-    for part in original.parts:
-        if part.text:
-            original_text = part.text
-            break
-    if not original_text:
-        return
-
-    # Replace the last user-role content in llm_request.contents
-    for i in range(len(llm_request.contents) - 1, -1, -1):
-        content = llm_request.contents[i]
-        if content.role == "user" and content.parts:
-            llm_request.contents[i] = types.Content(
-                role="user",
-                parts=[types.Part(text=original_text)],
-            )
-            logger.info(
-                "[OrchestratorAgent] Replaced planner messages with original user query"
-            )
-            return
-
-
 # Recognisable token the orchestrator prompt / post-critic key off to re-route.
 NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
 

@@ -385,11 +385,6 @@ def _before_get_task():
     return before_get_task
 
 
-def _inject_original_query():
-    from CoScientist.agents.callbacks import inject_original_query
-    return inject_original_query
-
-
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     return SearchLimiter(max_searches=2).limit_searches
@@ -428,7 +423,6 @@ _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranke
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
-_cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.

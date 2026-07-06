@@ -57,7 +57,7 @@ agents:
       - CoderAgent
       - MedicalAgent
     callbacks:
-      before_model: [save_uploaded_artifacts, seed_coder_workspace, inject_original_query]
+      before_model: [save_uploaded_artifacts, seed_coder_workspace]
       before_agent: [before_get_task]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
