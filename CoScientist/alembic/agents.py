@@ -10,6 +10,7 @@ litellm.suppress_debug_info = True
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.agent_tool import AgentTool
+from alembic.agent_runtime import _trunc
 from alembic.tools import (
     clone_repo, read_file, bash, bash_env, search,
     read_report, write_report,
@@ -42,6 +43,44 @@ def set_current_repo_url(repo_url: str) -> None:
 # while leaving room for several calls within the 1800s validator timeout.
 DEBUGGER_CALL_TIMEOUT = 600  # seconds
 
+# F29: the debugger's own tool calls/reasoning happen inside a nested
+# ADK sub-Runner (see AgentTool.run_async) whose events never pass through
+# agent_runtime._log_event — only the debugger's final self-reported text
+# surfaces to the validator's log, as one opaque `RESP debugger -> {...}`
+# line. This made a real, minutes-long debugger call impossible to audit
+# after the fact (e.g. what bash commands it ran, what it actually edited).
+# _debug_round tags every debugger-internal log line with which top-level
+# validator->debugger call it belongs to, since the validator can call the
+# debugger many times across one stage and the callbacks below (attached to
+# debugger_agent, so they fire regardless of nesting) have no other way to
+# tell which call is currently in flight.
+_debug_round: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "debug_round", default=0
+)
+
+
+def _debugger_before_tool(tool, args, tool_context):
+    round_num = _debug_round.get()
+    logger.debug(f"[debugger#{round_num}] CALL  {tool.name}({_trunc(str(args))})")
+    return None
+
+
+def _debugger_after_tool(tool, args, tool_context, tool_response):
+    round_num = _debug_round.get()
+    logger.debug(f"[debugger#{round_num}] RESP  {tool.name} → {_trunc(str(tool_response))}")
+    return None
+
+
+def _debugger_after_model(callback_context, llm_response):
+    round_num = _debug_round.get()
+    content = getattr(llm_response, "content", None)
+    if content and content.parts:
+        for part in content.parts:
+            text = getattr(part, "text", None)
+            if text:
+                logger.debug(f"[debugger#{round_num}] text:  {_trunc(text.strip())}")
+    return None
+
 
 class _DebuggerAgentTool(AgentTool):
     """Hardens the raw AgentTool call into the debugger sub-agent.
@@ -54,42 +93,55 @@ class _DebuggerAgentTool(AgentTool):
     with zero diagnostic value (F17). See docs/IMPROVEMENTS_SPEC.md.
     """
 
+    def __init__(self, *, agent):
+        super().__init__(agent=agent)
+        self._round = 0  # F29: per-process debug-round counter, see above.
+
     async def run_async(self, *, args, tool_context):
+        self._round += 1
+        round_num = self._round
+        _debug_round.set(round_num)
+
         repo_url = _current_repo_url.get()
         request = (args.get("request") or "").strip()
         if repo_url:
             request = f"Repository: {repo_url}\n\n{request}"
         call_args = {**args, "request": request}
 
-        for attempt in range(2):
-            try:
-                return await asyncio.wait_for(
-                    super().run_async(args=call_args, tool_context=tool_context),
-                    timeout=DEBUGGER_CALL_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[debugger] call timed out after {DEBUGGER_CALL_TIMEOUT}s"
-                )
-                return (
-                    f"Debugger call timed out after {DEBUGGER_CALL_TIMEOUT}s "
-                    "without a resolution. Treat this as an unresolved "
-                    "failure for this stage/tool and move on."
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                if attempt == 0:
-                    logger.warning(
-                        f"[debugger] transient error ({e!r}), retrying once"
+        logger.info(f"[debugger#{round_num}] ── round {round_num} start ──")
+        try:
+            for attempt in range(2):
+                try:
+                    result = await asyncio.wait_for(
+                        super().run_async(args=call_args, tool_context=tool_context),
+                        timeout=DEBUGGER_CALL_TIMEOUT,
                     )
-                    continue
-                logger.warning(f"[debugger] error persisted after retry: {e!r}")
-                return (
-                    f"Debugger call failed twice ({type(e).__name__}: {e}) "
-                    "with no diagnostic content. Treat this as an unresolved "
-                    "failure for this stage/tool and move on."
-                )
+                    return result
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[debugger#{round_num}] call timed out after {DEBUGGER_CALL_TIMEOUT}s"
+                    )
+                    return (
+                        f"Debugger call timed out after {DEBUGGER_CALL_TIMEOUT}s "
+                        "without a resolution. Treat this as an unresolved "
+                        "failure for this stage/tool and move on."
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    if attempt == 0:
+                        logger.warning(
+                            f"[debugger#{round_num}] transient error ({e!r}), retrying once"
+                        )
+                        continue
+                    logger.warning(f"[debugger#{round_num}] error persisted after retry: {e!r}")
+                    return (
+                        f"Debugger call failed twice ({type(e).__name__}: {e}) "
+                        "with no diagnostic content. Treat this as an unresolved "
+                        "failure for this stage/tool and move on."
+                    )
+        finally:
+            logger.info(f"[debugger#{round_num}] ── round {round_num} end ──")
 
 
 explorer_agent = Agent(
@@ -122,6 +174,13 @@ debugger_agent = Agent(
     description="Receives a repo URL and an error message, fixes the bug — either by installing a missing system/pip dep or by editing server.py/helpers — and re-runs the failing tool to confirm.",
     instruction=debugger_instruction,
     tools=[read_output_file, update_file, bash, bash_env, invoke_mcp_tool],
+    # F29: log the debugger's own steps (which are otherwise invisible to
+    # the pipeline log — see _debug_round above) via callbacks, since those
+    # fire on every tool/model call regardless of whether this agent is run
+    # top-level or nested inside _DebuggerAgentTool's AgentTool.run_async.
+    before_tool_callback=_debugger_before_tool,
+    after_tool_callback=_debugger_after_tool,
+    after_model_callback=_debugger_after_model,
 )
 
 validator_agent = Agent(

@@ -79,13 +79,21 @@ If a call returns ``{"ok": False, ...}``:
   - Call the debugger agent tool, passing: repo_url + tool name + the full
     ``error`` + ``traceback`` + ``stderr`` from the response. The debugger
     has bash_env (apt-get / uv pip) and can also edit code.
-  - The debugger will return a short summary AND will itself have re-run
-    `invoke_mcp_tool` to verify its fix. Trust its summary; do NOT call
-    invoke_mcp_tool again for the same tool unless the debugger reports
-    it could not verify the fix.
+  - The debugger will return a short summary of what it changed and
+    whether ITS OWN re-invocation succeeded. This summary is NOT
+    authoritative — do not write PASSED/FAILED from it. After the
+    debugger returns, regardless of what it claims (even "tool re-invoke
+    OK"), YOU must call invoke_mcp_tool yourself again, with the SAME
+    sample args, and judge PASSED/FAILED strictly from THAT result. A
+    debugger claiming success is a hypothesis to check, not a verdict —
+    self-reports from inside a sub-agent call you cannot otherwise see
+    into are exactly the failure mode this independent re-check guards
+    against.
   - Budget: max 2 debugger calls per tool, AND stop on repeated error
-    (same `error` first line twice in a row). If a tool still fails, mark
-    it FAILED and move on to the next tool.
+    (same `error` first line twice in a row, from YOUR OWN re-invocation
+    results — not the debugger's text summary). If a tool still fails
+    your own re-invocation after the budget is exhausted, mark it FAILED
+    and move on to the next tool.
 
 Tools whose sample is ``SKIP`` are reported as ``skipped`` — not failures.
 

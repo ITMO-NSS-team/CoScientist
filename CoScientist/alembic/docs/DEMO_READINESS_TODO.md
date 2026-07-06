@@ -189,6 +189,9 @@ below reflects what the rerun actually confirmed, not just what was patched.
   spent on it. Full evidence and fix direction in
   [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f24) — adjacent to
   F1/F3/F4, likely best designed together with those post-submission.
+  (Update 2026-07-06: the section below's related sub-caveat — no
+  independent re-verification of the debugger's self-report — has since
+  been fixed; see the F24 entry in §5 below.)
 - [x] **F12** — Structured per-run JSON metrics + failure taxonomy.
   Implemented 2026-07-06: `agent_runtime.py`'s `run_agent`/`_run_agent_once`
   now return a `stage_metrics` dict (tool-call counts, a `classify_error()`
@@ -415,11 +418,17 @@ full specs. Do these only if §1–§4 are done with days to spare.
 - [ ] **F24** — Validator/debugger handoff needs a "sample is wrong, not
   the code" outcome and cross-tool fix propagation for shared helper
   bugs (found 2026-07-06 in the rerun4 live-verification run). Directly
-  adjacent to F1/F4 — likely one combined design. Also now documents a
-  more general caveat found while auditing the baseline `AgML` log: every
-  tool's PASSED verdict rests entirely on the debugger's own self-report
-  (Step 4 never has the validator independently re-invoke a fixed tool)
-  — true of every run to date, not just the unhappy-path cases.
+  adjacent to F1/F4 — likely one combined design. These two remain
+  deferred (unchecked above is for these, not the item below).
+  - [x] The more general caveat found while auditing the baseline `AgML`
+    log — every tool's PASSED verdict rested entirely on the debugger's
+    own self-report, since Step 4 never had the validator independently
+    re-invoke a fixed tool — **is fixed**. Implemented 2026-07-06:
+    `instructions/validator.py` Step 4 now requires the validator to call
+    `invoke_mcp_tool` itself again after every debugger call, regardless
+    of what the debugger's self-report claims, and judge PASSED/FAILED
+    from that independent result. See
+    [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f24).
 - [ ] **F25** — SKIP is an LLM-followed convention, not a code-enforced
   gate (`AgML`'s `train_detector` was marked SKIP by the Coder but
   invoked anyway by the Validator, with the tool's expensive default
@@ -471,6 +480,21 @@ full specs. Do these only if §1–§4 are done with days to spare.
   the Validator's 1800s stage budget — `validation.md` never got written
   for this run. Not a regression from F26/27/28; see IMPROVEMENTS_SPEC.md#f28
   "Live end-to-end confirmation" for the full account and its bearing on F25.
+- [x] **F29** — The debugger's internal steps (its own bash/read/edit/
+  invoke_mcp_tool calls) were completely invisible in the pipeline log —
+  only its final one-paragraph self-report ever surfaced, via
+  `[validator] RESP debugger -> {...}`, making the ~10-minute debugger
+  calls seen while diagnosing F28's live run impossible to audit after
+  the fact. Implemented 2026-07-06: `agents.py` now attaches
+  `before_tool_callback`/`after_tool_callback`/`after_model_callback` to
+  `debugger_agent` (these fire regardless of whether the agent runs
+  top-level or nested inside an `AgentTool`, so no ADK internals needed
+  reimplementing), logging every debugger-internal CALL/RESP/text line
+  tagged `[debugger#N]` where N is a per-stage "debug round" counter
+  incremented once per validator→debugger call. See
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f29) for the mechanism
+  and testing (verified against ADK's actual callback contracts and
+  functionally tested inside the real container image).
 - [ ] **F2 / F3** — Semantic output-correctness gate + held-out validation
   invocation. Matches ToolMaker's rigor and is a direct "why trust this
   passed" answer for reviewers.
