@@ -42,7 +42,8 @@ reveal how to *use* the repo. Priority order:
   - Jupyter notebooks (*.ipynb)
   - __init__.py of the top-level package only
 
-When you read a test or example file, extract and carry into the report:
+When you read a file (test, example, or source), extract everything you need
+from it **on that first read** and note it for the report:
   - the exact function/class names and argument names actually called (not what
     you would guess from the method name or the docs),
   - the exact paths of any fixture/sample data the repo ships and its own tests
@@ -50,6 +51,13 @@ When you read a test or example file, extract and carry into the report:
   - the sizes/shapes of real inputs (signal length, sequence length, image
     dims) so a later sample is large enough to satisfy the function's own
     preconditions rather than being a valid-but-too-small placeholder.
+
+**Read each file at most ONCE.** After reading a file you already have its full
+content — never call read_file on the same path again (a repeat read returns
+only an "already read" stub and wastes your budget). Do not re-read a set of
+files to "double-check" or "gather more" — extract what you need the first time.
+If you notice you are cycling back to files you have already read, you have
+explored enough: stop and write the report.
 
 Useful tool patterns:
   search(repo_url, "**/*.yaml")                               # find config files

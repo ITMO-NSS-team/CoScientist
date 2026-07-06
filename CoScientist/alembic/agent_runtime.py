@@ -17,6 +17,8 @@ from loguru import logger
 from google.adk.runners import Runner
 from google.genai import types
 
+from alembic.tools.fs import enable_read_dedup
+
 # ── Loguru: terminal sink ──────────────────────────────────────────────────────
 logger.remove()
 logger.add(
@@ -198,7 +200,12 @@ def _log_event(agent_name: str, event) -> None:
             logger.debug(f"[{agent_name}] RESP  {fr.name} → {resp_str}")
 
 
-MAX_TOOL_REPEATS  = 3    # abort if same tool+args combo is called this many times
+MAX_TOOL_REPEATS  = 3    # abort if same tool+args combo is called this many times in a row
+MAX_TOOL_CYCLE    = 3    # abort if the same tool+args recurs this many times TOTAL in one
+                         # invocation, even non-consecutively — catches set-cycling loops
+                         # (re-reading files A,B,C,A,B,C…) that slip past the consecutive
+                         # check above. Observed in the rerun9 BioSPPy explorer, which
+                         # re-read the same 10 modules 5-7x each up to the MAX_STEPS ceiling.
 MAX_STEPS         = 120  # hard ceiling on total events per agent (was 60; complex
                          # debugger fixes routinely need >60 calls)
 MAX_GUARD_RETRIES = 3    # re-invoke agent at most this many times when guard fires
@@ -220,9 +227,13 @@ async def _run_agent_once(
     retry rather than trust ``final`` as a genuine completed turn.
     ``tool_calls`` maps tool name -> call count this invocation (F12).
     ``failures_by_class`` maps taxonomy label -> count this invocation (F12).
-    ``abort_reason`` is "tool_repeat" / "max_steps" / None (F12).
+    ``abort_reason`` is "tool_repeat" / "tool_cycle" / "max_steps" / None (F12).
     """
     _transient_provider_fault.set(False)
+    # Audit N1 follow-up: de-dup repeated reads only for the agent observed to
+    # loop (the Explorer, cycling read_file over the same modules); every other
+    # agent reads normally so it still gets full content (see tools/fs.py).
+    enable_read_dedup(agent.name == "explorer")
     content           = types.Content(role="user", parts=[types.Part(text=message)])
     final             = "Agent did not produce a final response."
     wrote_report      = False
@@ -231,6 +242,7 @@ async def _run_agent_once(
     last_call         = None
     tool_repeats      = 0
     tool_calls: dict[str, int]        = {}
+    call_key_counts: dict[tuple, int] = {}
     failures_by_class: dict[str, int] = {}
 
     def _fault():
@@ -263,6 +275,15 @@ async def _run_agent_once(
                             )
                             return (final, wrote_report, step, total_tokens, _fault(),
                                     tool_calls, failures_by_class, "tool_repeat")
+                        call_key_counts[call_key] = call_key_counts.get(call_key, 0) + 1
+                        if call_key_counts[call_key] >= MAX_TOOL_CYCLE:
+                            logger.warning(
+                                f"[{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
+                                f"called {call_key_counts[call_key]}x total (non-consecutive "
+                                f"cycle) — breaking loop."
+                            )
+                            return (final, wrote_report, step, total_tokens, _fault(),
+                                    tool_calls, failures_by_class, "tool_cycle")
 
                     fr = getattr(part, "function_response", None)
                     if fr and fr.name == "write_report" and required_report:
@@ -319,7 +340,7 @@ async def run_agent(
     Returns (final_text, total_steps, total_tokens, stage_metrics). ``stage_metrics``
     (F12) is: {"tool_calls": {name: count}, "failures_by_class": {label: count},
     "guard_retries": int, "transient_fault_retries": int, "abort_reason": str | None}.
-    ``abort_reason`` is "tool_repeat"/"max_steps" from the *last* attempt (an
+    ``abort_reason`` is "tool_repeat"/"tool_cycle"/"max_steps" from the *last* attempt (an
     earlier attempt's abort is cleared once a later retry finishes cleanly),
     "guard_exhausted" if the guard-retry budget ran out while nudges were
     still outstanding, or None if the stage genuinely finished clean.

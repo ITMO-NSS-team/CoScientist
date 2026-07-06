@@ -25,22 +25,29 @@ from alembic.instructions import (
 )
 MODEL = os.environ.get("MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
 
-# N1 (docs/audit/02-stability.md): pin sampling so a run is reproducible.
-# Previously every agent used `LiteLlm(model=MODEL)` with no sampling params,
-# so the provider default (~0.7-1.0 for Qwen via OpenRouter) applied and each
-# run was an independent sample — the dominant cause of the run-to-run
-# tool-pass swing (31.9 -> 45.5 -> 54.5% across three "identical" benchmark
-# runs, see docs/DEMO_READINESS_TODO.md §1a Final-eval). Deterministic by
-# default; override via env to run seed/variance experiments without editing
-# code. Extra kwargs on LiteLlm are forwarded to the underlying
-# litellm.completion() call, so temperature/top_p reach the provider.
-MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0"))
-MODEL_TOP_P       = float(os.environ.get("MODEL_TOP_P", "1"))
+# N1 (docs/audit/02-stability.md): sampling-pin to cut run-to-run variance —
+# POSTPONED 2026-07-06, disabled by default. Pinning the temperature (tried both
+# 0 and 0.2) reliably drove Qwen into read_file repetition loops in the Explorer
+# (cycling the same signal modules), even with the read-dedup and cycle-breaker
+# backstops in place — so the determinism experiment is shelved for now. With
+# nothing set here, LiteLlm omits the sampling params and the provider default
+# (~0.7 for Qwen via OpenRouter) applies: the historical, non-looping behavior.
+# To re-open the experiment, set MODEL_TEMPERATURE (and optionally MODEL_TOP_P)
+# in the environment — start_chain already forwards both to the container. Extra
+# kwargs on LiteLlm pass through to litellm.completion(), reaching the provider.
+_MODEL_TEMPERATURE = os.environ.get("MODEL_TEMPERATURE")  # None => unset => provider default
+_MODEL_TOP_P       = os.environ.get("MODEL_TOP_P")
 
 
 def _model() -> LiteLlm:
-    """A LiteLlm wrapper with pinned sampling (see MODEL_TEMPERATURE above)."""
-    return LiteLlm(model=MODEL, temperature=MODEL_TEMPERATURE, top_p=MODEL_TOP_P)
+    """LiteLlm wrapper. Sampling params are passed ONLY when explicitly set via
+    env (postponed N1); otherwise the provider default applies (no loop)."""
+    sampling: dict = {}
+    if _MODEL_TEMPERATURE is not None:
+        sampling["temperature"] = float(_MODEL_TEMPERATURE)
+    if _MODEL_TOP_P is not None:
+        sampling["top_p"] = float(_MODEL_TOP_P)
+    return LiteLlm(model=MODEL, **sampling)
 
 
 # Set once per pipeline run (main.py, before any stage) so the debugger

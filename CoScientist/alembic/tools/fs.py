@@ -1,11 +1,33 @@
 """Filesystem tools: clone/read/search the repo, read/write output and reports."""
 import asyncio
+import contextvars
 import subprocess
 
 from alembic.tools.paths import (
     IGNORE_EXTS, MAX_BYTES, output_dir, rel_or_ignored, repo_path,
     reports_dir,
 )
+
+# ── read_file de-dup (audit N1 follow-up) ──────────────────────────────────────
+# The Explorer was observed cycling read_file over the same handful of files
+# (eda.py, ppg.py, …) many times, thrashing to the step ceiling. This tracks the
+# paths already read *within one agent invocation* and stubs a repeat so the
+# re-read is free and the model is nudged to move on.
+#
+# Scoped, NOT global: agent_runtime.enable_read_dedup() installs a fresh set at
+# the start of each agent turn only for the agent that loops (the Explorer), and
+# None for every other agent. So a *different* agent (e.g. the Coder) that later
+# reads a file the Explorer already read still gets its full content — the set is
+# per-invocation, and disabled entirely outside the Explorer.
+_read_seen: contextvars.ContextVar[set | None] = contextvars.ContextVar(
+    "read_seen", default=None
+)
+
+
+def enable_read_dedup(enabled: bool) -> None:
+    """Called by agent_runtime at each agent-invocation start: a fresh empty set
+    when this agent should de-dup its own repeated reads, None to disable."""
+    _read_seen.set(set() if enabled else None)
 
 
 async def clone_repo(repo_url: str) -> dict:
@@ -48,6 +70,22 @@ def read_file(repo_url: str, path: str) -> dict:
         return {"error": f"File not found: {path}."}
     if full.suffix in IGNORE_EXTS:
         return {"error": f"Binary/data file skipped: {path}."}
+
+    seen = _read_seen.get()
+    if seen is not None:
+        if path in seen:
+            return {
+                "path": path,
+                "already_read": True,
+                "note": (
+                    f"You already read '{path}' earlier in this session and its "
+                    "content has not changed. Do NOT read it again — use what you "
+                    "already have. If you are cycling back to files you have "
+                    "already read, you are done exploring: write the report now."
+                ),
+            }
+        seen.add(path)
+
     raw = full.read_bytes()[:MAX_BYTES]
     return {"path": path, "content": raw.decode("utf-8", errors="replace")}
 

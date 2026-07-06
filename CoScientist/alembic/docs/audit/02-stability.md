@@ -18,20 +18,37 @@ Sources 1–4 are all cheap and mostly untracked. Do them first.
 
 ---
 
-## N1 — Kill the nondeterminism (config, ~1h) — ✅ IMPLEMENTED 2026-07-06
+## N1 — Kill the nondeterminism (config) — ⏸️ POSTPONED 2026-07-06
 
-Confirmed: no agent set a sampling temperature. This is the largest single
-contributor to "it passed yesterday and fails today."
+Confirmed: no agent set a sampling temperature, and that is the largest single
+contributor to "it passed yesterday and fails today." **But pinning the
+temperature to fix it backfired and is shelved for now.**
 
-**Implemented (code part):** `agents.py` now builds every agent via a `_model()`
-factory = `LiteLlm(model=MODEL, temperature=MODEL_TEMPERATURE, top_p=MODEL_TOP_P)`,
-defaulting to `temperature=0`, `top_p=1` (env-overridable via `MODEL_TEMPERATURE`
-/ `MODEL_TOP_P` for seed/variance experiments). LiteLlm forwards these kwargs to
-`litellm.completion()`, so they reach the provider. Still to do (run methodology,
-not code): report the benchmark as mean ± std / pass@k over k≥3 runs, and persist
-each run's generated `server.py` + samples as artifacts.
+**What was tried and why it was reverted.** `agents.py` was changed to build
+every agent via a `_model()` factory that passed `temperature`/`top_p`. Two
+values were tested in-container on the BioSPPy Explorer:
+- **temperature 0** (rerun9): the Explorer thrashed to the `MAX_STEPS=120`
+  ceiling re-reading the same ~10 signal modules 5–7× each — a repetition loop
+  never seen under the provider default.
+- **temperature 0.2** (+ a cycle-breaker + Explorer-only `read_file` dedup):
+  still cycled — the dedup made the re-reads cheap and the breaker bounded them,
+  but the model kept trying to loop rather than finishing.
 
-**Do:**
+Greedy/low-temperature decoding is a known trigger for repetition loops, and
+Qwen here is clearly susceptible. Net: pinning temperature trades one problem
+(variance) for a worse one (looping), so **N1 is reverted to the provider
+default** (`_model()` now passes no sampling params unless `MODEL_TEMPERATURE`
+is set in the env) and postponed. The loop-mitigation work it prompted was kept
+because it is useful regardless (see below): Explorer-only `read_file` dedup, and
+the cycle-aware `MAX_TOOL_CYCLE` loop-breaker in `agent_runtime.py`.
+
+**When revisited**, likely needs a different lever than raw temperature —
+e.g. a repetition/frequency penalty, a moderate temperature (~0.4) *plus* the
+dedup, or per-agent temperatures (low only for the Coder/Validator where looping
+wasn't observed). Report methodology still stands: mean ± std / pass@k over k≥3
+runs, and persist each run's generated `server.py` + samples.
+
+**Original recommendation (for the record):**
 1. Set `temperature=0` and a fixed `top_p` on each agent's model (ADK
    generation config). Qwen at temp 0 is far more repeatable.
 2. For the benchmark, run each repo **k≥3 times** and report per-repo
