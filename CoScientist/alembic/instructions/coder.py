@@ -278,14 +278,53 @@ exact call signatures and real parameter values into the tool's docstring
 `Examples:` section. If the explorer provided multiple examples, include all.
 
 ### Step 2 — Verify API signatures before writing helpers
-Before writing any helper script, confirm the exact parameter names of every
-method you plan to call by reading the source:
-    bash("grep -n 'def <method_name>' .alembic/<repo>/repos/<module>/interface.py")
+Before writing any helper script, confirm both that every class/function you
+plan to import **actually exists** and the exact parameter names of every
+method you plan to call, by reading the source:
+    bash("grep -n 'class <ClassName>\\|def <method_name>' .alembic/<repo>/repos/<module>/interface.py")
     # or read the relevant source file directly
 
-Do NOT guess parameter names from the method name or docs — they may differ
-from what you expect (e.g. `pdf` instead of `pdf_path`, `image` instead of
-`image_path`). A wrong keyword argument causes a TypeError at runtime.
+Do NOT guess either the name or the parameter names from memory, the method's
+name, or docs — both can be wrong (e.g. a plausible-sounding class name that
+was renamed or never existed in this version, or `pdf` instead of `pdf_path`,
+`image` instead of `image_path`). A wrong keyword argument causes a
+TypeError at runtime; a wrong or nonexistent class/function name causes an
+ImportError — grep for both before writing the `import` line, not just
+before calling the method.
+
+### Tool-selection guardrails (apply before writing each helper script)
+
+Before turning any repo function into a tool, check it against both of
+these — violating either has caused real, unfixable failures in practice
+(not fixable by the debugger later, because the problem is the tool's
+*design*, not a bug in its code):
+
+- **Does invoking it via subprocess and capturing stdout give a
+  well-defined, checkable result?** If the operation's only effect is
+  opening an interactive GUI/notebook/REPL, blocking on user input, or
+  displaying a plot with nothing returned, it does **not** fit this
+  framework's invoke-and-parse-JSON contract — do NOT create a tool for
+  it. (One concrete failure: a `run_interactive_gui` tool wrapping a
+  Jupyter-notebook launcher produced `JSONDecodeError: Expecting value:
+  line 1 column 1` on every invocation — there was never a way to make
+  it work, no matter how the helper script was written.) If the same
+  underlying capability can be reached through a variant that saves
+  output to a file and returns the path (e.g. a headless render instead
+  of an interactive viewer), expose that variant instead — don't just
+  drop the capability.
+- **Keep the parameter surface small — prefer ≤4-5 parameters mapping to
+  one well-defined operation.** When a wrapped function exposes many
+  optional configuration knobs, surface only the 2-3 most essential as
+  tool parameters and hardcode sensible defaults for the rest internally,
+  rather than mirroring every internal option as a parameter. A single
+  tool that tries to expose ~10 parameters covering nearly every internal
+  option of a complex operation is a disproportionate failure point
+  compared to several smaller, focused tools (or the same tool with a
+  narrower surface) — more parameters means more chances for a wrong
+  type, a bad interaction between options, or a hallucinated kwarg name.
+  Prefer mirroring the repo's own existing CLI/API entry points 1:1 over
+  inventing a broader custom interface — the thinner the wrap, the less
+  surface area for something to go wrong.
 
 ### Step 3 — Write helper scripts (one per tool that calls repo Python API)
 For each tool that needs to call the repo's Python classes or functions,

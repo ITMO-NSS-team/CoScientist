@@ -428,22 +428,49 @@ full specs. Do these only if §1–§4 are done with days to spare.
   explicit constraint instead of trusted free-text parsing, and (b) an
   optional separate, much-longer-timeout "extended validation" pass for
   SKIP-marked heavy tools, decoupled from the shared per-repo budget.
-- [ ] **F26** — Tools with no checkable/parseable output (e.g.
+- [x] **F26** — Tools with no checkable/parseable output (e.g.
   `aizynthfinder`'s `run_interactive_gui`, a Jupyter-notebook launcher)
   should never be created in the first place, not discovered as
   unfixable at validation time. Coder-instruction fix, same class as
-  F18/F21.
-- [ ] **F27** — Tools with too many parameters are a disproportionate
+  F18/F21. Implemented 2026-07-06: new "Tool-selection guardrails"
+  section in `instructions/coder.py`, right before Step 3.
+- [x] **F27** — Tools with too many parameters are a disproportionate
   failure point (`aizynthfinder` final-eval's 10-parameter
   `perform_retrosynthesis` mega-tool vs. baseline's thin, few-param,
-  CLI-mirroring tools). Coder-instruction cap + an optional F12 metric
-  enrichment (track param counts, correlate with failure rate over time).
-- [ ] **F28** — `validate_syntax` only checks `server.py`, never the
+  CLI-mirroring tools). Implemented 2026-07-06 alongside F26 in the same
+  "Tool-selection guardrails" section: caps at ≤4-5 params, prefer
+  mirroring the repo's own CLI/API 1:1. The optional F12 metric
+  enrichment (tracking param counts over time) was scoped out for now —
+  not selected for this implementation pass.
+- [x] **F28** — `validate_syntax` only checks `server.py`, never the
   `helpers/*.py` scripts that hold the real per-tool logic and imports —
   so a hallucinated import (`aizynthfinder`'s nonexistent
   `AiZynthExpander` class) is invisible until a live invocation burns a
   full debugger round-trip on something a sub-second static check could
   catch for free. A concrete, low-effort, evidence-backed slice of F1.
+  Implemented 2026-07-06: see [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f28)
+  for the full mechanism and the two subtle false-positive bugs found and
+  fixed during testing (sys.path[0] semantics, two-venv repo-vs-server
+  venv selection). Verified against all 11 real committed images from the
+  final-eval run with zero false positives; caught two previously-invisible
+  real bugs, including a `biotite` helper with a flatly invalid
+  `def x = y(...)` typo that had been silently marked SKIPPED and never
+  actually tested in the real run. Live end-to-end verification (fresh
+  `biotite` regeneration, not a replay):
+  `benchmarks/alembic/runs/2026-07-06_rerun7_f26-f28-verify/` — confirmed
+  working exactly as designed on freshly-generated code: caught an `elsif`
+  typo and 3 hallucinated import paths (one confirmed against real repo
+  source: `ClustalOmegaApp` hallucinated as living in `biotite.application.msa`
+  instead of its real home `biotite.application.clustalo`) before any
+  `invoke_mcp_tool` round-trip, zero false positives, F26/F27's guardrails
+  also held (5 thin tools, ≤5 params each, no GUI/mega-tool). This run
+  also independently reproduced the F24/F25-class validator/debugger
+  coordination gap: the debugger re-attempted fixing that same
+  already-known-unfixable import at Step 4 after already giving up on it
+  at Step 2, and combined with an unrelated 600s debugger timeout, blew
+  the Validator's 1800s stage budget — `validation.md` never got written
+  for this run. Not a regression from F26/27/28; see IMPROVEMENTS_SPEC.md#f28
+  "Live end-to-end confirmation" for the full account and its bearing on F25.
 - [ ] **F2 / F3** — Semantic output-correctness gate + held-out validation
   invocation. Matches ToolMaker's rigor and is a direct "why trust this
   passed" answer for reviewers.

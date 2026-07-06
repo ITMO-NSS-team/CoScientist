@@ -1,11 +1,15 @@
 """Validation tools: syntax/import check, pytest run, and live tool invocation."""
+import ast
 import asyncio
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
-from alembic.tools.paths import INVOKE_TOOL_SCRIPT, MAX_BYTES, output_dir, venv_python
+from alembic.tools.paths import (
+    INVOKE_TOOL_SCRIPT, MAX_BYTES, helper_venv_python, output_dir, repo_path, venv_python,
+)
 
 
 async def validate_syntax(repo_url: str) -> dict:
@@ -16,6 +20,99 @@ async def validate_syntax(repo_url: str) -> dict:
     """
     # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
     return await asyncio.to_thread(_validate_syntax_sync, repo_url)
+
+
+def _is_main_guard(node: ast.stmt) -> bool:
+    """True for ``if __name__ == "__main__":`` (or `.../ "== '__main__'"`)."""
+    if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+        return False
+    test = node.test
+    sides = [test.left, *test.comparators]
+    return (
+        any(isinstance(s, ast.Name) and s.id == "__name__" for s in sides)
+        and any(isinstance(s, ast.Constant) and s.value == "__main__" for s in sides)
+    )
+
+
+def _import_safe_prefix(source: str) -> str:
+    """Return the leading slice of ``source``'s top-level statements that is
+    safe to execute without triggering the helper's real argparse/business
+    logic (F28).
+
+    Helper scripts (coder.py Step 3) come in two observed shapes: flat
+    top-level code (``parser = argparse.ArgumentParser(); ...; result =
+    obj.run(...)`` with no function wrapper — the documented template), or
+    a `def main():` wrapper with real logic only run via an
+    `if __name__ == "__main__":` guard. Function/class definitions and
+    imports are always safe to execute (defining doesn't run the body);
+    only a *top-level* statement that itself constructs/parses an argparse
+    parser is where real execution would begin, and the `__main__` guard is
+    never executed at all.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source  # let the real py_compile check below report this
+
+    safe: list[ast.stmt] = []
+    for node in tree.body:
+        if _is_main_guard(node):
+            continue  # never executed — this is exactly the real entrypoint
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                              ast.ClassDef, ast.Import, ast.ImportFrom)):
+            safe.append(node)  # defining, not calling — always safe
+            continue
+        segment = ast.get_source_segment(source, node) or ""
+        if "ArgumentParser(" in segment or "parse_args(" in segment:
+            break  # top-level argparse construction/parsing — stop here
+        safe.append(node)
+
+    return "\n".join(ast.get_source_segment(source, n) or "" for n in safe)
+
+
+def _check_helper_imports(python: str, helper: Path, repo_dir: Path) -> str | None:
+    """F28: verify a helper script's imports actually resolve, without running
+    its business logic. Helper scripts (coder.py Step 3) always accept
+    REPO_PATH as sys.argv[1] and do their own sys.path manipulation with it
+    before importing from the repo's own modules — so we can't just import
+    the file naively, and we can't safely exec() the whole thing (the rest of
+    the file is real argparse + tool logic, which would run for real).
+
+    Instead, execute only the import-safe prefix computed by
+    ``_import_safe_prefix`` (see there for the two helper-script shapes it
+    handles), with sys.argv[1] set to the real repo clone dir so any inline
+    ``sys.path.insert(0, sys.argv[1])``-style setup in that prefix runs
+    exactly as it would at real invocation time. Returns an error string
+    (stderr) on failure, or None if the prefix executed cleanly.
+
+    The prefix is written to a temp file *in the same directory as the
+    original helper* and run as a real script (``python tmp_file.py ...``),
+    not via ``-c`` — server.py always invokes helpers this way, and Python
+    sets ``sys.path[0]`` to the script's own directory only when run this
+    way (``-c`` sets it to ``''``/cwd instead). Getting this wrong produces
+    false positives: verified against `aizynthfinder`'s helpers, where a
+    ``-c``-based check spuriously failed on a file that genuinely works at
+    real invocation time.
+    """
+    source = helper.read_text(encoding="utf-8", errors="replace")
+    prefix = _import_safe_prefix(source)
+
+    fd, tmp_path = tempfile.mkstemp(dir=str(helper.parent), suffix=".py")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(prefix)
+        r = subprocess.run(
+            [python, tmp_path, str(repo_dir)],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(repo_dir),
+        )
+    except subprocess.TimeoutExpired:
+        return f"{helper.name}: import check timed out after 30 seconds"
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+    if r.returncode != 0:
+        return f"{helper.name}: {r.stderr.strip()}"
+    return None
 
 
 def _validate_syntax_sync(repo_url: str) -> dict:
@@ -46,6 +143,30 @@ def _validate_syntax_sync(repo_url: str) -> dict:
     )
     if r2.returncode != 0:
         return {"passed": False, "stage": "imports", "error": r2.stderr.strip()}
+
+    # F28: server.py's own import-exec above never touches helpers/*.py —
+    # those are only ever invoked lazily via subprocess when a tool actually
+    # runs, so a hallucinated import/class/function inside one is otherwise
+    # invisible until it burns a live invoke_mcp_tool + debugger round-trip.
+    helpers_dir = out_dir / "helpers"
+    if helpers_dir.is_dir():
+        repo_dir    = repo_path(repo_url).resolve()
+        # Helpers import the repo's own packages, which in two-venv mode
+        # live in .venv-repo, not .venv — using the wrong venv here produces
+        # false ModuleNotFoundErrors (confirmed against `ase`'s real
+        # two-venv layout, where numpy is repo-side only).
+        helper_python = helper_venv_python(out_dir)
+        for helper in sorted(helpers_dir.glob("*.py")):
+            r3 = subprocess.run(
+                [helper_python, "-m", "py_compile", str(helper)],
+                capture_output=True, text=True,
+            )
+            if r3.returncode != 0:
+                return {"passed": False, "stage": "helper_syntax",
+                        "error": f"{helper.name}: {r3.stderr.strip()}"}
+            err = _check_helper_imports(helper_python, helper, repo_dir)
+            if err:
+                return {"passed": False, "stage": "helper_imports", "error": err}
 
     return {"passed": True}
 

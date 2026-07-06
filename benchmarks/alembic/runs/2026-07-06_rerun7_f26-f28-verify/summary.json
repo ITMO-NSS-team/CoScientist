@@ -1,0 +1,85 @@
+{
+  "repos": [
+    {
+      "repo": "biotite",
+      "url": "https://github.com/biotite-dev/biotite",
+      "elapsed_sec": 2448.6,
+      "exit_code": 0,
+      "log": "benchmarks/alembic/runs/2026-07-06_rerun7_f26-f28-verify/logs/biotite.log",
+      "error_tail": null,
+      "validation": {
+        "error": "validation.md not readable",
+        "stderr": "cat: /work/.alembic/biotite/reports/validation.md: No such file or directory\n",
+        "pipeline_metrics": {
+          "actions_per_stage": {
+            "explorer": 33,
+            "environment": 15,
+            "coder": 45
+          },
+          "tokens_per_stage": {
+            "explorer": 507302,
+            "environment": 53312,
+            "coder": 664174
+          },
+          "durations_per_stage": {
+            "explorer": 93.5,
+            "environment": 151.5,
+            "coder": 387.1,
+            "validator": 1800.0
+          },
+          "tool_calls_per_stage": {
+            "explorer": {
+              "clone_repo": 1,
+              "read_file": 11,
+              "bash": 1,
+              "search": 2,
+              "write_report": 1
+            },
+            "environment": {
+              "read_report": 1,
+              "setup_venv": 1,
+              "check_venv_compat": 2,
+              "bash_env": 2,
+              "write_report": 1
+            },
+            "coder": {
+              "read_report": 1,
+              "bash": 7,
+              "read_file": 6,
+              "write_file": 7,
+              "write_report": 1
+            }
+          },
+          "guard_retries_per_stage": {
+            "explorer": 0,
+            "environment": 0,
+            "coder": 0
+          },
+          "transient_fault_retries_per_stage": {
+            "explorer": 0,
+            "environment": 0,
+            "coder": 0
+          },
+          "abort_reason_per_stage": {
+            "validator": "stage_timeout"
+          },
+          "failures_by_class": {},
+          "total_actions": 93,
+          "total_tokens": 1224788
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "repos_with_metrics": 1,
+    "stage_completion": {
+      "explorer": "1/1",
+      "environment": "1/1",
+      "coder": "1/1",
+      "validator": "0/1"
+    },
+    "failures_by_class": {},
+    "guard_retries_total": 0,
+    "transient_fault_retries_total": 0
+  }
+}
