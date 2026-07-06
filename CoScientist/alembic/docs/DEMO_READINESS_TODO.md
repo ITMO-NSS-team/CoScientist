@@ -189,9 +189,34 @@ below reflects what the rerun actually confirmed, not just what was patched.
   spent on it. Full evidence and fix direction in
   [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f24) — adjacent to
   F1/F3/F4, likely best designed together with those post-submission.
-- [ ] **F12** — Structured per-run JSON metrics + failure taxonomy. Needed
-  so the Evaluation section reports a clean table instead of hand-parsed
-  logs (which is how this TODO's own failure analysis had to be done).
+- [x] **F12** — Structured per-run JSON metrics + failure taxonomy.
+  Implemented 2026-07-06: `agent_runtime.py`'s `run_agent`/`_run_agent_once`
+  now return a `stage_metrics` dict (tool-call counts, a `classify_error()`
+  taxonomy over `invoke_mcp_tool`/`validate_syntax`/`run_tests` failures —
+  plus `DebuggerTimeout` from F16/F17's swallowed timeouts — guard-retry
+  and F22 transient-fault-retry counts, and an abort reason); `main.py`
+  folds these into `pipeline_metrics` per stage (with wall-clock durations)
+  and writes it to `reports/metrics.json` as before. `run_benchmark.py`
+  gained `aggregate_metrics()`, rolling every repo's `metrics.json` into a
+  stage-completion-rate table and a cross-repo failure-taxonomy table,
+  appended to `summary.md` and to `summary.json` (now `{"repos": [...],
+  "aggregate": {...}}` instead of a bare list). Unit-tested the classifier
+  (10 cases incl. nested-traceback root-cause extraction) and the
+  aggregator (mixed complete/timed-out/crashed/unreachable repos) — see
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f12). Live verification on
+  `biotite` (`benchmarks/alembic/runs/2026-07-06_rerun6_f12-verify/`) caught
+  two real bugs the same day: `extract_validation()` skipped `metrics.json`
+  entirely whenever `validation.md` was missing (exactly the
+  timed-out/skipped-validator case F12 most needs to see), and
+  `abort_reason` accumulated the *first* abort across guard-retry attempts
+  instead of reflecting the latest one (so a stage that failed once and
+  then genuinely succeeded on retry would still misreport the stale
+  failure). Both fixed and re-verified: a clean rerun shows PASSED (4/4
+  tools, 12/12 tests), `metrics.json` fully populated (per-stage durations,
+  per-tool call counts, a `failures_by_class` of `{TypeError: 3,
+  ModuleNotFound: 1, FileNotFound: 1}` correctly classified from 5 real
+  debugger-cycle failures en route to the final pass), and
+  `summary.json`'s aggregate correctly showing `repos_with_metrics: 1`.
 
 ## 1a. Rerun results (2026-07-06, same 12 repos as the baseline run)
 
@@ -256,13 +281,70 @@ package install, two `AttributeError`s from wrong SDK field names) are
 ordinary generated-code bugs, unrelated to the refactor, both resolved
 normally. Confirms the split introduced zero behavioral regressions.
 
+### Final-eval (2026-07-06, full 12-repo set, all fixes F14–F23 + F12 in place)
+
+`benchmarks/alembic/runs/2026-07-06_final-eval/` — 11/12 reachable
+(`Analyze-stroke` unreachable in every run since baseline: dead repo, not a
+regression), `--parallel 4`. Per-repo Overall verdict across all three full
+runs to date:
+
+| Repo | Baseline (06-30) | Rerun2 (F14–F19) | Final-eval (07-06) |
+|---|---|---|---|
+| AgML | PASSED 5/0/0 | FAILED 0/2/3 | **timed out** (validator, honest F20 log) |
+| BioSPPy | FAILED 1/4/0 | ERROR (no data) | FAILED 0/4/1 |
+| aizynthfinder | PASSED 3/0/0 | FAILED 1/4/0 | FAILED 0/2/1 |
+| ase | PASSED 4/0/1 | FAILED 1/1/1 | FAILED 2/0/3 |
+| astronomy | PASSED 5/0/0 | PASSED 7/0/0 | PASSED 5/0/0 |
+| astropy | PASSED 4/0/1 | FAILED 3/2/0 | **PASSED 6/0/0** |
+| auto-sklearn | FAILED 0/0/4 (blanket skip) | FAILED 0/2/2 | FAILED 0/5/0 (real diagnoses) |
+| backtrader | FAILED 2/2/1 | FAILED 0/4/0 | FAILED 1/4/0 |
+| biopython | no data (validation.md unreadable) | FAILED 2/3/0 | FAILED 4/1/0 |
+| biotite | FAILED 0/0/4 (blanket skip) | FAILED 1/4/1 | FAILED 2/1/1 (real diagnoses) |
+| dalle-mini | FAILED 0/1/2 | FAILED 0/3/0 | FAILED 0/1/0 |
+
+Overall-PASSED count: **5/10 → 1/10 → 2/10** (denominator = repos with any
+real validator data each run). Tool-invocation pass rate (Σpassed /
+Σ(passed+failed+skipped) across repos with real data): **54.5% (24/44) →
+31.9% (15/47) → 45.5% (20/44)**.
+
+**Read this honestly, not as a regression.** None of F14–F23 touch code
+generation quality — they fix logging honesty, timeout/retry mechanics, and
+tool-lookup robustness. The swings above (AgML/aizynthfinder/ase declining;
+astropy/biopython recovering) are the same LLM-regeneration variance
+already characterized earlier this session (each run regenerates
+`server.py` from scratch via the LLM; a repo passing in one run and failing
+in the next, or vice versa, is expected noise, not a directional trend). Two
+things *are* real, structural improvements, independent of this noise:
+1. **F14's fix is visible in the data.** `auto-sklearn` and `biotite`
+   went from a blanket 4-tool SKIP (baseline; one test failure nuking all
+   downstream tool checks) to real, individually-diagnosable PASS/FAIL
+   verdicts in both later runs — a materially more trustworthy signal even
+   though the Overall row is still FAILED.
+2. **F12 now gives a systematic failure taxonomy for free**, unavailable in
+   baseline/rerun2: this run's aggregate (`summary.json`) shows `Import: 8,
+   ValueError: 5, ModuleNotFound: 5, TypeError: 4, DebuggerTimeout: 4,
+   FileNotFound: 3, Runtime: 3, NameError: 3, Syntax: 1, AttributeError: 1`
+   across all 11 attempted repos — the first time this breakdown exists
+   anywhere for alembic.
+
+**Recommendation for the paper's Evaluation section:** report the
+tool-invocation pass rate as the headline metric (not Overall-PASSED-repo
+count, which is low-n and noisy), explicitly caveat it as a single-run
+sample subject to LLM-regeneration variance (cite the 31.9–54.5% spread
+across 3 independent runs as evidence of the caveat, not as 3 comparable
+data points to average), and lead the qualitative narrative with F14's
+SKIP→real-diagnosis improvement plus the new F12 failure taxonomy — both
+of which are true, structural, and don't depend on any single run's luck.
+
 ## 2. Must-have — re-run the benchmark, write the Evaluation section
 
-- [ ] Re-run `benchmarks/alembic/run_benchmark.py` on at least the current
+- [x] Re-run `benchmarks/alembic/run_benchmark.py` on at least the current
   12-repo set (ideally the full `toolrosella_subset.txt`, 12 more repos)
   after §1's fixes land, and diff against
   `benchmarks/alembic/runs/2026-06-30_baseline/summary.md` to confirm the
-  SKIP rows resolve to real PASS/FAIL.
+  SKIP rows resolve to real PASS/FAIL. Done 2026-07-06 — see "Final-eval"
+  above; SKIP rows do resolve to real PASS/FAIL, but Overall-PASSED count
+  itself is noisy run-to-run (see honest caveat above).
 - [ ] Fill in `docs/paper/sections/evaluation.tex` with the real table
   (per-repo stage success + tool pass rate) and a headline number. **This
   is not optional for submission** — the demo track explicitly desk-rejects
@@ -333,7 +415,35 @@ full specs. Do these only if §1–§4 are done with days to spare.
 - [ ] **F24** — Validator/debugger handoff needs a "sample is wrong, not
   the code" outcome and cross-tool fix propagation for shared helper
   bugs (found 2026-07-06 in the rerun4 live-verification run). Directly
-  adjacent to F1/F4 — likely one combined design.
+  adjacent to F1/F4 — likely one combined design. Also now documents a
+  more general caveat found while auditing the baseline `AgML` log: every
+  tool's PASSED verdict rests entirely on the debugger's own self-report
+  (Step 4 never has the validator independently re-invoke a fixed tool)
+  — true of every run to date, not just the unhappy-path cases.
+- [ ] **F25** — SKIP is an LLM-followed convention, not a code-enforced
+  gate (`AgML`'s `train_detector` was marked SKIP by the Coder but
+  invoked anyway by the Validator, with the tool's expensive default
+  params, burning most of the 1800s stage budget). Needs (a) the
+  SKIP/invoke split computed in code and handed to the validator as an
+  explicit constraint instead of trusted free-text parsing, and (b) an
+  optional separate, much-longer-timeout "extended validation" pass for
+  SKIP-marked heavy tools, decoupled from the shared per-repo budget.
+- [ ] **F26** — Tools with no checkable/parseable output (e.g.
+  `aizynthfinder`'s `run_interactive_gui`, a Jupyter-notebook launcher)
+  should never be created in the first place, not discovered as
+  unfixable at validation time. Coder-instruction fix, same class as
+  F18/F21.
+- [ ] **F27** — Tools with too many parameters are a disproportionate
+  failure point (`aizynthfinder` final-eval's 10-parameter
+  `perform_retrosynthesis` mega-tool vs. baseline's thin, few-param,
+  CLI-mirroring tools). Coder-instruction cap + an optional F12 metric
+  enrichment (track param counts, correlate with failure rate over time).
+- [ ] **F28** — `validate_syntax` only checks `server.py`, never the
+  `helpers/*.py` scripts that hold the real per-tool logic and imports —
+  so a hallucinated import (`aizynthfinder`'s nonexistent
+  `AiZynthExpander` class) is invisible until a live invocation burns a
+  full debugger round-trip on something a sub-second static check could
+  catch for free. A concrete, low-effort, evidence-backed slice of F1.
 - [ ] **F2 / F3** — Semantic output-correctness gate + held-out validation
   invocation. Matches ToolMaker's rigor and is a direct "why trust this
   passed" answer for reviewers.

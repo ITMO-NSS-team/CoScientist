@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 import textwrap
+import time
 
 from loguru import logger
 from google.adk.sessions import InMemorySessionService
@@ -82,9 +83,18 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
             app_name=APP_NAME, user_id=USER_ID, session_id=sid
         )
 
+    # F12: structured per-run metrics + failure taxonomy, written to
+    # reports/metrics.json in the `finally` block below so run_benchmark.py
+    # can aggregate pass-rate-by-stage and error-distribution across a bench.
     pipeline_metrics: dict = {
-        "actions_per_stage": {},
-        "tokens_per_stage":  {},
+        "actions_per_stage":                {},
+        "tokens_per_stage":                 {},
+        "durations_per_stage":              {},
+        "tool_calls_per_stage":             {},
+        "guard_retries_per_stage":          {},
+        "transient_fault_retries_per_stage": {},
+        "abort_reason_per_stage":           {},
+        "failures_by_class":                {},
         "total_actions":     0,
         "total_tokens":      0,
     }
@@ -98,8 +108,9 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                          **kwargs) -> str:
         """Wrap run_agent in a wall-clock timeout. Returns final text or
         an empty string when the stage timed out (pipeline continues)."""
+        started = time.monotonic()
         try:
-            final, steps, tokens = await asyncio.wait_for(
+            final, steps, tokens, stage_metrics = await asyncio.wait_for(
                 run_agent(agent, session_service, f"{name}_{sid_suffix}",
                           message, **kwargs),
                 timeout=STAGE_TIMEOUT[stage],
@@ -109,11 +120,23 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                 f"[{stage}] STAGE TIMEOUT after {STAGE_TIMEOUT[stage]}s — "
                 f"aborting stage, pipeline continues to next stage."
             )
+            pipeline_metrics["durations_per_stage"][stage]   = round(time.monotonic() - started, 1)
+            pipeline_metrics["abort_reason_per_stage"][stage] = "stage_timeout"
             return ""
+        pipeline_metrics["durations_per_stage"][stage] = round(time.monotonic() - started, 1)
         pipeline_metrics["actions_per_stage"][stage] = steps
         pipeline_metrics["tokens_per_stage"][stage]  = tokens
         pipeline_metrics["total_actions"]           += steps
         pipeline_metrics["total_tokens"]            += tokens
+        pipeline_metrics["tool_calls_per_stage"][stage]              = stage_metrics["tool_calls"]
+        pipeline_metrics["guard_retries_per_stage"][stage]           = stage_metrics["guard_retries"]
+        pipeline_metrics["transient_fault_retries_per_stage"][stage] = stage_metrics["transient_fault_retries"]
+        if stage_metrics["abort_reason"]:
+            pipeline_metrics["abort_reason_per_stage"][stage] = stage_metrics["abort_reason"]
+        for label, count in stage_metrics["failures_by_class"].items():
+            pipeline_metrics["failures_by_class"][label] = (
+                pipeline_metrics["failures_by_class"].get(label, 0) + count
+            )
         return final
 
     def _coder_artefacts_present() -> tuple[bool, list[str]]:

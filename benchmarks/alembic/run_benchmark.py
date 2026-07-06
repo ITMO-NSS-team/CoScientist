@@ -113,7 +113,7 @@ def run_one(repo_url: str, extra_args: list[str], log_dir: Path,
 
 
 def extract_validation(repo: str) -> dict:
-    """Pull validation.md (and metrics.json) from the committed image and parse them."""
+    """Pull validation.md (and metrics.json/error.json) from the committed image and parse them."""
     image = f"alembic-tool:{repo}"
     base  = f"/work/.alembic/{repo}/reports"
 
@@ -122,9 +122,15 @@ def extract_validation(repo: str) -> dict:
         capture_output=True, text=True,
     )
     if r.returncode != 0:
-        return {"error": "validation.md not readable", "stderr": r.stderr[-300:]}
-    result = parse_validation(r.stdout)
+        result: dict = {"error": "validation.md not readable", "stderr": r.stderr[-300:]}
+    else:
+        result = parse_validation(r.stdout)
 
+    # F12: metrics.json is written unconditionally in main.py's `finally` block,
+    # even when the pipeline never reaches (or times out in) the validator stage
+    # — pull it regardless of whether validation.md exists, so a partial/failed
+    # run still contributes stage-completion and failure-taxonomy data to the
+    # benchmark-level aggregate instead of being silently excluded.
     for fname, key in [("metrics.json", "pipeline_metrics"), ("error.json", "pipeline_error")]:
         c = subprocess.run(
             ["docker", "run", "--rm", "--entrypoint", "cat", image, f"{base}/{fname}"],
@@ -191,6 +197,50 @@ def parse_validation(md: str) -> dict:
     }
 
 
+PIPELINE_STAGES = ("explorer", "environment", "coder", "validator")
+
+
+def aggregate_metrics(records: list[dict]) -> dict:
+    """F12: roll each repo's metrics.json (main.py's ``pipeline_metrics``,
+    pulled in by extract_validation()) into pass-rate-by-stage and an
+    error-distribution table across the whole bench run."""
+    stage_attempted = {s: 0 for s in PIPELINE_STAGES}
+    stage_completed = {s: 0 for s in PIPELINE_STAGES}
+    failures_by_class: dict[str, int] = {}
+    guard_retries_total           = 0
+    transient_fault_retries_total = 0
+    repos_with_metrics = 0
+
+    for r in records:
+        pm = (r.get("validation") or {}).get("pipeline_metrics")
+        if not pm:
+            continue
+        repos_with_metrics += 1
+        for s in PIPELINE_STAGES:
+            if s in pm.get("durations_per_stage", {}):
+                stage_attempted[s] += 1
+                if s in pm.get("actions_per_stage", {}):
+                    stage_completed[s] += 1
+        for label, count in pm.get("failures_by_class", {}).items():
+            failures_by_class[label] = failures_by_class.get(label, 0) + count
+        guard_retries_total += sum(pm.get("guard_retries_per_stage", {}).values())
+        transient_fault_retries_total += sum(
+            pm.get("transient_fault_retries_per_stage", {}).values()
+        )
+
+    return {
+        "repos_with_metrics":  repos_with_metrics,
+        "stage_completion":    {
+            s: f"{stage_completed[s]}/{stage_attempted[s]}" for s in PIPELINE_STAGES
+        },
+        "failures_by_class":   dict(
+            sorted(failures_by_class.items(), key=lambda kv: -kv[1])
+        ),
+        "guard_retries_total":            guard_retries_total,
+        "transient_fault_retries_total":  transient_fault_retries_total,
+    }
+
+
 def write_summary(records: list[dict], out: Path) -> None:
     """Rewrite the markdown summary (called after every finished worker)."""
     lines = [
@@ -244,6 +294,25 @@ def write_summary(records: list[dict], out: Path) -> None:
             continue
         for t in v.get("tools", []):
             lines.append(f"  - {t['name']}: {t['status']}")
+
+    agg = aggregate_metrics(records)
+    if agg["repos_with_metrics"]:
+        lines += ["", "## Aggregate metrics (F12)",
+                  "", f"Repos with metrics.json: {agg['repos_with_metrics']}/{len(records)}",
+                  "", "**Stage completion (completed/attempted):**", ""]
+        for s in PIPELINE_STAGES:
+            lines.append(f"- {s}: {agg['stage_completion'][s]}")
+        lines += ["", "**Failure taxonomy (tool-invocation failures across all repos):**", ""]
+        if agg["failures_by_class"]:
+            for label, count in agg["failures_by_class"].items():
+                lines.append(f"- {label}: {count}")
+        else:
+            lines.append("- (none)")
+        lines += [
+            "",
+            f"- Guard retries (write_report/venv nudges) total: {agg['guard_retries_total']}",
+            f"- Transient provider-fault retries (F22) total: {agg['transient_fault_retries_total']}",
+        ]
 
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -356,8 +425,15 @@ def main() -> None:
         with lock:
             write_summary(records, ns.output)
             if ns.json_output:
+                # F12: wrap the flat per-repo list with the cross-repo
+                # aggregate (stage pass-rates + failure taxonomy) so
+                # summary.json alone is enough for a paper table, without
+                # re-parsing every repo's metrics.json by hand.
                 ns.json_output.write_text(
-                    json.dumps(records, indent=2, ensure_ascii=False),
+                    json.dumps(
+                        {"repos": records, "aggregate": aggregate_metrics(records)},
+                        indent=2, ensure_ascii=False,
+                    ),
                     encoding="utf-8",
                 )
 

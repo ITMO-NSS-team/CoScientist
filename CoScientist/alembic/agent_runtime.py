@@ -110,6 +110,64 @@ USER_ID  = "user_1"
 
 TRUNC = 2000  # max chars shown for tool args / responses inline
 
+# ── F12: failure taxonomy ───────────────────────────────────────────────────
+# Coarse, best-effort classification of a tool-failure's error/traceback text
+# into a fixed set of buckets a benchmark run can aggregate across repos.
+# Ordering doesn't matter: classify_error() picks whichever needle occurs
+# *last* in the text, since generated server.py wraps the real exception in
+# `raise RuntimeError(f"... {e.stderr}") from e` (see tools/scripts/
+# invoke_tool.py callers) — the wrapper's own class name always appears
+# before the wrapped traceback's real exception, so "last match wins"
+# recovers the actual root cause instead of the wrapper.
+_ERROR_TAXONOMY: list[tuple[str, str]] = [
+    ("ModuleNotFoundError",  "ModuleNotFound"),
+    ("ImportError",          "Import"),
+    ("FileNotFoundError",    "FileNotFound"),
+    ("AttributeError",       "AttributeError"),
+    ("KeyError",             "KeyError"),
+    ("IndexError",           "IndexError"),
+    ("NameError",            "NameError"),
+    ("TypeError",            "TypeError"),
+    ("ValueError",           "ValueError"),
+    ("UnicodeDecodeError",   "Encoding"),
+    ("IndentationError",     "Syntax"),
+    ("SyntaxError",          "Syntax"),
+    ("TimeoutExpired",       "Timeout"),
+    ("timed out",            "Timeout"),
+    ("No matching distribution", "Environment"),
+    ("Could not find a version", "Environment"),
+    ("error: subprocess-exited-with-error", "Environment"),
+    ("Failed building wheel", "Environment"),
+    ("CalledProcessError",   "Runtime"),
+    ("non-zero exit status", "Runtime"),
+]
+
+
+def classify_error(text: str) -> str:
+    """Map a raw error/traceback string to a coarse failure-taxonomy bucket."""
+    if not text:
+        return "Unknown"
+    best_label, best_pos = None, -1
+    for needle, label in _ERROR_TAXONOMY:
+        pos = text.rfind(needle)
+        if pos > best_pos:
+            best_pos, best_label = pos, label
+    return best_label or "Other"
+
+
+# Tool names whose function_response carries a structured ok/passed verdict
+# we can classify on failure.
+_VALIDATION_TOOLS = {"invoke_mcp_tool", "validate_syntax", "run_tests"}
+
+
+def _tool_outcome(name: str, response) -> tuple[bool | None, str]:
+    """Best-effort (ok?, error_text) for a validation-tool's response dict."""
+    if not isinstance(response, dict):
+        return None, ""
+    if name == "invoke_mcp_tool":
+        return response.get("ok"), f"{response.get('error','')}\n{response.get('traceback','')}"
+    return response.get("passed"), str(response.get("error") or response.get("output") or "")
+
 
 def _trunc(text: str, n: int = TRUNC) -> str:
     text = str(text).replace("\n", " ")
@@ -152,22 +210,31 @@ async def _run_agent_once(
     session_id: str,
     message: str,
     required_report: str | None,
-) -> tuple[str, bool, int, int, bool]:
+) -> tuple[str, bool, int, int, bool, dict, dict, str | None]:
     """Run one invocation.
 
-    Returns (final_text, wrote_report, steps, total_tokens, transient_fault).
+    Returns (final_text, wrote_report, steps, total_tokens, transient_fault,
+    tool_calls, failures_by_class, abort_reason).
     ``transient_fault`` is True iff LiteLLM logged an unmapped provider
     finish_reason (see F22) during this invocation — the caller should
     retry rather than trust ``final`` as a genuine completed turn.
+    ``tool_calls`` maps tool name -> call count this invocation (F12).
+    ``failures_by_class`` maps taxonomy label -> count this invocation (F12).
+    ``abort_reason`` is "tool_repeat" / "max_steps" / None (F12).
     """
     _transient_provider_fault.set(False)
-    content      = types.Content(role="user", parts=[types.Part(text=message)])
-    final        = "Agent did not produce a final response."
-    wrote_report = False
-    step         = 0
-    total_tokens = 0
-    last_call    = None
-    tool_repeats = 0
+    content           = types.Content(role="user", parts=[types.Part(text=message)])
+    final             = "Agent did not produce a final response."
+    wrote_report      = False
+    step              = 0
+    total_tokens      = 0
+    last_call         = None
+    tool_repeats      = 0
+    tool_calls: dict[str, int]        = {}
+    failures_by_class: dict[str, int] = {}
+
+    def _fault():
+        return _transient_provider_fault.get()
 
     try:
         async for event in runner.run_async(
@@ -184,7 +251,8 @@ async def _run_agent_once(
             if event.content:
                 for part in event.content.parts:
                     if hasattr(part, "function_call") and part.function_call:
-                        fc       = part.function_call
+                        fc = part.function_call
+                        tool_calls[fc.name] = tool_calls.get(fc.name, 0) + 1
                         call_key = (fc.name, str(fc.args))
                         tool_repeats = tool_repeats + 1 if call_key == last_call else 1
                         last_call    = call_key
@@ -193,19 +261,34 @@ async def _run_agent_once(
                                 f"[{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
                                 f"called {tool_repeats}x with identical args — breaking loop."
                             )
-                            return (final, wrote_report, step, total_tokens,
-                                    _transient_provider_fault.get())
+                            return (final, wrote_report, step, total_tokens, _fault(),
+                                    tool_calls, failures_by_class, "tool_repeat")
 
                     fr = getattr(part, "function_response", None)
                     if fr and fr.name == "write_report" and required_report:
                         report_path = str((fr.response or {}).get("report_path", ""))
                         if required_report in report_path:
                             wrote_report = True
+                    elif fr and fr.name in _VALIDATION_TOOLS:
+                        ok, err_text = _tool_outcome(fr.name, fr.response)
+                        if ok is False:
+                            label = classify_error(err_text)
+                            failures_by_class[label] = failures_by_class.get(label, 0) + 1
+                    elif fr and fr.name == "debugger":
+                        # F16/F17: the debugger's AgentTool wrapper swallows its
+                        # own timeout/retry-exhaustion into a plain text result
+                        # rather than raising — surface it as a taxonomy bucket
+                        # instead of silently losing the signal.
+                        result_text = str((fr.response or {}).get("result", ""))
+                        if "timed out after" in result_text or "failed twice" in result_text:
+                            failures_by_class["DebuggerTimeout"] = (
+                                failures_by_class.get("DebuggerTimeout", 0) + 1
+                            )
 
             if step >= MAX_STEPS:
                 logger.warning(f"[{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
-                return (final, wrote_report, step, total_tokens,
-                        _transient_provider_fault.get())
+                return (final, wrote_report, step, total_tokens, _fault(),
+                        tool_calls, failures_by_class, "max_steps")
 
             if event.is_final_response():
                 if event.content and event.content.parts:
@@ -220,7 +303,7 @@ async def _run_agent_once(
     except Exception:
         logger.exception(f"[{agent.name}] ERROR in event loop:")
 
-    return final, wrote_report, step, total_tokens, _transient_provider_fault.get()
+    return final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, None
 
 
 async def run_agent(
@@ -230,15 +313,26 @@ async def run_agent(
     message: str,
     required_report: str | None = None,
     venv_guard_path: str | None = None,
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, dict]:
     """Run an agent, retrying if guards (write_report / venv) are not satisfied.
 
-    Returns (final_text, total_steps, total_tokens).
+    Returns (final_text, total_steps, total_tokens, stage_metrics). ``stage_metrics``
+    (F12) is: {"tool_calls": {name: count}, "failures_by_class": {label: count},
+    "guard_retries": int, "transient_fault_retries": int, "abort_reason": str | None}.
+    ``abort_reason`` is "tool_repeat"/"max_steps" from the *last* attempt (an
+    earlier attempt's abort is cleared once a later retry finishes cleanly),
+    "guard_exhausted" if the guard-retry budget ran out while nudges were
+    still outstanding, or None if the stage genuinely finished clean.
     """
     runner       = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
     final        = "Agent did not produce a final response."
     total_steps  = 0
     total_tokens = 0
+    tool_calls: dict[str, int]        = {}
+    failures_by_class: dict[str, int] = {}
+    guard_retries            = 0
+    transient_fault_retries  = 0
+    abort_reason: str | None = None
 
     current_message = message
     for attempt in range(MAX_GUARD_RETRIES + 1):
@@ -248,14 +342,26 @@ async def run_agent(
         # which exists for a different purpose (nudging a missed tool call).
         fault_retries = 0
         while True:
-            final, wrote_report, steps, tokens, transient_fault = await _run_agent_once(
+            (final, wrote_report, steps, tokens, transient_fault,
+             call_counts, fail_counts, this_abort) = await _run_agent_once(
                 agent, runner, session_id, current_message, required_report
             )
             total_steps  += steps
             total_tokens += tokens
+            for k, v in call_counts.items():
+                tool_calls[k] = tool_calls.get(k, 0) + v
+            for k, v in fail_counts.items():
+                failures_by_class[k] = failures_by_class.get(k, 0) + v
+            # Reflects only the most recent attempt: a later guard-retry
+            # that finishes cleanly must clear an earlier attempt's abort,
+            # not accumulate it — otherwise a stage that genuinely
+            # succeeded after one retry would still misreport e.g.
+            # "tool_repeat" from its first, superseded attempt.
+            abort_reason = this_abort
             if not transient_fault or fault_retries >= MAX_TRANSIENT_FAULT_RETRIES:
                 break
             fault_retries += 1
+            transient_fault_retries += 1
             logger.warning(
                 f"[{agent.name}] transient provider fault (unmapped LLM "
                 f"finish_reason) — retrying turn {fault_retries}/"
@@ -281,9 +387,22 @@ async def run_agent(
 
         if attempt >= MAX_GUARD_RETRIES:
             logger.warning(f"[guard] Max retries ({MAX_GUARD_RETRIES}) reached — giving up.")
+            # More specific than whatever the last attempt's abort_reason
+            # was (which may be None, e.g. it reached a normal final
+            # response but simply never called write_report/set up the
+            # venv) — the guard budget itself is what's actually exhausted.
+            abort_reason = "guard_exhausted"
             break
 
+        guard_retries += 1
         current_message = "IMPORTANT: " + " ".join(nudges)
         logger.warning(f"[guard] Retry {attempt + 1}/{MAX_GUARD_RETRIES}: {current_message[:120]}")
 
-    return final, total_steps, total_tokens
+    stage_metrics = {
+        "tool_calls":               tool_calls,
+        "failures_by_class":        failures_by_class,
+        "guard_retries":            guard_retries,
+        "transient_fault_retries":  transient_fault_retries,
+        "abort_reason":             abort_reason,
+    }
+    return final, total_steps, total_tokens, stage_metrics
