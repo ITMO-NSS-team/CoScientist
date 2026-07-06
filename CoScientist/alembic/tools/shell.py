@@ -1,4 +1,5 @@
 """Shell-execution tools exposed to the agents: bash / bash_env."""
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -44,7 +45,7 @@ def _run_shell(command: str, timeout: int) -> dict:
         return {"error": f"Command timed out after {timeout} seconds."}
 
 
-def bash(command: str) -> dict:
+async def bash(command: str) -> dict:
     """Run a shell command with a 15 s timeout.
 
     The pipeline is intended to run inside an ephemeral container, so any
@@ -58,10 +59,15 @@ def bash(command: str) -> dict:
         bash("glob .alembic/massformer/repos/**/*.yaml")
         bash("python -m py_compile .alembic/massformer/output/server.py && echo OK")
     """
-    return _run_shell(command, 15)
+    # F23: offload the blocking subprocess.run to a worker thread — ADK calls
+    # non-async tools with a plain synchronous call (no run_in_executor), so a
+    # sync bash()/bash_env() here would freeze the whole event loop for the
+    # duration of the command, silently defeating any asyncio.wait_for-based
+    # timeout (per-debugger-call and per-stage alike) wrapping this turn.
+    return await asyncio.to_thread(_run_shell, command, 15)
 
 
-def bash_env(command: str) -> dict:
+async def bash_env(command: str) -> dict:
     """Run a shell command with a 300 s timeout — for slow installs.
 
     Same semantics as ``bash``, just a longer timeout so package managers
@@ -75,4 +81,4 @@ def bash_env(command: str) -> dict:
         # System libs (container only, /var/lib/apt/lists is empty):
         bash_env("apt-get update && apt-get install -y --no-install-recommends libpoppler-cpp-dev")
     """
-    return _run_shell(command, 300)
+    return await asyncio.to_thread(_run_shell, command, 300)

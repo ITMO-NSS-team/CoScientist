@@ -1,4 +1,5 @@
 """Venv creation and dependency-compatibility checking."""
+import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -14,7 +15,7 @@ def _pip_install(use_uv: bool, python: str, venv_dir: Path, *args: str) -> None:
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
-def setup_venv(repo_url: str, packages: list[str] | None = None,
+async def setup_venv(repo_url: str, packages: list[str] | None = None,
                requirements_file: str | None = None,
                pyproject_toml: str | None = None,
                python_version: str | None = None) -> dict:
@@ -36,6 +37,17 @@ def setup_venv(repo_url: str, packages: list[str] | None = None,
         setup_venv("https://github.com/Roestlab/massformer",
                    pyproject_toml="pyproject.toml", python_version="3.11")
     """
+    # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
+    return await asyncio.to_thread(
+        _setup_venv_sync, repo_url, packages, requirements_file,
+        pyproject_toml, python_version,
+    )
+
+
+def _setup_venv_sync(repo_url: str, packages: list[str] | None,
+                      requirements_file: str | None,
+                      pyproject_toml: str | None,
+                      python_version: str | None) -> dict:
     out_dir  = output_dir(repo_url)
     out_dir.mkdir(parents=True, exist_ok=True)
     venv_dir = out_dir / ".venv"
@@ -88,7 +100,7 @@ def setup_venv(repo_url: str, packages: list[str] | None = None,
     return {"success": True, "venv": str(venv_dir), "python": python}
 
 
-def check_venv_compat(repo_url: str, venv_name: str = ".venv") -> dict:
+async def check_venv_compat(repo_url: str, venv_name: str = ".venv") -> dict:
     """Check compatibility by replaying the repo's own import statements in a venv.
 
     Scans the cloned repo's Python files with AST, collects every unique
@@ -110,6 +122,11 @@ def check_venv_compat(repo_url: str, venv_name: str = ".venv") -> dict:
         check_venv_compat("https://github.com/Roestlab/massformer")
         check_venv_compat("https://github.com/Roestlab/massformer", venv_name=".venv-repo")
     """
+    # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
+    return await asyncio.to_thread(_check_venv_compat_sync, repo_url, venv_name)
+
+
+def _check_venv_compat_sync(repo_url: str, venv_name: str) -> dict:
     out_dir  = output_dir(repo_url).resolve()
     repo_dir = repo_path(repo_url).resolve()
     venv_py  = out_dir / venv_name / "bin" / "python"

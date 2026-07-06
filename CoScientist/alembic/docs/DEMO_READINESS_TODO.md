@@ -116,41 +116,79 @@ below reflects what the rerun actually confirmed, not just what was patched.
   Python ≥3.12-vs-3.11.15 environment gap), not invented filenames. F21
   closed for the observed case; a deterministic file-existence gate
   (F1/F4) remains the durable general fix.
-- [ ] **F22** *(new, found during rerun3, deferred — not blocking the
-  2026-07-10 submission)* — A rare (1 of ~15 runs so far) OpenRouter/
-  LiteLLM fault: an upstream provider error surfaces as an unmapped
-  `finish_reason: "error"`, which `litellm`'s `map_finish_reason()`
-  silently defaults to `"stop"` instead of raising — so ADK treats a
-  stub/garbage response as a normal completed turn. Cost `BioSPPy`'s
-  Coder stage ~8 of its 25 minutes across two occurrences, recovered
-  only by accident via an unrelated guard-retry nudge; a 3rd occurrence
-  in the same stage would have exhausted the guard-retry budget and
-  killed the stage outright. Not caught by F17 (whose retry-once is
-  scoped only to Debugger calls, and only catches *raised* exceptions —
-  this fault never raises). Full root cause, exact code location
-  (`litellm/litellm_core_utils/core_helpers.py:107`), and a concrete
-  3-step implementation path are written up in
-  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f22) for whenever this
-  gets picked up post-submission.
-- [ ] **F23** *(new, found during rerun3, deferred)* — `AgML`'s Validator
-  stage produced no report at all this run (vs. rerun2's clean 0/2/3
-  verdicts on the same repo) because F16's 600s per-debugger-call timeout
-  appears **not to have fired**: a debugger call sent at `09:34:47` (to
-  re-investigate a missing `ensemble-boxes` package) produced zero log
-  output for ~20 minutes — not even F16's own "call timed out after 600s"
-  message — before the *outer* 1800s stage timeout finally fired, itself
-  ~2 minutes late. Root cause (inferred from timing, not yet confirmed
-  against ADK internals): every individual subprocess call already has
-  its own bound (15s–900s depending on the tool), but if the debugger
-  sub-agent chains several of those within one turn (e.g. a few
-  sequential install attempts) before yielding control, `asyncio.wait_for`
-  can't actually cancel until that chain finishes — so the 600s ceiling
-  is real on paper but defeatable in practice. This is a genuine gap in
-  F16, not caused by F19/F20/F21 (which don't touch timeouts/retries) and
-  not the same fault as F22 (which is an LLM/provider issue, not a
-  subprocess-chaining one). Full evidence and fix options in
-  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f23), deferred
-  post-submission like F22.
+- [x] **F22** *(found during rerun3, fixed 2026-07-06)* — A rare (1 of
+  ~15 runs so far) OpenRouter/LiteLLM fault: an upstream provider error
+  surfaces as an unmapped `finish_reason: "error"`, which `litellm`'s
+  `map_finish_reason()` silently defaults to `"stop"` instead of raising
+  — so ADK treats a stub/garbage response as a normal completed turn.
+  Cost `BioSPPy`'s Coder stage ~8 of its 25 minutes across two
+  occurrences in rerun3, recovered only by accident via an unrelated
+  guard-retry nudge. **Fix:** rather than chasing `map_finish_reason`
+  across the 9 litellm modules that each independently `from ... import`
+  it (fragile), hooked litellm's own diagnostic logger — a stable public
+  integration point — via a `logging.Handler` that flags a
+  `contextvars.ContextVar` when it sees the exact warning text.
+  `run_agent`'s stage loop now retries (same message, up to 2x) whenever
+  the flag is set, on a budget entirely separate from the guard-retry
+  nudges. Unit + integration tested (fault-then-recover, and
+  exhaustion-doesn't-infinite-loop); see
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f22) for the full
+  test list, including the subtlety that litellm's own redaction filter
+  required using `record.getMessage()` instead of raw `record.args`.
+- [x] **F23** *(found during rerun3, fixed 2026-07-06)* — `AgML`'s
+  Validator stage produced no report at all in rerun3 because F16's 600s
+  per-debugger-call timeout didn't fire: a debugger call went silent for
+  ~20 minutes before the *outer* 1800s stage timeout finally caught it,
+  itself ~2 minutes late. **Root cause confirmed** (not just inferred)
+  by reading ADK source directly: `function_tool.py`'s
+  `_invoke_callable()` calls synchronous tool functions with a plain
+  blocking call, no `asyncio.to_thread`/`run_in_executor` — so any one
+  of our `subprocess.run()`-based tools (`bash`, `bash_env`,
+  `setup_venv`, `check_venv_compat`, `validate_syntax`, `run_tests`,
+  `invoke_mcp_tool`, `clone_repo`) fully freezes the event loop for its
+  duration, during which no `asyncio.wait_for`-based timeout can fire.
+  **Fix:** converted all 8 to `async def`, each offloading its blocking
+  body to a worker thread via `asyncio.to_thread`. Verified with a
+  decisive positive/negative test pair: `wait_for(bash_env("sleep 10"),
+  timeout=1.5)` now correctly times out at ~1.5s post-fix, and the
+  identical test against the *old* synchronous pattern does **not**
+  time out at all (proving the test is real, not a false positive). See
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f23) for the full
+  test list.
+- [x] Live end-to-end confirmation (`benchmarks/alembic/runs/2026-07-06_rerun4_f22-f23-verify/`).
+  Both `AgML` and `BioSPPy` completed all 4 stages cleanly this run — a
+  real improvement over rerun3, where both truncated with "validation.md
+  not readable" (the exact symptom F19/F20/F23 caused). F23 got a clean
+  natural reproduction: `BioSPPy` hit a genuine slow `pip install`
+  debugger call, and `[debugger] call timed out after 600s` fired
+  **exactly 600.0s** after the call was sent — previously this line
+  never appeared even ~20 minutes late. F20 got a free cross-check too:
+  `AgML`'s Explorer stage genuinely timed out (900s, unrelated slow-repo
+  case), and the log correctly shows no false "done" claim for that
+  stage while the 3 stages that really did complete each show a true
+  one. F22's fault did not recur live (expected at ~1/15 frequency) —
+  no regression, and its correctness rests on the unit/integration
+  tests, not this run. All remaining tool-level failures in both repos
+  trace to genuine, unrelated application bugs (missing ML deps,
+  `argparse` boolean-flag handling, sample-sizing in generated helpers),
+  not to anything F19–F23 touched. F22 and F23 are both closed.
+- [ ] **F24** *(new, found while explaining rerun4's tool-level failures,
+  deferred past 2026-07-10 by explicit instruction)* — Traced why every
+  failing tool in both `AgML` and `BioSPPy` stayed FAILED despite correct
+  debugger diagnoses: `instructions/validator.py` tells the validator to
+  trust the debugger's summary and never re-invoke a tool itself, on the
+  assumption every failure is a code bug the debugger can edit and
+  self-verify. Two real gaps in that assumption, both hit in this one
+  run: (1) when the debugger correctly diagnoses "the sample/argument is
+  wrong, not the code" (e.g. `quality_ecg` needs a 10s segment, `eeg` had
+  only 3 samples), there's no path for that diagnosis to trigger a
+  corrected retry; (2) a debugger fix to one tool (`ecg`'s argv
+  construction) didn't get recognized as covering a sibling tool with
+  the identical bug in its own helper file (`ppg`), so the validator
+  re-hit the same error there with only one debugger attempt already
+  spent on it. Full evidence and fix direction in
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f24) — adjacent to
+  F1/F3/F4, likely best designed together with those post-submission.
 - [ ] **F12** — Structured per-run JSON metrics + failure taxonomy. Needed
   so the Evaluation section reports a clean table instead of hand-parsed
   logs (which is how this TODO's own failure analysis had to be done).
@@ -202,6 +240,21 @@ F19/F20 recurring; the important signal is that both timeouts were now
 (F14–F21) is now closed and confirmed by log evidence; F22 is documented
 and deferred post-submission. F12 remains the only open must-have item
 below.
+
+### Rerun5 (refactor smoke test, 1 repo: `astronomy`)
+
+`main.py` was refactored (523→249 lines) to move cross-cutting runtime
+support — loguru setup, the ADK/LiteLLM compatibility patches (F19, F22),
+and the guarded single-agent-turn runner (`run_agent`/`_run_agent_once`)
+— into a new `agent_runtime.py` (289 lines); `main.py` now holds only
+pipeline orchestration (stage sequencing, timeouts, CLI entrypoint). Ran
+`astronomy` end-to-end as a live regression check: **PASSED**, 5/5 tools,
+16/16 tests, exit 0, 1137s — no `STAGE TIMEOUT`, no `_UnknownToolStub`, no
+`Unmapped finish_reason`, no `error.json`, matching the historically-good
+result for this repo. The two debugger calls that did fire (a missing
+package install, two `AttributeError`s from wrong SDK field names) are
+ordinary generated-code bugs, unrelated to the refactor, both resolved
+normally. Confirms the split introduced zero behavioral regressions.
 
 ## 2. Must-have — re-run the benchmark, write the Evaluation section
 
@@ -277,6 +330,10 @@ full specs. Do these only if §1–§4 are done with days to spare.
 - [ ] **F4** — Bounded, confidence-ranked, AST-verified tool selection (real
   parameter names into the Coder pre-empt wrong-kwarg `TypeError`s like
   `auto-sklearn`'s `time_left_for_this_task`).
+- [ ] **F24** — Validator/debugger handoff needs a "sample is wrong, not
+  the code" outcome and cross-tool fix propagation for shared helper
+  bugs (found 2026-07-06 in the rerun4 live-verification run). Directly
+  adjacent to F1/F4 — likely one combined design.
 - [ ] **F2 / F3** — Semantic output-correctness gate + held-out validation
   invocation. Matches ToolMaker's rigor and is a direct "why trust this
   passed" answer for reviewers.

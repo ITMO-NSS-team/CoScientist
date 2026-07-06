@@ -1,4 +1,5 @@
 """Filesystem tools: clone/read/search the repo, read/write output and reports."""
+import asyncio
 import subprocess
 
 from alembic.tools.paths import (
@@ -7,7 +8,7 @@ from alembic.tools.paths import (
 )
 
 
-def clone_repo(repo_url: str) -> dict:
+async def clone_repo(repo_url: str) -> dict:
     """Clone a GitHub repository to local disk.
 
     Returns the local path and a flat file list for you to select from.
@@ -16,6 +17,11 @@ def clone_repo(repo_url: str) -> dict:
         clone_repo("https://github.com/Roestlab/massformer")
         # -> {"local_path": ".alembic/massformer/repos", "files": [...]}
     """
+    # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
+    return await asyncio.to_thread(_clone_repo_sync, repo_url)
+
+
+def _clone_repo_sync(repo_url: str) -> dict:
     dest = repo_path(repo_url)
     if not dest.exists():
         dest.mkdir(parents=True, exist_ok=True)

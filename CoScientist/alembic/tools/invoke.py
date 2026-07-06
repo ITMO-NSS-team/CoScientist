@@ -1,4 +1,5 @@
 """Validation tools: syntax/import check, pytest run, and live tool invocation."""
+import asyncio
 import json
 import os
 import subprocess
@@ -7,12 +8,17 @@ from pathlib import Path
 from alembic.tools.paths import INVOKE_TOOL_SCRIPT, MAX_BYTES, output_dir, venv_python
 
 
-def validate_syntax(repo_url: str) -> dict:
+async def validate_syntax(repo_url: str) -> dict:
     """Check server.py for syntax errors and failed imports.
 
     Example:
         validate_syntax("https://github.com/Roestlab/massformer")
     """
+    # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
+    return await asyncio.to_thread(_validate_syntax_sync, repo_url)
+
+
+def _validate_syntax_sync(repo_url: str) -> dict:
     out_dir = output_dir(repo_url).resolve()
     server  = out_dir / "server.py"
     python  = venv_python(out_dir)
@@ -44,12 +50,17 @@ def validate_syntax(repo_url: str) -> dict:
     return {"passed": True}
 
 
-def run_tests(repo_url: str) -> dict:
+async def run_tests(repo_url: str) -> dict:
     """Run the pytest test suite for the generated MCP server.
 
     Example:
         run_tests("https://github.com/Roestlab/massformer")
     """
+    # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
+    return await asyncio.to_thread(_run_tests_sync, repo_url)
+
+
+def _run_tests_sync(repo_url: str) -> dict:
     out_dir  = output_dir(repo_url).resolve()
     test_dir = out_dir / "tests"
     python   = venv_python(out_dir)
@@ -69,7 +80,7 @@ def run_tests(repo_url: str) -> dict:
     return {"passed": r.returncode == 0, "output": output}
 
 
-def invoke_mcp_tool(repo_url: str, tool_name: str, args: dict | None = None) -> dict:
+async def invoke_mcp_tool(repo_url: str, tool_name: str, args: dict | None = None) -> dict:
     """Actually invoke an @mcp.tool() function from the generated server.py.
 
     Runs server.py inside the server venv (where fastmcp is installed),
@@ -104,6 +115,11 @@ def invoke_mcp_tool(repo_url: str, tool_name: str, args: dict | None = None) -> 
              "device": -1},
         )
     """
+    # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
+    return await asyncio.to_thread(_invoke_mcp_tool_sync, repo_url, tool_name, args)
+
+
+def _invoke_mcp_tool_sync(repo_url: str, tool_name: str, args: dict | None = None) -> dict:
     out_dir = output_dir(repo_url).resolve()
     server  = out_dir / "server.py"
     venv_py = out_dir / ".venv" / "bin" / "python"
