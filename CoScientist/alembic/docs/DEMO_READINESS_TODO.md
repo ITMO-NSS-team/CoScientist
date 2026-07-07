@@ -189,9 +189,9 @@ below reflects what the rerun actually confirmed, not just what was patched.
   spent on it. Full evidence and fix direction in
   [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f24) — adjacent to
   F1/F3/F4, likely best designed together with those post-submission.
-  (Update 2026-07-06: the section below's related sub-caveat — no
-  independent re-verification of the debugger's self-report — has since
-  been fixed; see the F24 entry in §5 below.)
+  (Update 2026-07-06: all three gaps described here — items (1), (2), and
+  the related independent-re-verification sub-caveat — have since been
+  fixed at the instruction level; see the F24 entry in §5 below.)
 - [x] **F12** — Structured per-run JSON metrics + failure taxonomy.
   Implemented 2026-07-06: `agent_runtime.py`'s `run_agent`/`_run_agent_once`
   now return a `stage_metrics` dict (tool-call counts, a `classify_error()`
@@ -339,6 +339,70 @@ data points to average), and lead the qualitative narrative with F14's
 SKIP→real-diagnosis improvement plus the new F12 failure taxonomy — both
 of which are true, structural, and don't depend on any single run's luck.
 
+### Full-rerun (2026-07-07, full 12-repo set, all fixes F14–F31 in place)
+
+`benchmarks/alembic/runs/2026-07-07_full-rerun/` — 11/12 reachable
+(`Analyze-stroke` unreachable again, same dead repo). Extending the table above:
+
+| Repo | Baseline (06-30) | Rerun2 (F14–F19) | Final-eval (07-06) | Full-rerun (07-07, F24–F31) |
+|---|---|---|---|---|
+| AgML | PASSED 5/0/0 | FAILED 0/2/3 | timed out (validator) | **timed out (validator)** |
+| BioSPPy | FAILED 1/4/0 | ERROR (no data) | FAILED 0/4/1 | **timed out (validator)** |
+| aizynthfinder | PASSED 3/0/0 | FAILED 1/4/0 | FAILED 0/2/1 | **timed out (validator)** |
+| ase | PASSED 4/0/1 | FAILED 1/1/1 | FAILED 2/0/3 | FAILED 0/1/4 |
+| astronomy | PASSED 5/0/0 | PASSED 7/0/0 | PASSED 5/0/0 | **FAILED 0/0/0** (fastmcp install; debugger's fix claim was false, F24 caught it) |
+| astropy | PASSED 4/0/1 | FAILED 3/2/0 | PASSED 6/0/0 | **ERROR — no artefacts** (Explorer timed out at 900s; Coder then hit a real `IsADirectoryError` crash, F33) |
+| auto-sklearn | FAILED 0/0/4 | FAILED 0/2/2 | FAILED 0/5/0 | **timed out (validator)** |
+| backtrader | FAILED 2/2/1 | FAILED 0/4/0 | FAILED 1/4/0 | FAILED 1/4/0 |
+| biopython | no data | FAILED 2/3/0 | FAILED 4/1/0 | **PASSED 4/0/0** |
+| biotite | FAILED 0/0/4 | FAILED 1/4/1 | FAILED 2/1/1 | **PASSED 3/0/1** (recovered despite its own Explorer timeout) |
+| dalle-mini | FAILED 0/1/2 | FAILED 0/3/0 | FAILED 0/1/0 | FAILED 0/0/2 (genuine jax/jaxlib incompatibility, honestly diagnosed) |
+
+Overall-PASSED count: **5/10 → 1/10 → 2/10 → 2/6** (denominator = repos
+with any real validator data each run — note the denominator itself
+dropped from 10 to 6 this run, which is the real story: see below).
+Tool-invocation pass rate on repos with real data: **54.5% → 31.9% →
+45.5% → 40.0% (8/20)** — roughly in the same noisy band as prior runs,
+i.e. not obviously worse at the tool level.
+
+**Read this honestly.** Two things happened simultaneously and should not
+be conflated:
+1. **Noise, consistent with prior runs.** `astronomy` and `astropy` — the
+   two repos that have PASSED in every run to date — both failed this
+   time, while `biopython` and `biotite` — which had never PASSED before —
+   both PASSED cleanly this time. This is the same LLM-regeneration
+   variance already characterized above, not a directional regression in
+   tool-generation quality.
+2. **A real, structural drop in the denominator (10 → 6), not noise.**
+   This is the headline finding of this run. Five of eleven repos
+   produced **zero** real validator signal:
+   - **4 hit the Validator's 1800s `STAGE_TIMEOUT`** (`AgML`, `BioSPPy`,
+     `aizynthfinder`, `auto-sklearn`) — confirmed via `summary.json`'s
+     `"validator": "6/10"`. This is not new in kind (`AgML`/`biopython`
+     hit the same timeout in earlier runs too) but 4/10 in one run is the
+     highest rate observed yet, and F24's independent re-verification
+     (validator re-checking every debugger "fixed" claim itself) is a
+     plausible contributor — each catch of a false claim (confirmed
+     happening on `auto-sklearn` this run) costs real wall-clock time the
+     fixed budget doesn't have room for. See IMPROVEMENTS_SPEC.md's new
+     **F32** for the full writeup and proposed mitigations (not yet
+     implemented).
+   - **2 hit the Explorer's 900s timeout** (`astropy`, `biotite`), a
+     previously under-examined second timeout that cascades downstream
+     — `astropy` lost its Coder stage entirely to a real bug this
+     surfaced (**F33**, found and fixed this run: `tools/fs.py`'s
+     `read_file` crashed with an unhandled `IsADirectoryError` on a
+     directory path); `biotite` recovered by burning part of its own
+     Validator budget re-installing `pytest`, and got lucky that it still
+     fit.
+
+**Bottom line for the paper:** the tool-invocation pass rate (the
+recommended headline metric) held steady, but stage timeouts — not code
+generation quality — are now the most urgent open robustness gap. F32
+(timeout budget/cascade) and F33 (directory-read crash, fixed) are the
+concrete next items; F33 is done, F32 is analysis-only pending a priority
+decision.
+
 ## 2. Must-have — re-run the benchmark, write the Evaluation section
 
 - [x] Re-run `benchmarks/alembic/run_benchmark.py` on at least the current
@@ -415,20 +479,77 @@ full specs. Do these only if §1–§4 are done with days to spare.
 - [ ] **F4** — Bounded, confidence-ranked, AST-verified tool selection (real
   parameter names into the Coder pre-empt wrong-kwarg `TypeError`s like
   `auto-sklearn`'s `time_left_for_this_task`).
-- [ ] **F24** — Validator/debugger handoff needs a "sample is wrong, not
-  the code" outcome and cross-tool fix propagation for shared helper
-  bugs (found 2026-07-06 in the rerun4 live-verification run). Directly
-  adjacent to F1/F4 — likely one combined design. These two remain
-  deferred (unchecked above is for these, not the item below).
-  - [x] The more general caveat found while auditing the baseline `AgML`
-    log — every tool's PASSED verdict rested entirely on the debugger's
-    own self-report, since Step 4 never had the validator independently
-    re-invoke a fixed tool — **is fixed**. Implemented 2026-07-06:
-    `instructions/validator.py` Step 4 now requires the validator to call
-    `invoke_mcp_tool` itself again after every debugger call, regardless
-    of what the debugger's self-report claims, and judge PASSED/FAILED
-    from that independent result. See
-    [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f24).
+- [x] **F24** — Validator/debugger handoff needed a "sample is wrong, not
+  the code" outcome and cross-tool fix propagation for shared helper bugs
+  (found 2026-07-06 in the rerun4 live-verification run), plus the more
+  general independent-re-verification caveat found while auditing the
+  baseline `AgML` log. All three now implemented 2026-07-06:
+  - Independent re-verification: `instructions/validator.py` Step 4 now
+    requires the validator to call `invoke_mcp_tool` itself again after
+    every debugger call, regardless of what the debugger's self-report
+    claims, and judge PASSED/FAILED from that independent result.
+  - Corrected-args signal: new **Class E** in `instructions/debugger.py`
+    ("sample/argument is wrong, code is correct") — the debugger verifies
+    a corrected value itself and reports it in a "Corrected args" field;
+    the validator's independent re-check uses those corrected args
+    instead of the original sample when present.
+  - Sibling-fix propagation: the debugger now greps all `helpers/*.py` for
+    the same buggy pattern when a fix is generic (not tool-specific
+    business logic) and fixes every match, listing changed files; the
+    validator re-checks any earlier-FAILED tool whose file appears in
+    that list, without a new debugger round-trip.
+
+  Instruction-only (same trust model as F18/F26/F27). Live-verified
+  against `BioSPPy` (the repo where both gaps were originally found,
+  `benchmarks/alembic/runs/2026-07-06_rerun8_f24-verify/`) with mixed
+  results, reported honestly: independent re-verification got a direct
+  confirmed pass (validator re-invoked `process_ecg` itself after the
+  debugger, ignoring the debugger's own crashed self-report). The
+  corrected-args and sibling-propagation mechanisms are implemented but
+  **not yet confirmed live** — the run hit F30 (below) before reaching
+  the tools that would have exercised them, and ended without ever
+  writing `validation.md`. **Correction (2026-07-07):** this run (and
+  rerun9/10/11) targeted `PIA-Group/BioSPPy`, not the canonical
+  `scientisst/BioSPPy` used everywhere else in this doc and the real
+  benchmark suite — a real repo-selection mistake, not an ambiguity in
+  the project's repo list. Doesn't invalidate what was verified (general
+  pipeline mechanisms, not repo-specific), but don't read these runs as
+  *the* benchmark's BioSPPy result. See
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f24) for full detail.
+- [x] **F30** *(found while live-verifying F24)* — A successful
+  `invoke_mcp_tool` result had no size cap, unlike stdout/stderr
+  (`MAX_BYTES = 40_000` in `tools/paths.py`). `process_ecg` returned full
+  numpy arrays serialized to JSON lists (many thousands of floats); that
+  unbounded blob re-enters the conversation as context for every
+  subsequent LLM call in the stage, and immediately afterward the
+  validator's own turn started hitting `[validator] ERROR in event loop:`
+  — a raw, uncaught litellm exception distinct from F22's known
+  "unmapped finish_reason" signature — identically on the main attempt
+  and all 3 guard retries, ending in `guard_exhausted` with no
+  `validation.md` ever written. **Causation caveat:** the actual crash
+  traceback contained no status code, response body, or context-length
+  wording (unlike a separately-observed `biotite` crash that clearly WAS
+  a context-length error) — so the large-result theory is a plausible,
+  timing-correlated hypothesis, not confirmed. Implemented 2026-07-06
+  regardless (capping output size is good practice either way):
+  `tools/invoke.py`'s `_invoke_mcp_tool_sync` now recursively truncates
+  `result` list fields to 20 items and string fields to 2000 chars on the
+  success path, next to the existing failure-path `stderr` truncation.
+  See [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f30) for the full
+  writeup and testing. Not yet re-verified in a full live run.
+- [ ] **F31** *(implemented, live-verified, then REVERTED 2026-07-07)* —
+  Built `check_ancient_pins` (`tools/venv.py`) to detect upfront whether a
+  repo's pinned dependencies can resolve to a release with a Python-3.10
+  wheel at all, to skip a doomed ONE-VENV attempt. Live-verified working
+  against `auto-sklearn` (correctly recommended two-venv), but reverted
+  after a later rerun of that same repo showed the two-venv path it
+  recommended still failed — on an ABI-incompatibility conflict
+  (numpy/ConfigSpace/scikit-learn) outside what this check covers. The
+  narrow detection scope plus the code's real implementation cost (two
+  correctness bugs needed fixing along the way) weren't worth it for a
+  problem class that didn't actually prevent the failure it was built to
+  address. All code, tool wiring, and instructions reverted; see
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f31) for the full history.
 - [ ] **F25** — SKIP is an LLM-followed convention, not a code-enforced
   gate (`AgML`'s `train_detector` was marked SKIP by the Coder but
   invoked anyway by the Validator, with the tool's expensive default

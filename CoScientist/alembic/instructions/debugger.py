@@ -21,6 +21,7 @@ Read the error message carefully and decide which class it belongs to:
 | (B) Missing Python module   | `ModuleNotFoundError: No module named '<pkg>'` from venv          | uv pip install  |
 | (C) Code bug (server/helper)| `TypeError`, `AttributeError`, `IndexError`, argparse error, etc. | update_file     |
 | (D) Hard environment fault  | Architecture mismatch, broken wheel, kernel ELF rejection         | stop, report    |
+| (E) Sample/argument is wrong, code is correct | A *value* constraint from the repo's OWN logic (not a Python built-in exception) — e.g. "a 10-second segment is required," an array with too few elements, a wrong enum value | find working args, report them — do NOT edit code |
 
 Pick exactly one class and follow its workflow below. Do NOT mix — for
 example, do not edit server.py when the real cause is a missing apt package.
@@ -99,6 +100,24 @@ Common argv-construction bugs to recognise and fix:
 - Mismatched flag names: server uses `--smiles-fp`, helper expects
   positional `smiles_fp` (or vice versa). Make them agree.
 
+### Propagate pattern-level fixes to sibling tools
+
+Before returning, ask: is the bug you just fixed specific to THIS tool's
+own business logic, or a generic code-generation pattern the Coder could
+have repeated verbatim in other helpers (argv construction, boolean-flag
+handling, path resolution against the wrong CWD, an import-path
+convention, etc.)? If it's the latter:
+
+    bash("grep -rn '<the exact buggy pattern>' .alembic/<repo>/output/helpers/")
+
+and apply the identical fix to every OTHER helper file that matches too —
+not just the one you were asked about. A fix scoped to only the one tool
+you were explicitly told about, when the same broken line exists verbatim
+in a sibling helper, means the validator will independently hit the exact
+same error on that sibling tool and spend a whole separate debugger call
+rediscovering what you already know. List every file you changed in your
+summary's "Files changed" field (see "Return summary" below).
+
 ### Sub-recipe — `ValueError: File not found: <path>` (or similar)
 
 This is almost always a **defensive existence check** the coder added at
@@ -149,6 +168,47 @@ it is NOT a code or package bug — it is an environment-level fault that
 the debugger cannot resolve from source. Stop and report what you saw and
 why it is out of scope.
 
+## Class E — sample/argument is wrong, the code is correct
+
+Some failures are neither a missing dependency nor a code bug — the tool's
+own logic is correctly rejecting the specific arguments the validator
+happened to pass (e.g. "a 10-second segment is required" when the sample
+passed a 2-second one, an array with too few elements, a wrong enum/string
+value, an ID that legitimately doesn't exist in the target database). You
+will recognize this class when the traceback's raising line originates
+from the REPO'S OWN validation/logic (not a Python built-in type error),
+and the message describes a *value* constraint, not a *type* or
+*missing-symbol* problem. Do NOT edit server.py or the helper to work
+around this — that would be hiding a correct check behind a fake pass.
+
+Instead:
+1. Work out a concrete corrected value that should satisfy the constraint
+   (read the repo's own source/docs for the real requirement — e.g. grep
+   for the constant/threshold named in the error message).
+2. Verify it yourself:
+       invoke_mcp_tool(repo_url, "<tool_name>", { ...corrected args... })
+   If it now returns ``{"ok": True, ...}``, you've confirmed the code is
+   correct and the fix is a corrected argument, not a code change.
+3. Report the exact corrected args dict in your summary (see "Return
+   summary" below) — the validator will use these for its own independent
+   re-check instead of the original sample args.
+
+**A Class E report is INCOMPLETE, and unusable by the validator, without a
+literal "Corrected args:" line containing the full args dict.** Do not
+describe the correction only in prose (e.g. "corrected dataset name" or
+"the value now satisfies the constraint") — that text is not something the
+validator can act on. Always write the field exactly as:
+    Corrected args: {"<param>": <value>, ...}
+using the COMPLETE args dict (every parameter, not just the one you
+changed) so the validator can pass it straight to `invoke_mcp_tool`
+verbatim.
+
+If you cannot find a corrected value that satisfies the constraint using
+information actually available in the repo (not guessing), report this as
+an unresolved Class E case with no "Corrected args" field — do not force a
+Class C code edit just to make the immediate error go away, and do not
+invent a "Corrected args" value you have not actually verified yourself.
+
 ## Hard limits — never do these
 - Do NOT replace `from fastmcp import FastMCP` (or any other installed
   library) with a hand-written local stub. If fastmcp is missing, install
@@ -164,6 +224,8 @@ why it is out of scope.
 Whichever class you handled, the last action before returning is to re-run
 the tool that failed:
     invoke_mcp_tool(repo_url, "<tool_name>", { ...same args validator sent... })
+(Class E is the one exception: re-run with your CORRECTED args instead —
+see Class E above.)
 
 If it returns ``{"ok": True, ...}``: your fix worked. Return a summary.
 If it returns ``{"ok": False, ...}`` with a DIFFERENT error: classify the
@@ -178,10 +240,19 @@ just report and the validator will retry tests).
 ## Return summary
 
 Reply with a short, structured summary:
-  - Error class (A / B / C / D)
+  - Error class (A / B / C / D / E)
   - What was wrong (one sentence)
-  - What you changed (one sentence) — install command, file edited, or
-    "environment fault out of scope"
+  - What you changed (one sentence) — install command, file(s) edited,
+    "environment fault out of scope", or "no code change — sample/argument
+    was the problem" (class E)
+  - Files changed: list every helper/server file you actually edited,
+    INCLUDING any sibling files fixed via the pattern-propagation step
+    above. Omit this field for class A / B / D, or for class E with no
+    edits.
+  - Corrected args: the exact args dict to retry with. MANDATORY for every
+    class E report that reaches "tool re-invoke OK" — see the "A Class E
+    report is INCOMPLETE..." note above. Omit only for an unresolved class
+    E case (no verified correction found) or for classes A / B / C / D.
   - Verification result: tool re-invoke OK / FAILED with new error / FAILED
     with same error
 '''

@@ -81,19 +81,48 @@ If a call returns ``{"ok": False, ...}``:
     has bash_env (apt-get / uv pip) and can also edit code.
   - The debugger will return a short summary of what it changed and
     whether ITS OWN re-invocation succeeded. This summary is NOT
-    authoritative — do not write PASSED/FAILED from it. After the
-    debugger returns, regardless of what it claims (even "tool re-invoke
-    OK"), YOU must call invoke_mcp_tool yourself again, with the SAME
-    sample args, and judge PASSED/FAILED strictly from THAT result. A
-    debugger claiming success is a hypothesis to check, not a verdict —
-    self-reports from inside a sub-agent call you cannot otherwise see
-    into are exactly the failure mode this independent re-check guards
-    against.
+    authoritative — do not write PASSED/FAILED from it.
+
+  **HARD GATE — do not skip this, do not invoke any other tool first:**
+  the very next tool call you make, no matter what the debugger's summary
+  says, MUST be `invoke_mcp_tool` for THIS SAME tool_name. This has been
+  observed failing in practice: a validator run received a debugger
+  summary claiming success and moved straight to invoking a *different*
+  tool without ever re-checking this one — exactly the unverified-trust
+  failure mode this re-check exists to prevent. Do not let a debugger
+  summary that "sounds" verified (e.g. "Verification result: tool
+  re-invoke OK") substitute for you actually making the call yourself.
+      - Normally, re-invoke with the SAME sample args you originally sent.
+      - EXCEPTION — if the debugger's summary reports **Error class E**
+        ("sample/argument is wrong, code is correct") AND includes a
+        literal **"Corrected args:"** field with a full args dict,
+        re-invoke using THOSE corrected args instead. If that passes, mark
+        the tool PASSED but explicitly note in your report which args had
+        to change and why (do not silently report a plain PASSED as if the
+        original sample worked — it didn't).
+      - If the summary reports Class E but has NO "Corrected args:" field
+        (a vague claim like "corrected the dataset name" with no dict to
+        act on), treat this the same as any other unverifiable claim: fall
+        back to re-invoking with the ORIGINAL sample args. Do not invent
+        or guess a corrected value yourself, and do not mark the tool
+        PASSED on the strength of the debugger's prose alone.
+  - Judge PASSED/FAILED strictly from the result of YOUR OWN call above —
+    never from the debugger's text. A debugger claiming success is a
+    hypothesis to check, not a verdict.
   - Budget: max 2 debugger calls per tool, AND stop on repeated error
     (same `error` first line twice in a row, from YOUR OWN re-invocation
     results — not the debugger's text summary). If a tool still fails
     your own re-invocation after the budget is exhausted, mark it FAILED
     and move on to the next tool.
+  - **Check for sibling fixes before moving on.** If the debugger's
+    summary includes a "Files changed" field listing a helper file
+    belonging to a DIFFERENT tool you already tested earlier in this Step
+    4 pass and marked FAILED, that tool's bug was very likely fixed as a
+    side effect (the debugger proactively propagates pattern-level fixes
+    to sibling helpers — see its own instructions). Re-invoke that earlier
+    tool now with its original sample args — a single direct
+    `invoke_mcp_tool` call, do NOT start a new debugger call for it first —
+    and update its verdict in your report if it now passes.
 
 Tools whose sample is ``SKIP`` are reported as ``skipped`` — not failures.
 
@@ -114,7 +143,9 @@ The report must contain:
 
   ## Tool Invocations
   For each tool from the samples block:
-  - **tool_name** — PASSED | FAILED | SKIPPED (with one-line reason if skipped/failed)
+  - **tool_name** — PASSED | FAILED | SKIPPED (with one-line reason if
+    skipped/failed, or — if a Class E corrected-args re-check was needed
+    to reach PASSED — a note of which args changed and why)
 
   ## Debugger Actions
   List each fix attempt: stage (syntax / tests / invoke <tool>), what was
