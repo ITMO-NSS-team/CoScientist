@@ -127,7 +127,7 @@ def create_app() -> FastAPI:
         }
         return JSONResponse({
             "hitl_enabled": get_settings().hitl.enabled,
-            "websocket_bound": _web_hitl_handler._websocket is not None,
+            "websocket_connections": len(_web_hitl_handler._sockets),
             "session_agents_with_handler": agents,
             "pending_requests": _web_hitl_handler.pending_summary(),
             "auto_approve_timeout_seconds": _web_hitl_handler.HITL_TIMEOUT_SECONDS,
@@ -290,18 +290,14 @@ def create_app() -> FastAPI:
                         "message": f"Unknown message type: {msg_type}",
                     })
         except WebSocketDisconnect:
-            if _web_hitl_handler._websocket == ws:
-                _cancel_pending_hitl()
-                _web_hitl_handler.reset()
-                _web_hitl_handler.set_websocket(None)
+            # Only drop THIS socket. Pending HITL reviews stay alive: they are
+            # re-delivered when a tab reconnects, and auto-approve on timeout.
+            _web_hitl_handler.detach_websocket(ws)
             if active_task and not active_task.done():
                 active_task.cancel()
             print("[WebSocket] Client disconnected")
         except Exception as exc:
-            if _web_hitl_handler._websocket == ws:
-                _cancel_pending_hitl()
-                _web_hitl_handler.reset()
-                _web_hitl_handler.set_websocket(None)
+            _web_hitl_handler.detach_websocket(ws)
             if active_task and not active_task.done():
                 active_task.cancel()
             print(f"[WebSocket] Error: {exc}")
