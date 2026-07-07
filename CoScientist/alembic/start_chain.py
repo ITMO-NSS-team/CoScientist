@@ -41,10 +41,16 @@ PORT_RANGE       = (20000, 30000)
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
 PASSTHROUGH_ENV = (
+    # LLM / agent providers
     "OPENROUTER_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY",
-    "GOOGLE_API_KEY", "GEMINI_API_KEY",
+    "GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
     "MODEL", "MODEL_TEMPERATURE", "MODEL_TOP_P",
     "MCP_URLS", "OR_APP_NAME", "FEDOTMAS_DEFAULT_MODEL",
+    # HuggingFace — needed by ToolMaker subset (CONCH, UNI, MUSK, ...)
+    "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN",
+    # Wandb — some train/finetune tools call wandb.init at import time.
+    # Set WANDB_MODE=offline to disable without leaking the key.
+    "WANDB_API_KEY", "WANDB_MODE",
 )
 
 
