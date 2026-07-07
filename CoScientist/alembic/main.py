@@ -18,7 +18,7 @@ from google.adk.sessions import InMemorySessionService
 
 from alembic.agents import (
     explorer_agent, environment_agent, coder_agent, validator_agent,
-    set_current_repo_url,
+    reporter_agent, set_current_repo_url,
 )
 from alembic.tools import WORKDIR, get_repo_name
 from alembic.agent_runtime import APP_NAME, USER_ID, run_agent
@@ -31,6 +31,24 @@ STAGE_TIMEOUT = {
     "coder":       1500,   # 25 min — generates server.py + helpers + tests
     "validator":   1800,   # 30 min — syntax + pytest + per-tool invocations
 }
+
+# F32: reserve the last 15% of each stage's budget as a grace window. Once
+# elapsed time crosses this fraction, run_agent breaks the agent's current
+# attempt early and spends one urgent, deadline-free turn forcing write_report
+# — so a stage that's about to blow its hard STAGE_TIMEOUT still saves
+# whatever partial findings it has, instead of the wait_for below cancelling
+# everything with no report written at all (observed repeatedly: a stage
+# grinding through many genuinely-productive-but-slow steps never trips the
+# tool_repeat/tool_cycle/max_steps guards, so nothing broke the loop early
+# until this).
+REPORT_GRACE_FRACTION = 0.85
+
+# F35: hard cap on the last-resort reporter's own call, so the guarantee
+# ("the validator stage always ends with a validation.md, one way or
+# another") can't itself hang forever. The reporter's toolset is bounded to
+# well under a minute of real tool time (validate_syntax/run_tests), so this
+# is generous defense-in-depth, not an expected-to-fire limit.
+REPORTER_TIMEOUT = 300
 
 
 def _banner(stage: int, label: str) -> None:
@@ -92,7 +110,7 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
     # ──────────────────────────────────────────────────────────────────────
 
     for sid in (f"{name}_explorer", f"{name}_environment",
-                f"{name}_coder", f"{name}_validator"):
+                f"{name}_coder", f"{name}_validator", f"{name}_reporter"):
         await session_service.create_session(
             app_name=APP_NAME, user_id=USER_ID, session_id=sid
         )
@@ -126,10 +144,11 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
         """Wrap run_agent in a wall-clock timeout. Returns final text or
         an empty string when the stage timed out (pipeline continues)."""
         started = time.monotonic()
+        soft_deadline = started + STAGE_TIMEOUT[stage] * REPORT_GRACE_FRACTION
         try:
             final, steps, tokens, stage_metrics = await asyncio.wait_for(
                 run_agent(agent, session_service, f"{name}_{sid_suffix}",
-                          message, **kwargs),
+                          message, deadline=soft_deadline, **kwargs),
                 timeout=STAGE_TIMEOUT[stage],
             )
         except asyncio.TimeoutError:
@@ -164,6 +183,56 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
         ]
         missing = [str(p.relative_to(base)) for p in required if not p.exists()]
         return (not missing), missing
+
+    async def _ensure_validation_report(progress: dict) -> None:
+        """F35 last-resort guarantee: if the validator stage ended — via
+        hard STAGE_TIMEOUT or by exhausting its guard-retry budget — without
+        ever writing validation.md, invoke the separate reporter_agent to
+        write SOMETHING rather than leaving zero signal. Uses a FRESH
+        session (not the validator's own, which may have been cancelled
+        mid-tool-call — replaying that risks the same "Missing tool results
+        for tool_call_id(s)" session corruption seen elsewhere this session)
+        and a toolset that structurally cannot repeat the validator's own
+        failure mode (no debugger, no invoke_mcp_tool — see agents.py).
+        ``progress`` is the same dict passed as run_agent's ``progress=``
+        for the validator call: mutated in place as events streamed, so it
+        still holds a compact summary of how far the run got even if the
+        validator's own call was cancelled mid-flight.
+        """
+        validation_path = base / "reports" / "validation.md"
+        if validation_path.exists():
+            return
+        logger.warning(
+            f"[validator] no validation.md after the stage ended — "
+            f"invoking the fallback reporter to guarantee one gets written."
+        )
+        summary_bits = []
+        if progress.get("tool_calls"):
+            summary_bits.append(f"Tool calls made before running out of time: {progress['tool_calls']}")
+        if progress.get("last_debugger_request"):
+            summary_bits.append(f"Last debugger request in flight: {progress['last_debugger_request']}")
+        if progress.get("last_failure"):
+            summary_bits.append(f"Last known validation failure observed: {progress['last_failure']}")
+        summary = "\n".join(summary_bits) or "No further detail is available."
+        reporter_message = (
+            f"{repo_url}\n\nThe validator stage ended without writing a "
+            f"validation report (it ran out of its {STAGE_TIMEOUT['validator']}s "
+            f"budget). You do not have access to that debugging session — "
+            f"here is what's known about it:\n{summary}\n\n"
+            f"Perform your own fresh, independent check now and write the "
+            f"validation report immediately, per your instructions."
+        )
+        try:
+            await asyncio.wait_for(
+                run_agent(reporter_agent, session_service, f"{name}_reporter",
+                          reporter_message, required_report="validation"),
+                timeout=REPORTER_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[reporter] fallback reporter ALSO timed out after "
+                f"{REPORTER_TIMEOUT}s — giving up, no validation.md written."
+            )
 
     try:
         # ── Stage 1: Explorer ──────────────────────────────────────────────
@@ -206,32 +275,41 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
                 )
             else:
                 _banner(4, f"Validator  ({repo_url})")
-                validator_response = await _run_stage(
+                validator_progress: dict = {}
+                await _run_stage(
                     "validator", validator_agent, "validator", repo_url,
-                    required_report="validation",
+                    required_report="validation", progress=validator_progress,
                 )
+                # F35: fires only if validation.md is still missing — covers
+                # both the hard-timeout path (_run_stage returned "") and
+                # the guard-exhausted path (run_agent returned normally but
+                # never actually called write_report). Either way, the file
+                # itself (checked below) is the only source of truth now.
+                await _ensure_validation_report(validator_progress)
 
                 sep = "=" * 60
-                # _run_stage returns "" only on the asyncio.wait_for timeout
-                # branch (a normal completion always yields at least the
-                # "Agent did not produce a final response." fallback) — so
-                # this reliably distinguishes "timed out" from "finished",
-                # unlike unconditionally logging success/report-path lines.
-                if validator_response:
-                    logger.info(f"[Validator done] report → {base}/reports/validation.md")
+                validation_path = base / "reports" / "validation.md"
+                # F35: check the file directly — it's the one source of
+                # truth regardless of whether the validator itself wrote it
+                # or the fallback reporter had to step in.
+                if validation_path.exists():
+                    logger.info(f"[Validator done] report → {validation_path}")
                     logger.success(
                         f"\n{sep}\n  Pipeline complete: {name}\n"
                         f"  Reports : {base}/reports/\n"
                         f"  Output  : {base}/output/\n"
                         f"  Log     : {log_file}\n{sep}\n\n"
                         f"--- Validator summary ---\n\n"
-                        + textwrap.indent((validator_response or "").strip(), "  ")
+                        + textwrap.indent(
+                            validation_path.read_text(encoding="utf-8").strip(), "  ",
+                        )
                     )
                 else:
                     logger.error(
                         f"\n{sep}\n  Pipeline incomplete: {name}\n"
-                        f"  Validator stage timed out — no {base}/reports/validation.md "
-                        f"was written.\n"
+                        f"  Validator stage ended — no {validation_path} was "
+                        f"written (the fallback reporter also failed to "
+                        f"produce one; see logs above).\n"
                         f"  Reports so far : {base}/reports/\n"
                         f"  Output  : {base}/output/\n"
                         f"  Log     : {log_file}\n{sep}\n"

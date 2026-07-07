@@ -11,6 +11,7 @@ import contextvars
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -217,6 +218,8 @@ async def _run_agent_once(
     session_id: str,
     message: str,
     required_report: str | None,
+    deadline: float | None = None,
+    progress: dict | None = None,
 ) -> tuple[str, bool, int, int, bool, dict, dict, str | None]:
     """Run one invocation.
 
@@ -227,7 +230,23 @@ async def _run_agent_once(
     retry rather than trust ``final`` as a genuine completed turn.
     ``tool_calls`` maps tool name -> call count this invocation (F12).
     ``failures_by_class`` maps taxonomy label -> count this invocation (F12).
-    ``abort_reason`` is "tool_repeat" / "tool_cycle" / "max_steps" / None (F12).
+    ``abort_reason`` is "tool_repeat" / "tool_cycle" / "max_steps" /
+    "soft_deadline" / None (F12/F32).
+    ``deadline`` (F32): a ``time.monotonic()`` timestamp checked between
+    events. Reaching it breaks the loop early (abort_reason="soft_deadline")
+    so ``run_agent`` gets a chance to nudge a forced write_report *before*
+    the caller's hard wall-clock stage timeout cancels everything with
+    nothing saved. None disables the check (used for the nudge retry
+    itself, which needs a clear shot at finishing).
+    ``progress`` (F35): an optional plain dict the caller keeps a reference
+    to and mutated in place here — ``tool_calls`` (same dict, live-updated),
+    ``last_debugger_request``, ``last_failure``. Because it's mutated by
+    reference rather than returned, it survives even if this coroutine is
+    cancelled mid-await (e.g. the caller's own asyncio.wait_for hits its hard
+    timeout) — giving a fallback caller (see main.py's validator
+    last-resort reporter) a compact summary of how far the run got, without
+    needing to replay the (possibly mid-tool-call, corruption-prone)
+    session itself.
     """
     _transient_provider_fault.set(False)
     # Audit N1 follow-up: de-dup repeated reads only for the agent observed to
@@ -244,6 +263,8 @@ async def _run_agent_once(
     tool_calls: dict[str, int]        = {}
     call_key_counts: dict[tuple, int] = {}
     failures_by_class: dict[str, int] = {}
+    if progress is not None:
+        progress["tool_calls"] = tool_calls
 
     def _fault():
         return _transient_provider_fault.get()
@@ -285,6 +306,9 @@ async def _run_agent_once(
                             return (final, wrote_report, step, total_tokens, _fault(),
                                     tool_calls, failures_by_class, "tool_cycle")
 
+                        if progress is not None and fc.name == "debugger":
+                            progress["last_debugger_request"] = _trunc(str(fc.args))
+
                     fr = getattr(part, "function_response", None)
                     if fr and fr.name == "write_report" and required_report:
                         report_path = str((fr.response or {}).get("report_path", ""))
@@ -295,6 +319,8 @@ async def _run_agent_once(
                         if ok is False:
                             label = classify_error(err_text)
                             failures_by_class[label] = failures_by_class.get(label, 0) + 1
+                            if progress is not None:
+                                progress["last_failure"] = f"{fr.name}: {_trunc(err_text)}"
                     elif fr and fr.name == "debugger":
                         # F16/F17: the debugger's AgentTool wrapper swallows its
                         # own timeout/retry-exhaustion into a plain text result
@@ -310,6 +336,15 @@ async def _run_agent_once(
                 logger.warning(f"[{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
                 return (final, wrote_report, step, total_tokens, _fault(),
                         tool_calls, failures_by_class, "max_steps")
+
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.warning(
+                    f"[{agent.name}] ABORT: soft deadline reached — breaking "
+                    f"early so a final write_report nudge can still fit "
+                    f"inside the stage's wall-clock budget."
+                )
+                return (final, wrote_report, step, total_tokens, _fault(),
+                        tool_calls, failures_by_class, "soft_deadline")
 
             if event.is_final_response():
                 if event.content and event.content.parts:
@@ -334,16 +369,29 @@ async def run_agent(
     message: str,
     required_report: str | None = None,
     venv_guard_path: str | None = None,
+    deadline: float | None = None,
+    progress: dict | None = None,
 ) -> tuple[str, int, int, dict]:
     """Run an agent, retrying if guards (write_report / venv) are not satisfied.
 
     Returns (final_text, total_steps, total_tokens, stage_metrics). ``stage_metrics``
     (F12) is: {"tool_calls": {name: count}, "failures_by_class": {label: count},
     "guard_retries": int, "transient_fault_retries": int, "abort_reason": str | None}.
-    ``abort_reason`` is "tool_repeat"/"tool_cycle"/"max_steps" from the *last* attempt (an
-    earlier attempt's abort is cleared once a later retry finishes cleanly),
-    "guard_exhausted" if the guard-retry budget ran out while nudges were
+    ``abort_reason`` is "tool_repeat"/"tool_cycle"/"max_steps"/"soft_deadline" from the
+    *last* attempt (an earlier attempt's abort is cleared once a later retry finishes
+    cleanly), "guard_exhausted" if the guard-retry budget ran out while nudges were
     still outstanding, or None if the stage genuinely finished clean.
+
+    ``deadline`` (F32): a ``time.monotonic()`` soft deadline, earlier than the
+    caller's hard wall-clock stage timeout (see main.py's STAGE_TIMEOUT). Once
+    crossed, the in-progress attempt breaks early with abort_reason=
+    "soft_deadline" and the very next attempt drops the deadline check
+    entirely and gets one urgent, deadline-free nudge to call write_report —
+    a last chance to save *something* before the caller's hard timeout fires
+    and cancels the whole call with nothing written at all.
+
+    ``progress`` (F35): see ``_run_agent_once`` — passed through unchanged on
+    every attempt so the caller's dict stays live-updated across retries too.
     """
     runner       = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
     final        = "Agent did not produce a final response."
@@ -355,7 +403,8 @@ async def run_agent(
     transient_fault_retries  = 0
     abort_reason: str | None = None
 
-    current_message = message
+    current_message  = message
+    current_deadline = deadline
     for attempt in range(MAX_GUARD_RETRIES + 1):
         # F22: retry immediately on a detected transient provider fault,
         # using the SAME message (the agent did nothing wrong) and a
@@ -365,7 +414,8 @@ async def run_agent(
         while True:
             (final, wrote_report, steps, tokens, transient_fault,
              call_counts, fail_counts, this_abort) = await _run_agent_once(
-                agent, runner, session_id, current_message, required_report
+                agent, runner, session_id, current_message, required_report,
+                deadline=current_deadline, progress=progress,
             )
             total_steps  += steps
             total_tokens += tokens
@@ -392,10 +442,23 @@ async def run_agent(
 
         nudges = []
         if required_report and not wrote_report:
-            nudges.append(
-                f"You have not called write_report with report_name='{required_report}' yet. "
-                f"You MUST call write_report now to save your findings."
-            )
+            if this_abort == "soft_deadline":
+                nudges.append(
+                    f"You are almost out of time for this stage. Call "
+                    f"write_report with report_name='{required_report}' IMMEDIATELY, "
+                    f"summarizing whatever you found so far — a partial, "
+                    f"incomplete, or entirely FAILED report is required and "
+                    f"acceptable. Do not call any other tool before doing this."
+                )
+                # Give the forced attempt a clear shot: re-checking the same
+                # deadline here would just re-trip on its very first event
+                # and defeat the whole point of this nudge.
+                current_deadline = None
+            else:
+                nudges.append(
+                    f"You have not called write_report with report_name='{required_report}' yet. "
+                    f"You MUST call write_report now to save your findings."
+                )
         if venv_guard_path and not Path(venv_guard_path).exists():
             nudges.append(
                 f"The virtual environment was not created. "

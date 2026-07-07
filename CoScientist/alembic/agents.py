@@ -21,7 +21,7 @@ from alembic.tools import (
 from alembic.instructions import (
     explorer_instruction, coder_instruction,
     debugger_instruction, validator_instruction,
-    environment_instruction,
+    environment_instruction, reporter_instruction,
 )
 MODEL = os.environ.get("MODEL", "openrouter/qwen/qwen3-235b-a22b-2507")
 
@@ -214,4 +214,19 @@ validator_agent = Agent(
     description="Validates the generated MCP server via syntax checks, pytest, and real tool invocations, calling the debugger agent on failures, then writes a validation report.",
     instruction=validator_instruction,
     tools=[read_report, validate_syntax, run_tests, invoke_mcp_tool, write_report, _DebuggerAgentTool(agent=debugger_agent)],
+)
+
+# F35: last-resort fallback invoked by main.py only when the validator stage
+# ends (via hard timeout or guard-retry exhaustion) without ever writing
+# validation.md. Deliberately excludes debugger/invoke_mcp_tool — those are
+# exactly the tools that let the validator wander into a long-running call
+# and run out of time in the first place; this agent can only make fast,
+# bounded calls (validate_syntax/run_tests each cap at well under a minute),
+# so it is structurally unable to repeat the failure it's covering for.
+reporter_agent = Agent(
+    name="reporter",
+    model=_model(),
+    description="Fallback agent invoked when the validator stage ends without writing a validation report — performs one fast, independent syntax/test check and guarantees a report gets written.",
+    instruction=reporter_instruction,
+    tools=[read_report, validate_syntax, run_tests, write_report],
 )
