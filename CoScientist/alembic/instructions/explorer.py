@@ -58,6 +58,33 @@ Record:
   - The key runtime dependencies (package names + versions if pinned)
   - The exact install command from the README, if any
 
+### Step 4c — Identify external assets (weights / datasets / databases)
+
+Many scientific repos do NOT ship their model weights, checkpoints, vocab
+files, or reference databases in git — they download them on first use or
+expect the user to fetch them manually. If the MCP server later calls repo
+code that needs one of these and it is absent, the tool fails at runtime.
+Your job here is only to DETECT and DESCRIBE these assets — the environment
+agent will actually download them from the section you write.
+
+Look for evidence of external assets (spend at most 3-4 tool calls here):
+  - HuggingFace references in code or README:
+      bash("grep -rEn 'from_pretrained|hf_hub_download|snapshot_download' <local_path> --include=*.py")
+      Note the exact repo id and revision if pinned (e.g. "org/model@a1b2c3d").
+  - Download scripts shipped by the repo (PREFER these — they place files in
+    the exact paths the repo expects):
+      search(repo_url, "**/download*")        # download.sh, download_weights.py
+      bash("grep -rEn 'wget|curl|gdown|gsutil|azcopy' <local_path> --include=*.sh --include=*.py --include=*.md")
+  - Direct URLs to .pth/.ckpt/.pt/.bin/.onnx/.h5/.tar.gz/.zip/.db weights or
+    datasets in the README or a config file.
+  - README sections titled "Download", "Pretrained models", "Checkpoints",
+    "Data", "Weights".
+
+For each asset you find, record: what it is, its type, where it comes from,
+the destination path the repo expects, and whether the core workflows need
+it. If you find NO external assets, say so explicitly — that is a valid and
+useful finding (it means the repo is self-contained).
+
 ### Step 5 — Write report
 Save your findings by calling:
     write_report(repo_url, "exploration", <content>)
@@ -90,6 +117,28 @@ The report must contain:
     packages.
   - **Install command**: the exact command from the README, or the recommended
     one you derived (e.g. `pip install -e .` or `uv pip install -r requirements.txt`).
+
+  ## External Assets
+  List every model weight / checkpoint / dataset / reference database the repo
+  needs at runtime but does NOT ship in git. Write "None — repo is
+  self-contained" if there are none. For each asset use this exact block so
+  the environment agent can act on it directly:
+
+  - **Name**: short human label (e.g. "MolScribe pretrained checkpoint")
+    - **Type**: weights | dataset | database | vocab | other
+    - **Source**: ONE of —
+        - `hf:<repo_id>@<revision>` (HuggingFace; copy the id verbatim, pin the
+          revision/commit if the code does, else use `@main`)
+        - `script:<repo-relative path>` (a download script the repo ships, e.g.
+          `script:scripts/download_weights.sh` — PREFER this when it exists)
+        - `url:<direct download URL>` (a raw file link for wget/curl)
+    - **Destination**: the path the repo expects the file(s) at, repo-relative
+      (e.g. `checkpoints/best.pth`). If unknown, write "repo default / HF cache".
+    - **Required for**: which of your usage scenarios below break without it,
+      or "optional".
+    - **Gated / size note**: mark "gated" (needs a HuggingFace token / license
+      acceptance) or an approximate size if it looks large (> ~2 GB). Otherwise
+      "public, small".
 
   ## Suggested MCP Usage Scenarios
   List up to 5 scenarios in decreasing order of usefulness. Each scenario:

@@ -31,7 +31,10 @@ must also exist.
 - setup_venv        — create the SERVER venv + install packages in one call
 - bash_env          — run uv/pip/conda commands; also used to build the REPO
                       venv. Also accepts `apt-get` for installing system
-                      libraries (the container runs as root).
+                      libraries (the container runs as root). Also used to
+                      DOWNLOAD external assets (model weights / datasets /
+                      databases) via `hf download`, `wget`, `curl`, or the
+                      repo\'s own download script — see Step 3c.
 - check_venv_compat — verify installed packages can actually be imported
                       (accepts venv_name; default ".venv", pass ".venv-repo"
                       to validate the repo venv)
@@ -90,6 +93,11 @@ From the **Environment Setup** section extract:
   `python = "3.8"` in pyproject, or a hint like "tested on Python 3.8")
 - Key dependencies and any exact git URLs
 - Any system-level (C library) dependencies
+
+From the **External Assets** section extract every asset block (Name, Type,
+Source, Destination, Required for, Gated / size note). You will download
+these in Step 3c after the venvs are built. If the section says "None —
+repo is self-contained", skip Step 3c entirely.
 
 ### Step 2 — Decide layout: ONE venv or TWO?
 
@@ -206,6 +214,87 @@ DO NOT install fastmcp or pytest into .venv-repo — they live in .venv only.
 This replays the repo\'s own imports inside .venv-repo and surfaces real
 conflicts. Apply fixes from the table in Step 4 below.
 
+### Step 3c — Provision external assets
+
+Run this ONLY if the exploration report listed one or more assets under
+**External Assets**. Skip it entirely for self-contained repos.
+
+Assets are downloaded AFTER the venvs exist (a HuggingFace download uses
+`huggingface_hub` from a venv, and the repo\'s own download script may need
+the repo\'s dependencies). Download once into a stable, reusable location so
+retries do not re-fetch multi-gigabyte files.
+
+**Canonical locations (use these exactly):**
+- HuggingFace cache: `.alembic/<repo>/output/.hf-cache`
+  Always export `HF_HOME` so the cache is stable and the generated server can
+  reuse it: prefix hf commands with
+  `HF_HOME=.alembic/<repo>/output/.hf-cache`.
+- Direct-download files: place at the **Destination** path from the report,
+  resolved relative to the cloned repo, i.e.
+  `.alembic/<repo>/repos/<destination>`. If the report says "repo default /
+  HF cache", use the HF cache above.
+
+**Which venv python to use:** the one that runs the asset at runtime — the
+REPO venv if `.venv-repo` exists, else `.venv`.
+
+**Decide per asset — download or SKIP:**
+- **SKIP** (do NOT attempt) if the asset is marked `gated` and no
+  HuggingFace token is available in the environment, OR its size note is
+  large (> ~5 GB) — a CPU validation container will time out or run out of
+  disk. Record it as SKIPPED in the report with the one-line reason; the
+  coder/validator will treat the dependent tool as SKIP.
+- Otherwise download it, by Source type:
+
+**Source `script:<path>` — PREFER this when present.**
+The repo\'s own script places files exactly where its code expects them. Run
+it from the repo root with the repo venv on PATH:
+
+    bash_env("cd .alembic/<repo>/repos && "
+             "HF_HOME=../output/.hf-cache "
+             "../output/.venv-repo/bin/python <path>")   # for a .py script
+    # or, for a shell script:
+    bash_env("cd .alembic/<repo>/repos && bash <path>")
+
+If the shell script calls `wget`/`curl`/`gdown` and the binary is missing,
+install it first (`apt-get install -y wget` / `curl`, or
+`uv pip install --python <venv>/bin/python gdown`) and re-run.
+
+**Source `hf:<repo_id>@<revision>` — HuggingFace.**
+Install the CLI into the venv that owns the asset at runtime, then download
+into the canonical cache (copy the id and revision verbatim — never guess):
+
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv-repo/bin/python 'huggingface_hub[cli]'")
+    bash_env("HF_HOME=.alembic/<repo>/output/.hf-cache "
+             ".alembic/<repo>/output/.venv-repo/bin/hf download <repo_id> --revision <revision>")
+
+If the report gave a specific **Destination** inside the repo, add
+`--local-dir .alembic/<repo>/repos/<destination>` instead of relying on the
+cache. For a gated repo with a token present, add
+`HF_TOKEN=<from environment>` to the command prefix; if no token, SKIP (see
+above).
+
+**Source `url:<direct URL>` — wget/curl.**
+Download to the Destination path, creating parent dirs first:
+
+    bash_env("apt-get update && apt-get install -y --no-install-recommends wget")  # if missing
+    bash_env("mkdir -p .alembic/<repo>/repos/<dest-dir> && "
+             "wget -q -O .alembic/<repo>/repos/<destination> '<URL>'")
+
+Unpack archives at the Destination if the repo expects extracted files
+(`tar -xzf ... -C <dir>`, `unzip ...`).
+
+**Verify every download before moving on.** A silent partial download is
+worse than none — the failure surfaces much later in the validator. Confirm
+the file exists and is non-empty:
+
+    bash_env("ls -lh .alembic/<repo>/repos/<destination>")   # size > 0
+    # for HF cache, confirm the snapshot dir is populated:
+    bash_env("find .alembic/<repo>/output/.hf-cache -name '*.safetensors' -o -name '*.bin' | head")
+
+If a download fails twice for the same asset, stop retrying it, mark it
+SKIPPED in the report with the error, and continue — do not let one asset
+block the whole setup.
+
 ### Step 4 — Post-install compatibility check
 
 For each venv you created, run:
@@ -261,4 +350,16 @@ The report must contain:
 
   ## Key packages installed
   Bullet list of the main packages (name + version where known) per venv.
+
+  ## External Assets
+  Omit this section only if the exploration report listed no assets.
+  Otherwise, for each asset from the report:
+  - **<Name>** — DOWNLOADED | SKIPPED
+    - Path: where it now lives on disk (`.alembic/<repo>/repos/<dest>` or the
+      HF cache dir `.alembic/<repo>/output/.hf-cache`)
+    - Source used: the exact `hf:` / `script:` / `url:` command that fetched it
+    - If SKIPPED: the one-line reason (gated without token, too large, or the
+      download error) — the coder should default the dependent tool to SKIP.
+  If you set `HF_HOME`, state its path here so the generated server can reuse
+  the same cache.
 '''
