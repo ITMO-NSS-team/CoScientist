@@ -334,6 +334,7 @@ my_agent = LlmAgent(
 - [API Documentation](./docs/API.md) - Complete API reference
 - [Contributing Guide](./docs/CONTRIBUTING.md) - How to contribute
 - [Architecture](./docs/ARCHITECTURE.md) - System architecture details
+- [Microfluidics Profile](./docs/MICROFLUIDICS.md) - Reduced deployment for the microfluidics case (ТЗ agent + planner + literature analysis); run it with `COSCIENTIST_CONFIG=microfluidics` or `python scripts/run_microfluidics_web.py`
 
 ## Dependencies
 

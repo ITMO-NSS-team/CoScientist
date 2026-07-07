@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from typing import AsyncGenerator, Optional
 
@@ -14,6 +15,8 @@ from CoScientist.hitl.models import HITLRequest, HITLAction
 import json
 from CoScientist.tools.task_tracker import task_tracker_instance
 
+logger = logging.getLogger("CoScientist.hitl.session_agent")
+
 class SessionAgent(LlmAgent):
     """A planner that generates a roadmap and asks the human.
     If the human requests changes, it automatically feeds the changes back
@@ -21,6 +24,28 @@ class SessionAgent(LlmAgent):
     """
     hitl_handler: Optional[AbstractHITLHandler] = None
     correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
+
+    def _review_output(self, output_text) -> str:
+        """How the proposed output is presented to the human reviewer.
+
+        Structured outputs (dict/list from an output_schema) are shown as
+        readable JSON. Subclasses may override to show a rendered document
+        instead (e.g. the microfluidics ТЗ agent renders Markdown)."""
+        if isinstance(output_text, (dict, list)):
+            try:
+                return json.dumps(output_text, ensure_ascii=False, indent=2)
+            except (TypeError, ValueError):
+                pass
+        return str(output_text)
+
+    def _post_final_events(self, ctx: InvocationContext, output_text):
+        """Extra events to emit AFTER the final output is accepted (approved
+        by the human, or produced directly when no HITL handler is wired).
+
+        Subclasses may yield follow-up events — e.g. the microfluidics ТЗ
+        agent publishes the rendered ТЗ document into the chat before the
+        pipeline moves on. Default: nothing."""
+        return iter(())
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
 
@@ -44,8 +69,15 @@ class SessionAgent(LlmAgent):
 
             if not self.hitl_handler or final_event is None:
                 # No HITL or not a final event (e.g. tool call): just pass and exit
+                if not self.hitl_handler:
+                    logger.info(
+                        "%s: no HITL handler wired (HITL__ENABLED off?) — "
+                        "output passed through without human review", self.name,
+                    )
                 if final_event is not None:
                     yield final_event
+                    for extra in self._post_final_events(ctx, output_text):
+                        yield extra
                 break
 
             if self.output_key:
@@ -58,7 +90,7 @@ class SessionAgent(LlmAgent):
                 agent_name=self.name,
                 action_type=HITLAction.APPROVE,
                 message=message,
-                context={"output": str(output_text)},
+                context={"output": self._review_output(output_text)},
                 invoked_via="internal_loop"
             )
 
@@ -86,6 +118,8 @@ class SessionAgent(LlmAgent):
                     # HITL approved — now emit the (possibly updated) final event and exit
                     if final_event is not None:
                         yield final_event
+                        for extra in self._post_final_events(ctx, output_text):
+                            yield extra
                     break
 
             # Rejected or "Edit" requested — feed feedback back into the agent

@@ -19,6 +19,7 @@ The YAML declares every agent of the system in one place. Per agent:
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -28,7 +29,27 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from CoScientist.config import get_settings
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "agents" / "system.yaml"
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "agents"
+DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
+
+# Env var selecting an alternative system profile for the whole process.
+# Accepts a bare profile name ("microfluidics" -> CoScientist/agents/
+# microfluidics.yaml) or a filesystem path to a YAML file. Every entry point
+# that builds the system through get_config() (CLI, web server, A2A serving)
+# honours it, so one deployment can run a differently-shaped CoScientist
+# without touching the default system.yaml.
+CONFIG_ENV_VAR = "COSCIENTIST_CONFIG"
+
+
+def resolve_config_path(ref: Optional[str] = None) -> Path:
+    """Resolve a config reference: explicit ref, $COSCIENTIST_CONFIG, or default."""
+    ref = ref or os.environ.get(CONFIG_ENV_VAR)
+    if not ref:
+        return DEFAULT_CONFIG_PATH
+    path = Path(ref)
+    if path.suffix in (".yaml", ".yml"):
+        return path
+    return CONFIG_DIR / f"{ref}.yaml"
 
 
 def _resolve_setting_ref(value: Union[bool, str]) -> bool:
@@ -242,7 +263,7 @@ class SystemConfig(BaseModel):
 
 
 def load_config(path: Optional[Path] = None) -> SystemConfig:
-    path = Path(path) if path else DEFAULT_CONFIG_PATH
+    path = Path(path) if path else resolve_config_path()
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     return SystemConfig.model_validate(raw)
@@ -250,7 +271,8 @@ def load_config(path: Optional[Path] = None) -> SystemConfig:
 
 @lru_cache(maxsize=1)
 def get_config() -> SystemConfig:
-    """The default system config, loaded once per process."""
+    """The process-wide system config ($COSCIENTIST_CONFIG or the default),
+    loaded once per process."""
     return load_config()
 
 
@@ -258,10 +280,12 @@ __all__ = [
     "A2AConfig",
     "AgentConfig",
     "CallbacksConfig",
+    "CONFIG_ENV_VAR",
     "DEFAULT_CONFIG_PATH",
     "DefaultsConfig",
     "SkillConfig",
     "SystemConfig",
     "get_config",
     "load_config",
+    "resolve_config_path",
 ]
