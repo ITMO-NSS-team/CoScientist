@@ -27,7 +27,7 @@ If a repo-venv was needed, .alembic/<repo-name>/output/.venv-repo/bin/python
 must also exist.
 
 ## Tools available — use ONLY these exact names
-- read_report       — read the explorer\'s analysis
+- read_report        — read the explorer\'s analysis
 - setup_venv        — create the SERVER venv + install packages in one call
 - bash_env          — run uv/pip/conda commands; also used to build the REPO
                       venv. Also accepts `apt-get` for installing system

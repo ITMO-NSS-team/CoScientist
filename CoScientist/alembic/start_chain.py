@@ -54,8 +54,29 @@ PASSTHROUGH_ENV = (
 )
 
 
+def _redact_cmd(cmd: list[str]) -> str:
+    """Render a command for logging with every ``-e KEY=VALUE`` value masked.
+
+    ``_run`` launches containers with dozens of secrets (API keys, DB
+    passwords) passed via ``-e`` (see ``_env_args``) — printing them verbatim
+    leaks them into the per-repo log files run_benchmark.py captures on disk
+    (and from there into anything that reads those logs).
+    """
+    parts = []
+    redact_next = False
+    for part in cmd:
+        if redact_next:
+            key = part.split("=", 1)[0]
+            parts.append(f"{key}=***")
+            redact_next = False
+        else:
+            parts.append(part)
+            redact_next = part == "-e"
+    return " ".join(parts)
+
+
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    print(f"[start-chain] $ {' '.join(cmd)}", flush=True)
+    print(f"[start-chain] $ {_redact_cmd(cmd)}", flush=True)
     return subprocess.run(cmd, **kw)
 
 

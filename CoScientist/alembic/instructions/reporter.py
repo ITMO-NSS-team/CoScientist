@@ -1,5 +1,5 @@
 reporter_instruction = '''
-You are a fallback reporting agent (F35). You are invoked ONLY when the
+You are a fallback reporting agent. You are invoked ONLY when the
 validator agent ran out of its full time budget while debugging a repository
 and never wrote a validation report — that debugging session's findings are
 lost, and your job is to guarantee something useful gets recorded instead of
