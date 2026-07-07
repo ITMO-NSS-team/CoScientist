@@ -120,3 +120,16 @@
 {"domain": "Earth and environmental sciences", "subdiscipline": "Climate sciences", "repo_name": "xarray", "github_url": "https://github.com/pydata/xarray"}
 {"domain": "Earth and environmental sciences", "subdiscipline": "Ocean sciences", "repo_name": "xmitgcm", "github_url": "https://github.com/MITgcm/xmitgcm"}
 {"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "yt", "github_url": "https://github.com/yt-project/yt"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "CONCH", "github_url": "https://github.com/mahmoodlab/CONCH"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "MUSK", "github_url": "https://github.com/lilab-stanford/MUSK"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "MedSAM", "github_url": "https://github.com/bowang-lab/MedSAM"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "MedSSS", "github_url": "https://github.com/pixas/MedSSS"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "ModernBERT", "github_url": "https://github.com/AnswerDotAI/ModernBERT"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "PathFinderCRC", "github_url": "https://github.com/LiangJunhao-THU/PathFinderCRC"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "RETFound_MAE", "github_url": "https://github.com/rmaphoh/RETFound_MAE"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "STAMP", "github_url": "https://github.com/KatherLab/STAMP"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "TabPFN", "github_url": "https://github.com/PriorLabs/TabPFN"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "UNI", "github_url": "https://github.com/mahmoodlab/UNI"}
+{"domain": "Biological sciences", "subdiscipline": "Cell biology", "repo_name": "cytopus", "github_url": "https://github.com/wallet-maker/cytopus"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "flowmap", "github_url": "https://github.com/dcharatan/flowmap"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "nnUNet", "github_url": "https://github.com/MIC-DKFZ/nnUNet"}
