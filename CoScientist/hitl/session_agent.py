@@ -10,7 +10,7 @@ from google.adk.events.event import Event
 from google.adk.utils.context_utils import Aclosing
 
 from CoScientist.hitl.handler import AbstractHITLHandler
-from CoScientist.hitl.models import HITLRequest, HITLAction
+from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 
 import json
 from CoScientist.tools.task_tracker import task_tracker_instance
@@ -46,6 +46,25 @@ class SessionAgent(LlmAgent):
         agent publishes the rendered ТЗ document into the chat before the
         pipeline moves on. Default: nothing."""
         return iter(())
+
+    async def _review_decision(self, ctx: InvocationContext, output_text) -> HITLResponse:
+        """One review round with the human; returns the final decision.
+
+        Default: a single approve/edit request showing the proposed output.
+        Subclasses may run a multi-step dialogue instead (e.g. the ТЗ agent
+        first reviews the document, then interviews the operator question by
+        question) as long as they return one HITLResponse."""
+        request = HITLRequest(
+            agent_name=self.name,
+            action_type=HITLAction.APPROVE,
+            message=(
+                f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes "
+                "its result. Please review."
+            ),
+            context={"output": self._review_output(output_text)},
+            invoked_via="internal_loop",
+        )
+        return await self.hitl_handler.handle_request(request)
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
 
@@ -83,18 +102,8 @@ class SessionAgent(LlmAgent):
             if self.output_key:
                 output_text = ctx.session.state.get(self.output_key, output_text)
 
-            # Perform HITL check
-            message = f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes its result. Please review."
-
-            request = HITLRequest(
-                agent_name=self.name,
-                action_type=HITLAction.APPROVE,
-                message=message,
-                context={"output": self._review_output(output_text)},
-                invoked_via="internal_loop"
-            )
-
-            response = await self.hitl_handler.handle_request(request)
+            # Perform HITL check (subclasses may run a multi-step dialogue).
+            response = await self._review_decision(ctx, output_text)
 
             if response.approved:
                 if response.instructions and response.action != HITLAction.EDIT:

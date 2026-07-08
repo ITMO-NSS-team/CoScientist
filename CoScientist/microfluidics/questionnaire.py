@@ -106,6 +106,13 @@ QUESTION_BANK: dict[str, tuple[str, str]] = {
     ),
 }
 
+# Button options of a single question window (web review). Selecting one is a
+# complete answer — the pipeline can always continue with open questions.
+OPT_SKIP = "Не знаю — пропустить"
+OPT_AGENT = "На усмотрение агента"
+OPT_STOP = "Завершить опрос (остальные пропустить)"
+QUESTION_OPTIONS: tuple[str, ...] = (OPT_SKIP, OPT_AGENT, OPT_STOP)
+
 _ANSWER_RULES = """\
 Черновик ТЗ собран только из исходного запроса — ниже вопросы по блокам,
 где остались незаполненные поля. Отвечать можно на любую часть вопросов:
@@ -191,9 +198,42 @@ def render_questionnaire(questions: List[OperatorQuestion]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def render_question_card(q: OperatorQuestion, index: int, total: int) -> str:
+    """One question as shown in its own HITL window."""
+    lines = [
+        f"Уточнение ТЗ — вопрос {index} из {total}",
+        "",
+        f"Блок: {q.block}",
+        "",
+        q.text,
+    ]
+    if q.hint:
+        lines.append(f"({q.hint})")
+    if q.open_fields:
+        shown = ", ".join(q.open_fields[:6])
+        more = f" (+{len(q.open_fields) - 6})" if len(q.open_fields) > 6 else ""
+        lines += ["", f"Сейчас не задано: {shown}{more}"]
+    else:
+        lines += ["", "Блок пока не сформирован."]
+    lines += [
+        "",
+        "Как ответить:",
+        "- впишите ответ в поле и нажмите «Ответить»;",
+        f"- «{OPT_SKIP}» — поля останутся «не задано», система продолжит без них;",
+        f"- «{OPT_AGENT}» — агент подставит рабочее значение из отраслевого контекста;",
+        f"- «{OPT_STOP}» — перейти к работе, пропустив оставшиеся вопросы.",
+    ]
+    return "\n".join(lines)
+
+
 __all__ = [
     "OperatorQuestion",
+    "OPT_AGENT",
+    "OPT_SKIP",
+    "OPT_STOP",
     "QUESTION_BANK",
+    "QUESTION_OPTIONS",
     "build_questionnaire",
+    "render_question_card",
     "render_questionnaire",
 ]

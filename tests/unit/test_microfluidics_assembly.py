@@ -309,11 +309,47 @@ def test_operator_questionnaire_built_from_open_fields():
     assert [q.block for q in qs_from_str] == [q.block for q in qs]
 
 
-def test_tz_review_appends_questionnaire(system):
+def test_tz_review_shows_document_with_interview_note(system):
+    """The document review shows the document + a note that the interview
+    (one window per question) follows — NOT the inline questionnaire dump."""
     agent = system.agent("TZSpecAgent")
     preview = agent._review_output({"original_request": "т", "blocks": []})
     assert "## Правила интерпретации полей" in preview  # документ
-    assert "## Уточняющие вопросы оператору" in preview  # опросник после него
+    assert "## Уточняющие вопросы оператору" not in preview
+    assert "по одному окну на вопрос" in preview
+    assert "таких блоков: 16" in preview  # все 16 блоков пусты
+
+
+def test_question_card_and_options():
+    """Each interview window is self-contained: question, hint, open fields
+    and the escape options that keep the pipeline moving."""
+    from CoScientist.microfluidics.questionnaire import (
+        OPT_AGENT,
+        OPT_SKIP,
+        OPT_STOP,
+        QUESTION_OPTIONS,
+        build_questionnaire,
+        render_question_card,
+    )
+
+    assert list(QUESTION_OPTIONS) == [OPT_SKIP, OPT_AGENT, OPT_STOP]
+
+    tz = {"original_request": "т", "blocks": [
+        {"title": "Масштаб результата", "fields": [
+            {"name": "Масштаб текущего результата", "value": "1 г",
+             "status": "задано заказчиком"},
+            {"name": "Масштаб следующей проверки"},
+        ]},
+    ]}
+    questions = build_questionnaire(tz)
+    q = next(x for x in questions if x.block == "Масштаб результата")
+    card = render_question_card(q, 3, 7)
+    assert "вопрос 3 из 7" in card
+    assert "Масштаб результата" in card and q.text in card
+    assert "Масштаб следующей проверки" in card  # именно незаполненное поле
+    assert "Масштаб текущего результата" not in card  # заполненное не спрашиваем
+    for opt in QUESTION_OPTIONS:
+        assert opt in card
 
 
 def test_default_profile_is_untouched():

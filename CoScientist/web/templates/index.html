@@ -339,6 +339,11 @@
       scrollChat();
     }
 
+    function escJs(s) {
+      // For embedding a value inside a single-quoted onclick attribute.
+      return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+
     function linkify(escapedText) {
       // Make http(s) URLs and known API paths clickable (input is already HTML-escaped).
       return escapedText
@@ -432,7 +437,20 @@
     `;
       }
 
-      // Show in sidebar
+      const hasOptions = !!(data.options && data.options.length);
+
+      // Show in sidebar. For question windows (options present) the sidebar is
+      // informational only — a bare Accept there would silently skip the question.
+      const sidebarButtons = hasOptions ? `
+        <p class="text-[10px] text-outline-variant leading-relaxed">Ответьте в карточке вопроса в чате.</p>` : `
+        <div class="flex gap-3">
+          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+            <span class="material-symbols-outlined text-base">check_circle</span> Accept
+          </button>
+          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+            <span class="material-symbols-outlined text-base">close</span> Reject
+          </button>
+        </div>`;
       panel.classList.remove('hidden');
       panel.innerHTML = `
     <div class="relative">
@@ -445,14 +463,7 @@
           <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">HITL Required</h3>
         </div>
         <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(data.message)}</p>
-        <div class="flex gap-3">
-          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-            <span class="material-symbols-outlined text-base">check_circle</span> Accept
-          </button>
-          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-            <span class="material-symbols-outlined text-base">close</span> Reject
-          </button>
-        </div>
+        ${sidebarButtons}
         ${openRoadmapSidebarBtn}
       </div>
     </div>`;
@@ -477,8 +488,20 @@
         <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(data.message)}</p>
         <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)} · ${escHtml(data.agent_name || '')}</p>
         ${outputBlock}
+        ${hasOptions ? `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Правки или ответы на опросник: Q1: …; Q2: не знаю; Q3: на усмотрение агента — затем Revise"
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Ваш ответ на вопрос — затем «Ответить»"
+            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-base">reply</span> Ответить
+            </button>
+            ${data.options.map(o => `
+            <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
+          </div>
+        </div>` : `
+        <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Правки для агента — затем Revise"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex gap-3">
             <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
@@ -491,7 +514,7 @@
               <span class="material-symbols-outlined text-base">close</span> Reject
             </button>
           </div>
-        </div>
+        </div>`}
         ${openRoadmapChatBtn}
       </div>
     </div>`;
@@ -533,6 +556,22 @@
         currentPlannerHitlRequest = null;
         updateRoadmapModalButtons();
       }
+    }
+
+    function respondHITLOption(requestId, option) {
+      // A question-window option button: a complete answer by itself.
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'hitl_response',
+          request_id: requestId,
+          action: 'select',
+          approved: true,
+          selected_option: option,
+        }));
+      }
+      document.getElementById('hitl-panel').classList.add('hidden');
+      disableHitlControls(requestId);
+      addSystemMsg('☑ ' + option);
     }
 
     function respondHITLEdit(requestId) {
