@@ -18,6 +18,46 @@ repo) at commit `0b275a266e01b38f13a8e7041489f5762887cd65`.
 
 ---
 
+## 0. BLOCKING (2026-07-08) — OpenRouter API key has hit its total spend limit
+
+**Not a pipeline bug. No amount of further code changes will fix this.** Found
+while re-running `toolmaker_subset_nomusk` (minus CONCH) with every pipeline
+timeout doubled for the run (`benchmarks/alembic/runs/2026-07-08_toolmaker-nomusk-2x-timeout/`,
+see §1a for the full writeup): **all 12/12 repos failed in ~9-10 seconds each**,
+every single one on the *first* LLM call of the Explorer stage, with the
+identical error in every log:
+
+```
+litellm.llms.openrouter.common_utils.OpenRouterException: {"error":{"message":
+"Key limit exceeded (total limit). Manage it using
+https://openrouter.ai/workspaces/default/keys/299a637e5bba5ebf7f6fc8b9e492fd4c94a9e0f82d95d16e794d4c243e6231c1",
+"code":403}}
+```
+
+This is OpenRouter's own native error shape (distinct from the vaguer
+`{"success": false, "error": "Access denied by security policy."}` 403 seen in
+the *previous* run, §1a "Full toolmaker-subset run" — that one is a separate,
+still-unexplained issue, not this same cause) — it unambiguously means the
+configured **total spend/usage cap on this specific API key** has been fully
+exhausted, almost certainly from the cumulative LLM usage across today's very
+heavy benchmarking activity (this run, the prior 13-repo toolmaker run, and
+all of today's earlier F25/F36/F37/AgML live-verification runs). Every
+container gets the same key via `start_chain.py`'s `PASSTHROUGH_ENV`
+(`OPENROUTER_API_KEY`), so this blocks **every** repo, **every** stage,
+**every** call, with zero exceptions — the 2x-timeout change deployed for
+this run (see §1a) is verified correct in isolation but could not be tested
+against a single real repo because of this.
+
+**Action needed (not something this pipeline can fix itself):** visit
+`https://openrouter.ai/workspaces/default/keys/299a637e5bba5ebf7f6fc8b9e492fd4c94a9e0f82d95d16e794d4c243e6231c1`
+and either raise/remove the key's total limit or add credits, or switch
+`OPENROUTER_API_KEY` in `.env` to a fresh key. **Do not re-run the benchmark
+before this is resolved** — every repo will fail identically in ~10s
+regardless of any pipeline fix, wasting nothing but confirming the same thing
+again.
+
+---
+
 ## 1. Must-have — system fixes (blocks trustworthy Evaluation numbers)
 
 These were caught directly in the bench logs, not inferred — each one is
@@ -403,6 +443,61 @@ generation quality — are now the most urgent open robustness gap. F32
 concrete next items; F33 is done, F32 is analysis-only pending a priority
 decision.
 
+### Full toolmaker-subset run (2026-07-07, 13 repos incl. CONCH, F6 live-verify)
+
+`benchmarks/alembic/runs/2026-07-07_toolmaker-nomusk/` — the F6 (external
+model-weight download) live-verification run against
+`toolmaker_subset_nomusk.txt`. Per-repo root cause, exactly what happened and
+why (not just the bare Overall column):
+
+| Repo | Overall | Root cause |
+|---|---|---|
+| **CONCH** | FAILED (3/4 tools real PASS) | **F6 fully confirmed working**: gated `MahmoodLab/conch` weights downloaded for real via the new Environment Step 4b, and 3 real tool invocations (`get_image_embedding`, `get_text_embedding`, `zero_shot_classification`) genuinely loaded and ran the model. The 4th tool (`image_to_text_retrieval`) failed on a real bug — **F38, fixed 2026-07-08** (IMPROVEMENTS_SPEC.md#f38): a real, correctly-identified sample path (`./docs/roi1.jpg`, which genuinely exists in the repo) still 404'd because the helper never joined it against `repo_path`; the debugger had already reactively patched the identical bug into 2 of the 3 affected helpers but never reached the 3rd before running out of attempts. Fixed at the `coder.py` template level so every future helper resolves path-shaped args from the start. The Syntax stage also hit a distinct bug in F28's helper-import safety check — **F39, fixed 2026-07-08** (IMPROVEMENTS_SPEC.md#f39): the Coder didn't follow `coder.py`'s "helpers must use argparse" rule for this repo (wrote flat `sys.argv[2]`/`sys.argv[3]` indexing instead), and F28's `_import_safe_prefix` had no defense against that third shape — fixed by inverting its default from "assume safe" to "assume unsafe unless a recognized shape is found," verified against CONCH's actual real helper file. Both root-caused from the committed image, not inferred; both are code/instruction fixes now baked into a rebuilt `alembic-base:latest`, pending live re-verification once §0's OpenRouter block clears.
+| TabPFN | SKIPPED (correct) | Every tool genuinely requires a per-user `TABPFN_TOKEN` for license verification — correctly identified and reported as SKIPPED, not a bug. Validates that the SKIP mechanism (F25) generalizes beyond "too slow" to "needs a credential we don't have," same class as F6/F7's secret-gating problem.
+| PathFinderCRC | FAILED (0/5 tools) | Genuine application-level tool failures, not a pipeline gap — see `logs/PathFinderCRC.log` for per-tool tracebacks.
+| RETFound_MAE | FAILED (0/0/3, all skipped) | All 3 tools marked SKIP — heavy fine-tune/feature-extraction/eval tools genuinely too expensive for a cheap validation pass; no F25-item-2 (extended validation) pass exists yet to check them at all.
+| ModernBERT | FAILED (syntax) | Syntax/import validation failed; tests separately passed. Not investigated further this pass — lower priority than the timeout/OpenRouter findings below.
+| MedSSS | FAILED (0/0/2) | Broken import chain — syntax/imports failed outright, cascading into both tools being un-invokable (SKIPPED, not FAILED, since nothing could even load).
+| **MedSAM, esm, cytopus, nnUNet, flowmap, STAMP** (6/13) | ERROR — no validation.md | **All 6 confirmed to share one external root cause**: `{"success": false, "error": "Access denied by security policy."}`, a 403 from `https://openrouter.ai/api/v1/chat/completions`, hit on every guard-retry attempt of every stage (28-48 occurrences per repo). Not a pipeline bug — this is a distinct 403 shape from §0's "key limit exceeded" (this run's key clearly still had *some* budget left, since CONCH/TabPFN/PathFinderCRC/RETFound_MAE/ModernBERT/MedSSS all got real signal) — most likely a rate-limit/WAF-style block that started partway through this run and didn't clear. Root cause of *why* OpenRouter issued this specific denial (vs. a plain rate-limit response) was not pinned down further.
+| UNI | ERROR — no validation.md | **Confirmed root cause, NOT the OpenRouter issue above.** The Environment stage burned its entire 2400s budget on two separate plain `pip install` attempts (each hitting the full 900s `bash_env` timeout with nothing installed) after abandoning `uv` following a quoting mistake (`torch>=2.0.1` unquoted, parsed as a shell redirect) — permitted by `environment.py`'s own pre-existing Rule 6 fallback, but plain pip's resolver is too slow for heavy ML deps to finish in 900s. `environment.md` was never written; Coder got 0 actions/`guard_exhausted` immediately after. F6's download step was never reached for UNI — unlike CONCH, this is not a verdict on F6 itself, just a gap the 2026-07-08 rerun below was specifically meant to give more room to (see F40/§1a below) before it got blocked by §0's key-limit issue instead.
+
+**Two adjacent, not-yet-fixed follow-up findings surfaced by this run (flagged, not actioned — awaiting a decision):**
+1. Coder-generated tools reload a HF model live via its `hf-hub:` reference instead of preferring the environment-downloaded local checkpoint path recorded in `environment.md` — partially undercuts F6's whole point (avoiding a cold download during the tight 120s validation window) for repos where it happens.
+2. The environment agent's `uv`-quoting-mistake → slow-plain-pip fallback pattern (the UNI root cause above) is generalizable: any quoting slip could trigger the same slow-pip trap on any repo with heavy ML deps.
+
+### 2026-07-08 rerun (12 repos, CONCH excluded, timeouts doubled for this run only)
+
+Per an explicit request to re-run everything except CONCH with every pipeline
+timeout doubled, added `ALEMBIC_TIMEOUT_SCALE` (default `1`, i.e. zero
+behavior change unless set) — see IMPROVEMENTS_SPEC.md's new **F40** for the
+full mechanism. Verified in isolation before the run: with the env var unset,
+`STAGE_TIMEOUT` reads exactly `{explorer: 900, environment: 2400, coder: 1500,
+validator: 1800}` (unchanged); with `ALEMBIC_TIMEOUT_SCALE=2`, every timeout in
+the pipeline doubles (`{explorer: 1800, environment: 4800, coder: 3000,
+validator: 3600}`, `DEBUGGER_CALL_TIMEOUT: 1200`, `_INVOKE_TIMEOUT: 240`,
+`bash_env`: 1800s, etc.) — confirmed inside the rebuilt image before launch.
+
+**The run itself produced zero usable signal: 12/12 repos failed in ~9-10s
+each, entirely blocked by §0's OpenRouter key-limit exhaustion** — every repo
+hit the *exact* same `"Key limit exceeded (total limit)"` 403 on its very
+first Explorer LLM call. This is unrelated to (and not fixed by) the timeout
+work — a doubled timeout doesn't help when the very first API call of the
+run is rejected outright.
+
+**Update (2026-07-08): the `ALEMBIC_TIMEOUT_SCALE` mechanism above was
+reverted** — sound and working, but judged an unmanageable amount of
+indirection (an env-var multiplier touching 5 files plus a Docker `-e`
+passthrough) for a problem that's really just "a handful of numbers to look
+at in one place." Replaced with plain integer constants centralized directly
+in `main.py` (`BASH_TIMEOUT`, `BASH_ENV_TIMEOUT`, `VENV_COMPAT_TIMEOUT`,
+`SERVER_IMPORT_CHECK_TIMEOUT`, `HELPER_IMPORT_CHECK_TIMEOUT`, `PYTEST_TIMEOUT`,
+`INVOKE_TIMEOUT`, `DEBUGGER_CALL_TIMEOUT`, alongside the existing
+`STAGE_TIMEOUT`/`REPORTER_TIMEOUT`) — see IMPROVEMENTS_SPEC.md's updated
+**F40** for the full mechanism (deferred imports from the tool modules into
+`main.py`, verified to not deadlock). To re-run with more headroom now, just
+edit the plain numbers in `main.py` directly and rebuild — there is no more
+env-var knob.
+
 ## 2. Must-have — re-run the benchmark, write the Evaluation section
 
 - [x] Re-run `benchmarks/alembic/run_benchmark.py` on at least the current
@@ -550,14 +645,56 @@ full specs. Do these only if §1–§4 are done with days to spare.
   problem class that didn't actually prevent the failure it was built to
   address. All code, tool wiring, and instructions reverted; see
   [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f31) for the full history.
-- [ ] **F25** — SKIP is an LLM-followed convention, not a code-enforced
+- [x] **F25** *(items 1+3 implemented+live-verified; item 2 still
+  deferred)* — SKIP was an LLM-followed convention, not a code-enforced
   gate (`AgML`'s `train_detector` was marked SKIP by the Coder but
   invoked anyway by the Validator, with the tool's expensive default
-  params, burning most of the 1800s stage budget). Needs (a) the
-  SKIP/invoke split computed in code and handed to the validator as an
-  explicit constraint instead of trusted free-text parsing, and (b) an
-  optional separate, much-longer-timeout "extended validation" pass for
-  SKIP-marked heavy tools, decoupled from the shared per-repo budget.
+  params, burning most of the 1800s stage budget). Fixed 2026-07-07:
+  (1) the SKIP/invoke split is now computed in code
+  (`tools/fs.py:parse_samples_block`) and handed to the validator as an
+  explicit list, with `invoke_mcp_tool` itself refusing any SKIP-listed
+  tool name regardless of which agent calls it; (3) `coder.py` now
+  requires trying a cheap parameterization (tiny epochs/dataset, CPU)
+  before falling back to SKIP on training/inference tools. (2) — a
+  decoupled, longer-timeout "extended validation" pass for SKIP-marked
+  heavy tools — remains deferred, same backlog reasoning as F1/F3/F4.
+  Live-verified against `AgML`: the validator itself never touched the
+  SKIP-listed tool, and the code gate separately caught the *debugger*
+  opportunistically calling it while exploring (the debugger has no
+  visibility into the SKIP list at all — exactly the case the
+  code-level gate exists for). `train_yolo_model` was sampled with
+  `epochs: 2`, confirming item 3. See
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f25) for full detail,
+  and F36/F37 below for two more fixes found during the same
+  verification pass.
+- [x] **F36** — `agent_runtime.py`'s non-consecutive `tool_cycle` guard
+  (`MAX_TOOL_CYCLE=3`) unjustly aborted `check_venv_compat` mid-fix even
+  though each round found genuinely different conflicts (real progress,
+  not a stuck loop) — its args never vary across a legitimate
+  fix-and-recheck cycle, so every call shares the same cycle key, and
+  `environment.py`'s own "repeat at most 2 rounds" instruction (3 total
+  calls) exactly matches the abort threshold. Same flaw affects
+  `validate_syntax`/`run_tests`. Fixed by exempting these three tools
+  from the non-consecutive check specifically (`_TOOL_CYCLE_EXEMPT`),
+  while keeping the consecutive-repeat guard intact for them. Rebuilt +
+  re-ran `AgML`: zero ABORTs anywhere in the full run. See
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f36).
+- [x] **F37** — A long in-flight `invoke_mcp_tool` call (e.g. a real
+  `epochs: 2` YOLO training run) could keep a container alive up to
+  `STAGE_TIMEOUT + 900s` past when the pipeline had already given up on
+  it, for zero benefit — `asyncio` cancellation can't reach a blocked
+  worker thread, and the old timeout's kill only reached its immediate
+  child, orphaning the real generated-code subprocess. Fixed: shrunk the
+  timeout to 120s (matches coder.py's own "cheap to run" requirement),
+  switched to a process-group kill (`start_new_session` +
+  `os.killpg`) so the real subprocess dies too, and reclassified a
+  timeout as `{"skipped": true, ...}` (not FAILED) so it doesn't waste a
+  debugger call. Directly closes the maintainer's observation that
+  resource-heavy tool calls "waste a lot of time and don't give any
+  benefits." Unit-verified standalone (fake 600s grandchild subprocess:
+  killed cleanly at 120.1s, confirmed not just orphaned); not yet
+  re-verified live against a real repo. See
+  [IMPROVEMENTS_SPEC.md](./IMPROVEMENTS_SPEC.md#f37).
 - [x] **F26** — Tools with no checkable/parseable output (e.g.
   `aizynthfinder`'s `run_interactive_gui`, a Jupyter-notebook launcher)
   should never be created in the first place, not discovered as

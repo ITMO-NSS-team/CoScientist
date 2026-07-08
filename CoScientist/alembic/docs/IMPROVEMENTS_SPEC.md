@@ -92,6 +92,13 @@ Suggested first wave (cheap, high-leverage): **F1, F2, F12, F10**. Second wave (
 **Integration.** New Environment instruction section + allow `bash_env` to run download CLIs; document a `mounts:`/inputs convention for the served container.
 **Effort.** Medium–High.
 
+**Implemented 2026-07-07 (weights-download half; dataset-mount convention (b) still deferred — no repo in the current benchmark subset needs it yet).** Driven by the TM-Bench subset (`benchmarks/alembic/toolmaker_subset_nomusk.txt`), specifically `mahmoodlab/UNI` and `mahmoodlab/CONCH` — both gated HuggingFace models (`MahmoodLab/UNI2-h`, `MahmoodLab/conch`) requiring an approved `HF_TOKEN`.
+- `instructions/explorer.py`: new Step 4c — while reading the README/code, flag pretrained-weight requirements (`from_pretrained`, `hf_hub_download`, `snapshot_download`, `timm.create_model(..., pretrained=True)`, `hf-hub:` references, gated-access wording) and record the exact HF repo ID, gated status, loading call, and expected local path in a new "External model weights" bullet in `exploration.md`'s Environment Setup section. Explicitly scoped to weights only — datasets are out of scope by instruction.
+- `instructions/environment.py`: new Step 4b, run after the compatibility check, before writing the report — installs `huggingface_hub` into the right venv and either pre-warms the HF cache (`hf-hub:` style loads) or downloads to the repo's own expected path (explicit-path style loads, e.g. CONCH's `checkpoints/conch/pytorch_model.bin`), using the `HF_TOKEN` already present in the container's environment (no explicit passing/printing). A 401/403/gated error is treated as an access problem, not a bug — recorded and the stage moves on, not retried or worked around. New "External model weights" section added to `environment.md`'s report template.
+- `tools/shell.py`: `bash_env`'s timeout raised 300s → 900s — a multi-GB weight download needs more room than the original "slow pip install" budget assumed.
+- **Why pre-warm during Environment, not lazy-load during validation:** F37 (above) caps a single `invoke_mcp_tool` call at 120s. A cold first-time multi-GB download during Step 4 sampling would never finish inside that budget and would be misreported as "too slow" every single run — pre-downloading during Environment's much larger 2400s budget is what makes F37 and F6 work together instead of at cross purposes.
+**Not yet live-verified** — next step is a benchmark run against `toolmaker_subset_nomusk.txt` (excludes MUSK, whose HF access is still pending) to confirm UNI/CONCH's weights actually download and get baked into the image.
+
 ### F7 — Declared, allowlisted repo-secret injection
 **Problem.** Alembic injects only its own LLM keys (and scrubs them); a repo-required runtime secret (HF token, inference API key) has no channel, so token-gated tools can't be built or served.
 **Spec.** Support a per-repo `env:` declaration (config/task-level) of required secret names; resolve from host env via an **allowlist** substitution (e.g. `${env:HF_TOKEN}`); inject into build + serve containers; keep them out of the committed image (bake-then-remove, combined with alembic's existing secret scrub). Surface available var names to the agents in prompts.
@@ -312,6 +319,213 @@ There's a second, related gap: even when SKIP *is* honored, a genuinely heavy to
 **Integration.** (1) is a `main.py`/`agents.py` change (parse `server.md`, thread the computed list into the validator's initial prompt and/or `invoke_mcp_tool`'s dispatch). (2) is a new optional stage, analogous to today's 4-stage pipeline. (3) is a `coder.py` instruction addition next to the existing SKIP rules (`instructions/coder.py` lines ~352–385).
 **Effort.** (1) Low–Med. (2) Med (new stage/pass, needs a design decision on where it plugs into `run_benchmark.py`). (3) Low.
 
+**Implemented 2026-07-07 (items 1 and 3; item 2 still deferred — same "post-2026-07-10 backlog" reasoning as F1/F3/F4).**
+- **Item 1.** `tools/fs.py`'s new `parse_samples_block(repo_url)` parses `server.md`'s fenced ```` ```yaml ```` `samples:` block via PyYAML (added to `docker/alembic/requirements.txt`) right before the Validator stage starts. `main.py`'s new `_build_validator_message()` computes the SKIP/invoke split and hands the validator an explicit, authoritative list in its opening message instead of relying on it to re-derive the same split from free-text YAML every run. Belt-and-suspenders: `tools/invoke.py`'s `_invoke_mcp_tool_sync` now checks a `set_skip_tools()`-populated contextvar first and refuses any call against a SKIP-listed tool name with `{"skipped": true, "reason": "..."}`, regardless of which agent made the call or whether it read the injected list — `validator.py` Step 1 documents this response shape.
+- **Item 3.** `instructions/coder.py`'s samples rules gained a new bullet: for training/inference-style tools, SKIP is now the fallback, not the default — try a cheap parameterization first (1-2 epochs, tiny dataset subset, `device: -1`) before falling back to SKIP, mirroring the `epochs: 2` pattern from baseline's own successful `AgML` run.
+
+**Live-verified 2026-07-07** against `Project-AgML/AgML` (`benchmarks/alembic/runs/2026-07-07_f25-verify/`, rebuilt image confirmed to have the fix baked in) — both items confirmed working, from two independent angles:
+- The validator itself never invoked the SKIP-listed tool (`run_detection_inference`) across the whole run — it correctly respected the injected list.
+- The code-level gate fired for real anyway: the *debugger*, while exploring for the real tool names in `server.py` after guessing wrong ones, opportunistically called `run_detection_inference` and got refused with `{"skipped": true, "reason": "...code-enforced, F25..."}` — exactly the belt-and-suspenders case item 1 was designed for, since the debugger has no visibility into the SKIP list at all (only the validator's opening message gets it).
+- Item 3: `train_yolo_model` was sampled with `epochs: 2` (not the tool's real default), giving real invocation coverage instead of a SKIP.
+The run itself still ended `INCOMPLETE` — the Validator hit its 1800s `STAGE_TIMEOUT` on a real, unrelated AgML bug (`AgMLDataLoader` returning `None` — a genuine repo-side issue, not an F25 regression) and F35's fallback reporter correctly stepped in. See F36 and F37 below for two more fixes from this same verification pass.
+
+### F37 — A long in-flight `invoke_mcp_tool` call could keep a container alive well past the stage that spawned it, for zero benefit
+
+**Problem.** Found during the F25 verification run: the Validator's 1800s timeout fired while a debugger-initiated `invoke_mcp_tool(train_yolo_model, ...)` call was mid-flight, actually training a real (if `epochs=2`-capped) YOLO model. `asyncio.wait_for`'s cancellation at the stage boundary can only cancel the *coroutine* awaiting `asyncio.to_thread` — it cannot reach into the worker thread blocked inside `subprocess.run()`, so that thread kept running. The old `subprocess.run(..., timeout=900)` in `_invoke_mcp_tool_sync` would eventually fire and kill its *immediate* child (`invoke_tool.py`) — but that only orphaned the *real* generated-code subprocess it spawned as its own child (`server.py`'s tool function does its own uncapped `subprocess.run()`), which kept running with no cap of its own at all. Net effect: the container (and therefore `start_chain.py`'s foreground `docker run`, and therefore the whole benchmark driver) could not fully exit/commit until roughly `STAGE_TIMEOUT` + 900s had both elapsed, for a tool whose result nobody was even going to read (the stage had already given up). Not an unbounded hang (Docker tears down a container's whole process tree once the container itself stops, so nothing leaked past the run), but a real, silent ~15-minute waste with no signal gained — directly prompted by the maintainer's observation that resource-heavy tool calls "waste a lot of time and don't give any benefits."
+
+**Spec/fix.** Two changes, both in `tools/invoke.py`'s `_invoke_mcp_tool_sync`:
+1. Shrink the timeout from 900s to `_INVOKE_TIMEOUT = 120`s. `coder.py` already requires every non-SKIP sample to be "cheap to run" — a genuinely cheap call should return in seconds, so anything still running past 120s is resource-heavy regardless of how small its parameters look (a real `epochs: 2` run still triggers a genuine dataset download + training loop, as observed).
+2. Switch from `subprocess.run` to `subprocess.Popen(..., start_new_session=True)` + `proc.communicate(timeout=...)`, so a timeout can `os.killpg()` the *entire* process group — killing the real generated-code grandchild subprocess too, not just `invoke_tool.py`.
+3. A timeout now returns `{"skipped": true, "reason": "..."}` (same shape as F25's SKIP-gate response) instead of `{"ok": false, "error": "timed out"}` — so it's reported as SKIPPED, not FAILED, and never triggers a wasted debugger call. The `reason` text makes clear this is not a confirmed bug, just a call too slow for a fast validation pass, and points at F25 item 2 (the still-deferred decoupled "extended validation" pass) as the real fix for tools that need more room. `validator.py` and `debugger.py` both updated to explain the dual meaning of `{"skipped": true}` (explicitly SKIP-marked, or simply timed out) and to treat both identically.
+
+**Effort.** Low.
+**Implemented and verified 2026-07-07.** Unit-verified standalone (a fake tool spawning a real 600s-sleep grandchild subprocess): the timeout fires at 120.1s, returns the expected `{"skipped": true, ...}` shape, and the grandchild process is confirmed fully killed (`pgrep` found nothing afterward) — not just orphaned. A normal fast call and the existing SKIP-gate case were both re-confirmed unaffected. Rebuilt image, confirmed baked in (`grep -c "_INVOKE_TIMEOUT = 120"` / `grep -c killpg` → 1 each). Not yet re-verified against a real repo end-to-end (would need another resource-heavy tool to naturally arise in a live run) — the standalone reproduction covers the exact mechanism (timeout → process-group kill → SKIPPED classification) that F37 changes.
+
+### F38 — A real, verified-to-exist sample file path still fails at invocation, because it's resolved against the wrong directory
+
+**Problem.** Found in `CONCH`'s F6 live-verification run (2026-07-07,
+`benchmarks/alembic/runs/2026-07-07_toolmaker-nomusk/`): `image_to_text_retrieval`
+failed with `FileNotFoundError: [Errno 2] No such file or directory:
+'./docs/roi1.jpg'`. Unlike F21 (invented, nonexistent paths), this path is
+**completely real** — confirmed via `docker run --entrypoint find
+alembic-tool:CONCH -iname roi1.jpg` → `/work/.alembic/CONCH/repos/docs/roi1.jpg`
+exists exactly where the Coder saw it. The bug is a directory mismatch: `server.py`
+correctly computes `REPO_PATH = Path(__file__).parent.parent / "repos"` (an
+absolute path to the actual clone dir) and passes it as the helper's
+`sys.argv[1]` — but the generated helper script (`helpers/image_to_text_retrieval.py`)
+never joins the *relative* `image_path` argument against that `repo_path`; it
+opens `image_path` exactly as given (`Image.open(image_path)`). Meanwhile
+`tools/invoke.py`'s `_invoke_mcp_tool_sync` runs the whole helper chain with
+`cwd=str(out_dir)` (the *output* dir, `.alembic/CONCH/output`) — so a
+repo-root-relative sample path like `./docs/roi1.jpg` resolves against the
+wrong directory and 404s, even though the Coder did everything F21 asks
+(verified the path is real before using it).
+
+**Why this matters beyond CONCH.** Any generated tool that takes a
+repo-bundled file path as a sample argument is exposed to this — the failure
+mode is invisible until the exact combination of "helper receives a relative
+path" + "that helper never joins it against `REPO_PATH`" occurs, which the
+Coder has no way to know it needs to guard against today; `coder.py`'s helper
+template doesn't mention path-joining relative arguments against `REPO_PATH`
+at all.
+
+**Spec/fix.** Option (a) — `coder.py`'s helper template requires joining any
+path-shaped argument against `repo_path` (received as `sys.argv[1]`) before
+use unless it's already absolute — chosen over (b) (`invoke_mcp_tool`
+resolving path-shaped args itself) since the dispatcher's generic `args: dict`
+has no schema to know which fields are paths, and (a) fixes the actual
+generated tool for real post-deployment usage too, not just the validation
+harness.
+**Effort.** Low.
+
+**Implemented 2026-07-08.** Traced the exact mechanics before fixing:
+`coder.py`'s own Pattern C template already told the Coder to set
+`cwd=str(REPO_PATH)` on the helper's `subprocess.run(...)` call — but CONCH's
+generated `server.py` omitted it on all 4 tools (an instruction-following
+miss, same class as F18/F21), and separately, the "Rules for samples" section
+told the Coder that sample paths "are resolved relative to `cwd=REPO_PATH`"
+— true only if that omission never happens, which it did. Confirmed via the
+committed image that this was **not evenly broken**: the debugger had
+already reactively patched an explicit `Path(repo_path) / image_path` join
+directly inside 2 of the 3 image-path-consuming helpers
+(`load_model_and_embed_image.py`, `zero_shot_classification.py`) after
+hitting the same `FileNotFoundError`, but never reached the 3rd, identical
+sibling (`image_to_text_retrieval.py`) before running out of debugger
+attempts for that tool — an F24 sibling-propagation gap on top of the F38
+bug itself. Fixed at the template level so every future helper gets the
+(already-proven, since it's literally what fixed the other 2 CONCH tools)
+explicit resolution from the start instead of depending on the debugger to
+reactively patch it per-helper: `instructions/coder.py`'s Pattern C Step 1
+template, the "helper must" rule list (Step 3), and the "Rules for samples"
+section (Step 6) all now require/show `if not image_path.is_absolute():
+image_path = (repo_path / image_path).resolve()`-style resolution inside the
+helper, with CONCH's exact counter-example cited. Instruction-only fix, same
+trust model as F18/F21/F26/F27 — not independently verifiable the way F39's
+code-level fix below is. Not yet live-re-verified against a real repo (would
+need another repo with a path-shaped sample argument to naturally arise in a
+live run).
+
+### F39 — F28's helper-import safety check assumes only two script shapes; a Coder-generated third shape defeats it
+
+**Problem.** Found investigating the same CONCH run's Syntax stage: the first
+`validate_syntax` call correctly reported a real `ModuleNotFoundError: No
+module named 'transformers'` from `helpers/image_to_text_retrieval.py` (via
+F28's `_check_helper_imports`). After a debugger round installed
+`transformers`, a **second** `validate_syntax` call on the same helper
+produced a completely different, nonsensical error: `IndexError: list index
+out of range` at `image_path = sys.argv[2]`. Root cause: `coder.py` requires
+every helper to "accept all dynamic inputs as argparse arguments" — but this
+repo's Coder ignored that and wrote flat top-level code that indexes
+`sys.argv` directly (`repo_path = sys.argv[1]; image_path = sys.argv[2];
+candidate_texts = json.loads(sys.argv[3])`), with no `argparse.ArgumentParser()`
+call anywhere and no `if __name__ == "__main__":` guard. `tools/invoke.py`'s
+`_import_safe_prefix` (F28) only recognizes two script shapes by design (its
+own docstring): flat argparse-based top-level code (stops at the first
+`"ArgumentParser("`/`"parse_args("` substring match) or a `def main():` +
+`__main__`-guard wrapper (skips the guarded block). A flat, non-argparse,
+non-guarded script matches **neither** stopping condition, so every top-level
+statement gets appended to the "safe" prefix — meaning `_check_helper_imports`
+doesn't just verify imports here, it actually starts executing the real
+model-loading/inference pipeline, and only stops by accident when it hits
+`sys.argv[2]` (which doesn't exist, since `_check_helper_imports` only ever
+passes `[python, tmp_path, str(repo_dir)]`, i.e. one positional arg). The
+`IndexError` message is misleading noise that has nothing to do with the
+actual import-correctness question F28 exists to answer.
+
+**Why this matters beyond CONCH.** This is a latent gap, not a one-off: F28's
+safety guarantee ("verify imports without running business logic") silently
+does not hold whenever a helper violates `coder.py`'s own argparse
+requirement — and F28 has no way to detect that violation and fail safe
+instead. The proximate cause (Coder skipping argparse) is an ordinary
+instruction-following miss, same class as F18/F21; the interesting part is
+that F28's static-analysis fallback has zero defense against it.
+
+**Spec/fix.** `_import_safe_prefix` treats "a script with no `ArgumentParser(`
+anywhere and no `__main__` guard" as an explicit **unknown/unsafe shape** and
+refuses to execute any top-level statement beyond imports/definitions and
+`sys.path.insert`/`.append` calls (the latter kept safe-by-exception since
+it's required for a helper's own repo-local imports to resolve, e.g. CONCH's
+`sys.path.insert(0, sys.argv[1])` before `from conch... import ...`) —
+inverting the old "assume safe unless proven otherwise" default to "assume
+unsafe unless a recognized safe pattern is found."
+**Effort.** Low–Medium (touches `_import_safe_prefix`'s shape detection,
+`tools/invoke.py`).
+
+**Implemented and verified 2026-07-08.** `_import_safe_prefix` now computes
+`has_argparse`/`has_main_guard` once up front; a plain top-level statement is
+only appended to the safe prefix when one of those is true, or the statement
+is itself a `sys.path.insert(`/`.append(` call — anything else in a script
+matching neither recognized shape stops the prefix immediately. Unit-tested
+standalone (isolated `/app`-layout sandbox, avoiding the real
+`CoScientist/logging` collision): (1) the pre-existing argparse-flat shape —
+unaffected, still stops exactly at `ArgumentParser()`; (2) the pre-existing
+`def main()` + `__main__`-guard shape — unaffected, still includes the full
+function body and skips the guard; (3) a synthetic F39-shaped script (flat
+`sys.argv` indexing, no argparse, no guard) — now correctly stops before the
+first business-logic statement while still including the `sys.path.insert`
+and every real import; (3b) confirmed the resulting prefix is actually
+*executable* end-to-end (the real point of F28 — verifying imports resolve,
+not just computing a string) via a runnable stdlib-only variant. **Also
+re-ran the fixed function against CONCH's actual real, still-on-disk
+`image_to_text_retrieval.py`** (pulled straight from the committed
+`alembic-tool:CONCH` image, not a reconstruction) — the computed safe prefix
+now ends exactly at `repo_path = sys.argv[1]` (the same line that used to
+cause the `IndexError: list index out of range` two lines later), correctly
+including all 4 real imports (`torch`, `Path`, and both `conch.*` imports)
+that F28 exists to verify. Rebuilt `alembic-base:latest`, confirmed baked in
+(`grep -c "has_argparse\|has_main_guard"` → present). Not yet re-verified
+against a real repo end-to-end in a fresh benchmark run (would need another
+repo whose Coder violates the argparse rule to naturally arise live) — the
+real-file reproduction above covers the exact mechanism F39 changes.
+
+### F40 — Global timeout-scale knob for ad-hoc "give this run more room" reruns (reverted) → centralized in main.py instead
+
+**Problem.** Every wall-clock timeout in the pipeline (`STAGE_TIMEOUT`,
+`REPORTER_TIMEOUT`, `DEBUGGER_CALL_TIMEOUT`, `bash`/`bash_env`, the venv
+compat-check, `run_tests`, `_INVOKE_TIMEOUT`, F28's two helper-import-check
+timeouts) was a separate hardcoded module-level constant scattered across 6
+files, so "double every timeout for one diagnostic run" meant editing all of
+them and remembering to revert afterward.
+**First fix (2026-07-08, reverted same day).** Added
+`alembic/common.py::TIMEOUT_SCALE = float(os.environ.get("ALEMBIC_TIMEOUT_SCALE", "1"))`
+and multiplied every timeout constant by it at import time, forwarded via
+`start_chain.py`'s `PASSTHROUGH_ENV`. Implemented, unit-verified (unset →
+byte-identical defaults; `ALEMBIC_TIMEOUT_SCALE=2` → every timeout doubled),
+and used for one real rerun — but per the maintainer's call, reverted as "a
+working but unmanageable feature": the env-var/multiplier indirection (five
+files each computing `int(X * TIMEOUT_SCALE)`, plus a Docker `-e` passthrough
+just to change a number for one run) was more machinery than the problem
+actually needed.
+**Fix that replaced it (2026-07-08).** Every timeout constant now lives as a
+plain integer directly in `main.py`, next to the pre-existing `STAGE_TIMEOUT`/
+`REPORTER_TIMEOUT`: `BASH_TIMEOUT`, `BASH_ENV_TIMEOUT`, `VENV_COMPAT_TIMEOUT`,
+`SERVER_IMPORT_CHECK_TIMEOUT`, `HELPER_IMPORT_CHECK_TIMEOUT`, `PYTEST_TIMEOUT`,
+`INVOKE_TIMEOUT`, `DEBUGGER_CALL_TIMEOUT` — one file to open to see or tune
+any wall-clock bound in the whole pipeline, no multiplier, no env var. The
+low-level tool modules (`tools/shell.py`, `tools/venv.py`, `tools/invoke.py`,
+`agents.py`) each pull in the one constant they need via a **deferred
+import** placed inside the function that uses it (e.g. `tools/shell.py`'s
+`bash_env()` does `from alembic.main import BASH_ENV_TIMEOUT` as its first
+line), not at module top level — `main.py` imports `agents.py`/`alembic.tools`
+at its own top level, so a top-level import in the reverse direction would be
+circular; a deferred import inside a function body resolves cleanly because
+by the time any of these functions actually runs, `main.py`'s module body has
+already finished executing.
+**Effort.** Low.
+**Implemented and verified 2026-07-08.** Confirmed inside the rebuilt image:
+importing `alembic.main` directly exposes all 8 new constants as plain ints
+(`BASH_TIMEOUT=15`, `BASH_ENV_TIMEOUT=900`, `VENV_COMPAT_TIMEOUT=240`,
+`SERVER_IMPORT_CHECK_TIMEOUT=30`, `HELPER_IMPORT_CHECK_TIMEOUT=30`,
+`PYTEST_TIMEOUT=120`, `INVOKE_TIMEOUT=120`, `DEBUGGER_CALL_TIMEOUT=600`) —
+identical to the original pre-F40 hardcoded values. Confirmed the deferred
+imports don't deadlock/fail even from a cold start: importing
+`alembic.tools.shell` **standalone**, without ever importing `alembic.main`
+first, and calling `bash()`/`bash_env()` both succeed (the deferred import
+transparently pulls in the full `alembic.main` → `agents` → `alembic.tools`
+chain on first call, which resolves fine since nothing is mid-import at that
+point). Also reconfirmed F39's `_import_safe_prefix` is untouched by any of
+this (it uses no timeout constant at all).
+
 ### F26 — Tools with no checkable/parseable output should never be created, not just skipped at validation time
 
 **Problem.** Found in the 2026-07-06 rerun2 `aizynthfinder` run: the Coder invented a `run_interactive_gui` tool wrapping a function that launches a Jupyter notebook/GUI session. Its `invoke_mcp_tool` failures were `JSONDecodeError: Expecting value: line 1 column 1 (char 0)` — the wrapped operation has no synchronous, parseable return value at all; it's fundamentally incompatible with the subprocess-run-and-parse-stdout-JSON contract every other tool relies on. This is a design mistake at tool-*selection* time (Coder Step 3, before any code is even written), not a fixable runtime bug — no amount of debugging converges on a working `run_interactive_gui`.
@@ -445,7 +659,15 @@ Traced `--depth=1` back to the very first commit that introduced `clone_repo` (`
 - `instructions/reporter.py` (new): a short, narrowly-scoped instruction — read the coder's report, run `validate_syntax`/`run_tests` once each (no retries, no debugger — it doesn't have one), write a report marked `## Result: INCOMPLETE` folding in whatever context summary it was given.
 - `agents.py`: new `reporter_agent`, tools `[read_report, validate_syntax, run_tests, write_report]` only.
 - `main.py`: new `_ensure_validation_report(progress)` helper, called unconditionally right after the validator's `_run_stage` call returns (covers both the hard-timeout and guard-exhausted paths in one place) — no-ops immediately if `validation.md` already exists. New `f"{name}_reporter"` session created alongside the other four. The pipeline's own completion check (`Pipeline complete` vs `Pipeline incomplete` log banner) now checks `validation.md`'s existence on disk directly instead of trusting the validator's returned text, since that text is meaningless in both the hard-timeout ("") and guard-exhausted (stale placeholder) cases the fallback exists to cover.
-**Not yet live-verified** — the next stage-timeout or guard-exhausted validator run would confirm the fallback actually fires and produces a usable `validation.md`. The `2026-07-07_f34-verify` run that motivated this (described in F32's note above) predates F35 landing, so it's the direct target for a re-run once the codebase is rebuilt.
+**Live-verified 2026-07-07** during the F25 verification run against `AgML` (`benchmarks/alembic/runs/2026-07-07_f25-verify/`): the Validator hit its 1800s `STAGE_TIMEOUT` mid-debug-round, `main.py` logged `"no validation.md after the stage ended — invoking the fallback reporter..."`, and the reporter produced a real, correctly-structured `## Result: INCOMPLETE` report (syntax/tests results plus all 4 tools marked SKIPPED with the fallback's own reason) within ~2 minutes — the pipeline then correctly logged `"Pipeline complete: AgML"` (file exists, even though its content says INCOMPLETE) instead of losing the run's signal entirely. F35 closed.
+
+### F36 — `MAX_TOOL_CYCLE`'s non-consecutive check aborts tools whose own instructions require repeated identical-args calls (`check_venv_compat`, `validate_syntax`, `run_tests`)
+
+**Problem.** Found live during the F25 verification run's first attempt (before the fix, discarded): the Environment stage's `check_venv_compat(repo_url, venv_name=".venv")` call was aborted via `"tool_cycle"` (`agent_runtime.py`'s non-consecutive `call_key_counts` guard, `MAX_TOOL_CYCLE = 3`) even though each round found genuinely different conflicts (first `albumentations`/`torch` missing, then clean, then `torchmetrics.IoU`/`pytorch_lightning.LightningLoggerBase`) — real progress, not a stuck loop. Root cause: `check_venv_compat`'s only arguments (`repo_url`, `venv_name`) never vary across a legitimate fix-and-recheck cycle on one venv, so the cycle key `(tool_name, str(args))` is identical on every call regardless of how much real work happened in between. `environment.py`'s own Step 4 instructs "repeat at most 2 rounds" (3 total calls) — exactly `MAX_TOOL_CYCLE`'s threshold, guaranteeing a collision on any repo that actually needs the full instructed retry budget. The same structural flaw applies identically to `validate_syntax(repo_url)` and `run_tests(repo_url)`, both of which `validator.py` also instructs to retry "up to 3 times."
+
+**Spec/fix.** Exempt these three tool names (`_TOOL_CYCLE_EXEMPT` in `agent_runtime.py`) from the non-consecutive `call_key_counts` check specifically, while leaving the consecutive-repeat guard (`MAX_TOOL_REPEATS`, same threshold) fully in place for them — 3 literally-identical calls back-to-back with nothing else in between is still a real stuck-loop signal worth catching, even for these tools; it's only the spread-out, real-progress-in-between pattern that was misfiring.
+**Effort.** Trivial.
+**Implemented and live-verified 2026-07-07.** Rebuilt the image, confirmed the fix baked in (`grep -c _TOOL_CYCLE_EXEMPT agent_runtime.py` → 2), and re-ran the same `AgML` verification: zero `ABORT` lines anywhere in the full run (explorer/environment/coder/validator combined), including through Environment's `check_venv_compat` calls. F36 closed.
 
 ---
 
