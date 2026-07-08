@@ -39,20 +39,38 @@ def _import_safe_prefix(source: str) -> str:
     safe to execute without triggering the helper's real argparse/business
     logic (F28).
 
-    Helper scripts (coder.py Step 3) come in two observed shapes: flat
-    top-level code (``parser = argparse.ArgumentParser(); ...; result =
-    obj.run(...)`` with no function wrapper — the documented template), or
-    a `def main():` wrapper with real logic only run via an
-    `if __name__ == "__main__":` guard. Function/class definitions and
-    imports are always safe to execute (defining doesn't run the body);
-    only a *top-level* statement that itself constructs/parses an argparse
-    parser is where real execution would begin, and the `__main__` guard is
-    never executed at all.
+    Helper scripts (coder.py Step 3) come in two *recognized-safe* shapes:
+    flat top-level code gated by an argparse call (``parser =
+    argparse.ArgumentParser(); ...; result = obj.run(...)`` — the documented
+    template, safe up to the ``ArgumentParser(``/``parse_args(`` line), or a
+    `def main():` wrapper with real logic only run via an `if __name__ ==
+    "__main__":` guard (safe in full — defining a function doesn't call it,
+    and the guard is never executed by this check). Function/class
+    definitions and imports are always safe (defining doesn't run the body).
+
+    F39: a helper can violate coder.py's "must use argparse" instruction and
+    instead index ``sys.argv`` directly with no argparse call and no
+    `__main__` guard at all (observed live: CONCH's `image_to_text_retrieval.py`).
+    Such a script matches NEITHER recognized-safe shape, so there is no
+    reliable point at which to stop — treating it as "safe until an argparse
+    call is seen" (the old default) meant this check would actually start
+    executing the helper's real business logic (model loading, inference)
+    instead of just checking imports, only accidentally stopping when it
+    happened to crash on a missing sys.argv index. Fixed by inverting the
+    default: a plain top-level statement is only appended when we've
+    positively identified a recognized-safe shape (argparse-gated, or inside
+    a main()-wrapped script) or it is itself a `sys.path.insert`/`.append`
+    call (needed for the repo's own imports to resolve, and safe on its own);
+    anything else, in a script matching neither shape, stops the prefix right
+    there rather than being assumed safe.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return source  # let the real py_compile check below report this
+
+    has_main_guard = any(_is_main_guard(node) for node in tree.body)
+    has_argparse   = "ArgumentParser(" in source or "parse_args(" in source
 
     safe: list[ast.stmt] = []
     for node in tree.body:
@@ -63,9 +81,23 @@ def _import_safe_prefix(source: str) -> str:
             safe.append(node)  # defining, not calling — always safe
             continue
         segment = ast.get_source_segment(source, node) or ""
-        if "ArgumentParser(" in segment or "parse_args(" in segment:
-            break  # top-level argparse construction/parsing — stop here
-        safe.append(node)
+        if has_argparse:
+            if "ArgumentParser(" in segment or "parse_args(" in segment:
+                break  # top-level argparse construction/parsing — stop here
+            safe.append(node)
+        elif has_main_guard:
+            # Stray top-level statement in a main()-wrapped script — real
+            # logic still lives inside the guarded call, so this is safe by
+            # construction regardless of what this one statement does.
+            safe.append(node)
+        elif "sys.path.insert(" in segment or "sys.path.append(" in segment:
+            safe.append(node)  # needed for the repo's own imports to resolve
+        else:
+            # F39: neither recognized-safe shape applies to this script, and
+            # this statement isn't a path-setup line either — no proven-safe
+            # boundary exists past this point. Stop here instead of assuming
+            # it's fine to execute.
+            break
 
     return "\n".join(ast.get_source_segment(source, n) or "" for n in safe)
 

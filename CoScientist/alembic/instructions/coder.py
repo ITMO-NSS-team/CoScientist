@@ -151,6 +151,7 @@ Step 1 — write the helper (do this before writing server.py):
 ```python
 write_file(repo_url, "helpers/run_analysis.py", """
 import sys, json, argparse
+from pathlib import Path
 sys.path.insert(0, sys.argv[1])  # REPO_PATH passed as first positional arg
 from mymodule import MyClass
 
@@ -160,8 +161,19 @@ parser.add_argument("image_path")
 parser.add_argument("--model", default="models/best.pth")
 args = parser.parse_args()
 
-obj = MyClass(model_path=args.repo_path + "/" + args.model)
-result = obj.run(args.image_path)
+# F38: resolve every path-shaped argument against repo_path INSIDE the
+# helper, explicitly, before using it — do not rely on the caller having
+# set cwd=REPO_PATH. A sample path like "docs/roi1.jpg" is real (it exists
+# in the repo) but is not necessarily interpreted relative to the repo root
+# by whatever process invokes this helper; join it yourself so the helper
+# is correct regardless of the caller's own working directory.
+repo_path = Path(args.repo_path)
+image_path = Path(args.image_path)
+if not image_path.is_absolute():
+    image_path = (repo_path / image_path).resolve()
+
+obj = MyClass(model_path=str(repo_path / args.model))
+result = obj.run(str(image_path))
 print(json.dumps(result))
 """)
 ```
@@ -338,6 +350,17 @@ The helper must:
 - Import from the repo's own modules
 - Print a single JSON object to stdout and exit
 - Contain NO runtime-interpolated values — it is a static file
+- **Resolve every path-shaped parameter (image_path, input_file,
+  dataset_dir, checkpoint_path, etc.) against repo_path explicitly, inside
+  the helper, before using it** — `p = Path(args.repo_path) / p if not
+  Path(p).is_absolute() else Path(p)`. A sample value like `docs/roi1.jpg`
+  is real (it exists in the repo, and the validator/coder correctly saw it
+  there) but is NOT necessarily interpreted relative to the repo root by
+  whatever process actually runs the helper (F38: `image_path` was opened
+  as the raw string given, and 404'd, even though `docs/roi1.jpg` genuinely
+  exists — two sibling helpers in the same tool set had this exact join and
+  worked, one didn't and failed). Do not rely on the caller having set
+  `cwd=REPO_PATH` — resolve it yourself so the helper is correct regardless.
 
 ### Step 4 — Write the MCP server
     write_file(repo_url, "server.py", <content>)
@@ -391,8 +414,13 @@ The report must contain:
   Rules for samples:
   - List EVERY tool you wrote. Skipped ones still need an entry.
   - Use real files that exist in the cloned repo (e.g.
-    `predictions/example_smiles.csv` if the repo ships one) — paths are
-    resolved relative to `cwd=REPO_PATH`.
+    `predictions/example_smiles.csv` if the repo ships one), given as a
+    plain repo-relative path (e.g. `predictions/example_smiles.csv`, not an
+    absolute path). **The corresponding helper must join it against
+    repo_path itself before use (see Step 3's path-resolution rule, F38)**
+    — do not assume the sample path will be resolved for you just because
+    it is repo-relative; only a helper that explicitly performs the join is
+    guaranteed to open the right file.
   - For tools that need external user input (a user PDF / weights file /
     network resource not bundled in the repo) write `SKIP` and add one
     line under the YAML explaining why.
