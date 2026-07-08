@@ -1,8 +1,10 @@
 """Validation tools: syntax/import check, pytest run, and live tool invocation."""
 import ast
 import asyncio
+import contextvars
 import json
 import os
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -10,7 +12,6 @@ from pathlib import Path
 from alembic.tools.paths import (
     INVOKE_TOOL_SCRIPT, MAX_BYTES, helper_venv_python, output_dir, repo_path, venv_python,
 )
-
 
 async def validate_syntax(repo_url: str) -> dict:
     """Check server.py for syntax errors and failed imports.
@@ -272,6 +273,32 @@ async def invoke_mcp_tool(repo_url: str, tool_name: str, args: dict | None = Non
     return await asyncio.to_thread(_invoke_mcp_tool_sync, repo_url, tool_name, args)
 
 
+# F30: a *successful* invoke_mcp_tool result has no size cap at all, unlike
+# stdout/stderr (MAX_BYTES above). A real tool returning full numpy arrays
+# as JSON lists (e.g. thousands of ECG samples) re-enters the conversation
+# as context on every later LLM call in the stage — observed immediately
+# preceding a provider-side crash in a live BioSPPy run
+# (benchmarks/alembic/runs/2026-07-06_rerun8_f24-verify/); the crash's own
+# error was too generic to prove this was the cause, but capping oversized
+# fields is good practice regardless of that one incident.
+_RESULT_MAX_LIST_ITEMS = 20
+_RESULT_MAX_STR_LEN    = 2000
+
+
+def _truncate_large_result(value):
+    """Recursively cap list length / string length in a tool result (F30)."""
+    if isinstance(value, list):
+        truncated = [_truncate_large_result(v) for v in value[:_RESULT_MAX_LIST_ITEMS]]
+        if len(value) > _RESULT_MAX_LIST_ITEMS:
+            truncated.append(f"... ({len(value) - _RESULT_MAX_LIST_ITEMS} more items truncated)")
+        return truncated
+    if isinstance(value, dict):
+        return {k: _truncate_large_result(v) for k, v in value.items()}
+    if isinstance(value, str) and len(value) > _RESULT_MAX_STR_LEN:
+        return value[:_RESULT_MAX_STR_LEN] + f"... ({len(value) - _RESULT_MAX_STR_LEN} more chars truncated)"
+    return value
+
+
 # F25: code-enforced SKIP gate. main.py's set_skip_tools() populates this
 # from the coder report's own samples: block, right before the Validator
 # stage starts (via tools.fs.parse_samples_block) — see the observed AgML
@@ -356,6 +383,8 @@ def _invoke_mcp_tool_sync(repo_url: str, tool_name: str, args: dict | None = Non
         parsed = json.loads(last_line)
         if not parsed.get("ok") and r.stderr:
             parsed.setdefault("stderr", r.stderr[-2000:])
+        if parsed.get("ok") and "result" in parsed:
+            parsed["result"] = _truncate_large_result(parsed["result"])
         return parsed
     except Exception:
         return {

@@ -1,7 +1,10 @@
 """Filesystem tools: clone/read/search the repo, read/write output and reports."""
 import asyncio
 import contextvars
+import re
 import subprocess
+
+import yaml
 
 from alembic.tools.paths import (
     IGNORE_EXTS, MAX_BYTES, output_dir, rel_or_ignored, repo_path,
@@ -48,7 +51,15 @@ def _clone_repo_sync(repo_url: str) -> dict:
     if not dest.exists():
         dest.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "clone", "--depth=1", repo_url, str(dest)],
+            # --recurse-submodules: some repos vendor real dependencies as git
+            # submodules (e.g. auto-sklearn's autosklearn/automl_common) —
+            # without this, the submodule directory clones empty, and any
+            # import touching it fails with a misleading ModuleNotFoundError
+            # that reads like a missing pip package, not a missing submodule.
+            # --shallow-submodules keeps submodules shallow too, consistent
+            # with the main --depth=1 (full submodule history isn't needed).
+            ["git", "clone", "--depth=1", "--recurse-submodules",
+             "--shallow-submodules", repo_url, str(dest)],
             check=True, capture_output=True,
         )
 
@@ -68,6 +79,8 @@ def read_file(repo_url: str, path: str) -> dict:
     full = repo_path(repo_url) / path
     if not full.exists():
         return {"error": f"File not found: {path}."}
+    if full.is_dir():
+        return {"error": f"'{path}' is a directory, not a file. Use search() or bash('ls') to list its contents."}
     if full.suffix in IGNORE_EXTS:
         return {"error": f"Binary/data file skipped: {path}."}
 
@@ -146,6 +159,8 @@ def read_output_file(repo_url: str, relative_path: str) -> dict:
     full = output_dir(repo_url) / relative_path
     if not full.exists():
         return {"error": f"File not found: {full}"}
+    if full.is_dir():
+        return {"error": f"'{relative_path}' is a directory, not a file."}
     raw = full.read_bytes()[:MAX_BYTES]
     return {"path": str(full), "content": raw.decode("utf-8", errors="replace")}
 
