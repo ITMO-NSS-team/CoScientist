@@ -21,6 +21,8 @@ from alembic.agents import (
     reporter_agent, set_current_repo_url,
 )
 from alembic.tools import WORKDIR, get_repo_name
+from alembic.tools.fs import parse_samples_block
+from alembic.tools.invoke import set_skip_tools
 from alembic.agent_runtime import APP_NAME, USER_ID, run_agent
 
 # Per-stage wall-clock budgets (seconds). Caps a hung stage (heavy pip install,
@@ -31,6 +33,9 @@ STAGE_TIMEOUT = {
     "coder":       1500,   # 25 min — generates server.py + helpers + tests
     "validator":   1800,   # 30 min — syntax + pytest + per-tool invocations
 }
+INVOKE_TIMEOUT              = 120   # invoke_mcp_tool() — F25/F37: resource-heavy calls
+                                     # are SKIPPED past this point, not FAILED
+DEBUGGER_CALL_TIMEOUT       = 600   # F16: bounds one debugger round-trip
 
 # F32: reserve the last 15% of each stage's budget as a grace window. Once
 # elapsed time crosses this fraction, run_agent breaks the agent's current
@@ -184,6 +189,39 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
         missing = [str(p.relative_to(base)) for p in required if not p.exists()]
         return (not missing), missing
 
+    def _build_validator_message() -> str:
+        """F25: compute the SKIP/invoke split from server.md's samples: block
+        in code, register it with invoke_mcp_tool's code-enforced gate
+        (set_skip_tools), and hand the validator the exact list up front —
+        instead of trusting it to correctly re-derive the same split itself
+        from free-text YAML on every run (the AgML failure this closes: a
+        tool the Coder itself marked SKIP got invoked anyway with its
+        expensive default params, burning the stage budget).
+        """
+        samples = parse_samples_block(repo_url)
+        if not samples:
+            set_skip_tools([])
+            return repo_url  # unparseable/missing — validator falls back to Step 1's own read
+        skip_tools = sorted(
+            name for name, v in samples.items()
+            if isinstance(v, str) and v.strip().upper() == "SKIP"
+        )
+        invoke_tools = sorted(name for name in samples if name not in skip_tools)
+        set_skip_tools(skip_tools)
+        return (
+            f"{repo_url}\n\n"
+            f"Computed from server.md's samples: block — trust this, it is "
+            f"authoritative, not a suggestion to re-derive yourself:\n"
+            f"  Invoke in Step 4 ({len(invoke_tools)}): "
+            f"{', '.join(invoke_tools) if invoke_tools else '(none)'}\n"
+            f"  SKIP — do NOT invoke ({len(skip_tools)}): "
+            f"{', '.join(skip_tools) if skip_tools else '(none)'}\n"
+            f"This is also enforced in code: calling invoke_mcp_tool on a "
+            f"SKIP-listed tool name returns {{\"skipped\": true, \"reason\": "
+            f"...}} instead of running it — treat that response as SKIPPED, "
+            f"never as a failure to hand to the debugger."
+        )
+
     async def _ensure_validation_report(progress: dict) -> None:
         """F35 last-resort guarantee: if the validator stage ended — via
         hard STAGE_TIMEOUT or by exhausting its guard-retry budget — without
@@ -277,7 +315,7 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
                 _banner(4, f"Validator  ({repo_url})")
                 validator_progress: dict = {}
                 await _run_stage(
-                    "validator", validator_agent, "validator", repo_url,
+                    "validator", validator_agent, "validator", _build_validator_message(),
                     required_report="validation", progress=validator_progress,
                 )
                 # F35: fires only if validation.md is still missing — covers

@@ -427,6 +427,16 @@ The report must contain:
   - Keep args cheap to RUN, not small in absolute size: small
     `num_pages`, small `batch_size`, `device: -1` for CPU. Validator runs
     these on a CPU container; long inference / GPU calls will time out.
+  - **For training/inference-style tools (`.fit()`, `.train()`, a
+    `predict()` over a full dataset, etc.), SKIP is the fallback, not the
+    default.** Before writing SKIP, try a genuinely cheap parameterization
+    first: 1-2 epochs instead of the default 100+, a tiny dataset subset (a
+    handful of examples, not the full corpus), `device: -1`/CPU. A real,
+    cheap, end-to-end run (e.g. `epochs: 2`) gives the validator actual
+    runtime coverage a SKIP never can. Only fall back to SKIP when no cheap
+    parameterization exists at all — the tool genuinely requires a
+    pretrained checkpoint file, a network resource, or external user data
+    not bundled in the repo.
   - **"Cheap" is not the same as "tiny" — do not shrink a value below
     what the function itself requires to execute.** Many scientific
     functions have hard preconditions on argument SIZE, not just type:

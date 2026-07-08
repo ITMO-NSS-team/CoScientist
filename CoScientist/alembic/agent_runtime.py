@@ -207,6 +207,23 @@ MAX_TOOL_CYCLE    = 3    # abort if the same tool+args recurs this many times TO
                          # (re-reading files A,B,C,A,B,C…) that slip past the consecutive
                          # check above. Observed in the rerun9 BioSPPy explorer, which
                          # re-read the same 10 modules 5-7x each up to the MAX_STEPS ceiling.
+
+# F25 follow-up: tools whose own instructions require calling them again after
+# a fix, with a signature that never varies across those calls (validate_syntax
+# and run_tests take only repo_url; check_venv_compat's only other arg,
+# venv_name, is fixed across an entire fix-and-recheck loop on one venv). For
+# these, every legitimate re-check has an IDENTICAL call_key — real progress
+# shows up in the *response* (conflicts/pass-fail changing), not the args —
+# so MAX_TOOL_CYCLE's non-consecutive counter trips on exactly the workflow
+# the tool's own instructions ask for (e.g. environment.py Step 4's "repeat at
+# most 2 rounds" = 3 total check_venv_compat calls with identical args = the
+# MAX_TOOL_CYCLE=3 threshold exactly). Observed live: a real AgML environment
+# run aborted via "tool_cycle" on check_venv_compat mid-fix, discarding a
+# genuinely-progressing venv setup (conflicts differed every round) that
+# happened to reuse the same call signature every time. Still fully covered
+# by the MAX_TOOL_REPEATS consecutive check below — 3 literally-identical
+# calls in a row with nothing else in between is still a real stuck loop.
+_TOOL_CYCLE_EXEMPT = {"validate_syntax", "run_tests", "check_venv_compat"}
 MAX_STEPS         = 120  # hard ceiling on total events per agent (was 60; complex
                          # debugger fixes routinely need >60 calls)
 MAX_GUARD_RETRIES = 3    # re-invoke agent at most this many times when guard fires
@@ -296,15 +313,16 @@ async def _run_agent_once(
                             )
                             return (final, wrote_report, step, total_tokens, _fault(),
                                     tool_calls, failures_by_class, "tool_repeat")
-                        call_key_counts[call_key] = call_key_counts.get(call_key, 0) + 1
-                        if call_key_counts[call_key] >= MAX_TOOL_CYCLE:
-                            logger.warning(
-                                f"[{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
-                                f"called {call_key_counts[call_key]}x total (non-consecutive "
-                                f"cycle) — breaking loop."
-                            )
-                            return (final, wrote_report, step, total_tokens, _fault(),
-                                    tool_calls, failures_by_class, "tool_cycle")
+                        if fc.name not in _TOOL_CYCLE_EXEMPT:
+                            call_key_counts[call_key] = call_key_counts.get(call_key, 0) + 1
+                            if call_key_counts[call_key] >= MAX_TOOL_CYCLE:
+                                logger.warning(
+                                    f"[{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
+                                    f"called {call_key_counts[call_key]}x total (non-consecutive "
+                                    f"cycle) — breaking loop."
+                                )
+                                return (final, wrote_report, step, total_tokens, _fault(),
+                                        tool_calls, failures_by_class, "tool_cycle")
 
                         if progress is not None and fc.name == "debugger":
                             progress["last_debugger_request"] = _trunc(str(fc.args))

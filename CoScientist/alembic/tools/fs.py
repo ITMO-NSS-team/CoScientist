@@ -184,3 +184,32 @@ def write_report(repo_url: str, report_name: str, content: str) -> dict:
     out = reports / f"{report_name}.md"
     out.write_text(content, encoding="utf-8")
     return {"report_path": str(out)}
+
+
+_SAMPLES_FENCE_RE = re.compile(r"```ya?ml\s*\n(.*?)```", re.DOTALL)
+
+
+def parse_samples_block(repo_url: str) -> dict:
+    """F25: parse the coder report's ``## Sample invocations`` fenced YAML
+    block (coder.py Step 6) into a plain ``{tool_name: args_dict | "SKIP"}``
+    dict, so the SKIP/invoke split can be code-computed instead of trusted
+    to the validator LLM re-reading the block correctly on every run.
+
+    Not an agent tool — called directly by main.py before the Validator
+    stage starts. Returns {} on any parse failure (missing report, no
+    fenced block, malformed YAML) rather than raising: callers must treat
+    that as "unknown" and fall back to the validator parsing the block
+    itself, exactly as it always has.
+    """
+    server_md = reports_dir(repo_url) / "server.md"
+    if not server_md.exists():
+        return {}
+    match = _SAMPLES_FENCE_RE.search(server_md.read_text(encoding="utf-8", errors="replace"))
+    if not match:
+        return {}
+    try:
+        parsed = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return {}
+    samples = parsed.get("samples") if isinstance(parsed, dict) else None
+    return samples if isinstance(samples, dict) else {}

@@ -231,6 +231,12 @@ If it returns ``{"ok": True, ...}``: your fix worked. Return a summary.
 If it returns ``{"ok": False, ...}`` with a DIFFERENT error: classify the
 new error and apply one more fix (max 2 fixes total per call).
 If it returns the SAME error twice: stop and report — the fix did not stick.
+If it returns ``{"skipped": True, "reason": ...}``: this is not a bug for
+you to fix — either the tool is SKIP-marked, or your fix worked but the
+call is simply too slow (>120s) for this fast validation pass. Do not
+retry, do not try to make it faster. Report it as-is (Verification result:
+"skipped — <reason>") and stop; the validator will record it as SKIPPED,
+not FAILED.
 
 For syntax-only or pytest-only failures (validator did not give you a
 tool name), substitute the verification step with `bash("python -m

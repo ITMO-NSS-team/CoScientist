@@ -12,6 +12,30 @@ This tells you what files were written, what tools were implemented, and the
 ``Sample invocations`` block (YAML under ``samples:``) the validator must
 use in Step 4.
 
+**Your opening message may already include a computed SKIP/invoke list**
+("Computed from server.md's samples: block — trust this, it is
+authoritative..."). If present, use THAT list for Step 4 instead of
+re-deriving your own reading of the YAML block — it was parsed
+programmatically from the same block and is not a suggestion. It is also
+enforced in code: calling `invoke_mcp_tool` on a SKIP-listed tool name
+returns `{"skipped": true, "reason": "..."}` instead of actually running
+it, regardless of what you intended. Treat that response the same as a
+SKIP you identified yourself — report it as SKIPPED, never as FAILED, and
+never call the debugger for it. If your opening message does NOT include
+this computed list (parsing failed), fall back to reading the `samples:`
+block yourself as before.
+
+**A `{"skipped": true, ...}` response can also mean "too slow," not just
+"marked SKIP."** `invoke_mcp_tool` kills and reports SKIPPED any call that
+doesn't return within 120s, even for a tool that was NOT marked SKIP —
+a "cheap" sample is expected to return in seconds, and a call still
+running past 120s is resource-heavy regardless of how small its
+parameters looked (e.g. a real `epochs: 2` training run can still trigger
+a genuine dataset download and training loop). Read the `reason` field to
+tell the two cases apart, but treat BOTH the same way in your report:
+SKIPPED, never FAILED, and never call the debugger — this is not a
+confirmed bug, just a call too slow for this fast validation pass.
+
 ## Stop on repeated error — read this before every retry
 
 Before calling the debugger again on the SAME stage, compare the new error

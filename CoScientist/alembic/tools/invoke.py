@@ -272,7 +272,35 @@ async def invoke_mcp_tool(repo_url: str, tool_name: str, args: dict | None = Non
     return await asyncio.to_thread(_invoke_mcp_tool_sync, repo_url, tool_name, args)
 
 
+# F25: code-enforced SKIP gate. main.py's set_skip_tools() populates this
+# from the coder report's own samples: block, right before the Validator
+# stage starts (via tools.fs.parse_samples_block) — see the observed AgML
+# failure in IMPROVEMENTS_SPEC.md#f25, where the validator LLM invoked a
+# tool it had itself just marked SKIP moments earlier because the
+# skip/invoke split was never enforced, only requested in free text. The
+# validator is also told this list explicitly in its opening message
+# (belt-and-suspenders): this contextvar is the "suspenders" half, refusing
+# the call regardless of whether the LLM remembers to honor its own read of
+# the block.
+_skip_tools: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
+    "skip_tools", default=frozenset()
+)
+
+
+def set_skip_tools(names) -> None:
+    _skip_tools.set(frozenset(names))
+
 def _invoke_mcp_tool_sync(repo_url: str, tool_name: str, args: dict | None = None) -> dict:
+    from alembic.main import INVOKE_TIMEOUT  # deferred: see main.py's timeout block
+    if tool_name in _skip_tools.get():
+        return {
+            "skipped": True,
+            "reason": (
+                f"'{tool_name}' is marked SKIP in server.md's samples block "
+                "and was not invoked (code-enforced, F25) — report it as "
+                "SKIPPED, not FAILED, and do not call the debugger for it."
+            ),
+        }
     out_dir = output_dir(repo_url).resolve()
     server  = out_dir / "server.py"
     venv_py = out_dir / ".venv" / "bin" / "python"
@@ -286,14 +314,39 @@ def _invoke_mcp_tool_sync(repo_url: str, tool_name: str, args: dict | None = Non
     env["TOOL_NAME"]      = tool_name
     env["TOOL_ARGS_JSON"] = json.dumps(args or {})
 
+    # start_new_session=True puts invoke_tool.py in its own process group so
+    # a timeout can kill the WHOLE tree, not just this immediate child.
+    # server.py's tool functions spawn their own subprocess (the real helper
+    # script) with no timeout of their own — SIGKILL-ing only invoke_tool.py
+    # orphans that real work, which then keeps running unbounded (observed:
+    # the AgML train_yolo.py process outlived a plain subprocess.run(timeout=)
+    # kill of its parent).
+    proc = subprocess.Popen(
+        [str(venv_py), str(INVOKE_TOOL_SCRIPT)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        cwd=str(out_dir), start_new_session=True,
+    )
     try:
-        r = subprocess.run(
-            [str(venv_py), str(INVOKE_TOOL_SCRIPT)],
-            capture_output=True, text=True, env=env, timeout=900,
-            cwd=str(out_dir),
-        )
+        stdout, stderr = proc.communicate(timeout=INVOKE_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "invocation timed out after 900 seconds"}
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        return {
+            "skipped": True,
+            "reason": (
+                f"'{tool_name}' did not return within {INVOKE_TIMEOUT}s and "
+                "was killed — treated as resource-heavy and SKIPPED, not "
+                "FAILED. This is NOT a confirmed bug: the tool may work "
+                "fine, it was just too slow for a cheap validation sample. "
+                "Do not call the debugger for it. A real check would need a "
+                "decoupled, much-longer 'extended validation' pass for "
+                "heavy tools (F25 item 2, still deferred)."
+            ),
+        }
+    r = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
 
     # The invoker prints a single JSON line. If it crashed before printing,
     # surface stderr so the debugger can see what failed.
