@@ -232,6 +232,50 @@ When applying a fix, target the right venv:
 | `cannot import name 'X' from 'torch'` | torch version mismatch | `bash_env("uv pip install --python <venv>/bin/python 'torch<2.0' --extra-index-url https://download.pytorch.org/whl/cpu")` |
 | `module 'torchdata' has no attribute 'datapipes'` | torchdata>=0.10 removed datapipes — common on old DGL | Pin `torchdata<0.7` in the same venv |
 
+### Step 4b — Download external model weights (F6, only if the explorer report lists any)
+
+If the exploration report\'s **External model weights** section lists a
+required checkpoint (not "None needed"), download it now — BEFORE writing
+the report — so it is baked into this image and the Validator stage never
+has to do a first-time network download inside its own tight per-invocation
+budget (F37 caps a single tool call at 120s; a cold multi-GB download would
+never finish in time and would be misreported as "too slow" every run).
+
+1. Make sure `huggingface_hub` is installed in whichever venv will actually
+   load the model (the REPO venv in two-venv mode, the server venv in
+   one-venv mode):
+       bash_env("uv pip install --python <venv>/bin/python huggingface_hub")
+
+2. Download using the EXACT repo ID and path from the report — never guess
+   or invent either:
+
+   - If the repo loads the model via a `hf-hub:<org>/<name>` reference or
+     `from_pretrained(...)` (no manual file placement needed — the library
+     caches it itself), just trigger that same load once to pre-warm the
+     cache:
+         bash_env("<venv>/bin/python -c \\"import timm; "
+                  "timm.create_model(\'hf-hub:MahmoodLab/UNI2-h\', pretrained=True)\\"")
+
+   - If the report gives an explicit local path the repo\'s own code
+     expects (e.g. CONCH\'s `checkpoints/conch/pytorch_model.bin` relative
+     to the repo root), download straight to that path:
+         bash_env("huggingface-cli download <repo_id> <filename> "
+                  "--local-dir .alembic/<repo>/repos/<expected/dir>")
+
+   `HF_TOKEN` is already present in this container\'s environment —
+   `huggingface_hub`/`huggingface-cli` read it automatically. Never print
+   it, never pass it inline on the command line.
+
+3. **A 401/403/"gated"/"access" error is an access problem, not a bug.** It
+   means the token\'s account has not (yet) been granted access to that
+   specific gated model. Do not retry more than once and do not attempt a
+   workaround — there is no code fix. Record it plainly ("blocked: gated
+   model, access not granted") and move on to Step 5; tools that need this
+   checkpoint will simply have no weights to sample against later.
+
+**Never download a full dataset here** — only the pretrained checkpoint(s)
+needed to run inference, exactly as scoped by the exploration report.
+
 ### Step 5 — Write environment report
     write_report(repo_url, "environment", <content>)
 
@@ -261,4 +305,8 @@ The report must contain:
 
   ## Key packages installed
   Bullet list of the main packages (name + version where known) per venv.
+
+  ## External model weights (omit this section if the exploration report said "None needed")
+  - Downloaded: <HF repo ID> -> <local path, or "HF cache (hf-hub: reference)">
+  - or: Blocked — gated model, access not granted (<HF repo ID>)
 '''

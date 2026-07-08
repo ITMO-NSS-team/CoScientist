@@ -85,6 +85,37 @@ Record:
   - The key runtime dependencies (package names + versions if pinned)
   - The exact install command from the README, if any
 
+### Step 4c — Identify required external downloads (pretrained weights, NOT datasets)
+Many ML repos need a pretrained model checkpoint that pip does not install
+and the repo does not bundle — it must be fetched separately, most often
+from HuggingFace Hub. While reading the README and any model-loading code
+(Steps 2-4), watch for:
+  - README wording like "download", "pretrained", "checkpoint", "weights",
+    a huggingface.co link, or gated-access language ("request access",
+    "you will need to login").
+  - Code using `from_pretrained`, `hf_hub_download`, `snapshot_download`,
+    `timm.create_model(..., pretrained=True)`, `huggingface_hub.login()`,
+    or a `hf-hub:<org>/<name>` style model reference.
+
+For each one found, record in the report:
+  - The exact HuggingFace repo ID (e.g. `MahmoodLab/UNI2-h`) or URL — copy
+    it exactly, do not guess or paraphrase.
+  - Whether it is GATED (README says "request access" / requires login) —
+    this needs an HF token whose account has actually been *granted*
+    access; a valid token alone is not sufficient, and a 403 for a gated
+    repo is an access problem, not something environment setup can fix.
+  - The exact loading call and any local path the repo's own code expects
+    (e.g. CONCH expects `checkpoints/conch/pytorch_model.bin` relative to
+    the repo root — copy this path exactly if one is given; if the repo
+    loads via a `hf-hub:` reference instead, no manual path is needed since
+    the library caches it itself).
+
+**Do NOT recommend downloading full training/evaluation datasets** — only
+flag pretrained model checkpoints needed to actually run inference.
+Datasets are large, unnecessary to demonstrate a tool works, and out of
+scope; if a tool needs a real input file, prefer data already bundled in
+the repo's own `tests/`/`examples/` directories (Step 4) instead.
+
 ### Step 5 — Write report
 Save your findings by calling:
     write_report(repo_url, "exploration", <content>)
@@ -117,6 +148,10 @@ The report must contain:
     packages.
   - **Install command**: the exact command from the README, or the recommended
     one you derived (e.g. `pip install -e .` or `uv pip install -r requirements.txt`).
+  - **External model weights**: for each pretrained checkpoint identified in
+    Step 4c — HF repo ID/URL, gated (yes/no), exact loading call, expected
+    local path (if any). Write "None needed" if the repo works from
+    pip-installed weights or ships its own checkpoint in-repo.
 
   ## Suggested MCP Usage Scenarios
   List up to 5 scenarios in decreasing order of usefulness. Each scenario:

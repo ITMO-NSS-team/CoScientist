@@ -64,14 +64,20 @@ async def bash(command: str) -> dict:
     # sync bash()/bash_env() here would freeze the whole event loop for the
     # duration of the command, silently defeating any asyncio.wait_for-based
     # timeout (per-debugger-call and per-stage alike) wrapping this turn.
-    return await asyncio.to_thread(_run_shell, command, 15)
+    from alembic.main import BASH_TIMEOUT  # deferred: see main.py's timeout block
+    return await asyncio.to_thread(_run_shell, command, BASH_TIMEOUT)
 
 
 async def bash_env(command: str) -> dict:
-    """Run a shell command with a 300 s timeout — for slow installs.
+    """Run a shell command with a 900 s timeout — for slow installs and downloads.
 
     Same semantics as ``bash``, just a longer timeout so package managers
-    (pip / uv / apt-get / conda) have time to download and build.
+    (pip / uv / apt-get / conda) have time to download and build, and so a
+    pretrained-model-weight download (huggingface-cli / hf_hub_download,
+    potentially multi-GB) has room to finish (F6). Inherits this process's
+    full environment, so HF_TOKEN (if set) is automatically visible to any
+    huggingface_hub/huggingface-cli call run through this tool — never pass
+    it explicitly on the command line.
 
     Examples:
         bash_env("uv venv .alembic/massformer/output/.venv --python 3.11")
@@ -80,5 +86,8 @@ async def bash_env(command: str) -> dict:
         bash_env("which python3")
         # System libs (container only, /var/lib/apt/lists is empty):
         bash_env("apt-get update && apt-get install -y --no-install-recommends libpoppler-cpp-dev")
+        # Pretrained weights (F6) — HF_TOKEN used automatically, never inline it:
+        bash_env("huggingface-cli download MahmoodLab/UNI2-h --local-dir .alembic/UNI/repos/checkpoints")
     """
-    return await asyncio.to_thread(_run_shell, command, 300)
+    from alembic.main import BASH_ENV_TIMEOUT  # deferred: see main.py's timeout block
+    return await asyncio.to_thread(_run_shell, command, BASH_ENV_TIMEOUT)

@@ -133,9 +133,10 @@ def _check_venv_compat_sync(repo_url: str, venv_name: str) -> dict:
     if not venv_py.exists():
         return {"error": f"venv python not found at {venv_py}"}
 
+    from alembic.main import VENV_COMPAT_TIMEOUT  # deferred: see main.py's timeout block
     r = subprocess.run(
         [str(venv_py.absolute()), str(COMPAT_CHECK_SCRIPT), str(repo_dir)],
-        capture_output=True, text=True, timeout=240,
+        capture_output=True, text=True, timeout=VENV_COMPAT_TIMEOUT,
     )
     if r.returncode != 0:
         return {"error": f"compat check script failed: {r.stderr.strip()[:500]}"}

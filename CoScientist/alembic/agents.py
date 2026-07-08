@@ -62,12 +62,6 @@ def set_current_repo_url(repo_url: str) -> None:
     _current_repo_url.set(repo_url)
 
 
-# Bounds a single debugger call so a stuck LLM/tool turn can't consume the
-# whole Validator stage budget (F16). Generous enough for a normal
-# multi-step fix (a couple of bash_env installs + an edit + a re-invoke)
-# while leaving room for several calls within the 1800s validator timeout.
-DEBUGGER_CALL_TIMEOUT = 600  # seconds
-
 # F29: the debugger's own tool calls/reasoning happen inside a nested
 # ADK sub-Runner (see AgentTool.run_async) whose events never pass through
 # agent_runtime._log_event — only the debugger's final self-reported text
@@ -123,6 +117,11 @@ class _DebuggerAgentTool(AgentTool):
         self._round = 0  # F29: per-process debug-round counter, see above.
 
     async def run_async(self, *, args, tool_context):
+        # Deferred import: main.py is the single source of truth for every
+        # pipeline timeout, but it imports this module at startup, so a
+        # top-level import in this direction would be circular.
+        from alembic.main import DEBUGGER_CALL_TIMEOUT
+
         self._round += 1
         round_num = self._round
         _debug_round.set(round_num)

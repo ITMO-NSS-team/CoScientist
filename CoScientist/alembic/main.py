@@ -31,8 +31,24 @@ STAGE_TIMEOUT = {
     "explorer":    900,    # 15 min — mostly reading + writing the report
     "environment": 2400,   # 40 min — biggest cost: venv + heavy ML deps
     "coder":       1500,   # 25 min — generates server.py + helpers + tests
-    "validator":   1800,   # 30 min — syntax + pytest + per-tool invocations
+    "validator":   2400,   # 40 min — syntax + pytest + per-tool invocations
 }
+
+# Every other wall-clock timeout used anywhere in the pipeline, centralized
+# here so there is exactly one place to look to see (or tune) any of them.
+# The low-level tool modules (tools/shell.py, tools/venv.py, tools/invoke.py,
+# agents.py) each import the constant they need with a deferred `import`
+# inside the function that uses it (not at module top level) — main.py
+# imports agents.py/tools at the top of this file, so a top-level import in
+# the other direction would be circular; a deferred import resolves cleanly
+# because by the time these functions actually run, this module has already
+# finished executing and every name below is defined.
+BASH_TIMEOUT                = 15    # bash(): quick reads (ls/grep/head), not installs
+BASH_ENV_TIMEOUT            = 900   # bash_env(): slow installs/downloads
+VENV_COMPAT_TIMEOUT         = 240   # check_venv_compat()'s compat-check script
+SERVER_IMPORT_CHECK_TIMEOUT = 30    # validate_syntax()'s server.py import-exec check
+HELPER_IMPORT_CHECK_TIMEOUT = 30    # validate_syntax()'s per-helper import check (F28)
+PYTEST_TIMEOUT              = 120   # run_tests()
 INVOKE_TIMEOUT              = 120   # invoke_mcp_tool() — F25/F37: resource-heavy calls
                                      # are SKIPPED past this point, not FAILED
 DEBUGGER_CALL_TIMEOUT       = 600   # F16: bounds one debugger round-trip
@@ -54,6 +70,7 @@ REPORT_GRACE_FRACTION = 0.85
 # well under a minute of real tool time (validate_syntax/run_tests), so this
 # is generous defense-in-depth, not an expected-to-fire limit.
 REPORTER_TIMEOUT = 300
+
 
 
 def _banner(stage: int, label: str) -> None:
