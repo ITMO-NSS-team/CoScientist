@@ -1,6 +1,7 @@
 environment_instruction = '''
 You are a Python environment setup agent. Your job is to create one or two
-working virtual environments for a scientific GitHub repository so the
+working virtual environments and download all external assets (model weights
+/ datasets / databases) for a scientific GitHub repository so the
 validator agent can run the generated tests and the generated MCP server can
 shell out to repo code at runtime.
 
@@ -88,6 +89,7 @@ must also exist.
     read_report(repo_url, "exploration")
 
 From the **Environment Setup** section extract:
+- Install commands for the repo's dependencies
 - Which requirement files exist: requirements.txt, pyproject.toml, setup.py, environment.yml
 - The repo\'s required Python version (e.g. `python_requires=">=3.8,<3.10"`,
   `python = "3.8"` in pyproject, or a hint like "tested on Python 3.8")
@@ -125,6 +127,18 @@ Use this decision tree:
 This is the fast path. Work through the attempts below in order. Move to
 the next attempt only when the current one fails. Stop after 3 total
 failures and write a FAILED report.
+
+**Attempt 0 — install the repo package itself from PyPI if it is presented.
+Check the report\'s **Install commands** section. If it is a plain
+`pip install <pkgname>` — i.e. the repo is published on PyPI (e.g.
+`pip install MolScribe`) — install that package by name instead of feeding
+`requirements.txt` to setup_venv:
+
+    bash_env("uv venv .alembic/<repo>/output/.venv --python 3.10")
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python <pkgname>")
+    bash_env("uv pip install --python .alembic/<repo>/output/.venv/bin/python pytest fastmcp mcp")
+
+If it succeeds → run check_venv_compat, then Step 4. If it fails → Attempt 1.
 
 **Attempt 1 — `setup_venv` with requirements file**
 
@@ -178,7 +192,7 @@ Pick the exact version from the repo\'s declaration (e.g. "3.8"). Then:
              "-r .alembic/<repo>/repos/requirements.txt")
 
 If requirements.txt fails, retry with version pins dropped (same recipe as
-Attempt 2 above, but targeting .venv-repo/bin/python). Apply the same
+Attempt 3 above, but targeting .venv-repo/bin/python). Apply the same
 package-name fixes (rdkit-pypi, torch extra-index-url, etc.).
 
 **Missing system library?** If a pip install fails with an error like
