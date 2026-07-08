@@ -97,6 +97,18 @@ Use this decision tree:
 
   IF the repo declares Python >= 3.10 (or no Python version at all):
       → ONE-VENV mode. The server venv hosts everything.
+      → Use the repo\'s OWN declared minimum version for `setup_venv`\'s
+        `python_version`, not a blind "3.10" — e.g. a repo pinning
+        `requires-python = ">=3.13,<3.14"` needs `python_version="3.13"`,
+        NOT "3.10". uv can fetch any CPython version on demand
+        (`uv python list` shows what\'s cached/downloadable) — a
+        higher-than-3.10 requirement is normal and resolvable, not a reason
+        to fall back to two-venv or to a hardcoded "3.10" and hope for the
+        best (observed failure: STAMP declares `>=3.13,<3.14`, the agent
+        used 3.10 anyway, `pip install -e .` then failed with "current
+        Python version does not satisfy Python>=3.13,<3.14" — genuinely
+        fixable by just using the declared version, misdiagnosed as an
+        unfixable environment fault instead).
       → Go to Step 3a.
 
   IF the repo declares Python < 3.10 (3.7 / 3.8 / 3.9):
@@ -120,16 +132,27 @@ failures and write a FAILED report.
 
 **Attempt 1 — `setup_venv` with requirements file**
 
+Use the repo\'s own declared Python version from Step 1 (default to "3.10"
+ONLY if the repo declares no specific version at all — never use "3.10" to
+override a higher declared minimum).
+
 If a flat `requirements.txt` exists:
-    setup_venv(repo_url, requirements_file="requirements.txt", python_version="3.10")
+    setup_venv(repo_url, requirements_file="requirements.txt", python_version="<repo's declared version, e.g. 3.10 or 3.13>")
 
 If only `pyproject.toml` exists and it lists `dependencies`:
-    setup_venv(repo_url, packages=["<dep1>", "<dep2>", ...], python_version="3.10")
+    setup_venv(repo_url, packages=["<dep1>", "<dep2>", ...], python_version="<repo's declared version>")
 where you list the runtime deps from `[project].dependencies` (NOT `pip install -e .`).
 
 `setup_venv` installs `fastmcp` and `pytest` automatically — do not list them.
 If it returns `{"success": True, ...}` → run check_venv_compat, then Step 4.
-If it returns `{"success": False, ...}` → read the error, proceed to Attempt 2.
+If it returns `{"success": False, ...}`:
+  - **If the error is a Python-version constraint** (e.g. uv/pip says
+    "does not satisfy Python>=X,<Y" or "requires Python <version>"), do NOT
+    proceed to Attempt 2 yet — first retry Attempt 1 once more with
+    `python_version` set to a version inside that exact stated range (uv
+    fetches it automatically if not already cached). Only fall through to
+    Attempt 2 if that retry also fails.
+  - Otherwise, read the error and proceed to Attempt 2.
 
 **Attempt 2 — same packages, but drop all version pins**
 

@@ -103,7 +103,7 @@ def _import_safe_prefix(source: str) -> str:
     return "\n".join(ast.get_source_segment(source, n) or "" for n in safe)
 
 
-def _check_helper_imports(python: str, helper: Path, repo_dir: Path) -> str | None:
+def _check_helper_imports(python: str, helper: Path, repo_dir: Path, timeout: int) -> str | None:
     """F28: verify a helper script's imports actually resolve, without running
     its business logic. Helper scripts (coder.py Step 3) always accept
     REPO_PATH as sys.argv[1] and do their own sys.path manipulation with it
@@ -136,11 +136,11 @@ def _check_helper_imports(python: str, helper: Path, repo_dir: Path) -> str | No
             f.write(prefix)
         r = subprocess.run(
             [python, tmp_path, str(repo_dir)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=timeout,
             cwd=str(repo_dir),
         )
     except subprocess.TimeoutExpired:
-        return f"{helper.name}: import check timed out after 30 seconds"
+        return f"{helper.name}: import check timed out after {timeout} seconds"
     finally:
         Path(tmp_path).unlink(missing_ok=True)
     if r.returncode != 0:
@@ -149,6 +149,8 @@ def _check_helper_imports(python: str, helper: Path, repo_dir: Path) -> str | No
 
 
 def _validate_syntax_sync(repo_url: str) -> dict:
+    # deferred: see main.py's timeout block
+    from alembic.main import HELPER_IMPORT_CHECK_TIMEOUT, SERVER_IMPORT_CHECK_TIMEOUT
     out_dir = output_dir(repo_url).resolve()
     server  = out_dir / "server.py"
     python  = venv_python(out_dir)
@@ -171,7 +173,7 @@ def _validate_syntax_sync(repo_url: str) -> dict:
     )
     r2 = subprocess.run(
         [python, "-c", load_snippet],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=SERVER_IMPORT_CHECK_TIMEOUT,
         cwd=str(server.parent),
     )
     if r2.returncode != 0:
@@ -197,7 +199,7 @@ def _validate_syntax_sync(repo_url: str) -> dict:
             if r3.returncode != 0:
                 return {"passed": False, "stage": "helper_syntax",
                         "error": f"{helper.name}: {r3.stderr.strip()}"}
-            err = _check_helper_imports(helper_python, helper, repo_dir)
+            err = _check_helper_imports(helper_python, helper, repo_dir, HELPER_IMPORT_CHECK_TIMEOUT)
             if err:
                 return {"passed": False, "stage": "helper_imports", "error": err}
 

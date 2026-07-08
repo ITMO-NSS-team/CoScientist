@@ -348,6 +348,17 @@ The helper must:
 - Accept all dynamic inputs as argparse arguments
 - Add REPO_PATH to sys.path via sys.argv[1]
 - Import from the repo's own modules
+- **If the module you need to import does NOT live at the repo root**
+  (e.g. it's `code/survival_analysis.py` or `src/mypackage/foo.py`, not
+  `survival_analysis.py` at the top level), add THAT module's own
+  directory to sys.path too — `sys.path.insert(0, str(Path(sys.argv[1]) /
+  "code"))` — before importing it, or use the correct package-qualified
+  import (`from code.survival_analysis import ...`) if the subdirectory has
+  an `__init__.py`. Inserting only the repo root and then doing a bare
+  `from survival_analysis import X` only works when the module is actually
+  at the root — verify the exact location via a directory listing or
+  `read_file` first (same rule as F21/F38's file-path verification, applied
+  to import paths this time), don't assume root-level layout.
 - Print a single JSON object to stdout and exit
 - Contain NO runtime-interpolated values — it is a static file
 - **Resolve every path-shaped parameter (image_path, input_file,

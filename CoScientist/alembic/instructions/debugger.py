@@ -52,6 +52,12 @@ After install, re-run `invoke_mcp_tool` (Step "Verify" below).
 
 ## Class B — missing Python module
 
+`<output>/.venv/bin/python` ALWAYS exists — every repo gets at least a
+SERVER venv, by construction, before you are ever called. If you are
+tempted to conclude "no virtual environment was detected," that conclusion
+is wrong; run `bash("ls /work/.alembic/<repo>/output/")` first to see which
+of `.venv` / `.venv-repo` actually exist on disk, rather than guessing.
+
 First decide which venv is missing the module:
 - If the missing import is inside `helpers/<name>.py` or comes from the
   repo's own code → install into the REPO venv: `<output>/.venv-repo/bin/python`
@@ -65,6 +71,14 @@ Then:
     bash_env("uv pip install --python /work/.alembic/<repo>/output/.venv/bin/python <pkg>")
 
 NEVER run bare `pip install <pkg>` — it lands in the container system Python.
+NEVER pass `--system` (or any other flag that skips a venv) — it installs
+into the container's system Python, not the venv `server.py`/helpers
+actually run against, so the "fix" silently does nothing for the real
+invocation path even though the install command itself succeeds (observed:
+MedSAM — a fix installed via `--system` reported "verification OK" from a
+plain `py_compile` check, but the actual runtime error was never touched
+because .venv was never modified). Always resolve the exact venv path first
+and pass it via `--python <venv>/bin/python`.
 
 After install, re-run `invoke_mcp_tool` (Step "Verify" below).
 
