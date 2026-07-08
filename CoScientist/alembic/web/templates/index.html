@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <title>Alembic Pipeline</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500&display=swap"
+    rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+    rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            /* CoScientist brand tokens — single accent (primary) + semantic states */
+            "primary": "#00daf3", "on-primary": "#00363d", "primary-container": "#007e8c",
+            "secondary": "#40e56c",                 /* done / pass */
+            "error": "#ffb4ab", "error-strong": "#93000a",  /* fail / timeout */
+            "background": "#101319",
+            "surface-low": "#191c22", "surface": "#1d2026", "surface-lowest": "#0b0e14",
+            "surface-high": "#272a31",
+            "on-surface": "#e1e2eb", "on-surface-dim": "#c2c6d8",
+            "outline": "#8c90a1", "outline-variant": "#424656",
+          },
+          borderRadius: { /* Shape Lock: cards=xl, controls=lg, pills=full */
+            "card": "0.75rem", "control": "0.5rem",
+          },
+          fontFamily: {
+            head: ["Space Grotesk", "sans-serif"],
+            mono: ["JetBrains Mono", "monospace"],
+            body: ["Inter", "sans-serif"],
+          }
+        },
+      },
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+
+    /* scrollbars */
+    .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .scroll::-webkit-scrollbar-thumb { background: #32353c; border-radius: 999px; }
+    .scroll::-webkit-scrollbar-track { background: transparent; }
+
+    /* faint topology grid — tinted to the one accent */
+    .grid-bg { background-image: radial-gradient(rgba(0,218,243,.045) 1px, transparent 1px); background-size: 26px 26px; }
+
+    /* motion — every animation is semantic (feedback / running-state) */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
+    .enter { animation: fadeIn .28s cubic-bezier(.16,1,.3,1) both; }
+    @keyframes ring { 0% { box-shadow: 0 0 0 0 rgba(0,218,243,.45) } 70% { box-shadow: 0 0 0 7px rgba(0,218,243,0) } 100% { box-shadow: 0 0 0 0 rgba(0,218,243,0) } }
+    .ring { animation: ring 1.7s ease-out infinite; }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    .spin { animation: spin 1s linear infinite; display: inline-block; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .enter, .ring, .spin { animation: none !important; }
+    }
+
+    /* lightweight markdown */
+    .md h4 { font-family: 'Space Grotesk'; font-weight: 600; color: #e1e2eb; margin: .5rem 0 .15rem; font-size: .82rem; }
+    .md code { font-family: 'JetBrains Mono'; font-size: .76rem; background: #0b0e14; padding: 1px 5px; border-radius: 5px; color: #00daf3; }
+    .md strong { color: #e1e2eb; font-weight: 600; }
+    .md .li { padding-left: 14px; position: relative; margin: 3px 0; color: #c2c6d8; font-size: .81rem; line-height: 1.5; }
+    .md .li::before { content: ""; position: absolute; left: 2px; top: .55em; width: 4px; height: 4px; border-radius: 999px; background: #00daf3; }
+    .md p { color: #c2c6d8; font-size: .81rem; line-height: 1.55; margin: 3px 0; }
+
+    /* body-level floating tooltip (never clipped by panel overflow) */
+    #floating-tip {
+      position: fixed; z-index: 200; display: none; pointer-events: none;
+      width: 360px; max-height: 260px; overflow: auto;
+      background: #0b0e14; border: 1px solid #93000a; color: #ffb4ab;
+      font-family: 'JetBrains Mono'; font-size: .69rem; line-height: 1.5;
+      padding: 9px 11px; border-radius: 12px; white-space: pre-wrap;
+      box-shadow: 0 14px 40px rgba(0,0,0,.55);
+    }
+    /* footer resize grabber */
+    #feed-resizer { height: 6px; cursor: ns-resize; }
+    #feed-resizer::after {
+      content: ""; display: block; width: 40px; height: 3px; margin: 1.5px auto 0;
+      border-radius: 999px; background: #424656; transition: background .15s;
+    }
+    #feed-resizer:hover::after { background: #00daf3; }
+
+    /* tool invocation panel (expand a tool card) */
+    .lbl { font-family: 'Space Grotesk'; font-size: .62rem; font-weight: 600; letter-spacing: .1em;
+      text-transform: uppercase; color: #8c90a1; margin-bottom: 4px; }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: start; }
+    .kvk { font-family: 'JetBrains Mono'; font-size: .72rem; color: #00daf3; white-space: nowrap; }
+    .kvv { font-family: 'JetBrains Mono'; font-size: .72rem; color: #c2c6d8; word-break: break-word; }
+    .out { font-family: 'JetBrains Mono'; font-size: .7rem; line-height: 1.5; color: #c2c6d8;
+      background: #0b0e14; border: 1px solid #424656; border-radius: 8px; padding: 8px 10px;
+      max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+    .err { font-family: 'JetBrains Mono'; font-size: .69rem; line-height: 1.5; color: #ffb4ab;
+      background: #0b0e14; border: 1px solid #93000a; border-radius: 8px; padding: 8px 10px;
+      max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+    .stat { font-family: 'JetBrains Mono'; font-size: 1.4rem; font-weight: 600; color: #e1e2eb; }
+    .chip { display: inline-block; font-family: 'JetBrains Mono'; font-size: .7rem; color: #c2c6d8;
+      background: #0b0e14; border: 1px solid #424656; border-radius: 999px; padding: 2px 9px; margin: 2px 3px 2px 0; }
+    .bars { display: flex; align-items: flex-end; gap: 2px; height: 44px; padding: 2px 0; }
+    .bar { flex: 1; min-width: 2px; max-width: 14px; background: #00daf3; border-radius: 2px 2px 0 0; opacity: .8; }
+    .svgbox { background: #fff; border-radius: 8px; padding: 8px; max-height: 300px; overflow: auto; }
+    .svgbox svg { max-width: 100%; height: auto; }
+    .filechip { display: inline-flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono';
+      font-size: .72rem; color: #eac400; background: #0b0e14; border: 1px solid #424656;
+      border-radius: 8px; padding: 5px 9px; }
+  </style>
+</head>
+
+<body class="bg-background text-on-surface overflow-hidden h-screen flex flex-col antialiased">
+
+  <!-- ── Header ─────────────────────────────────────────────────────── -->
+  <header class="flex items-center gap-5 px-6 h-16 border-b border-outline-variant/20 bg-surface-lowest shrink-0">
+    <div class="flex items-center gap-2.5 shrink-0">
+      <span class="material-symbols-outlined text-primary text-[26px]">experiment</span>
+      <div class="leading-none">
+        <div class="font-head text-lg font-bold tracking-[0.2em] text-primary uppercase">Alembic</div>
+        <div class="text-[9px] font-mono text-outline tracking-[0.25em] uppercase mt-1">repo → mcp</div>
+      </div>
+    </div>
+
+    <div class="flex-1 flex items-center gap-2 max-w-3xl">
+      <div class="flex-1 flex items-center gap-2 bg-surface rounded-control border border-outline-variant/30 px-3 h-10 focus-within:border-primary/60 transition-colors">
+        <span class="material-symbols-outlined text-outline text-[19px]">link</span>
+        <input id="repo-input" type="text" spellcheck="false" placeholder="https://github.com/Roestlab/massformer"
+          class="flex-1 bg-transparent border-0 focus:ring-0 p-0 text-sm font-mono text-on-surface placeholder:text-outline/70" />
+      </div>
+      <button id="run-btn"
+        class="flex items-center gap-1.5 bg-primary text-on-primary font-head font-semibold text-sm px-4 h-10 rounded-control hover:brightness-110 active:scale-[.98] transition disabled:opacity-40">
+        <span class="material-symbols-outlined text-[19px]">play_arrow</span> Run
+      </button>
+      <button id="stop-btn"
+        class="hidden items-center gap-1.5 bg-error/15 text-error font-head font-semibold text-sm px-4 h-10 rounded-control hover:bg-error/25 active:scale-[.98] transition">
+        <span class="material-symbols-outlined text-[19px]">stop</span> Stop
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Stage rail ─────────────────────────────────────────────────── -->
+  <div id="stage-rail" class="flex items-center gap-0 px-6 h-[68px] border-b border-outline-variant/20 bg-background shrink-0"></div>
+
+  <!-- ── Split body ─────────────────────────────────────────────────── -->
+  <main class="flex-1 grid grid-cols-2 overflow-hidden min-h-0">
+
+    <!-- LEFT: source repo -->
+    <section class="flex flex-col border-r border-outline-variant/20 overflow-hidden min-h-0">
+      <div class="flex items-center gap-2 px-5 h-11 border-b border-outline-variant/10 bg-surface-low shrink-0">
+        <span id="left-icon" class="material-symbols-outlined text-outline text-[18px]">search</span>
+        <h2 id="left-title" class="font-head text-sm font-semibold text-on-surface-dim">Explorer</h2>
+        <span id="left-tag" class="text-[10px] text-outline font-mono ml-auto">report</span>
+      </div>
+      <div id="left-panel" class="flex-1 overflow-y-auto scroll grid-bg p-4 min-h-0"></div>
+    </section>
+
+    <!-- RIGHT: generated MCP server -->
+    <section class="flex flex-col overflow-hidden min-h-0">
+      <div class="flex items-center gap-2 px-5 h-11 border-b border-outline-variant/10 bg-surface-low shrink-0">
+        <span class="material-symbols-outlined text-primary text-[18px]">build</span>
+        <h2 class="font-head text-sm font-semibold text-on-surface-dim">Generated MCP server</h2>
+        <div id="check-badges" class="ml-auto flex items-center gap-1.5"></div>
+      </div>
+      <div id="right-panel" class="flex-1 overflow-y-auto scroll grid-bg p-4 min-h-0"></div>
+    </section>
+  </main>
+
+  <!-- ── Activity ───────────────────────────────────────────────────── -->
+  <footer class="border-t border-outline-variant/20 bg-surface-lowest shrink-0">
+    <div id="feed-resizer" title="Drag to resize"></div>
+    <button id="feed-toggle" class="w-full flex items-center gap-2.5 px-6 h-10 text-left hover:bg-surface/40 transition-colors">
+      <span class="material-symbols-outlined text-primary text-[18px]" id="feed-chevron">expand_more</span>
+      <span class="font-head text-xs font-semibold text-on-surface-dim">Activity</span>
+      <span id="now-tool" class="text-xs font-mono text-outline truncate ml-2 flex-1"></span>
+      <span id="feed-count" class="text-[10px] font-mono text-outline-dim bg-surface rounded-full px-2 py-0.5 tabular-nums">0</span>
+    </button>
+    <div id="feed" class="overflow-y-auto scroll px-6 pb-3 space-y-0.5" style="height:208px"></div>
+  </footer>
+
+  <div id="floating-tip"></div>
+
+  <script>
+    // ─── stages ─────────────────────────────────────────────────────
+    const STAGES = [
+      { key: "explorer",    label: "Explorer",    icon: "search" },
+      { key: "environment", label: "Environment", icon: "deployed_code" },
+      { key: "coder",       label: "Coder",       icon: "code" },
+      { key: "validator",   label: "Validator",   icon: "verified" },
+    ];
+    // Color Lock: idle=outline, running=accent, done=green, timeout=error. No other hues.
+    const C = { idle: "#8c90a1", running: "#00daf3", done: "#40e56c", timeout: "#ffb4ab" };
+
+    // ─── state ──────────────────────────────────────────────────────
+    let ws;
+    const stageState = {};
+    const toolCards = {};
+    const toolRuns = {};             // tool name -> [{passed, input, output, error, traceback}]
+    const expandedTools = new Set(); // tool cards currently expanded to show invocations
+    let feedOpen = true, feedN = 0;
+
+    // which stage the user is viewing. "live" = follow the running pipeline.
+    // Clicking a stage pins its captured output so finished stages stay reachable.
+    let viewStage = "live";     // "live" = follow active stage; else a pinned stage key
+    let activeStage = "explorer"; // stage whose report the left panel shows in live mode
+    const snap = { exploration: null, environment: null, server: null, validation: null };
+    // left panel shows each stage's own report → all four stay consistent
+    const STAGE_REPORT = { explorer: "exploration", environment: "environment", coder: "server", validator: "validation" };
+    const STAGE_ICON = { explorer: "search", environment: "deployed_code", coder: "code", validator: "verified" };
+
+    // ─── markdown ───────────────────────────────────────────────────
+    const esc = s => (s || "").replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    function renderMd(md) {
+      const out = [];
+      for (const raw of (md || "").split("\n")) {
+        const t = raw.trim();
+        if (!t) continue;
+        if (t.startsWith("### ")) out.push(`<h4>${inline(t.slice(4))}</h4>`);
+        else if (t.startsWith("#### ")) out.push(`<h4>${inline(t.slice(5))}</h4>`);
+        else if (/^[-*]\s+/.test(t)) out.push(`<div class="li">${inline(t.replace(/^[-*]\s+/, ''))}</div>`);
+        else out.push(`<p>${inline(t)}</p>`);
+      }
+      return `<div class="md">${out.join("")}</div>`;
+    }
+
+    // ─── empty-state helper ─────────────────────────────────────────
+    function emptyState(panel, icon, text) {
+      panel.innerHTML = `<div class="placeholder h-full flex flex-col items-center justify-center gap-3 text-outline">
+        <span class="material-symbols-outlined text-4xl opacity-40">${icon}</span>
+        <span class="text-sm font-mono">${esc(text)}</span></div>`;
+    }
+
+    // ─── stage rail ─────────────────────────────────────────────────
+    function buildRail() {
+      const rail = document.getElementById("stage-rail");
+      rail.innerHTML = "";
+      STAGES.forEach((s, i) => {
+        const st = stageState[s.key] || (stageState[s.key] = "idle");
+        const col = C[st];
+        const sel = viewStage === s.key;
+        const glyph = st === "done" ? "check" : st === "timeout" ? "timer_off" : s.icon;
+
+        const item = document.createElement("div");
+        item.className = "flex items-center flex-1 gap-3";
+
+        const tab = document.createElement("button");
+        tab.title = "View " + s.label + " output";
+        tab.className = "group flex items-center gap-2.5 rounded-control pl-1 pr-3 py-1 transition-colors "
+          + (sel ? "bg-primary/10 ring-1 ring-primary/40" : "hover:bg-surface/60");
+        tab.onclick = () => selectStage(s.key);
+        tab.innerHTML = `
+          <div class="w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${st === 'running' ? 'ring' : ''}"
+               style="border:1.5px solid ${col};color:${col};background:${st === 'done' ? 'rgba(64,229,108,.08)' : st === 'running' ? 'rgba(0,218,243,.08)' : 'transparent'}">
+            <span class="material-symbols-outlined text-[19px] ${st === 'running' ? 'spin' : ''}">${glyph}</span>
+          </div>
+          <div class="leading-tight text-left">
+            <div class="font-head text-sm font-semibold" style="color:${st === 'idle' && !sel ? '#8c90a1' : '#e1e2eb'}">${s.label}</div>
+            <div class="text-[10px] font-mono uppercase tracking-wider" style="color:${col}">${st}</div>
+          </div>`;
+        item.appendChild(tab);
+
+        if (i < STAGES.length - 1) {
+          const line = document.createElement("div");
+          line.className = "flex-1 h-px rounded-full";
+          const lit = (stageState[STAGES[i + 1].key] && stageState[STAGES[i + 1].key] !== "idle") || st === "done";
+          line.style.background = lit ? "#40e56c" : "#424656";
+          item.appendChild(line);
+        }
+        rail.appendChild(item);
+      });
+    }
+    const setStage = (k, s) => { stageState[k] = s; buildRail(); };
+
+    // ─── stage tab switching ────────────────────────────────────────
+    const L = () => document.getElementById("left-panel");
+    const R = () => document.getElementById("right-panel");
+
+    function selectStage(key) {
+      viewStage = (viewStage === key) ? "live" : key;   // click again → back to live
+      applyView();
+    }
+    function applyView() {
+      renderLeft();
+      renderRight();
+      filterFeed();
+      buildRail();
+    }
+
+    // Stage the left panel currently reflects (pinned tab, or the live active stage).
+    const leftStage = () => (viewStage === "live" ? activeStage : viewStage);
+
+    // Left panel = the report of the current stage. Updates for ALL four stages:
+    // explorer→exploration, environment→environment, coder→server, validator→validation.
+    function renderLeft() {
+      const stg = leftStage();
+      setLeftHeader(stg);
+      const sections = snap[STAGE_REPORT[stg]];
+      if (sections) renderReport("left-panel", sections, "#00daf3");
+      else emptyState(L(), STAGE_ICON[stg] || "account_tree", "awaiting " + stg);
+    }
+
+    // Right panel = the generated MCP server artifact (tool cards + validation badges).
+    // Always shows the build once coder produced it, independent of the selected tab.
+    function renderRight() {
+      if (snap.server) renderServer(snap.server);
+      else emptyState(R(), "build", "awaiting coder");
+    }
+    function filterFeed() {
+      document.querySelectorAll("#feed > div").forEach(row => {
+        const show = viewStage === "live" || row.dataset.stage === viewStage;
+        row.style.display = show ? "" : "none";
+      });
+    }
+
+    // ─── left panel (source report) ─────────────────────────────────
+    const SECTION_ICON = {
+      "Description": "description", "List of key files": "folder_open",
+      "List of main workflows": "lan", "Environment Setup": "deployed_code",
+      "External Assets": "database", "Suggested MCP Usage Scenarios": "bolt",
+    };
+    function sectionsCardsHtml(sections, accent) {
+      let html = "";
+      const title = sections["_title"] || "";
+      if (title) html += `<div class="text-primary font-head font-bold text-base mb-3">${esc(title)}</div>`;
+      for (const [name, body] of Object.entries(sections)) {
+        if (name.startsWith("_")) continue;
+        const icon = SECTION_ICON[name] || "chevron_right";
+        html += `
+          <div class="enter bg-surface border border-outline-variant/20 rounded-card overflow-hidden">
+            <div class="flex items-center gap-2 px-3.5 h-9 border-b border-outline-variant/10 bg-surface-low">
+              <span class="material-symbols-outlined text-[17px]" style="color:${accent}">${icon}</span>
+              <span class="font-head text-xs font-semibold text-on-surface-dim">${esc(name)}</span>
+            </div>
+            <div class="px-3.5 py-2.5">${renderMd(body)}</div>
+          </div>`;
+      }
+      return html;
+    }
+    function renderReport(panelId, sections, accent) {
+      const panel = document.getElementById(panelId);
+      panel.querySelector(".placeholder")?.remove();
+      panel.innerHTML = `<div class="space-y-3">${sectionsCardsHtml(sections, accent)}</div>`;
+    }
+    const STAGE_LABEL = { explorer: "Explorer", environment: "Environment", coder: "Coder", validator: "Validator" };
+    function setLeftHeader(stg) {
+      document.getElementById("left-icon").textContent = STAGE_ICON[stg] || "account_tree";
+      document.getElementById("left-title").textContent = STAGE_LABEL[stg] || "Report";
+    }
+
+    // ─── right panel (generated tools) ──────────────────────────────
+    function toolNamesFrom(sections) {
+      const body = sections["Tools Implemented"] || sections["_intro"] || "";
+      const tools = [];
+      for (const line of body.split("\n")) {
+        // bold header: **name(<args, may contain nested ()[]>) -> ret** — desc
+        const m = line.match(/\*\*\s*([a-zA-Z_]\w*)\s*\((.*)\)\s*(?:->|→)?\s*([^*]*?)\*\*\s*[:-]*\s*(.*)/);
+        if (!m) continue;
+        tools.push({
+          name: m[1],
+          sig: m[2].trim(),
+          ret: (m[3] || "").trim(),
+          desc: (m[4] || "").replace(/^[\s—–:-]+/, "").trim(),
+        });
+      }
+      return tools;
+    }
+    function renderServer(sections) {
+      const panel = document.getElementById("right-panel");
+      panel.querySelector(".placeholder")?.remove();
+      const tools = toolNamesFrom(sections);
+      const title = sections["_title"] || "";
+
+      const prev = {};
+      Object.entries(toolCards).forEach(([n, el]) => prev[n] = el.getAttribute("data-status"));
+      Object.keys(toolCards).forEach(k => delete toolCards[k]);
+
+      panel.innerHTML = title ? `<div class="text-primary font-head font-bold text-base mb-3">${esc(title)}</div>` : "";
+      const wrap = document.createElement("div");
+      wrap.className = "space-y-2.5";
+      panel.appendChild(wrap);
+
+      if (!tools.length) { wrap.innerHTML = renderMd(sections["Tools Implemented"] || ""); return; }
+
+      tools.forEach(t => {
+        const card = document.createElement("div");
+        card.className = "enter bg-surface border border-outline-variant/20 rounded-card overflow-hidden transition-colors";
+        card.setAttribute("data-status", prev[t.name] || "pending");
+        card.innerHTML = `
+          <button class="tool-head w-full flex items-center gap-2 px-3.5 h-11 text-left hover:bg-surface-low/50 transition-colors">
+            <span class="material-symbols-outlined text-primary text-[18px] shrink-0">handyman</span>
+            <span class="font-mono text-sm font-semibold text-on-surface shrink-0">${esc(t.name)}</span>
+            <span class="font-mono text-[11px] text-outline truncate min-w-0 flex-1">(${esc(t.sig)})${t.ret ? ` → ${esc(t.ret)}` : ''}</span>
+            <span class="badge shrink-0"></span>
+            <span class="chev material-symbols-outlined text-outline text-[18px] shrink-0 transition-transform">expand_more</span>
+          </button>
+          ${t.desc ? `<div class="px-3.5 pb-2.5 -mt-1 text-xs text-on-surface-dim leading-relaxed">${inline(t.desc)}</div>` : ''}
+          <div class="tool-runs hidden border-t border-outline-variant/10 bg-surface-lowest/40"></div>`;
+        card.querySelector(".tool-head").onclick = () => toggleTool(t.name);
+        wrap.appendChild(card);
+        toolCards[t.name] = card;
+        applyBadge(t.name, card.getAttribute("data-status"));
+        if (expandedTools.has(t.name)) renderRuns(t.name);
+      });
+    }
+
+    function applyBadge(tool, status, error) {
+      const card = toolCards[tool];
+      if (!card) return;
+      card.setAttribute("data-status", status);
+      const badge = card.querySelector(".badge");
+      card.style.borderColor = { pending: "rgba(66,70,86,.4)", running: "#00daf3", pass: "#40e56c", fail: "#93000a" }[status];
+      if (status === "pending")
+        badge.innerHTML = `<span class="text-[10px] font-mono text-outline uppercase tracking-wide">pending</span>`;
+      else if (status === "running")
+        badge.innerHTML = `<span class="material-symbols-outlined text-primary text-[18px] spin">progress_activity</span>`;
+      else if (status === "pass")
+        badge.innerHTML = `<span class="flex items-center gap-1 text-secondary text-xs font-mono"><span class="material-symbols-outlined text-[16px]">check_circle</span>pass</span>`;
+      else if (status === "fail") {
+        badge.innerHTML = `<span class="flex items-center gap-1 text-error text-xs font-mono cursor-help"><span class="material-symbols-outlined text-[16px]">error</span>fail</span>`;
+        attachTip(badge.firstElementChild, error || "failed");
+      }
+    }
+
+    // ─── tool invocations (expand a tool card) ──────────────────────
+    function toggleTool(name) {
+      if (expandedTools.has(name)) expandedTools.delete(name);
+      else expandedTools.add(name);
+      renderRuns(name);
+    }
+    function renderRuns(name) {
+      const card = toolCards[name];
+      if (!card) return;
+      const box = card.querySelector(".tool-runs");
+      const chev = card.querySelector(".chev");
+      const open = expandedTools.has(name);
+      box.classList.toggle("hidden", !open);
+      if (chev) chev.style.transform = open ? "rotate(180deg)" : "";
+      if (!open) return;
+      const runs = toolRuns[name] || [];
+      if (!runs.length) {
+        box.innerHTML = `<div class="px-3.5 py-3 text-xs font-mono text-outline">No invocation yet — the validator calls each tool during the Validator stage.</div>`;
+        return;
+      }
+      box.innerHTML = runs.map((r, i) => runHtml(r, i, runs.length)).join("");
+    }
+    function runHtml(r, i, total) {
+      const s = r.passed ? { c: "#40e56c", t: "pass", ic: "check_circle" }
+        : { c: "#ffb4ab", t: "fail", ic: "error" };
+      const hasIn = r.input && typeof r.input === "object" && Object.keys(r.input).length;
+      const input = hasIn ? kvTable(r.input)
+        : `<span class="text-outline text-xs font-mono">no arguments</span>`;
+      const output = r.passed ? vizOutput(r.output)
+        : `<pre class="err">${esc(r.error || 'failed')}${r.traceback ? "\n\n" + esc(r.traceback) : ""}</pre>`;
+      return `
+        <div class="px-3.5 py-3 border-b border-outline-variant/5 space-y-2.5">
+          <div class="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wide" style="color:${s.c}">
+            <span class="material-symbols-outlined text-[15px]">${s.ic}</span>${s.t}
+            ${total > 1 ? `<span class="text-outline ml-1">run ${i + 1}/${total}</span>` : ""}
+          </div>
+          <div><div class="lbl">Input parameters</div>${input}</div>
+          <div><div class="lbl">Output</div>${output}</div>
+        </div>`;
+    }
+    const fmtVal = v => typeof v === "string" ? v : JSON.stringify(v);
+    function kvTable(obj) {
+      return `<div class="kv">` + Object.entries(obj)
+        .map(([k, v]) => `<div class="kvk">${esc(k)}</div><div class="kvv">${esc(fmtVal(v))}</div>`)
+        .join("") + `</div>`;
+    }
+    const prettyJson = v => {
+      let s = JSON.stringify(v, null, 2);
+      return s.length > 6000 ? s.slice(0, 6000) + "\n… (truncated)" : s;
+    };
+    const stripScripts = s => String(s).replace(/<script[\s\S]*?<\/script>/gi, "");
+    const IMG_RE = /\.(svg|png|jpe?g|gif|webp)$/i;
+    function vizOutput(v) {
+      if (v === null || v === undefined)
+        return `<span class="text-outline text-xs font-mono">null</span>`;
+
+      if (typeof v === "string") {
+        const t = v.trim();
+        // JSON string → parse and recurse
+        if ((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"))) {
+          try { return vizOutput(JSON.parse(t)); } catch (e) { /* not JSON */ }
+        }
+        if (/^data:image\//.test(t))
+          return `<img src="${t}" class="max-h-64 rounded-card border border-outline-variant/20"/>`;
+        if (/<svg[\s>]/i.test(t))
+          return `<div class="svgbox">${stripScripts(t)}</div>`;
+        if (IMG_RE.test(t))
+          return `<div class="filechip"><span class="material-symbols-outlined text-[15px]">image</span>${esc(t)}</div>`;
+        return `<pre class="out">${esc(v)}</pre>`;
+      }
+      if (typeof v === "number" || typeof v === "boolean")
+        return `<div class="stat">${esc(String(v))}</div>`;
+
+      if (Array.isArray(v)) {
+        if (v.length && v.every(x => typeof x === "number")) return bars(v);
+        if (v.length && v.length <= 60 && v.every(x => typeof x === "string" && x.length <= 48))
+          return v.map(x => `<span class="chip">${esc(x)}</span>`).join("");
+        return `<pre class="out">${esc(prettyJson(v))}</pre>`;
+      }
+      // object: surface an embedded image/svg field, else a path, else JSON
+      for (const k of ["svg", "image", "img", "plot", "figure"]) {
+        const val = v[k];
+        if (typeof val === "string" && (/<svg[\s>]/i.test(val) || /^data:image\//.test(val)))
+          return vizOutput(val) + kvTable(omit(v, k));
+      }
+      for (const k of ["path", "file", "output_path", "image_path", "svg_path"]) {
+        const val = v[k];
+        if (typeof val === "string" && IMG_RE.test(val))
+          return `<div class="filechip"><span class="material-symbols-outlined text-[15px]">image</span>${esc(val)}</div>` + kvTable(omit(v, k));
+      }
+      // small flat object → key/value table; otherwise JSON
+      const flat = Object.values(v).every(x => x === null || typeof x !== "object");
+      return flat ? kvTable(v) : `<pre class="out">${esc(prettyJson(v))}</pre>`;
+    }
+    function omit(obj, key) {
+      const o = {}; for (const k in obj) if (k !== key) o[k] = obj[k]; return o;
+    }
+    function bars(nums) {
+      const max = Math.max(...nums.map(Math.abs), 1);
+      return `<div class="bars">` + nums.slice(0, 40)
+        .map(n => `<div class="bar" style="height:${Math.max(2, Math.abs(n) / max * 40)}px" title="${esc(String(n))}"></div>`)
+        .join("") + `</div>`;
+    }
+
+    // ─── check badges (syntax / tests) ──────────────────────────────
+    function setCheck(name, passed, detail) {
+      const box = document.getElementById("check-badges");
+      let el = document.getElementById("chk-" + name);
+      if (!el) { el = document.createElement("span"); el.id = "chk-" + name; box.appendChild(el); }
+      const label = name === "validate_syntax" ? "syntax" : name === "run_tests" ? "tests" : name;
+      const col = passed ? "#40e56c" : "#ffb4ab";
+      el.className = "flex items-center gap-1 text-[11px] font-mono cursor-help px-2 h-6 rounded-full border";
+      el.style.borderColor = passed ? "rgba(64,229,108,.35)" : "rgba(147,0,10,.6)";
+      el.style.color = col;
+      el.innerHTML = `<span class="material-symbols-outlined text-[15px]">${passed ? 'check_circle' : 'cancel'}</span>${label}`;
+      attachTip(el, detail ? String(detail).slice(0, 2000) : "");
+    }
+
+    // ─── activity feed ──────────────────────────────────────────────
+    function pushFeed(stage, name, args) {
+      const feed = document.getElementById("feed");
+      const argStr = args && Object.keys(args).length ? JSON.stringify(args) : "";
+      const row = document.createElement("div");
+      row.className = "enter flex items-center gap-2.5 text-xs py-1.5 border-b border-outline-variant/5";
+      row.setAttribute("data-tool", name);
+      row.dataset.stage = stage || "";
+      if (viewStage !== "live" && (stage || "") !== viewStage) row.style.display = "none";
+      row.innerHTML = `
+        <span class="ico material-symbols-outlined text-[16px] spin shrink-0 text-primary">progress_activity</span>
+        <span class="font-mono text-[9.5px] uppercase tracking-wide text-outline bg-surface rounded px-1.5 py-0.5 shrink-0 w-[74px] text-center">${esc(stage || 'sys')}</span>
+        <span class="font-mono text-primary shrink-0">${esc(name)}</span>
+        <span class="font-mono text-outline truncate flex-1" title="${esc(argStr)}">${esc(argStr.slice(0, 160))}</span>`;
+      feed.appendChild(row);
+      feed.scrollTop = feed.scrollHeight;
+      feedN++; document.getElementById("feed-count").textContent = feedN;
+      document.getElementById("now-tool").textContent = name;
+    }
+    function markFeedDone(name) {
+      const rows = document.querySelectorAll(`#feed > div[data-tool="${CSS.escape(name)}"]`);
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].dataset.done) continue;
+        rows[i].dataset.done = "1";
+        const ico = rows[i].querySelector(".ico");
+        ico.classList.remove("spin");
+        ico.textContent = "check_small";
+        ico.style.color = "#40e56c";
+        return;
+      }
+    }
+
+    // ─── websocket ──────────────────────────────────────────────────
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => { };
+      ws.onclose = () => { setRunning(false); setTimeout(connect, 1500); };
+      ws.onmessage = e => handle(JSON.parse(e.data));
+    }
+
+    function handle(m) {
+      switch (m.type) {
+        case "pipeline":
+          if (m.status === "start") resetRun(m);
+          else if (m.status === "complete") { setRunning(false); setNow("pipeline complete", "#40e56c"); }
+          else if (m.status === "error") { setRunning(false); setNow("error: " + (m.message || ""), "#ffb4ab"); }
+          else if (m.status === "cancelled") { setRunning(false); setNow("cancelled", "#8c90a1"); }
+          break;
+        case "stage":
+          setStage(m.stage, m.status);
+          if (m.status === "running" && viewStage === "live") { activeStage = m.stage; renderLeft(); }
+          break;
+        case "tool_call":
+          pushFeed(m.stage, m.name, m.args);
+          if (m.name === "invoke_mcp_tool" && m.args?.tool_name) applyBadge(m.args.tool_name, "running");
+          break;
+        case "tool_result": markFeedDone(m.name); break;
+        case "report":
+          snap[m.report] = m.sections;
+          // left follows the writing stage in live mode, or if that stage is pinned
+          if (viewStage === "live") { activeStage = m.stage; renderLeft(); }
+          else if (leftStage() === m.stage) renderLeft();
+          if (m.report === "server") renderRight();   // right = the build artifact
+          break;
+        case "validation":
+          if (m.tool) {
+            (toolRuns[m.tool] || (toolRuns[m.tool] = [])).push({
+              passed: m.passed, input: m.input, output: m.output,
+              error: m.error, traceback: m.traceback,
+            });
+            applyBadge(m.tool, m.passed ? "pass" : "fail", m.error);
+            if (expandedTools.has(m.tool)) renderRuns(m.tool);
+          }
+          break;
+        case "check": setCheck(m.name, m.passed, m.detail); break;
+      }
+    }
+    function setNow(text, col) {
+      const el = document.getElementById("now-tool");
+      el.textContent = text;
+      el.style.color = col || "";
+    }
+
+    function resetRun(m) {
+      viewStage = "live";
+      activeStage = "explorer";
+      snap.exploration = snap.environment = snap.server = snap.validation = null;
+      STAGES.forEach(s => stageState[s.key] = "idle");
+      buildRail();
+      Object.keys(toolCards).forEach(k => delete toolCards[k]);
+      Object.keys(toolRuns).forEach(k => delete toolRuns[k]);
+      expandedTools.clear();
+      setLeftHeader("explorer");
+      emptyState(document.getElementById("left-panel"), "search", `analysing ${m.repo || 'repo'}`);
+      emptyState(document.getElementById("right-panel"), "build", "awaiting coder");
+      document.getElementById("check-badges").innerHTML = "";
+      document.getElementById("feed").innerHTML = "";
+      feedN = 0; document.getElementById("feed-count").textContent = 0;
+      setNow("", "");
+      setRunning(true);
+    }
+
+    // ─── controls ───────────────────────────────────────────────────
+    function setRunning(on) {
+      document.getElementById("run-btn").classList.toggle("hidden", on);
+      document.getElementById("stop-btn").classList.toggle("hidden", !on);
+      document.getElementById("stop-btn").classList.toggle("flex", on);
+    }
+    document.getElementById("run-btn").onclick = () => {
+      const url = document.getElementById("repo-input").value.trim();
+      if (!url || !ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ type: "run", repo_url: url }));
+    };
+    document.getElementById("stop-btn").onclick = () => {
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" }));
+    };
+    document.getElementById("repo-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") document.getElementById("run-btn").click();
+    });
+    document.getElementById("feed-toggle").onclick = () => {
+      feedOpen = !feedOpen;
+      document.getElementById("feed").style.display = feedOpen ? "block" : "none";
+      document.getElementById("feed-chevron").textContent = feedOpen ? "expand_more" : "expand_less";
+    };
+
+    // ─── floating tooltip (body-level, never clipped) ───────────────
+    const tipEl = document.getElementById("floating-tip");
+    function attachTip(el, text) {
+      if (!el) return;
+      if (!text) { el.onmouseenter = el.onmouseleave = el.onmousemove = null; return; }
+      el.onmouseenter = () => { tipEl.textContent = text; tipEl.style.display = "block"; posTip(el); };
+      el.onmousemove = () => posTip(el);
+      el.onmouseleave = () => { tipEl.style.display = "none"; };
+    }
+    function posTip(el) {
+      const r = el.getBoundingClientRect();
+      const tw = tipEl.offsetWidth, th = tipEl.offsetHeight, pad = 8;
+      let left = r.right - tw;                 // right-align to the badge
+      left = Math.max(pad, Math.min(left, innerWidth - tw - pad));
+      let top = r.top - th - 8;                // above the badge…
+      if (top < pad) top = r.bottom + 8;       // …or below if no room
+      tipEl.style.left = left + "px";
+      tipEl.style.top = top + "px";
+    }
+
+    // ─── resizable activity panel (drag the grabber) ────────────────
+    (() => {
+      const grip = document.getElementById("feed-resizer");
+      const feed = document.getElementById("feed");
+      let startY = 0, startH = 0, dragging = false;
+      const onMove = e => {
+        if (!dragging) return;
+        const y = (e.touches ? e.touches[0].clientY : e.clientY);
+        const h = Math.max(80, Math.min(startH + (startY - y), innerHeight * 0.7));
+        feed.style.height = h + "px";
+      };
+      const onUp = () => {
+        dragging = false;
+        document.body.style.userSelect = "";
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      grip.addEventListener("pointerdown", e => {
+        if (!feedOpen) return;
+        dragging = true; startY = e.clientY; startH = feed.offsetHeight;
+        document.body.style.userSelect = "none";
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        e.preventDefault();
+      });
+    })();
+
+    // ─── init ───────────────────────────────────────────────────────
+    buildRail();
+    emptyState(document.getElementById("left-panel"), "account_tree", "awaiting explorer");
+    emptyState(document.getElementById("right-panel"), "build", "awaiting coder");
+    connect();
+  </script>
+</body>
+
+</html>

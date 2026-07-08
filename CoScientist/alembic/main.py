@@ -75,6 +75,24 @@ def _trunc(text: str, n: int = TRUNC) -> str:
     return text if len(text) <= n else text[:n] + "…"
 
 
+def _safe(value):
+    """Deeply JSON-serializable copy (objects -> str). For on_event payloads."""
+    try:
+        return json.loads(json.dumps(value, default=str, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+async def _emit(on_event, msg: dict) -> None:
+    """Push a UI event to an optional async callback; never crash the run."""
+    if on_event is None:
+        return
+    try:
+        await on_event(msg)
+    except Exception:
+        logger.exception("[on_event] callback raised — ignoring.")
+
+
 def _log_event(agent_name: str, event) -> None:
     """Log a human-readable line for every ADK event."""
     if not event.content or not event.content.parts:
@@ -120,6 +138,7 @@ async def _run_agent_once(
     session_id: str,
     message: str,
     required_report: str | None,
+    on_event=None,
 ) -> tuple[str, bool, int, int]:
     """Run one invocation. Returns (final_text, wrote_report, steps, total_tokens)."""
     content      = types.Content(role="user", parts=[types.Part(text=message)])
@@ -144,8 +163,22 @@ async def _run_agent_once(
 
             if event.content:
                 for part in event.content.parts:
+                    if part.text:
+                        await _emit(on_event, {
+                            "type":  "text",
+                            "stage": agent.name,
+                            "text":  part.text.strip(),
+                            "final": event.is_final_response(),
+                        })
+
                     if hasattr(part, "function_call") and part.function_call:
                         fc       = part.function_call
+                        await _emit(on_event, {
+                            "type":  "tool_call",
+                            "stage": agent.name,
+                            "name":  fc.name,
+                            "args":  _safe(dict(fc.args) if fc.args else {}),
+                        })
                         call_key = (fc.name, str(fc.args))
                         tool_repeats = tool_repeats + 1 if call_key == last_call else 1
                         last_call    = call_key
@@ -157,6 +190,13 @@ async def _run_agent_once(
                             return final, wrote_report, step, total_tokens
 
                     fr = getattr(part, "function_response", None)
+                    if fr:
+                        await _emit(on_event, {
+                            "type":     "tool_result",
+                            "stage":    agent.name,
+                            "name":     fr.name,
+                            "response": _safe(fr.response),
+                        })
                     if fr and fr.name == "write_report" and required_report:
                         report_path = str((fr.response or {}).get("report_path", ""))
                         if required_report in report_path:
@@ -189,6 +229,7 @@ async def run_agent(
     message: str,
     required_report: str | None = None,
     venv_guard_path: str | None = None,
+    on_event=None,
 ) -> tuple[str, int, int]:
     """Run an agent, retrying if guards (write_report / venv) are not satisfied.
 
@@ -202,7 +243,7 @@ async def run_agent(
     current_message = message
     for attempt in range(MAX_GUARD_RETRIES + 1):
         final, wrote_report, steps, tokens = await _run_agent_once(
-            agent, runner, session_id, current_message, required_report
+            agent, runner, session_id, current_message, required_report, on_event
         )
         total_steps  += steps
         total_tokens += tokens
@@ -249,9 +290,11 @@ def _clean_workdir(name: str) -> None:
 STAGES = ("explorer", "environment", "coder", "validator")
 
 
-async def run_pipeline(repo_url: str, resume_from: str | None = None):
+async def run_pipeline(repo_url: str, resume_from: str | None = None, on_event=None):
     name = get_repo_name(repo_url)
     session_service = InMemorySessionService()
+    await _emit(on_event, {"type": "pipeline", "status": "start",
+                           "repo": name, "repo_url": repo_url})
 
     if resume_from is None:
         _clean_workdir(name)
@@ -298,10 +341,11 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                          **kwargs) -> str:
         """Wrap run_agent in a wall-clock timeout. Returns final text or
         an empty string when the stage timed out (pipeline continues)."""
+        await _emit(on_event, {"type": "stage", "stage": stage, "status": "running"})
         try:
             final, steps, tokens = await asyncio.wait_for(
                 run_agent(agent, session_service, f"{name}_{sid_suffix}",
-                          message, **kwargs),
+                          message, on_event=on_event, **kwargs),
                 timeout=STAGE_TIMEOUT[stage],
             )
         except asyncio.TimeoutError:
@@ -309,11 +353,14 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                 f"[{stage}] STAGE TIMEOUT after {STAGE_TIMEOUT[stage]}s — "
                 f"aborting stage, pipeline continues to next stage."
             )
+            await _emit(on_event, {"type": "stage", "stage": stage, "status": "timeout"})
             return ""
         pipeline_metrics["actions_per_stage"][stage] = steps
         pipeline_metrics["tokens_per_stage"][stage]  = tokens
         pipeline_metrics["total_actions"]           += steps
         pipeline_metrics["total_tokens"]            += tokens
+        await _emit(on_event, {"type": "stage", "stage": stage, "status": "done",
+                               "steps": steps, "tokens": tokens})
         return final
 
     def _coder_artefacts_present() -> tuple[bool, list[str]]:
@@ -403,6 +450,11 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None):
                 encoding="utf-8",
             )
             logger.error(f"[pipeline] error saved → {reports_dir}/error.json")
+            await _emit(on_event, {"type": "pipeline", "status": "error",
+                                   "repo": name, "message": str(exc_val)})
+        else:
+            await _emit(on_event, {"type": "pipeline", "status": "complete",
+                                   "repo": name, "metrics": pipeline_metrics})
 
         logger.remove(_file_sink_id)
 
