@@ -200,6 +200,8 @@
     const toolCards = {};
     const toolRuns = {};             // tool name -> [{passed, input, output, error, traceback}]
     const expandedTools = new Set(); // tool cards currently expanded to show invocations
+    const callState = {};            // tool name -> {status, output, error, traceback, argsText}
+    let callSeq = 0;                 // id for matching invoke -> invoke_result
     let feedOpen = true, feedN = 0;
 
     // which stage the user is viewing. "live" = follow the running pipeline.
@@ -440,12 +442,68 @@
       box.classList.toggle("hidden", !open);
       if (chev) chev.style.transform = open ? "rotate(180deg)" : "";
       if (!open) return;
+
       const runs = toolRuns[name] || [];
-      if (!runs.length) {
-        box.innerHTML = `<div class="px-3.5 py-3 text-xs font-mono text-outline">No invocation yet — the validator calls each tool during the Validator stage.</div>`;
-        return;
+      const passed = card.getAttribute("data-status") === "pass";
+      let html = runs.length
+        ? runs.map((r, i) => runHtml(r, i, runs.length)).join("")
+        : `<div class="px-3.5 py-3 text-xs font-mono text-outline">No invocation yet — the validator calls each tool during the Validator stage.</div>`;
+      if (passed) html += callFormHtml(name);
+      box.innerHTML = html;
+      if (passed) wireCallForm(name);
+    }
+
+    function callFormHtml(name) {
+      const cs = callState[name] || {};
+      const runs = toolRuns[name] || [];
+      const lastInput = runs.length ? runs[runs.length - 1].input : null;
+      const def = cs.argsText != null ? cs.argsText
+        : (lastInput && Object.keys(lastInput).length ? JSON.stringify(lastInput, null, 2) : "{}");
+      const busy = cs.status === "calling";
+      let result = "";
+      if (cs.status === "done")
+        result = `<div class="lbl mt-2">Result</div>${vizOutput(cs.output)}`;
+      else if (cs.status === "error")
+        result = `<pre class="err mt-2">${esc(cs.error || 'call failed')}${cs.traceback ? "\n\n" + esc(cs.traceback) : ""}</pre>`;
+      return `
+        <div class="px-3.5 py-3 space-y-2 border-t border-outline-variant/10 bg-surface-lowest/60">
+          <div class="lbl">Call this tool <span class="text-primary">· live</span></div>
+          <textarea class="call-args w-full bg-surface-lowest border border-outline-variant/40 rounded-control font-mono text-[11px] text-on-surface p-2 focus:ring-0 focus:border-primary/60 resize-y" rows="4" spellcheck="false" ${busy ? "disabled" : ""}>${esc(def)}</textarea>
+          <div class="flex items-center gap-2">
+            <button class="call-btn flex items-center gap-1.5 bg-primary text-on-primary font-head font-semibold text-xs px-3 h-8 rounded-control hover:brightness-110 active:scale-[.98] transition disabled:opacity-50" ${busy ? "disabled" : ""}>
+              ${busy ? `<span class="material-symbols-outlined text-[16px] spin">progress_activity</span> calling…`
+                     : `<span class="material-symbols-outlined text-[16px]">bolt</span> Call`}
+            </button>
+            <span class="call-msg text-[11px] font-mono text-outline"></span>
+          </div>
+          <div class="call-result">${result}</div>
+        </div>`;
+    }
+    function wireCallForm(name) {
+      const box = toolCards[name].querySelector(".tool-runs");
+      const ta = box.querySelector(".call-args");
+      const btn = box.querySelector(".call-btn");
+      if (ta) ta.oninput = () => { callState[name] = { ...(callState[name] || {}), argsText: ta.value }; };
+      if (btn) btn.onclick = () => doCall(name);
+    }
+    function doCall(name) {
+      const box = toolCards[name].querySelector(".tool-runs");
+      const ta = box.querySelector(".call-args");
+      const msg = box.querySelector(".call-msg");
+      let args;
+      try {
+        args = ta.value.trim() ? JSON.parse(ta.value) : {};
+      } catch (e) {
+        msg.textContent = "invalid JSON: " + e.message; msg.style.color = "#ffb4ab"; return;
       }
-      box.innerHTML = runs.map((r, i) => runHtml(r, i, runs.length)).join("");
+      if (typeof args !== "object" || Array.isArray(args)) {
+        msg.textContent = "args must be a JSON object"; msg.style.color = "#ffb4ab"; return;
+      }
+      if (!ws || ws.readyState !== 1) { msg.textContent = "not connected"; msg.style.color = "#ffb4ab"; return; }
+      const id = ++callSeq;
+      callState[name] = { status: "calling", argsText: ta.value, callId: id };
+      renderRuns(name);
+      ws.send(JSON.stringify({ type: "invoke", tool: name, args, call_id: id }));
     }
     function runHtml(r, i, total) {
       const s = r.passed ? { c: "#40e56c", t: "pass", ic: "check_circle" }
@@ -619,6 +677,16 @@
           }
           break;
         case "check": setCheck(m.name, m.passed, m.detail); break;
+        case "invoke_result": {
+          const nm = m.tool, cs = callState[nm] || {};
+          callState[nm] = {
+            status: m.ok ? "done" : "error",
+            output: m.output, error: m.error, traceback: m.traceback,
+            argsText: cs.argsText, callId: m.call_id,
+          };
+          if (expandedTools.has(nm)) renderRuns(nm);
+          break;
+        }
       }
     }
     function setNow(text, col) {
@@ -635,6 +703,7 @@
       buildRail();
       Object.keys(toolCards).forEach(k => delete toolCards[k]);
       Object.keys(toolRuns).forEach(k => delete toolRuns[k]);
+      Object.keys(callState).forEach(k => delete callState[k]);
       expandedTools.clear();
       setLeftHeader("explorer");
       emptyState(document.getElementById("left-panel"), "search", `analysing ${m.repo || 'repo'}`);
