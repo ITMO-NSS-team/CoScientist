@@ -2,7 +2,7 @@
 """Alembic container entrypoint.
 
 Modes:
-  entrypoint.py build <repo_url> [--resume <stage>]
+  entrypoint.py build <repo_url> [--resume <stage>] [--until <stage>]
       Runs the alembic pipeline; intended to be followed by `docker commit`.
   entrypoint.py serve <repo_url>
       Starts the generated FastMCP server on $MCP_PORT (HTTP transport).
@@ -17,7 +17,7 @@ from pathlib import Path
 
 USAGE = (
     "Usage:\n"
-    "  entrypoint.py build <repo_url> [--resume <stage>]\n"
+    "  entrypoint.py build <repo_url> [--resume <stage>] [--until <stage>]\n"
     "  entrypoint.py serve <repo_url>\n"
     "  entrypoint.py shell\n"
 )

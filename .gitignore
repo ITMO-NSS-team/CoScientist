@@ -212,3 +212,4 @@ CoScientist/tests/unit/test_llm_repair.py
 # Alembic output & testing
 .alembic
 .test
+benchmarks/alembic/runs

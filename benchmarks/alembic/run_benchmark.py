@@ -8,17 +8,21 @@ are not launched; the produced ``alembic-tool:<repo>`` images stay so you
 can ``docker run`` them later.
 
 Usage:
-    # parallel run, default 4 workers
+    # parallel run, default 4 workers — outputs land under
+    # benchmarks/alembic/runs/<timestamp>/{summary.md,summary.json,logs/}
     python benchmarks/alembic/run_benchmark.py \\
         --repos https://github.com/Roestlab/massformer \\
                 https://github.com/whitead/synspace \\
                 https://github.com/CrystalEye42/OpenChemIE
 
-    # from a file (one URL per line, '#' = comment), 8 workers, JSON dump
+    # from a file (one URL per line, '#' = comment), 8 workers, explicit
+    # output paths instead of the timestamped default
     python benchmarks/alembic/run_benchmark.py \\
         --repos-file repos.txt \\
         --parallel 8 \\
-        --json-output bench.json
+        --output benchmarks/alembic/runs/my-run/summary.md \\
+        --json-output benchmarks/alembic/runs/my-run/summary.json \\
+        --log-dir benchmarks/alembic/runs/my-run/logs
 """
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ from pathlib import Path
 # benchmarks/alembic/run_benchmark.py → project root is 2 levels up
 PROJECT_ROOT    = Path(__file__).resolve().parents[2]
 COSCIENTIST_DIR = PROJECT_ROOT / "CoScientist"
+RUNS_DIR        = Path(__file__).resolve().parent / "runs"
 
 sys.path.insert(0, str(COSCIENTIST_DIR))
 
@@ -43,6 +48,26 @@ from alembic.common import get_repo_name, ensure_base_image
 
 START_CHAIN = COSCIENTIST_DIR / "alembic" / "start_chain.py"
 DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
+
+AVAILABILITY_TIMEOUT = 15  # seconds — cheap network check, no clone
+
+
+def check_repo_available(repo_url: str, timeout: int = AVAILABILITY_TIMEOUT) -> tuple[bool, str]:
+    """True if ``repo_url`` is reachable and has at least one ref, via
+    ``git ls-remote`` — no clone, so a dead/private/empty repo is caught in
+    seconds instead of burning a full pipeline run before the Explorer's
+    own clone fails."""
+    try:
+        r = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "--heads", repo_url],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"timed out after {timeout}s"
+    if r.returncode == 0:
+        return True, ""
+    lines = [l.strip() for l in (r.stderr or r.stdout).splitlines() if l.strip()]
+    return False, (lines[0] if lines else f"git ls-remote exit {r.returncode}")
 
 
 def run_one(repo_url: str, extra_args: list[str], log_dir: Path,
@@ -87,7 +112,7 @@ def run_one(repo_url: str, extra_args: list[str], log_dir: Path,
 
 
 def extract_validation(repo: str) -> dict:
-    """Pull validation.md (and metrics.json) from the committed image and parse them."""
+    """Pull validation.md (and metrics.json/error.json) from the committed image and parse them."""
     image = f"alembic-tool:{repo}"
     base  = f"/work/.alembic/{repo}/reports"
 
@@ -96,9 +121,16 @@ def extract_validation(repo: str) -> dict:
         capture_output=True, text=True,
     )
     if r.returncode != 0:
-        return {"error": "validation.md not readable", "stderr": r.stderr[-300:]}
-    result = parse_validation(r.stdout)
+        result: dict = {"error": "validation.md not readable", "stderr": r.stderr[-300:]}
+    else:
+        result = parse_validation(r.stdout)
 
+    # metrics.json is written unconditionally in main.py's `finally` block,
+    # even when the pipeline never reaches (or times out in) the validator
+    # stage — pull it regardless of whether validation.md exists, so a
+    # partial/failed run still contributes stage-completion and
+    # failure-taxonomy data to the benchmark-level aggregate instead of
+    # being silently excluded.
     for fname, key in [("metrics.json", "pipeline_metrics"), ("error.json", "pipeline_error")]:
         c = subprocess.run(
             ["docker", "run", "--rm", "--entrypoint", "cat", image, f"{base}/{fname}"],
@@ -165,6 +197,45 @@ def parse_validation(md: str) -> dict:
     }
 
 
+PIPELINE_STAGES = ("explorer", "environment", "coder", "validator")
+
+
+def aggregate_metrics(records: list[dict]) -> dict:
+    """F12: roll each repo's metrics.json (main.py's ``pipeline_metrics``,
+    pulled in by extract_validation()) into pass-rate-by-stage and an
+    error-distribution table across the whole bench run."""
+    stage_attempted = {s: 0 for s in PIPELINE_STAGES}
+    stage_completed = {s: 0 for s in PIPELINE_STAGES}
+    failures_by_class: dict[str, int] = {}
+    guard_retries_total = 0
+    repos_with_metrics  = 0
+
+    for r in records:
+        pm = (r.get("validation") or {}).get("pipeline_metrics")
+        if not pm:
+            continue
+        repos_with_metrics += 1
+        for s in PIPELINE_STAGES:
+            if s in pm.get("durations_per_stage", {}):
+                stage_attempted[s] += 1
+                if s in pm.get("actions_per_stage", {}):
+                    stage_completed[s] += 1
+        for label, count in pm.get("failures_by_class", {}).items():
+            failures_by_class[label] = failures_by_class.get(label, 0) + count
+        guard_retries_total += sum(pm.get("guard_retries_per_stage", {}).values())
+
+    return {
+        "repos_with_metrics":  repos_with_metrics,
+        "stage_completion":    {
+            s: f"{stage_completed[s]}/{stage_attempted[s]}" for s in PIPELINE_STAGES
+        },
+        "failures_by_class":   dict(
+            sorted(failures_by_class.items(), key=lambda kv: -kv[1])
+        ),
+        "guard_retries_total": guard_retries_total,
+    }
+
+
 def write_summary(records: list[dict], out: Path) -> None:
     """Rewrite the markdown summary (called after every finished worker)."""
     lines = [
@@ -177,29 +248,37 @@ def write_summary(records: list[dict], out: Path) -> None:
     ]
     for r in sorted(records, key=lambda x: x["repo"]):
         v = r.get("validation") or {}
+        not_run = r["exit_code"] is None  # skipped by the availability check
         tools = v.get("tools", [])
         passed  = sum(1 for t in tools if t["status"] == "PASSED")
         failed  = sum(1 for t in tools if t["status"] == "FAILED")
         skipped = sum(1 for t in tools if t["status"] == "SKIPPED")
+        if not_run and v.get("error"):
+            overall = f"N/A — {v['error']}"
+        elif v.get("error"):
+            overall = f"ERROR — {v['error']}"
+        else:
+            overall = v.get("overall", "—")
         lines.append(
             f"| {r['repo']} "
             f"| {r['elapsed_sec']:.0f}s "
-            f"| {r['exit_code']} "
+            f"| {'—' if not_run else r['exit_code']} "
             f"| {v.get('syntax','—')} "
             f"| {v.get('tests','—')} "
             f"| {passed}/{failed}/{skipped} "
-            f"| {v.get('overall','—')} |"
+            f"| {overall} |"
         )
 
     lines += ["", "## Per-repo details"]
     for r in sorted(records, key=lambda x: x["repo"]):
+        not_run = r["exit_code"] is None
         lines += [
             "",
             f"### {r['repo']}",
             f"- URL: {r['url']}",
             f"- Duration: {r['elapsed_sec']}s",
-            f"- Exit code: {r['exit_code']}",
-            f"- Log: {r.get('log','—')}",
+            f"- Exit code: {'N/A — pipeline not run' if not_run else r['exit_code']}",
+            f"- Log: {r.get('log') or '—'}",
         ]
         v = r.get("validation") or {}
         if not v:
@@ -210,6 +289,24 @@ def write_summary(records: list[dict], out: Path) -> None:
             continue
         for t in v.get("tools", []):
             lines.append(f"  - {t['name']}: {t['status']}")
+
+    agg = aggregate_metrics(records)
+    if agg["repos_with_metrics"]:
+        lines += ["", "## Aggregate metrics (F12)",
+                  "", f"Repos with metrics.json: {agg['repos_with_metrics']}/{len(records)}",
+                  "", "**Stage completion (completed/attempted):**", ""]
+        for s in PIPELINE_STAGES:
+            lines.append(f"- {s}: {agg['stage_completion'][s]}")
+        lines += ["", "**Failure taxonomy (validation-tool failures across all repos):**", ""]
+        if agg["failures_by_class"]:
+            for label, count in agg["failures_by_class"].items():
+                lines.append(f"- {label}: {count}")
+        else:
+            lines.append("- (none)")
+        lines += [
+            "",
+            f"- Guard retries (write_report/venv nudges) total: {agg['guard_retries_total']}",
+        ]
 
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -226,23 +323,48 @@ def parse_args() -> argparse.Namespace:
 
     ap.add_argument("--parallel", type=int, default=4,
                     help="How many pipelines to run concurrently (default 4).")
-    ap.add_argument("--output", type=Path,
-                    default=PROJECT_ROOT / "alembic_bench.md",
-                    help="Markdown summary path (default: ./alembic_bench.md).")
-    ap.add_argument("--log-dir", type=Path,
-                    default=PROJECT_ROOT / "alembic_bench_logs",
-                    help="Per-repo log dir (default: ./alembic_bench_logs).")
-    ap.add_argument("--json-output", type=Path, default="bench.json",
-                    help="Optional JSON dump of all per-repo records.")
+    ap.add_argument("--output", type=Path, default=None,
+                    help="Markdown summary path (default: "
+                         "benchmarks/alembic/runs/<timestamp>/summary.md).")
+    ap.add_argument("--log-dir", type=Path, default=None,
+                    help="Per-repo log dir (default: "
+                         "benchmarks/alembic/runs/<timestamp>/logs).")
+    ap.add_argument("--json-output", type=Path, default=None,
+                    help="Optional JSON dump of all per-repo records (default: "
+                         "benchmarks/alembic/runs/<timestamp>/summary.json).")
     ap.add_argument("--rebuild-base", action="store_true",
                     help="Force rebuild of alembic-base:latest before workers start.")
     ap.add_argument("--platform", default=None,
                     help="Pass-through to docker --platform (build + run).")
+    ap.add_argument("--until", default=None,
+                    choices=("explorer", "environment", "coder", "validator"),
+                    help="Stop each repo's pipeline after completing this stage "
+                         "(forwarded to start_chain --until). E.g. --until "
+                         "explorer runs only exploration across all repos. Note: "
+                         "for stages before 'validator' there is no validation.md, "
+                         "so the summary's tool columns read ERROR while the "
+                         "per-stage metrics (durations, stage completion) are "
+                         "still collected from metrics.json.")
+    ap.add_argument("--skip-availability-check", action="store_true",
+                    help="Skip the pre-flight 'git ls-remote' reachability "
+                         "check and run the pipeline on every repo as-is.")
     return ap.parse_args()
 
 
 def main() -> None:
     ns = parse_args()
+
+    # Default all three outputs into one shared, timestamped run folder so
+    # ad-hoc invocations self-organize under benchmarks/alembic/runs/
+    # instead of scattering files at the project root.
+    if ns.output is None or ns.log_dir is None or ns.json_output is None:
+        run_dir = RUNS_DIR / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        if ns.output is None:
+            ns.output = run_dir / "summary.md"
+        if ns.log_dir is None:
+            ns.log_dir = run_dir / "logs"
+        if ns.json_output is None:
+            ns.json_output = run_dir / "summary.json"
 
     if ns.repos:
         repos = ns.repos
@@ -260,22 +382,63 @@ def main() -> None:
     print(f"[bench] logs   → {ns.log_dir}")
     print(f"[bench] summary→ {ns.output}")
 
+    records: list[dict] = []
+    lock = threading.Lock()
+
+    if ns.skip_availability_check:
+        available = repos
+    else:
+        print(f"[bench] checking reachability of {len(repos)} repos "
+              f"(git ls-remote, {AVAILABILITY_TIMEOUT}s timeout each)...")
+        available = []
+        with ThreadPoolExecutor(max_workers=ns.parallel) as pool:
+            checks = {pool.submit(check_repo_available, url): url for url in repos}
+            for fut in as_completed(checks):
+                url = checks[fut]
+                ok, reason = fut.result()
+                name = get_repo_name(url)
+                if ok:
+                    available.append(url)
+                else:
+                    print(f"[bench] ✗ skip    {name}  — unreachable: {reason}",
+                          flush=True)
+                    records.append({
+                        "repo":        name,
+                        "url":         url,
+                        "elapsed_sec": 0,
+                        "exit_code":   None,
+                        "log":         None,
+                        "validation":  {"error": f"repo unreachable: {reason}"},
+                    })
+        if not available:
+            write_summary(records, ns.output)
+            sys.exit("[bench] no reachable repos — nothing to run")
+        print(f"[bench] {len(available)}/{len(repos)} repos reachable, "
+              f"{len(repos) - len(available)} skipped")
+
     ensure_base_image(DOCKERFILE, PROJECT_ROOT, platform=ns.platform, rebuild=ns.rebuild_base)
 
     extra: list[str] = []
     if ns.platform:
         extra += ["--platform", ns.platform]
+    if ns.until:
+        extra += ["--until", ns.until]
 
-    records: list[dict] = []
-    lock = threading.Lock()
-    total = len(repos)
+    total = len(available)
 
     def flush_outputs() -> None:
         with lock:
             write_summary(records, ns.output)
             if ns.json_output:
+                # F12: wrap the flat per-repo list with the cross-repo
+                # aggregate (stage pass-rates + failure taxonomy) so
+                # summary.json alone is enough for a paper table, without
+                # re-parsing every repo's metrics.json by hand.
                 ns.json_output.write_text(
-                    json.dumps(records, indent=2, ensure_ascii=False),
+                    json.dumps(
+                        {"repos": records, "aggregate": aggregate_metrics(records)},
+                        indent=2, ensure_ascii=False,
+                    ),
                     encoding="utf-8",
                 )
 
@@ -283,7 +446,7 @@ def main() -> None:
         with ThreadPoolExecutor(max_workers=ns.parallel) as pool:
             futures = {
                 pool.submit(run_one, url, extra, ns.log_dir, i + 1, total): url
-                for i, url in enumerate(repos)
+                for i, url in enumerate(available)
             }
             for fut in as_completed(futures):
                 try:

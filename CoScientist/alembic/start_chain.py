@@ -96,6 +96,8 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     cmd += [BASE_IMAGE, "build", repo_url]
     if ns.resume:
         cmd += ["--resume", ns.resume]
+    if ns.until:
+        cmd += ["--until", ns.until]
 
     r = _run(cmd)
     if r.returncode != 0:
@@ -188,6 +190,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--resume", default=None,
                     choices=("explorer", "environment", "coder", "validator"),
                     help="Resume the alembic pipeline from a specific stage")
+    ap.add_argument("--until", default=None,
+                    choices=("explorer", "environment", "coder", "validator"),
+                    help="Stop the alembic pipeline after completing this stage")
     ap.add_argument("--no-serve", action="store_true",
                     help="Build and commit only; do not launch the MCP server")
     ap.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE,

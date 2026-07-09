@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 import textwrap
+import time
 
 from loguru import logger
 from google.adk.sessions import InMemorySessionService
@@ -117,6 +118,59 @@ def _log_event(agent_name: str, event) -> None:
             logger.debug(f"[{agent_name}] RESP  {fr.name} → {resp_str}")
 
 
+# Coarse failure-taxonomy buckets for validation-tool failures, aggregated
+# into metrics.json's "failures_by_class" so a benchmark run can report an
+# error-distribution table without re-reading every repo's raw logs.
+_ERROR_TAXONOMY: list[tuple[str, str]] = [
+    ("ModuleNotFoundError",  "ModuleNotFound"),
+    ("ImportError",          "ImportError"),
+    ("AttributeError",       "AttributeError"),
+    ("FileNotFoundError",    "FileNotFound"),
+    ("KeyError",             "KeyError"),
+    ("IndexError",           "IndexError"),
+    ("NameError",            "NameError"),
+    ("TypeError",            "TypeError"),
+    ("ValueError",           "ValueError"),
+    ("UnicodeDecodeError",   "Encoding"),
+    ("IndentationError",     "Syntax"),
+    ("SyntaxError",          "Syntax"),
+    ("TimeoutExpired",       "Timeout"),
+    ("timed out",            "Timeout"),
+    ("No matching distribution", "Environment"),
+    ("Could not find a version", "Environment"),
+    ("error: subprocess-exited-with-error", "Environment"),
+    ("Failed building wheel", "Environment"),
+    ("CalledProcessError",   "Runtime"),
+    ("non-zero exit status", "Runtime"),
+]
+
+
+def classify_error(text: str) -> str:
+    """Map a raw error/traceback string to a coarse failure-taxonomy bucket."""
+    if not text:
+        return "Unknown"
+    best_label, best_pos = None, -1
+    for needle, label in _ERROR_TAXONOMY:
+        pos = text.rfind(needle)
+        if pos > best_pos:
+            best_pos, best_label = pos, label
+    return best_label or "Other"
+
+
+# Tool names whose function_response carries a structured ok/passed verdict
+# we can classify on failure.
+_VALIDATION_TOOLS = {"invoke_mcp_tool", "validate_syntax", "run_tests"}
+
+
+def _tool_outcome(name: str, response) -> tuple[bool | None, str]:
+    """Best-effort (ok?, error_text) for a validation-tool's response dict."""
+    if not isinstance(response, dict):
+        return None, ""
+    if name == "invoke_mcp_tool":
+        return response.get("ok"), f"{response.get('error','')}\n{response.get('traceback','')}"
+    return response.get("passed"), str(response.get("error") or response.get("output") or "")
+
+
 MAX_TOOL_REPEATS  = 3    # abort if same tool+args combo is called this many times
 MAX_STEPS         = 120  # hard ceiling on total events per agent (was 60; complex
                          # debugger fixes routinely need >60 calls)
@@ -139,8 +193,15 @@ async def _run_agent_once(
     message: str,
     required_report: str | None,
     on_event=None,
-) -> tuple[str, bool, int, int]:
-    """Run one invocation. Returns (final_text, wrote_report, steps, total_tokens)."""
+) -> tuple[str, bool, int, int, dict, dict, str | None]:
+    """Run one invocation.
+
+    Returns (final_text, wrote_report, steps, total_tokens, tool_calls,
+    failures_by_class, abort_reason). ``tool_calls`` maps tool name -> call
+    count this invocation. ``failures_by_class`` maps taxonomy label ->
+    count this invocation. ``abort_reason`` is "tool_repeat" / "max_steps" /
+    None.
+    """
     content      = types.Content(role="user", parts=[types.Part(text=message)])
     final        = "Agent did not produce a final response."
     wrote_report = False
@@ -148,6 +209,8 @@ async def _run_agent_once(
     total_tokens = 0
     last_call    = None
     tool_repeats = 0
+    tool_calls: dict[str, int]        = {}
+    failures_by_class: dict[str, int] = {}
 
     try:
         async for event in runner.run_async(
@@ -172,13 +235,14 @@ async def _run_agent_once(
                         })
 
                     if hasattr(part, "function_call") and part.function_call:
-                        fc       = part.function_call
+                        fc = part.function_call
                         await _emit(on_event, {
                             "type":  "tool_call",
                             "stage": agent.name,
                             "name":  fc.name,
                             "args":  _safe(dict(fc.args) if fc.args else {}),
                         })
+                        tool_calls[fc.name] = tool_calls.get(fc.name, 0) + 1
                         call_key = (fc.name, str(fc.args))
                         tool_repeats = tool_repeats + 1 if call_key == last_call else 1
                         last_call    = call_key
@@ -187,7 +251,8 @@ async def _run_agent_once(
                                 f"[{agent.name}] ABORT: {fc.name}({_trunc(str(fc.args))}) "
                                 f"called {tool_repeats}x with identical args — breaking loop."
                             )
-                            return final, wrote_report, step, total_tokens
+                            return (final, wrote_report, step, total_tokens,
+                                    tool_calls, failures_by_class, "tool_repeat")
 
                     fr = getattr(part, "function_response", None)
                     if fr:
@@ -201,10 +266,16 @@ async def _run_agent_once(
                         report_path = str((fr.response or {}).get("report_path", ""))
                         if required_report in report_path:
                             wrote_report = True
+                    elif fr and fr.name in _VALIDATION_TOOLS:
+                        ok, err_text = _tool_outcome(fr.name, fr.response)
+                        if ok is False:
+                            label = classify_error(err_text)
+                            failures_by_class[label] = failures_by_class.get(label, 0) + 1
 
             if step >= MAX_STEPS:
                 logger.warning(f"[{agent.name}] ABORT: reached {MAX_STEPS} steps — breaking.")
-                return final, wrote_report, step, total_tokens
+                return (final, wrote_report, step, total_tokens,
+                        tool_calls, failures_by_class, "max_steps")
 
             if event.is_final_response():
                 if event.content and event.content.parts:
@@ -219,7 +290,7 @@ async def _run_agent_once(
     except Exception:
         logger.exception(f"[{agent.name}] ERROR in event loop:")
 
-    return final, wrote_report, step, total_tokens
+    return final, wrote_report, step, total_tokens, tool_calls, failures_by_class, None
 
 
 async def run_agent(
@@ -230,23 +301,37 @@ async def run_agent(
     required_report: str | None = None,
     venv_guard_path: str | None = None,
     on_event=None,
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, dict]:
     """Run an agent, retrying if guards (write_report / venv) are not satisfied.
 
-    Returns (final_text, total_steps, total_tokens).
+    Returns (final_text, total_steps, total_tokens, stage_metrics). ``stage_metrics``
+    is {"tool_calls": {name: count}, "failures_by_class": {label: count},
+    "guard_retries": int, "abort_reason": str | None}. ``abort_reason`` reflects the
+    last attempt ("tool_repeat"/"max_steps"), "guard_exhausted" if the guard-retry
+    budget ran out while nudges were still outstanding, or None if the stage
+    finished clean.
     """
     runner       = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
     final        = "Agent did not produce a final response."
     total_steps  = 0
     total_tokens = 0
+    tool_calls: dict[str, int]        = {}
+    failures_by_class: dict[str, int] = {}
+    guard_retries            = 0
+    abort_reason: str | None = None
 
     current_message = message
     for attempt in range(MAX_GUARD_RETRIES + 1):
-        final, wrote_report, steps, tokens = await _run_agent_once(
+        (final, wrote_report, steps, tokens,
+         call_counts, fail_counts, abort_reason) = await _run_agent_once(
             agent, runner, session_id, current_message, required_report, on_event
         )
         total_steps  += steps
         total_tokens += tokens
+        for k, v in call_counts.items():
+            tool_calls[k] = tool_calls.get(k, 0) + v
+        for k, v in fail_counts.items():
+            failures_by_class[k] = failures_by_class.get(k, 0) + v
 
         nudges = []
         if required_report and not wrote_report:
@@ -266,12 +351,20 @@ async def run_agent(
 
         if attempt >= MAX_GUARD_RETRIES:
             logger.warning(f"[guard] Max retries ({MAX_GUARD_RETRIES}) reached — giving up.")
+            abort_reason = "guard_exhausted"
             break
 
+        guard_retries += 1
         current_message = "IMPORTANT: " + " ".join(nudges)
         logger.warning(f"[guard] Retry {attempt + 1}/{MAX_GUARD_RETRIES}: {current_message[:120]}")
 
-    return final, total_steps, total_tokens
+    stage_metrics = {
+        "tool_calls":        tool_calls,
+        "failures_by_class": failures_by_class,
+        "guard_retries":     guard_retries,
+        "abort_reason":      abort_reason,
+    }
+    return final, total_steps, total_tokens, stage_metrics
 
 
 def _banner(stage: int, label: str) -> None:
@@ -290,11 +383,16 @@ def _clean_workdir(name: str) -> None:
 STAGES = ("explorer", "environment", "coder", "validator")
 
 
-async def run_pipeline(repo_url: str, resume_from: str | None = None, on_event=None):
+async def run_pipeline(repo_url: str, resume_from: str | None = None,
+                       stop_after: str | None = None, on_event=None):
     name = get_repo_name(repo_url)
     session_service = InMemorySessionService()
     await _emit(on_event, {"type": "pipeline", "status": "start",
                            "repo": name, "repo_url": repo_url})
+
+    if stop_after is not None and stop_after not in STAGES:
+        logger.error(f"Unknown --until stage '{stop_after}'. Valid: {', '.join(STAGES)}")
+        return
 
     if resume_from is None:
         _clean_workdir(name)
@@ -303,6 +401,15 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None, on_event=N
             logger.error(f"Unknown stage '{resume_from}'. Valid: {', '.join(STAGES)}")
             return
         logger.info(f"[Resume] starting from stage: {resume_from}  (workdir preserved)")
+
+    if (resume_from is not None and stop_after is not None
+            and STAGES.index(stop_after) < STAGES.index(resume_from)):
+        logger.error(
+            f"--until '{stop_after}' is before --resume '{resume_from}' — nothing to run."
+        )
+        return
+    if stop_after is not None:
+        logger.info(f"[Until] will stop after completing stage: {stop_after}")
 
     base = WORKDIR / name
     venv_python = str((base / "output" / ".venv" / "bin" / "python").resolve())
@@ -325,25 +432,37 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None, on_event=N
             app_name=APP_NAME, user_id=USER_ID, session_id=sid
         )
 
+    # Structured per-run metrics + failure taxonomy, written to
+    # reports/metrics.json in the `finally` block below so run_benchmark.py
+    # can aggregate pass-rate-by-stage and error-distribution across a bench.
     pipeline_metrics: dict = {
-        "actions_per_stage": {},
-        "tokens_per_stage":  {},
+        "actions_per_stage":       {},
+        "tokens_per_stage":        {},
+        "durations_per_stage":     {},
+        "tool_calls_per_stage":    {},
+        "guard_retries_per_stage": {},
+        "abort_reason_per_stage":  {},
+        "failures_by_class":       {},
         "total_actions":     0,
         "total_tokens":      0,
     }
 
     def _should_run(stage: str) -> bool:
-        if resume_from is None:
-            return True
-        return STAGES.index(stage) >= STAGES.index(resume_from)
+        idx = STAGES.index(stage)
+        if resume_from is not None and idx < STAGES.index(resume_from):
+            return False
+        if stop_after is not None and idx > STAGES.index(stop_after):
+            return False
+        return True
 
     async def _run_stage(stage: str, agent, sid_suffix: str, message: str,
                          **kwargs) -> str:
         """Wrap run_agent in a wall-clock timeout. Returns final text or
         an empty string when the stage timed out (pipeline continues)."""
+        started = time.monotonic()
         await _emit(on_event, {"type": "stage", "stage": stage, "status": "running"})
         try:
-            final, steps, tokens = await asyncio.wait_for(
+            final, steps, tokens, stage_metrics = await asyncio.wait_for(
                 run_agent(agent, session_service, f"{name}_{sid_suffix}",
                           message, on_event=on_event, **kwargs),
                 timeout=STAGE_TIMEOUT[stage],
@@ -353,12 +472,23 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None, on_event=N
                 f"[{stage}] STAGE TIMEOUT after {STAGE_TIMEOUT[stage]}s — "
                 f"aborting stage, pipeline continues to next stage."
             )
+            pipeline_metrics["durations_per_stage"][stage]    = round(time.monotonic() - started, 1)
+            pipeline_metrics["abort_reason_per_stage"][stage] = "stage_timeout"
             await _emit(on_event, {"type": "stage", "stage": stage, "status": "timeout"})
             return ""
+        pipeline_metrics["durations_per_stage"][stage] = round(time.monotonic() - started, 1)
         pipeline_metrics["actions_per_stage"][stage] = steps
         pipeline_metrics["tokens_per_stage"][stage]  = tokens
         pipeline_metrics["total_actions"]           += steps
         pipeline_metrics["total_tokens"]            += tokens
+        pipeline_metrics["tool_calls_per_stage"][stage]    = stage_metrics["tool_calls"]
+        pipeline_metrics["guard_retries_per_stage"][stage] = stage_metrics["guard_retries"]
+        if stage_metrics["abort_reason"]:
+            pipeline_metrics["abort_reason_per_stage"][stage] = stage_metrics["abort_reason"]
+        for label, count in stage_metrics["failures_by_class"].items():
+            pipeline_metrics["failures_by_class"][label] = (
+                pipeline_metrics["failures_by_class"].get(label, 0) + count
+            )
         await _emit(on_event, {"type": "stage", "stage": stage, "status": "done",
                                "steps": steps, "tokens": tokens})
         return final
@@ -461,10 +591,11 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None, on_event=N
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        logger.error(f"Usage: ./main.py <repo_url> [--resume <stage>]")
+        logger.error(f"Usage: ./main.py <repo_url> [--resume <stage>] [--until <stage>]")
         logger.error(f"       stages: {', '.join(STAGES)}")
         logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer")
         logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer --resume validator")
+        logger.error(f"Example: ./main.py https://github.com/Roestlab/massformer --until explorer")
         sys.exit(1)
 
     repo_url    = sys.argv[1]
@@ -476,8 +607,16 @@ if __name__ == "__main__":
             sys.exit(1)
         resume_from = sys.argv[idx + 1]
 
+    stop_after = None
+    if "--until" in sys.argv:
+        idx = sys.argv.index("--until")
+        if idx + 1 >= len(sys.argv):
+            logger.error("--until requires a stage name")
+            sys.exit(1)
+        stop_after = sys.argv[idx + 1]
+
     try:
-        asyncio.run(run_pipeline(repo_url, resume_from=resume_from))
+        asyncio.run(run_pipeline(repo_url, resume_from=resume_from, stop_after=stop_after))
     except Exception:
         logger.exception("Pipeline error:")
         raise
