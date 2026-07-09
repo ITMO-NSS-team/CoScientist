@@ -1,10 +1,7 @@
 """Filesystem tools: clone/read/search the repo, read/write output and reports."""
 import asyncio
 import contextvars
-import re
 import subprocess
-
-import yaml
 
 from alembic.tools.paths import (
     IGNORE_EXTS, MAX_BYTES, output_dir, rel_or_ignored, repo_path,
@@ -133,6 +130,19 @@ def read_report(repo_url: str, report_name: str) -> dict:
     return {"report_path": str(path), "content": path.read_text(encoding="utf-8")}
 
 
+def _norm_out_rel(relative_path: str) -> str:
+    """Normalize a path meant to live *under* the output dir. The tool base
+    already IS output/, so a leading ``output/`` (or ``./`` / ``/``) is the
+    common doubling mistake (``output/output/server.py``) that would hide
+    server.py from the artefact check — strip it so read/write/update agree."""
+    p = (relative_path or "").strip().lstrip("/")
+    if p.startswith("./"):
+        p = p[2:]
+    while p.startswith("output/"):
+        p = p[len("output/"):]
+    return p
+
+
 def write_file(repo_url: str, relative_path: str, content: str) -> dict:
     """Write a source file to the output directory for this repo.
 
@@ -143,7 +153,7 @@ def write_file(repo_url: str, relative_path: str, content: str) -> dict:
         write_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
         write_file("https://github.com/Roestlab/massformer", "helpers/run_analysis.py", "...")
     """
-    dest = output_dir(repo_url) / relative_path
+    dest = output_dir(repo_url) / _norm_out_rel(relative_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
     return {"written": str(dest)}
@@ -156,7 +166,7 @@ def read_output_file(repo_url: str, relative_path: str) -> dict:
         read_output_file("https://github.com/Roestlab/massformer", "server.py")
         read_output_file("https://github.com/Roestlab/massformer", "tests/test_server.py")
     """
-    full = output_dir(repo_url) / relative_path
+    full = output_dir(repo_url) / _norm_out_rel(relative_path)
     if not full.exists():
         return {"error": f"File not found: {full}"}
     if full.is_dir():
@@ -174,7 +184,7 @@ def update_file(repo_url: str, relative_path: str, content: str) -> dict:
         update_file("https://github.com/Roestlab/massformer", "server.py", "...")
         update_file("https://github.com/Roestlab/massformer", "tests/test_server.py", "...")
     """
-    dest = output_dir(repo_url) / relative_path
+    dest = output_dir(repo_url) / _norm_out_rel(relative_path)
     if not dest.exists():
         return {"error": f"File not found: {dest}. Cannot update a file that does not exist."}
     dest.write_text(content, encoding="utf-8")
@@ -199,32 +209,3 @@ def write_report(repo_url: str, report_name: str, content: str) -> dict:
     out = reports / f"{report_name}.md"
     out.write_text(content, encoding="utf-8")
     return {"report_path": str(out)}
-
-
-_SAMPLES_FENCE_RE = re.compile(r"```ya?ml\s*\n(.*?)```", re.DOTALL)
-
-
-def parse_samples_block(repo_url: str) -> dict:
-    """F25: parse the coder report's ``## Sample invocations`` fenced YAML
-    block (coder.py Step 6) into a plain ``{tool_name: args_dict | "SKIP"}``
-    dict, so the SKIP/invoke split can be code-computed instead of trusted
-    to the validator LLM re-reading the block correctly on every run.
-
-    Not an agent tool — called directly by main.py before the Validator
-    stage starts. Returns {} on any parse failure (missing report, no
-    fenced block, malformed YAML) rather than raising: callers must treat
-    that as "unknown" and fall back to the validator parsing the block
-    itself, exactly as it always has.
-    """
-    server_md = reports_dir(repo_url) / "server.md"
-    if not server_md.exists():
-        return {}
-    match = _SAMPLES_FENCE_RE.search(server_md.read_text(encoding="utf-8", errors="replace"))
-    if not match:
-        return {}
-    try:
-        parsed = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return {}
-    samples = parsed.get("samples") if isinstance(parsed, dict) else None
-    return samples if isinstance(samples, dict) else {}

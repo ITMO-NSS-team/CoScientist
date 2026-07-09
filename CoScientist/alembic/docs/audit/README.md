@@ -17,6 +17,12 @@ the F-list treats as fixed. Where an item extends an existing F-number, it says 
    source, with new cheap fixes. **Start here for your #1 headache.**
 3. [03-benchmarking.md](./03-benchmarking.md) — TM-Bench / ToolArena integration,
    three corrections to the current plan, the dual-metric design, feasibility.
+4. [04-environment-setup.md](./04-environment-setup.md) — audit of
+   `environment.py`/`venv.py`/`shell.py`, grounded in an independent from-scratch
+   14-repo run of the same `toolmaker_subset.txt` set: two unbounded-timeout gaps,
+   a docstring that contradicts the no-editable-install rule, a self-backgrounding
+   risk observed live in a different agent this same session, plus calibration
+   data (conda-attempt ordering, stage-timeout sizing) from the independent run.
 
 ---
 
@@ -53,9 +59,13 @@ rough eng-hours.
 | **N7** | **Idle / no-progress timeout** alongside the wall-clock cap | ~4h | Now feasible post-F23 (event loop no longer freezes). Stops killing genuinely-slow-but-working repos (AgML) as if they were hung. | [01](./01-architecture.md) |
 | **N8** | **Structured (JSON/pydantic) inter-agent contract** for machine-critical fields (tool list, signatures, sample args, SKIP set), prose reports kept for humans | ~1–2d | The strategic fix: makes F1/F4/F25 enforceable in code instead of by LLM good-behaviour, and removes the "validator misread the markdown" bug class (F25's SKIP gap). | [01](./01-architecture.md) |
 | **N9** | **Pin OpenRouter provider routing / use a direct endpoint** for benchmark runs | ~1h | F17/F22 treat the *symptoms* of a flaky backend; pinning the provider removes the cause of the `finish_reason:"error"` and empty-body faults. | [01](./01-architecture.md) |
+| **N10** | **Add a timeout to every `setup_venv`/`_pip_install` subprocess call** in `tools/venv.py` | ~1h | Currently unbounded — the one tool the Environment stage is told to try *first* is the one with no hang protection at all, unlike `bash_env`/`check_venv_compat`. | [04](./04-environment-setup.md) |
+| **N11** | **Delete (or fix) `setup_venv`'s `pyproject_toml=` editable-install branch** | ~1h | Its own docstring example directly contradicts `environment.py`'s Critical Rule #3 (no editable installs) — a live footgun, not dead code, since ADK surfaces docstrings to the LLM. | [04](./04-environment-setup.md) |
+| **N12** | **Reject self-backgrounded commands (`&`/`nohup`/`disown`) in `bash`/`bash_env`** | ~2h | Observed live this session in a different agent doing the same environment-setup work: backgrounding a slow install makes the tool report false success while the real work stalls unobserved. | [04](./04-environment-setup.md) |
 
 N1–N5 are all cheap and all target the stability headache. If you do nothing
 else this week, do **N1 + N2 + N4** (≈3 hours total, all instruction/config).
+N10–N12 are the equivalent short list for the Environment stage specifically.
 
 ## One-line take on the competition
 

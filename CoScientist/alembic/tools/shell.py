@@ -3,7 +3,7 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from alembic.tools.paths import MAX_BYTES
+from alembic.config import BASH_ENV_TIMEOUT, BASH_TIMEOUT, MAX_BYTES
 
 
 def _glob_command(stripped: str) -> dict | None:
@@ -63,8 +63,7 @@ async def bash(command: str) -> dict:
     # non-async tools with a plain synchronous call (no run_in_executor), so a
     # sync bash()/bash_env() here would freeze the whole event loop for the
     # duration of the command, silently defeating any asyncio.wait_for-based
-    # timeout (per-debugger-call and per-stage alike) wrapping this turn.
-    from alembic.main import BASH_TIMEOUT  # deferred: see main.py's timeout block
+    # timeout wrapping this turn.
     return await asyncio.to_thread(_run_shell, command, BASH_TIMEOUT)
 
 
@@ -89,5 +88,4 @@ async def bash_env(command: str) -> dict:
         # Pretrained weights (F6) — HF_TOKEN used automatically, never inline it:
         bash_env("huggingface-cli download MahmoodLab/UNI2-h --local-dir .alembic/UNI/repos/checkpoints")
     """
-    from alembic.main import BASH_ENV_TIMEOUT  # deferred: see main.py's timeout block
     return await asyncio.to_thread(_run_shell, command, BASH_ENV_TIMEOUT)

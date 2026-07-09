@@ -1,7 +1,9 @@
 """Invoke a single tool function from server.py with kwargs and print JSON.
 
 Run by ``invoke_mcp_tool`` with the *server venv's* python. Inputs come from
-the environment: SERVER_PATH, TOOL_NAME, TOOL_ARGS_JSON. Prints one JSON line.
+the environment: SERVER_PATH, TOOL_NAME, TOOL_ARGS_JSON. Prints the result as
+a JSON object on the line AFTER a sentinel marker, so any banners / progress
+bars the imported repo code prints to stdout never corrupt the parse (N5).
 
 Names are underscore-prefixed to avoid clashing with anything the imported
 server module pulls into scope.
@@ -12,6 +14,14 @@ import os as _os
 import sys as _sys
 import traceback as _tb
 from pathlib import Path as _P
+
+_SENTINEL = "<<<ALEMBIC_RESULT>>>"
+
+
+def _emit(_obj):
+    print(_SENTINEL)
+    print(_json.dumps(_obj, default=str))
+
 
 _server   = _P(_os.environ["SERVER_PATH"]).resolve()
 _toolname = _os.environ["TOOL_NAME"]
@@ -32,7 +42,7 @@ finally:
 
 _fn = getattr(_mod, _toolname, None)
 if _fn is None:
-    print(_json.dumps({"ok": False, "error": f"Tool {_toolname!r} not found"}))
+    _emit({"ok": False, "error": f"Tool {_toolname!r} not found"})
     raise SystemExit(0)
 # FastMCP wraps @mcp.tool() into FunctionTool — unwrap to original callable.
 for _attr in ("fn", "func", "__wrapped__"):
@@ -43,10 +53,10 @@ for _attr in ("fn", "func", "__wrapped__"):
 
 try:
     _result = _fn(**_args)
-    print(_json.dumps({"ok": True, "result": _result}, default=str))
+    _emit({"ok": True, "result": _result})
 except Exception as _e:
-    print(_json.dumps({
+    _emit({
         "ok": False,
         "error": f"{type(_e).__name__}: {_e}",
         "traceback": _tb.format_exc(),
-    }))
+    })

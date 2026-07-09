@@ -18,7 +18,7 @@ from alembic.tools.fs import (
     write_file, read_output_file, update_file, write_report,
 )
 from alembic.tools.venv import setup_venv, check_venv_compat
-from alembic.tools.invoke import validate_syntax, run_tests, invoke_mcp_tool
+from alembic.tools.invoke import validate_syntax, run_tests, invoke_mcp_tool, set_skip_tools
 
 __all__ = [
     "WORKDIR", "get_repo_name",
@@ -26,5 +26,5 @@ __all__ = [
     "clone_repo", "read_file", "search", "read_report",
     "write_file", "read_output_file", "update_file", "write_report",
     "setup_venv", "check_venv_compat",
-    "validate_syntax", "run_tests", "invoke_mcp_tool",
+    "validate_syntax", "run_tests", "invoke_mcp_tool", "set_skip_tools",
 ]

@@ -4,49 +4,52 @@ import json
 import subprocess
 from pathlib import Path
 
+from alembic.config import VENV_COMPAT_TIMEOUT, VENV_SETUP_TIMEOUT
 from alembic.tools.paths import COMPAT_CHECK_SCRIPT, output_dir, repo_path
 
 
 def _pip_install(use_uv: bool, python: str, venv_dir: Path, *args: str) -> None:
-    """Install into the venv via uv (when available) or the venv's own pip."""
+    """Install into the venv via uv (when available) or the venv's own pip.
+
+    N10: every subprocess call is bounded — a stalled resolver or a build that
+    drops into an interactive prompt must not hang past the stage timeout.
+    """
     cmd = (["uv", "pip", "install", "--python", python, *args]
            if use_uv
            else [str(venv_dir / "bin" / "pip"), "install", *args])
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=VENV_SETUP_TIMEOUT)
 
 
 async def setup_venv(repo_url: str, packages: list[str] | None = None,
                requirements_file: str | None = None,
-               pyproject_toml: str | None = None,
                python_version: str | None = None) -> dict:
-    """Create a .venv in the output directory and install dependencies.
+    """Create the server .venv and install dependencies.
 
     Uses `uv` when available, falls back to `python -m venv` + `pip`.
-    Always installs `mcp` and `pytest` automatically.
+    Always installs `fastmcp`, `pytest`, `mcp` automatically. Editable
+    installs are intentionally NOT supported (they almost always fail on
+    Cython/C-extension repos and the generated server shells out to repo
+    scripts rather than importing the repo as a package) — pass the runtime
+    deps via ``packages`` or a ``requirements_file`` instead.
 
     Args:
         repo_url:          Repository URL.
         packages:          Extra pip-installable package names.
         requirements_file: Path to requirements.txt relative to cloned repo root.
-        pyproject_toml:    Path to pyproject.toml relative to cloned repo root.
         python_version:    Python version string, e.g. "3.11".
 
     Examples:
         setup_venv("https://github.com/Roestlab/massformer",
-                   requirements_file="requirements.txt")
-        setup_venv("https://github.com/Roestlab/massformer",
-                   pyproject_toml="pyproject.toml", python_version="3.11")
+                   requirements_file="requirements.txt", python_version="3.11")
+        setup_venv("https://github.com/x/y", packages=["numpy", "scipy"])
     """
     # F23: run on a worker thread — see bash()/bash_env() in shell.py for why.
     return await asyncio.to_thread(
-        _setup_venv_sync, repo_url, packages, requirements_file,
-        pyproject_toml, python_version,
-    )
+        _setup_venv_sync, repo_url, packages, requirements_file, python_version)
 
 
 def _setup_venv_sync(repo_url: str, packages: list[str] | None,
                       requirements_file: str | None,
-                      pyproject_toml: str | None,
                       python_version: str | None) -> dict:
     out_dir  = output_dir(repo_url)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -63,12 +66,13 @@ def _setup_venv_sync(repo_url: str, packages: list[str] | None,
         else:
             py_bin = f"python{python_version}" if python_version else "python"
             cmd = [py_bin, "-m", "venv", str(venv_dir)]
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=VENV_SETUP_TIMEOUT)
     except subprocess.CalledProcessError as e:
         return {"success": False, "error": f"venv creation failed: {e.stderr.strip()}"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": f"venv creation timed out after {VENV_SETUP_TIMEOUT}s"}
 
     errors = []
-
     if requirements_file:
         req_path = repo_path(repo_url) / requirements_file
         if req_path.exists():
@@ -76,24 +80,18 @@ def _setup_venv_sync(repo_url: str, packages: list[str] | None,
                 _pip_install(use_uv, python, venv_dir, "-r", str(req_path))
             except subprocess.CalledProcessError as e:
                 errors.append(f"requirements install failed: {e.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                errors.append(f"requirements install timed out after {VENV_SETUP_TIMEOUT}s")
         else:
             errors.append(f"requirements file not found: {req_path}")
-
-    if pyproject_toml:
-        proj_path = repo_path(repo_url) / pyproject_toml
-        if proj_path.exists():
-            try:
-                _pip_install(use_uv, python, venv_dir, "-e", str(proj_path.parent))
-            except subprocess.CalledProcessError as e:
-                errors.append(f"pyproject.toml install failed: {e.stderr.strip()}")
-        else:
-            errors.append(f"pyproject.toml not found: {proj_path}")
 
     install_pkgs = ["fastmcp", "pytest", "mcp"] + (packages or [])
     try:
         _pip_install(use_uv, python, venv_dir, *install_pkgs)
     except subprocess.CalledProcessError as e:
         errors.append(f"package install failed: {e.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        errors.append(f"package install timed out after {VENV_SETUP_TIMEOUT}s")
 
     if errors:
         return {"success": False, "venv": str(venv_dir), "error": "; ".join(errors)}
@@ -133,7 +131,6 @@ def _check_venv_compat_sync(repo_url: str, venv_name: str) -> dict:
     if not venv_py.exists():
         return {"error": f"venv python not found at {venv_py}"}
 
-    from alembic.main import VENV_COMPAT_TIMEOUT  # deferred: see main.py's timeout block
     r = subprocess.run(
         [str(venv_py.absolute()), str(COMPAT_CHECK_SCRIPT), str(repo_dir)],
         capture_output=True, text=True, timeout=VENV_COMPAT_TIMEOUT,

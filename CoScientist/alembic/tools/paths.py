@@ -3,9 +3,9 @@ import os
 from pathlib import Path
 
 from alembic.common import get_repo_name
+from alembic.config import MAX_BYTES  # re-exported for tools that import it from here
 
 WORKDIR = Path(os.environ.get("ALEMBIC_WORKDIR", ".alembic"))
-MAX_BYTES = 40_000
 
 # Standalone scripts run inside a repo's venv (see venv.py / invoke.py).
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
