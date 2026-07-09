@@ -48,7 +48,10 @@ agents:
     # retrieval lets the orchestrator check which ready-made MCP tools exist
     # BEFORE routing a step — prefer TaskExecutorAgent over research when a
     # relevant tool is already available.
-    tools: [retrieval, task_tracker, graph]
+    # No task_tracker: with the PlannerAgent disabled nothing calls create_plan,
+    # so the tracker is always empty and the orchestrator only ever hallucinated
+    # update_task_status on phantom task ids. Dropped so it coordinates directly.
+    tools: [retrieval, graph]
     subordinates:
       - PlannerAgent
       - HypothesesAgent
