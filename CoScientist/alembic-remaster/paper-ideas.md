@@ -1,0 +1,66 @@
+I want to update the core ideas of our paper
+
+Mostly keep the same structure but enforce these ideas, as well as update for current implementation
+
+1. Abstract and Intro
+
+Alembic  is is motivated by presenting an all-in-one solution for making scientific repositories more accessible 
+- sometimes they are badly maintained and ill-documented, 
+
+as well as not always mentioning thorough setup guides.
+
+To some extent this is now solved by agentic harnesses like openclaw, but to some extent
+It is still executing on user's system that, with the popularity of fully-autonomous modes may pose danger 
+by installing external packages and polluting global dependencies
+
+The other motivation is reusability if needed to conduct multiple tests, especially in autonomous AI Scientific systems, 
+where verifying the results of scientific papers the code was attached to, or reliably transforming them to tools that 
+may be used for other experiments.
+
+2. Method
+
+Mostly keep the same, update for current paper structure
+
+The main change is that we move closer to tmbench - our explorer and environment work as before, but coding is now split:
+For the ease of coding and testing, Coder writes direct usage scripts of target workflows, after which they get tested by 
+static (pytest) and invocation tests.
+Then, the scripts are wrapped in a two-layer structure: main fastmcp mcp server definition file runs venv with python 
+
+The venv-splitting is implemented to support running older, unmaintained repos, which we are still able to do.
+
+We also explain our other design choices - what was picked from the spec sheets and explianed in PLAN / design choices document.
+
+
+3. Testing methodology
+
+It is a very complicated task to test against unknown objectives. The most information we 
+can gather from repo comes from authors themselves. The system tries its best to match the 
+discovered workflows in tools and keep them configurable for the agent that will know what to use it for.
+We adopt ToolMaker's TMBench as there are not many benchmarks for tool/MCP creation that come
+with objectives that are initially known possible, human-made tests for the tools themselves (as 
+reusing the existing repository test suite does not cover the tool usage that may extend beyond covered scenarios)
+
+TMBench comes with caveats - one of them being the huge dataset size of TCGA dataset:
+
+  TCGA (The Cancer Genome Atlas) is a public NCI repository of cancer genomic, clinical, and imaging data — including
+  whole-slide histopathology images (.svs files), hosted on the Genomic Data Commons (GDC) API. Two of the 15 TMBench
+  tasks need it: stamp_extract_features and stamp_train_classification_model, which run the STAMP pipeline over
+  TCGA-BRCA and TCGA-CRC slide cohorts.
+
+  The problem: the reference CSVs ToolMaker ships (TCGA-BRCA-DX_SLIDE.csv, TCGA-CRC-DX_SLIDE.csv) list the complete
+  cohorts — 1132 BRCA + 624 CRC slides — and downloading every one of them would be roughly 1.5TB. However the test 
+  expects expected_num_processed_slides == 10 for the CRC test case (not 624), plus two specific named files (one CRC, 
+  one BRCA) referenced by exact filename elsewhere. None of the tests check exact feature values — only shape/count/status. 
+  So the full cohort was never required, just those 10+2 slides.
+
+That is practiaclly impossible to guess beforehand, so we follow authors with turning off file downloading for these runs, 
+leaving the ability to download file weights, and cloning the required data for tasks inside the container, as intended originally.
+
+We run alembic with known target mode - it still extracts all workflows it finds, and we report metrics for 
+total MCP conversion, as well as the TMBench-defined metrics presented in the initial paper
+
+4. Results
+
+Then we provide additional study for mistakes by type, token consumprtion by stage etc. (ask claude to extend?)
+
+Case study - old
