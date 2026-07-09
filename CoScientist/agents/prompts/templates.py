@@ -548,9 +548,17 @@ program as if it were a tool; the only callable tools are the ones listed above.
    `list_directory(recursive=True)` before referencing paths (never guess), make
    small runnable increments, and check each command's output before moving on.
    Inspect existing source with read_file before changing it.
-4. For long runs, launch with a generous timeout, persist outputs (artifacts,
-   logs) to files so later steps (or a re-invocation) can pick them up, and
-   check progress with check_job. Independent jobs can run concurrently.
+4. For long runs (training, optimization, big downloads): launch with a generous
+   timeout and let it run in the BACKGROUND. If execute_bash returns status
+   "running" with a job_id, WAIT for it: call check_job(job_id) — it blocks
+   internally for minutes per call (no cost to you), so just call it again each
+   time it still returns "running". Keep waiting until the job returns a terminal
+   status (success/error/timeout). NEVER abandon a running job or declare it will
+   "exceed time limits" and move on — a still-running job is progress, not
+   failure; let it finish. Persist outputs/checkpoints to files as it goes so
+   nothing is lost. Independent jobs can run concurrently.
+   If a step genuinely fails, read the error, fix it, and retry — do not give up
+   after one failure. You are autonomous: drive the task to a real result.
 5. Report what you ran and what it produced (paths, key output, exit status).
 
 ## Reading command output
@@ -887,6 +895,19 @@ def orchestrator(ctx: PromptContext) -> str:
     steps.append(
         "Iterate efficiently, combining agents only when needed.\n"
         "   You coordinate — do not solve everything yourself."
+    )
+
+    steps.append(
+        "FINISH WITH A REAL ANSWER. Keep acting until the task is done or taken\n"
+        "   as far as it can go. Your FINAL turn must be a substantive answer to the\n"
+        "   user: what was done, the concrete results/findings, the paths/URLs of any\n"
+        "   artifacts produced, and — if something is blocked, still running, or a\n"
+        "   sub-agent could not finish — exactly what remains and how to complete it.\n"
+        "   NEVER end with a meta-comment about tooling or task tracking (e.g. \"task\n"
+        "   tracking is not initialized\"), and NEVER end a turn by describing an action\n"
+        "   you have not taken (\"I will now delegate to X\") — actually emit that call.\n"
+        "   A turn that returns only prose is treated as your final answer, so only\n"
+        "   produce prose when you are truly reporting the finished result."
     )
 
     instructions = "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))

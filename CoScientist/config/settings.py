@@ -151,7 +151,13 @@ class MCPSettings(BaseModel):
 # HITL (Human-in-the-Loop)
 # =========================
 class HITLSettings(BaseModel):
-    enabled: bool = True
+    # Human-in-the-loop approval for outward-facing / hard-to-reverse actions.
+    # OFF by default: a one-prompt autonomous run cannot pause for console
+    # approval (ConsoleHITLHandler blocks on input(), which would hang a web/
+    # headless run). The hard safety blocklist in coder_tools (_BLOCKED: rm -rf /,
+    # mkfs, fork bombs, …) still refuses genuinely dangerous commands regardless.
+    # Re-enable for interactive/supervised runs via HITL__ENABLED=true.
+    enabled: bool = False
 
 # =========================
 # ORCHESTRATOR
@@ -161,7 +167,20 @@ class OrchestratorSettings(BaseModel):
     # system.yaml as ${orchestrator.use_planner}). When False, the planner is
     # not attached and the orchestrator prompt's planning step adapts — the
     # assembler keeps prompt and tools consistent automatically.
-    use_planner: bool = True
+    #
+    # Kept in sync with PlannerAgent.enabled in system.yaml: the planner agent
+    # is disabled (it planned worse than the orchestrator coordinating inline),
+    # so this is False too. With True while the agent is disabled, the
+    # orchestrator prompt stays in TASK_MANAGEMENT mode expecting a plan nobody
+    # creates -> it hammers update_task_status on phantom task ids and gives up.
+    use_planner: bool = False
+
+    # Upper bound on LLM calls for one top-level run, passed to ADK's RunConfig.
+    # ADK defaults to 500, which a long autonomous research run (many CoderAgent
+    # debug/poll iterations) hits and gets cut off mid-work. Raised so a single
+    # prompt can drive a long job to completion; still finite as a runaway-cost
+    # backstop. Override via ORCHESTRATOR__MAX_LLM_CALLS.
+    max_llm_calls: int = 3000
 
 # =========================
 # CODE EXECUTION
@@ -178,14 +197,20 @@ class CodeExecSettings(BaseModel):
     submit_path: str = "/submit"
     result_path: str = "/result"
     poll_interval: int = 5                # seconds between status polls
-    default_timeout: int = 1800           # per-command timeout (s) for long jobs
-    exec_wait: int = 180                  # how long execute_bash waits inline for
+    default_timeout: int = 7200           # per-command timeout (s) — big enough for
+                                          # training/optimization (server may cap it;
+                                          # checkpoint long work to disk regardless)
+    exec_wait: int = 300                  # how long execute_bash waits inline for
                                           # the command to finish before handing
                                           # back a job_id — so the model gets the
                                           # result in ONE call instead of polling
-    check_wait: int = 15                  # how long check_job waits inline for a
-                                          # running job before returning (saves
-                                          # repeated LLM-driven polls)
+    check_wait: int = 600                 # how long check_job blocks inline for a
+                                          # running job before returning. This is an
+                                          # async poll loop (no LLM round-trips), so a
+                                          # single check_job waits up to 10 min for a
+                                          # long job — the key to letting a long
+                                          # autonomous run wait patiently instead of
+                                          # burning dozens of polling turns.
     workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
 
 # =========================

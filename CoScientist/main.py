@@ -17,6 +17,7 @@ import logging
 
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
+from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings
@@ -204,6 +205,12 @@ class CoScientistManager:
                 user_id=self.user_id,
                 session_id=self.session_id,
                 new_message=content,
+                # ADK caps a run at 500 LLM calls by default, which a long
+                # autonomous research run overruns mid-work; lift the ceiling so
+                # one prompt can drive the whole job (finite, as a cost backstop).
+                run_config=RunConfig(
+                    max_llm_calls=get_settings().orchestrator.max_llm_calls
+                ),
             ):
                 if verbose:
                     print(

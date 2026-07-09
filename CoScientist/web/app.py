@@ -14,8 +14,10 @@ from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.agents import planner_agent
 from CoScientist.hitl.tool import hitl_toolset
+from CoScientist.config import get_settings
 
 from google.genai import types
+from google.adk.agents.run_config import RunConfig
 from google.adk.workflow.utils._workflow_hitl_utils import (
     has_request_input_function_call,
     get_request_input_interrupt_ids,
@@ -338,6 +340,11 @@ async def _handle_chat(ws: WebSocket, data: dict):
                 user_id=manager.user_id,
                 session_id=manager.session_id,
                 new_message=current_message,
+                # Lift ADK's 500-LLM-call default so a long autonomous run driven
+                # by a single prompt isn't cut off mid-work.
+                run_config=RunConfig(
+                    max_llm_calls=get_settings().orchestrator.max_llm_calls
+                ),
             ):
                 # Stream each event to frontend
                 event_data = {

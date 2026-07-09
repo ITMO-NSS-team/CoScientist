@@ -82,7 +82,7 @@ agents:
   PlannerAgent:
     class: custom:session
     root: false
-    enabled: true #${orchestrator.use_planner}
+    enabled: false #${orchestrator.use_planner}
     description: >-
       produces a step-by-step roadmap for a complex, multi-step task;
       call it first, then execute the roadmap by delegating each step.
