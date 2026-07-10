@@ -20,6 +20,7 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from alembic import config
+from alembic.events import emit, safe
 from alembic.tools.fs import enable_read_dedup
 
 # ── LLM/provider fault classification (shared with agents.ResilientLiteLlm) ────
@@ -204,6 +205,9 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
                 for part in event.content.parts:
                     if getattr(part, "function_call", None):
                         fc = part.function_call
+                        await emit({"type": "tool_call", "stage": agent.name,
+                                    "name": fc.name,
+                                    "args": safe(dict(fc.args) if fc.args else {})})
                         tool_calls[fc.name] = tool_calls.get(fc.name, 0) + 1
                         call_key = (fc.name, str(fc.args))
                         tool_repeats = tool_repeats + 1 if call_key == last_call else 1
@@ -218,6 +222,9 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
                                 return (final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, "tool_cycle")
 
                     fr = getattr(part, "function_response", None)
+                    if fr:
+                        await emit({"type": "tool_result", "stage": agent.name,
+                                    "name": fr.name, "response": safe(fr.response)})
                     if fr and fr.name == "write_report" and required_report:
                         if required_report in str((fr.response or {}).get("report_path", "")):
                             wrote_report = True

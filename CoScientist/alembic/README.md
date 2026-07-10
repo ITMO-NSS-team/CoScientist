@@ -10,6 +10,7 @@ Alembic is a multi-agent pipeline that automatically generates a deployable [Fas
 
 - [How It Works](#how-it-works)
 - [Getting Started](#getting-started)
+- [Live Dashboard (Web UI)](#live-dashboard-web-ui)
 - [Running a Benchmark](#running-a-benchmark)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
@@ -76,6 +77,47 @@ python CoScientist/alembic/start_chain.py <repo_url> --gpus all
 
 ---
 
+## Live Dashboard (Web UI)
+
+A local, browser-based dashboard that runs the pipeline **without Docker** and
+streams every stage and agent action in real time:
+
+- **top** — the five-stage rail (explorer → environment → coder → validator →
+  wrapper), lit as each stage runs / passes / fails;
+- **left** — an accumulating column: the exploration report, the generated
+  output files, how to run them (the recorded `setup.sh`), and per-tool
+  invocation examples;
+- **right** — the generated tools as cards with live pass/fail validation
+  badges (hover a failure for the error) and a **Call** form that invokes each
+  tool-function on demand — the same `invoke_tool_function` path the validator
+  uses, so you can exercise a tool the instant the Coder writes it (wrapping to
+  a real MCP server is only the final stage);
+- **bottom** — a live activity feed of every agent tool call.
+
+**Prerequisites:** the same `.env` as [Getting Started](#getting-started), plus
+`fastapi` and `uvicorn` (already in the project `requirements.txt`).
+
+**Start it (from the repo root):**
+
+```bash
+python CoScientist/alembic/web/server.py
+```
+
+Then open **http://127.0.0.1:8100**, paste a repo URL (e.g.
+`https://github.com/whitead/synspace`) and press **Run**.
+
+Notes:
+- Run it from the project root — the pipeline writes its workdir to `./.alembic/`,
+  the same location as the CLI.
+- **Stop** invalidates the run; the pipeline unwinds at its next stage/tool
+  boundary (a subprocess already in flight finishes first).
+- The pipeline itself is unchanged for the CLI/benchmark: it emits events
+  through the optional `alembic.events` bus, a no-op unless the dashboard
+  installs a sink. All UI enrichment (reading `plan.json` / `validation.json` /
+  the output files off disk) lives in `web/app.py`, not in the pipeline.
+
+---
+
 ## Running a Benchmark
 
 `benchmarks/alembic/run_benchmark.py` processes multiple repos in parallel
@@ -110,8 +152,10 @@ CoScientist/alembic/
 ├── start_chain.py     # CLI: build base image → run pipeline → commit → serve
 ├── run_benchmark.py   # Parallel benchmark runner
 ├── common.py          # Shared Docker helpers (ensure_base_image, get_repo_name)
+├── events.py          # Optional live-event bus (no-op for CLI; feeds the web UI)
 ├── instructions/      # System prompts for each agent
-└── tools/             # Tool implementations (fs, shell, venv, invoke, paths)
+├── tools/             # Tool implementations (fs, shell, venv, invoke, codegen, paths)
+└── web/               # Live dashboard: FastAPI + WebSocket (app.py, server.py, templates/)
 
 docker/alembic/
 ├── Dockerfile         # Base image (python:3.11 + build deps + alembic code)

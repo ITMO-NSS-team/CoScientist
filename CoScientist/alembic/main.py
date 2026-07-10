@@ -34,6 +34,7 @@ from loguru import logger
 from google.adk.sessions import InMemorySessionService
 
 from alembic import config
+from alembic.events import emit
 from alembic.agents import (
     coder_agent, debugger_agent, environment_agent, explorer_agent, wrapper_agent,
 )
@@ -179,6 +180,8 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
     base = WORKDIR / name
     session_service = InMemorySessionService()
     tasks = _load_tasks(tasks_cli)
+    await emit({"type": "pipeline", "status": "start", "repo": name,
+                "repo_url": repo_url})
 
     for stg in (resume_from, stop_after):
         if stg is not None and stg not in STAGES:
@@ -261,6 +264,9 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
             _export_task_code(tasks)
             _report_completion(name, base)
 
+        await emit({"type": "pipeline", "status": "complete", "repo": name,
+                    "metrics": metrics})
+
     finally:
         _finalize_metrics(base, metrics)
         logger.remove(sink_id)
@@ -273,6 +279,7 @@ async def _staged_llm(stage, agent, name, metrics, session_service, message_fn,
     """Run one LLM stage; verify its exit gate; on failure roll back the
     stage-owned paths and rerun with a note (≤ STAGE_RESET extra loops).
     Returns whether the gate ever passed."""
+    await emit({"type": "stage", "stage": stage, "status": "running"})
     note = ""
     for attempt in range(config.STAGE_RESET + 1):
         sid = f"{name}_{stage}_r{attempt}"
@@ -290,6 +297,8 @@ async def _staged_llm(stage, agent, name, metrics, session_service, message_fn,
         if gate["ok"]:
             logger.info(f"[{stage}] gate passed"
                         + (f" after {attempt} reset(s)" if attempt else ""))
+            await emit({"type": "stage", "stage": stage, "status": "done",
+                        "resets": attempt})
             return True
         note = ("\n\nNOTE — previous attempt failed its exit gate; do better this time:\n"
                 + gate.get("note", "unknown failure"))
@@ -300,6 +309,7 @@ async def _staged_llm(stage, agent, name, metrics, session_service, message_fn,
             logger.warning(f"[{stage}] gate FAILED — reset "
                            f"{attempt + 1}/{config.STAGE_RESET}: {gate.get('note','')[:300]}")
     logger.error(f"[{stage}] gate still failing after {config.STAGE_RESET} reset(s) — moving on.")
+    await emit({"type": "stage", "stage": stage, "status": "failed"})
     return False
 
 
@@ -509,10 +519,12 @@ def _coder_gate() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 async def _validate(repo_url, name, session_service, metrics):
     started = time.monotonic()
+    await emit({"type": "stage", "stage": "validator", "status": "running"})
     plan = load_plan()
     if not plan or not plan.tools:
         logger.error("[validator] no plan/tools — nothing to validate.")
         update_stage_status("validator", status="failed", gate={"note": "no plan"})
+        await emit({"type": "stage", "stage": "validator", "status": "failed"})
         return
 
     v = Validation()
@@ -546,6 +558,10 @@ async def _validate(repo_url, name, session_service, metrics):
                 failures_by_class[classify_error(f)] = failures_by_class.get(classify_error(f), 0) + 1
             failures += fails
             write_validation(repo_url, name, v)   # incremental (R2)
+            await emit({"type": "validation", "tool": t.name,
+                        "passed": rep.passed, "status": rep.status,
+                        "exec_ok": rep.exec_ok, "input": t.sample_args or {},
+                        "error": (rep.error or None) if not rep.passed else None})
         if not failures:
             break
         if rnd >= config.DEBUGGING_ROUNDS:
@@ -565,6 +581,8 @@ async def _validate(repo_url, name, session_service, metrics):
     c = v.counts()
     update_stage_status("validator", status="passed", counts=c,
                         debugger_rounds=v.debugger_rounds)
+    await emit({"type": "stage", "stage": "validator", "status": "done",
+                "counts": c})
     logger.info(f"[Validator done] tools passed {c['tools_passed']}/{c['tools_total']} "
                 f"(perfect {c['tools_perfect']}); tests {c['tests_passed']}/{c['tests_total']}; "
                 f"exec ok {c['exec_ok']}/{c['exec_attempted']}")
@@ -654,6 +672,7 @@ async def _call_debugger(name, session_service, metrics, message, memory=None) -
 # ══════════════════════════════════════════════════════════════════════════════
 async def _wrap(name, session_service, metrics):
     started = time.monotonic()
+    await emit({"type": "stage", "stage": "wrapper", "status": "running"})
     plan = load_plan()
     out = output_dir()
     names = [t.name for t in (plan.tools if plan else [])
@@ -661,6 +680,7 @@ async def _wrap(name, session_service, metrics):
     if not names:
         update_stage_status("wrapper", status="failed", gate={"note": "no tool files exist"})
         logger.error("[wrapper] no tool files to wrap.")
+        await emit({"type": "stage", "stage": "wrapper", "status": "failed"})
         return
 
     res = write_server(name, names)
@@ -687,6 +707,9 @@ async def _wrap(name, session_service, metrics):
                               "llm_fallback": used_fallback,
                               "error": "" if gate["passed"] else gate.get("error", "")[:500]})
     metrics["durations_per_stage"]["wrapper"] = round(time.monotonic() - started, 1)
+    await emit({"type": "stage", "stage": "wrapper",
+                "status": "done" if gate["passed"] else "failed",
+                "tools_wrapped": res["tools"], "llm_fallback": used_fallback})
     if gate["passed"]:
         logger.info(f"[wrapper] server.py OK — {len(res['tools'])} tool(s) exposed"
                     + (" (via LLM fallback)" if used_fallback else ""))
