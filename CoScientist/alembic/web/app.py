@@ -23,6 +23,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from alembic.main import run_pipeline
+from alembic.tools.invoke import invoke_mcp_tool
 
 WEB_DIR = Path(__file__).parent
 TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
@@ -82,7 +83,7 @@ def create_app() -> FastAPI:
         # active["task"] = the current pipeline task; active["run_id"] is bumped
         # on every run/stop so a stale run (possibly blocked in a sync subprocess
         # that asyncio cannot interrupt) unwinds itself the next time it emits.
-        active: dict = {"task": None, "run_id": 0}
+        active: dict = {"task": None, "run_id": 0, "repo_url": None}
         # the most recent invoke_mcp_tool call (tool + args), awaiting its result
         pending_invoke: dict = {"tool": None, "args": None}
 
@@ -171,6 +172,23 @@ def create_app() -> FastAPI:
                     await send({"type": "pipeline", "status": "error",
                                 "message": str(exc)})
 
+        async def _do_invoke(repo: str, tool: str, args: dict, call_id):
+            """Invoke a generated MCP tool with user args (blocking subprocess)."""
+            try:
+                res = await asyncio.to_thread(invoke_mcp_tool, repo, tool, args)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": str(exc)}
+            ok = bool(res.get("ok"))
+            await send({
+                "type": "invoke_result",
+                "call_id": call_id,
+                "tool": tool,
+                "ok": ok,
+                "output": res.get("result") if ok else None,
+                "error": None if ok else (res.get("error") or res.get("stderr") or "call failed"),
+                "traceback": res.get("traceback"),
+            })
+
         try:
             while True:
                 raw = await ws.receive_text()
@@ -184,6 +202,7 @@ def create_app() -> FastAPI:
                         continue
                     # bump first: invalidates any in-flight run before we replace it
                     active["run_id"] += 1
+                    active["repo_url"] = repo_url   # remembered for manual tool calls
                     my_run = active["run_id"]
                     pending_invoke["tool"] = None
                     old = active["task"]
@@ -200,6 +219,19 @@ def create_app() -> FastAPI:
                     if old and not old.done():
                         old.cancel()
                     await send({"type": "pipeline", "status": "cancelled"})
+
+                elif mt == "invoke":
+                    # Manual, on-demand call of a generated MCP tool from the UI.
+                    tool = data.get("tool")
+                    args = data.get("args") or {}
+                    call_id = data.get("call_id")
+                    repo = active.get("repo_url")
+                    if not repo or not tool:
+                        await send({"type": "invoke_result", "call_id": call_id,
+                                    "tool": tool, "ok": False,
+                                    "error": "no built server for this session — run a repo first"})
+                    else:
+                        asyncio.create_task(_do_invoke(repo, tool, args, call_id))
 
                 elif mt == "ping":
                     await send({"type": "pong"})
