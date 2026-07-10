@@ -139,7 +139,11 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="retrieve_tools",
             signature="retrieve_tools(query)",
-            purpose="Retrieves tools from MCP servers using RAG.",
+            purpose=(
+                "Searches the MCP registry by capability. Returns ranked tool "
+                "records with tool name, server_id, full description, input_schema, "
+                "and score; use the metadata to determine exact requirement coverage."
+            ),
         ),
         ToolDoc(
             name="get_server_info",

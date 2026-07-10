@@ -14,6 +14,24 @@ from CoScientist.hitl.models import HITLRequest, HITLAction
 import json
 from CoScientist.tools.task_tracker import task_tracker_instance
 
+def render_task_plan(tasks) -> str:
+    """Render the registered delegation plan without model/tool narration."""
+    if not isinstance(tasks, list) or not tasks:
+        return ""
+    lines = [f"План: {len(tasks)} задач(и)"]
+    for index, task in enumerate(tasks, 1):
+        title = task.get("title") or f"Задача {index}"
+        assignee = task.get("assignee") or "не назначен"
+        lines.extend((f"\n{index}. {title}", f"Исполнитель: {assignee}"))
+        description = (task.get("description") or "").strip()
+        if description:
+            lines.append(description)
+        depends_on = task.get("parent_id")
+        if depends_on:
+            lines.append(f"Зависит от: {depends_on}")
+    return "\n".join(lines)
+
+
 class SessionAgent(LlmAgent):
     """A planner that generates a roadmap and asks the human.
     If the human requests changes, it automatically feeds the changes back
@@ -28,17 +46,21 @@ class SessionAgent(LlmAgent):
             output_text = ""
             final_event = None
 
+            # Never review a stale plan from an earlier attempt/session turn if
+            # the current planner run fails before create_plan succeeds.
+            if self.name == "PlannerAgent":
+                ctx.session.state.pop("active_tasks", None)
+
             async with Aclosing(super()._run_async_impl(ctx)) as agen:
                 async for event in agen:
-                    # Collect text for potential HITL refinement
-                    if event.content and event.content.parts:
-                        for part in event.content.parts:
-                            if part.text:
-                                output_text += part.text
-
                     if event.is_final_response():
-                        # Hold — emit only after HITL decision
                         final_event = event
+                        # Earlier text events contain reasoning and tool-call
+                        # narration. Only the final response may reach HITL.
+                        output_text = "".join(
+                            part.text or ""
+                            for part in (event.content.parts if event.content else [])
+                        )
                     else:
                         yield event
 
@@ -51,14 +73,21 @@ class SessionAgent(LlmAgent):
             if self.output_key:
                 output_text = ctx.session.state.get(self.output_key, output_text)
 
-            # Perform HITL check
+            # Perform HITL check. For the planner, show only the authoritative
+            # tasks registered through create_plan, never model narration.
             message = f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes its result. Please review."
+
+            review_output = output_text
+            if self.name == "PlannerAgent":
+                registered_plan = render_task_plan(ctx.session.state.get("active_tasks"))
+                if registered_plan:
+                    review_output = registered_plan
 
             request = HITLRequest(
                 agent_name=self.name,
                 action_type=HITLAction.APPROVE,
                 message=message,
-                context={"output": str(output_text)},
+                context={"output": str(review_output)},
                 invoked_via="internal_loop"
             )
 
