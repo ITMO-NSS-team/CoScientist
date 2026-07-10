@@ -109,13 +109,17 @@ extract_query_filters_prompt = (
     "\n\nIf no specific filter is mentioned for a field, leave it as null."
     "\n\nExamples:"
     "\nQ: 'What did Sam Smith say about catalysis?'"
-    "\nA: {\"paper_authors\": [\"Sam Smith\"], \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Chemistry\"], \"research_sub_domain\": [\"Organic Chemistry\", \"Electrochemistry\", \"Analytical Chemistry\", \"Catalysis\"]}"
+    "\nA: {\"paper_authors\": [\"Sam Smith\"], \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Physical Sciences\"], \"research_sub_domain\": [\"Chemistry\", \"Chemical Engineering\", \"Materials Science\", \"Engineering\"]}"
+
     "\n\nQ: 'What are recent advances in polymer chemistry?'"
-    "\nA: {\"paper_authors\": null, \"publication_year_min\": 2024, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Chemistry\"], \"research_sub_domain\": [\"Polymer Chemistry\", \"Molecular Dynamics\", \"DFT\", \"Materials Chemistry\"]}"
+    "\nA: {\"paper_authors\": null, \"publication_year_min\": 2024, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Physical Sciences\"], \"research_sub_domain\": [\"Chemistry\", \"Materials Science\", \"Chemical Engineering\", \"Engineering\"]}"
+
     "\n\nQ: 'Show me studies on protein folding dynamics since 2021'"
-    "\nA: {\"paper_authors\": null, \"publication_year_min\": 2021, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Chemistry\"], \"research_sub_domain\": [\"Biological Macromolecules\", \"Biological Chemistry\", \"Molecular Dynamics\", \"Structural Biology\"]}"
+    "\nA: {\"paper_authors\": null, \"publication_year_min\": 2021, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Life Sciences\"], \"research_sub_domain\": [\"Biochemistry, Genetics and Molecular Biology\", \"Agricultural and Biological Sciences\", \"Immunology and Microbiology\", \"Neuroscience\"]}"
+
     "\n\nQ: 'Any papers on machine learning for molecular property prediction in Science from 2022?'"
-    "\nA: {\"paper_authors\": null, \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": 2022, \"publication_source\": \"Science\", \"research_domain\": [\"Chemistry\"], \"research_sub_domain\": [\"DFT\", \"Molecular Dynamics\", \"Analytical Chemistry\", \"Machine Learning\"]}"
+    "\nA: {\"paper_authors\": null, \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": 2022, \"publication_source\": \"Science\", \"research_domain\": [\"Physical Sciences\"], \"research_sub_domain\": [\"Computer Science\", \"Chemistry\", \"Mathematics\", \"Materials Science\"]}"
+
     "\n\nQ: 'What quantum simulation methods are used in condensed matter physics?'"
-    "\nA: {\"paper_authors\": null, \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Chemistry\"], \"research_sub_domain\": [\"DFT\", \"Molecular Dynamics\", \"Nanomaterials\", \"Condensed Matter Physics\"]}"
+    "\nA: {\"paper_authors\": null, \"publication_year_min\": null, \"publication_year_max\": null, \"publication_year_exact\": null, \"publication_source\": null, \"research_domain\": [\"Physical Sciences\"], \"research_sub_domain\": [\"Physics and Astronomy\", \"Computer Science\", \"Mathematics\", \"Materials Science\"]}"
 )
