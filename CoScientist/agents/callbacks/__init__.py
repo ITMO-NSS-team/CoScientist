@@ -11,6 +11,7 @@ from CoScientist.agents.callbacks.med_callbacks import (
     before_model_modifier,
     med_agent_before_model,
 )
+from CoScientist.agents.callbacks.json_output import sanitize_json_output
 from CoScientist.agents.callbacks.research_callbacks import (
     cleanup_uploaded_papers,
     ensure_local_papers_uploaded,
@@ -41,4 +42,5 @@ __all__ = [
     "redirect_when_no_tools",
     "make_unknown_tool_guard",
     "before_get_task",
+    "sanitize_json_output",
 ]
