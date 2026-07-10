@@ -88,17 +88,27 @@ def _load_tasks(cli_value: str | None) -> list[dict]:
     return tasks
 
 
-def _tasks_prompt(tasks: list[dict]) -> str:
+def _tasks_prompt(tasks: list[dict], propose_extras: bool = False) -> str:
     if not tasks:
         return ""
     lines = ["", "", "REQUIRED TASKS — your plan MUST include one tool per task, "
-             "named EXACTLY as given, with EXACTLY these argument names:"]
+             "named EXACTLY as given, with EXACTLY these argument names. These are "
+             "the priority: verify them first and keep them at the FRONT of the "
+             "tools list:"]
     for t in tasks:
         lines += [f"- name: {t.get('name')}",
                   f"  description: {t.get('description', '')}",
                   f"  arguments: {json.dumps(t.get('arguments', {}))}",
                   f"  returns: {json.dumps(t.get('returns', {}))}",
                   f"  example invocation: {json.dumps(t.get('example', {}))}"]
+    if propose_extras:   # explorer only — the coder implements what the plan lists
+        lines += ["",
+                  "BEYOND the required task(s): the goal is to turn this whole repo "
+                  "into an MCP server, so ALSO propose the repo's other most important "
+                  "workflow tools (its key train / predict / evaluate / preprocess / "
+                  "featurize entry points), best first, each with the same evidence + "
+                  "sample_args rigor. Add them AFTER the required tool(s). Only propose "
+                  "tools you can ground in real repo code — skip the rest."]
     return "\n".join(lines)
 
 
@@ -207,7 +217,7 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
             _banner(1, f"Explorer ({repo_url})")
             plan_ok = await _staged_llm(
                 "explorer", explorer_agent, name, metrics, session_service,
-                message_fn=lambda note: repo_url + _tasks_prompt(tasks) + note,
+                message_fn=lambda note: repo_url + _tasks_prompt(tasks, propose_extras=True) + note,
                 gate_fn=lambda: _plan_gate(repo_url, tasks),
                 owned=[reports_dir() / "exploration.md", reports_dir() / "plan.json"],
                 required_report="exploration",

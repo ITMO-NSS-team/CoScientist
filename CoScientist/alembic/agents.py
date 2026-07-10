@@ -6,10 +6,13 @@ in main.py that calls the debugger as a subroutine. The wrapper agent is a
 fallback only: server.py is rendered deterministically (tools/codegen.py) and
 the agent runs solely when the compile/import gate fails.
 """
+import asyncio
+
 import litellm
 
 litellm.suppress_debug_info = True
 
+from loguru import logger
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 
@@ -23,17 +26,51 @@ from alembic.instructions import (
     coder_instruction, debugger_instruction, environment_instruction,
     explorer_instruction, wrapper_instruction,
 )
+from alembic.agent_runtime import _retryable_llm_error, _short_err
 
 
-def _model() -> LiteLlm:
+class ResilientLiteLlm(LiteLlm):
+    """LiteLlm that survives OpenRouter/provider faults. A transient error is
+    logged as ONE line, backed off (exponential, capped), and the request is
+    retried — unbounded by default (config.LLM_RETRY_CAP is None), so a
+    no-timeout run keeps trying until it gets a real answer instead of dumping a
+    stacktrace and failing the stage. Only pre-yield failures retry, so a fault
+    mid-stream is never double-emitted."""
+
+    async def generate_content_async(self, llm_request, stream: bool = False):
+        attempt = 0
+        while True:
+            produced = False
+            try:
+                async for resp in super().generate_content_async(llm_request, stream=stream):
+                    produced = True
+                    yield resp
+                return
+            except Exception as e:  # noqa: BLE001 — classify, don't crash the run
+                if produced or not _retryable_llm_error(e):
+                    raise
+                attempt += 1
+                if config.LLM_RETRY_CAP is not None and attempt > config.LLM_RETRY_CAP:
+                    logger.error(f"[llm] {_short_err(e)} — retry cap "
+                                 f"({config.LLM_RETRY_CAP}) exhausted, giving up.")
+                    raise
+                delay = min(config.LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1)),
+                            config.LLM_RETRY_MAX_DELAY)
+                logger.warning(f"[llm] provider fault ({_short_err(e)}); "
+                               f"retry {attempt} in {delay:.0f}s.")
+                await asyncio.sleep(delay)
+
+
+def _model() -> ResilientLiteLlm:
     """One model for every agent. Sampling params only when explicitly set via
-    env (leaving them unset avoids the temperature-0 loops seen on qwen)."""
-    sampling = {}
+    env (leaving them unset avoids the temperature-0 loops seen on qwen). A
+    per-request timeout bounds hung calls; ResilientLiteLlm retries faults."""
+    sampling = {"timeout": config.LLM_REQUEST_TIMEOUT, "num_retries": 0}
     if config.MODEL_TEMPERATURE is not None:
         sampling["temperature"] = float(config.MODEL_TEMPERATURE)
     if config.MODEL_TOP_P is not None:
         sampling["top_p"] = float(config.MODEL_TOP_P)
-    return LiteLlm(model=config.MODEL, **sampling)
+    return ResilientLiteLlm(model=config.MODEL, **sampling)
 
 
 def _const(text: str):

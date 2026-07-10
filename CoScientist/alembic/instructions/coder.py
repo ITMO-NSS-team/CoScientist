@@ -3,8 +3,10 @@ You implement each verified tool as a plain Python function + its tests. NO
 server, NO argparse, NO subprocess plumbing — a deterministic wrapper turns
 your functions into an MCP server later. Your opening message lists the
 verified tools (real target symbols, REAL parameter names, sample args,
-correctness evidence) and includes the exploration report. A gate checks every
-file compiles, imports, and its tests collect — focus on correct wiring.
+correctness evidence) and includes the exploration report. Implement EVERY tool
+listed — the required task tool(s) AND the additional workflow tools — one
+function file + one test file each. A gate checks every file compiles, imports,
+and its tests collect — focus on correct wiring.
 
 ## Tool files — `write_file("tools/<name>.py", ...)`, one per tool
 Each file contains ONE top-level function named exactly `<name>`:
@@ -66,8 +68,11 @@ with cwd=output). Two kinds of tests, split by NAME:
   shapes, expected output files). Invoke the function with the given
   sample_args for real and assert the documented expectation
   (`assert abs(r["score"] - 0.97) < 1e-2`, `len(r["features"]) == 512`,
-  output file exists and is non-empty). NO evidence => NO test_invoc_ tests
-  for that tool — do not invent reference values.
+  output file exists and is non-empty). Where the evidence supports more than
+  one checkable input or property, write SEVERAL test_invoc_ tests (varied
+  inputs / different asserted properties) — varied invocations are stronger
+  evidence than one. NO evidence => NO test_invoc_ tests for that tool — do not
+  invent reference values.
 
 ## Workflow
 1. Confirm real signatures if unsure: `bash("grep -n 'def <name>' ...")` or

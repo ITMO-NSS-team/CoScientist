@@ -13,6 +13,8 @@ import json
 import logging
 import sys
 import time
+import traceback
+import litellm
 from loguru import logger
 from google.adk.runners import Runner
 from google.genai import types
@@ -20,11 +22,45 @@ from google.genai import types
 from alembic import config
 from alembic.tools.fs import enable_read_dedup
 
+# ── LLM/provider fault classification (shared with agents.ResilientLiteLlm) ────
+# Request-shape errors a retry can never fix — everything else (5xx, rate limits,
+# timeouts, connection drops, OpenRouter's transient 403 "Access denied by
+# security policy") is a retryable provider fault.
+_PERMANENT_LLM_ERRORS = tuple(
+    c for c in (getattr(litellm, n, None) for n in (
+        "BadRequestError", "ContextWindowExceededError",
+        "ContentPolicyViolationError", "NotFoundError", "UnsupportedParamsError"))
+    if isinstance(c, type))
+
+_TRANSIENT_MARKERS = (
+    "security policy", "access denied", "rate limit", "overloaded", "429",
+    "temporarily unavailable", "service unavailable", "timed out", "timeout",
+    "connection", "openrouterexception", "bad gateway", "gateway time",
+    "internal server error", "502", "503", "504",
+)
+
+
+def _retryable_llm_error(e: Exception) -> bool:
+    if _PERMANENT_LLM_ERRORS and isinstance(e, _PERMANENT_LLM_ERRORS):
+        return False
+    mod = type(e).__module__ or ""
+    if mod.split(".", 1)[0] in ("litellm", "openai", "httpx", "httpcore"):
+        return True
+    return any(m in str(e).lower() for m in _TRANSIENT_MARKERS)
+
+
+def _short_err(e: Exception) -> str:
+    first = str(e).strip().splitlines()[0] if str(e).strip() else ""
+    return f"{type(e).__name__}: {first[:200]}"
+
 # ── loguru terminal sink ──────────────────────────────────────────────────────
+# backtrace/diagnose OFF: a provider fault otherwise printed a screen-high
+# annotated traceback (`└ <Response [403 Forbidden]>` …). Real bugs still get a
+# plain one-frame traceback, just not the variable-value wall.
 logger.remove()
 logger.add(sys.stderr,
            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
-           level="DEBUG", colorize=True)
+           level="DEBUG", colorize=True, backtrace=False, diagnose=False)
 
 # ── Patch ADK tool lookup: hallucinated tool name → error stub, not a crash (F19) ─
 import google.adk.flows.llm_flows.functions as _adk_fns
@@ -209,8 +245,14 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
 
     except json.JSONDecodeError as e:
         logger.warning(f"[{agent.name}] invalid JSON in tool call (char {e.pos}): {e.msg}")
-    except Exception:
-        logger.exception(f"[{agent.name}] ERROR in event loop:")
+    except Exception as e:
+        # ResilientLiteLlm retries transient provider faults; anything that still
+        # reaches here (a non-retryable API error, or a tool call that raised deep
+        # in ADK) is logged as ONE line — exception + originating frame — never the
+        # multi-frame async wall. Stage resets/debugger rounds handle recovery.
+        tb = traceback.extract_tb(e.__traceback__)
+        where = f"{tb[-1].filename.split('/')[-1]}:{tb[-1].lineno}" if tb else "?"
+        logger.warning(f"[{agent.name}] event-loop error: {_short_err(e)}  (raised at {where})")
 
     return final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, None
 

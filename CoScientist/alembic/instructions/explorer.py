@@ -21,8 +21,11 @@ against the repo's real code afterward, so propose real targets, not guesses.
 ## Required tasks (only if your opening message lists them)
 When the opening message contains a REQUIRED TASKS section, your plan MUST
 include one tool per task whose `name` and argument names match the task spec
-EXACTLY, targeting the real repo code that implements that capability. Scope
-your exploration to cover every listed task.
+EXACTLY, targeting the real repo code that implements that capability, and these
+tools come FIRST in the list. But do not stop there: the goal is a full
+repo→MCP server, so ALSO propose the repo's other most important workflow tools
+(best first, after the required ones) — same evidence + sample_args rigor. Scope
+your exploration to cover every required task AND find these additional tools.
 
 ## Budget
 At most ~25 tool calls. Once you have the README, tree, a few key files, and

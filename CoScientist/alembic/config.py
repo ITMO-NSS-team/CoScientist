@@ -66,6 +66,17 @@ MAX_TOOL_CYCLE    = 3     # abort on N identical NON-consecutive calls (set-cycl
 MAX_GUARD_RETRIES = 3     # re-nudge an agent that missed write_report
 MAX_TRANSIENT_FAULT_RETRIES = 2  # retry a silent provider fault, off-budget
 
+# ── LLM request resilience (OpenRouter faults: 403 policy blocks, 5xx, timeouts) ─
+# A transient provider error must not dump a stacktrace and kill the stage — the
+# request is logged as a one-liner, backed off, and retried. We optimise for the
+# best result, so by default there is NO retry cap (unbounded until it succeeds);
+# each request still has its own timeout, so a hung call is retried, not stuck.
+# Set ALEMBIC_LLM_RETRY_CAP=<n> to bound it (0 = fail fast, no retries).
+LLM_REQUEST_TIMEOUT  = int(os.environ.get("ALEMBIC_LLM_REQUEST_TIMEOUT", "600"))  # per call
+LLM_RETRY_BASE_DELAY = float(os.environ.get("ALEMBIC_LLM_RETRY_BASE_DELAY", "8"))  # 1st backoff
+LLM_RETRY_MAX_DELAY  = float(os.environ.get("ALEMBIC_LLM_RETRY_MAX_DELAY", "90"))  # backoff ceiling
+LLM_RETRY_CAP        = int(v) if (v := os.environ.get("ALEMBIC_LLM_RETRY_CAP")) else None
+
 # Tools whose own instructions require repeated identical-arg calls — exempt
 # from the non-consecutive cycle breaker but not the consecutive one.
 TOOL_CYCLE_EXEMPT = frozenset({"check_venv_compat", "run_tool_tests"})
