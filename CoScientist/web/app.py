@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -12,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
-from CoScientist.agents import planner_agent
+from CoScientist.agents import agent_system
 from CoScientist.hitl.tool import hitl_toolset
 
 from google.genai import types
@@ -56,11 +57,21 @@ async def _get_manager():
         _manager = CoScientistManager()
         await _manager.initialize()
 
-        # Wire WebHITLHandler into PlannerAgent (SessionAgent) and HITL toolset
-        # We use set_delegate because the workflow deepcopies references at init
-        if hasattr(planner_agent, 'hitl_handler') and hasattr(planner_agent.hitl_handler, 'set_delegate'):
-            planner_agent.hitl_handler.set_delegate(_web_hitl_handler)
-        
+        # Wire WebHITLHandler into every session agent with a HITL review loop
+        # (PlannerAgent, and the ТЗ agents of the microfluidics profile) and
+        # into the HITL toolset. We use set_delegate because the workflow
+        # deepcopies references at init.
+        wired = []
+        for _name, _agent in agent_system.agents.items():
+            handler = getattr(_agent, 'hitl_handler', None)
+            if handler is not None and hasattr(handler, 'set_delegate'):
+                handler.set_delegate(_web_hitl_handler)
+                wired.append(_name)
+        logging.getLogger("CoScientist.web").info(
+            "WebHITLHandler wired into session agents: %s "
+            "(empty list => HITL disabled via HITL__ENABLED)", wired,
+        )
+
         # Also update the hitl_toolset if it's delegating
         if hasattr(hitl_toolset._handler, 'set_delegate'):
             hitl_toolset._handler.set_delegate(_web_hitl_handler)
@@ -96,7 +107,31 @@ def create_app() -> FastAPI:
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)
     async def index():
-        return TEMPLATE_PATH.read_text(encoding="utf-8")
+        # no-store: a cached index.html silently serves an OLD frontend — HITL
+        # review cards then render without controls/content.
+        return HTMLResponse(
+            TEMPLATE_PATH.read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    # --- HITL diagnostics ---
+    @app.get("/api/hitl-status")
+    async def hitl_status():
+        """Why am I (not) being asked questions — one glance."""
+        from CoScientist.config import get_settings
+
+        agents = {
+            name: getattr(agent, "hitl_handler", None) is not None
+            for name, agent in agent_system.agents.items()
+            if hasattr(agent, "hitl_handler")
+        }
+        return JSONResponse({
+            "hitl_enabled": get_settings().hitl.enabled,
+            "websocket_connections": len(_web_hitl_handler._sockets),
+            "session_agents_with_handler": agents,
+            "pending_requests": _web_hitl_handler.pending_summary(),
+            "auto_approve_timeout_seconds": _web_hitl_handler.HITL_TIMEOUT_SECONDS,
+        })
 
     # --- Roadmap endpoints ---
     @app.get("/api/roadmap")
@@ -128,6 +163,34 @@ def create_app() -> FastAPI:
             return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
 
+    # --- ТЗ document (microfluidics profile) ---
+    @app.get("/api/tz-document")
+    async def get_tz_document(name: str = ""):
+        """Serve a ТЗ document from tz_documents/ (the latest one by default).
+
+        The TZSpecAgent announces the file in the chat; this endpoint lets the
+        user open it in the browser.
+        """
+        from fastapi.responses import PlainTextResponse
+
+        tz_dir = Path("tz_documents")
+        if not tz_dir.is_dir():
+            return JSONResponse({"error": "no ТЗ documents yet"}, status_code=404)
+        if name:
+            # Only bare file names inside tz_documents/ — no path traversal.
+            candidate = tz_dir / Path(name).name
+            if not candidate.is_file():
+                return JSONResponse({"error": f"no such document: {name}"}, status_code=404)
+        else:
+            files = sorted(tz_dir.glob("TZ_*.md"))
+            if not files:
+                return JSONResponse({"error": "no ТЗ documents yet"}, status_code=404)
+            candidate = files[-1]
+        return PlainTextResponse(
+            candidate.read_text(encoding="utf-8"),
+            media_type="text/markdown; charset=utf-8",
+        )
+
     # --- Agent info ---
     @app.get("/api/agents")
     async def get_agents():
@@ -157,8 +220,10 @@ def create_app() -> FastAPI:
     async def websocket_endpoint(ws: WebSocket):
         await ws.accept()
 
-        # Set websocket on the WebHITLHandler so it can send HITL requests
-        _web_hitl_handler.set_websocket(ws)
+        # Bind the socket AND re-deliver any pending HITL requests: a review
+        # raised during a reconnect (or bound to a closed tab) must reappear
+        # instead of silently auto-approving on timeout.
+        await _web_hitl_handler.attach_websocket(ws)
 
         # Send initial connection confirmation
         await ws.send_json({
@@ -225,18 +290,14 @@ def create_app() -> FastAPI:
                         "message": f"Unknown message type: {msg_type}",
                     })
         except WebSocketDisconnect:
-            if _web_hitl_handler._websocket == ws:
-                _cancel_pending_hitl()
-                _web_hitl_handler.reset()
-                _web_hitl_handler.set_websocket(None)
+            # Only drop THIS socket. Pending HITL reviews stay alive: they are
+            # re-delivered when a tab reconnects, and auto-approve on timeout.
+            _web_hitl_handler.detach_websocket(ws)
             if active_task and not active_task.done():
                 active_task.cancel()
             print("[WebSocket] Client disconnected")
         except Exception as exc:
-            if _web_hitl_handler._websocket == ws:
-                _cancel_pending_hitl()
-                _web_hitl_handler.reset()
-                _web_hitl_handler.set_websocket(None)
+            _web_hitl_handler.detach_websocket(ws)
             if active_task and not active_task.done():
                 active_task.cancel()
             print(f"[WebSocket] Error: {exc}")
