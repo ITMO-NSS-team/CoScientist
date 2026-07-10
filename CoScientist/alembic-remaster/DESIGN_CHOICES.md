@@ -248,3 +248,183 @@ testable* code (gates) rather than prose.
 3. Fewer, deterministic failure modes; hallucinated-symbol and
    report-drift classes eliminated by construction.
 4. Module is smaller and each file has one clear job.
+
+---
+
+# Part II — Upgrade (R1–R8, 2026-07-10)
+
+Second architectural pass per [upgrade.md](./upgrade.md). Supersedes parts of
+§3–§6 above where stated. Maintainer choices locked in Q&A: harness moves to
+JSON extraction; per-tool metrics with passed/perfect semantics; **full
+TM-Bench export** (score in their harness, no debugger on their tests);
+deterministic MCP wrapper + LLM fallback; in-container fs checkpoints;
+code-recorded `setup.sh`.
+
+## II.1 Target-focused retries, not graceful fails (R1)
+
+The qwen run's esm failure (Explorer never produced a report) showed the old
+posture — "run once, salvage what you can, move on" — optimizes cost, not
+completion. Inverted:
+
+- **Stage-reset loops.** Every LLM stage runs inside a reset loop. If its exit
+  gate fails, the stage's owned files are rolled back to the checkpoint taken
+  at stage start, a fresh agent session is created, and the stage reruns with
+  a one-paragraph note about what failed last time. `STAGE_RESET` env, default
+  2 extra loops. Stochastics happens; a reroll usually lands.
+- **Stage timeouts optional, default OFF.** Loop breakers (step ceiling,
+  repeat/cycle breakers, per-command subprocess timeouts) still bound runaway
+  behaviour, but no wall-clock guillotine kills an honest slow install.
+  `ALEMBIC_TIMEOUT_<STAGE>` re-enables per stage when needed.
+- **Checkpoints are in-container filesystem snapshots** (Q&A): each stage owns
+  a known set of paths (reports, plan.json, venvs, output/tools, server.py);
+  reset = delete/restore those + fresh session. ToolMaker-style per-stage
+  `docker commit` was rejected: the pipeline runs inside the build container
+  (no docker socket), and host-orchestrated multi-commit runs are a heavy
+  rewrite for the same effect. The final `docker commit` flow is unchanged.
+
+## II.2 Metrics from run data, not the final report (R2)
+
+`validation.md` as the harness contract was the last report-shaped dependency
+— and it still zeroed two repos in the qwen run. Now:
+
+- The pipeline writes **`reports/stage_status.json` incrementally** — after
+  every stage attempt and every gate: status, resets used, gate details.
+  `validation.json` (rich per-tool metrics) and `metrics.json` are likewise
+  written by code during the run. A crash at any point leaves valid JSON.
+- **`run_benchmark.py` extracts only JSON** (stage_status/validation/metrics)
+  from the committed image. `validation.md` is still rendered — for humans —
+  but nothing parses it anymore. Report-not-readable as a failure class is
+  eliminated by construction.
+- Reports are now **only written by the Explorer** (its output feeds the plan
+  gate and downstream prompts). Environment/Coder reports are replaced by
+  gates + stage_status; downstream agents get the exploration report appended
+  directly to their opening prompt (no read_report round-trip).
+
+## II.3 Functions first, server last (R3) — the structural inversion
+
+The old pipeline made the Coder write `server.py` + argparse helpers, then
+validated tools *through* that plumbing. Testing therefore always exercised
+subprocess/argv wiring — the layer where most generated-code bugs lived.
+Inverted, ToolMaker-style:
+
+- **The Coder writes each tool as a plain Python function** —
+  `output/tools/<name>.py`, one `def <name>(...) -> dict` per file, thorough
+  docstring (purpose, per-arg description, usage examples), **imports inside
+  the function body** (keeps import cheap for pytest collection, and makes the
+  function self-contained so the TM-Bench `code.py` export is a verbatim copy).
+- **Tests import the function directly** (`from tools.<name> import <name>`) —
+  no argparse, no subprocess in the test path. Two kinds, split by naming
+  convention in `tests/test_<name>.py`:
+  - `test_smoke_*` — quick sanity, always present;
+  - `test_invoc_*` — evidence-based correctness (reference values, shapes,
+    output files), written **only where the Explorer documented grounds**
+    (README numbers, repo tests, example outputs). The Explorer's plan now
+    carries per-tool `sample_args` + `evidence` for exactly this.
+- **New pipeline order** (stage names for --resume/--until in parens):
+
+```
+ clone → EXPLORER ─▶ [G1 plan gate] ─▶ ENVIRONMENT ─▶ [G2 env gate] ─▶ CODER
+ (explorer)          AST verify +      (environment)  venv compat +   (coder)
+                     layout            build venvs    repo-import
+                                                      smoke
+   ─▶ [G3 artefact gate] ─▶ VALIDATION ─▶ WRAPPER ─▶ [G4 server gate] ─▶ EXPORT
+       per-tool: compiles,  (validator:    (wrapper: deterministic      setup.sh,
+       imports, undefined   code loop +    codegen; LLM agent only      code.py,
+       names, tests exist   batch debug)   as G4-failure fallback)      artefacts
+```
+
+- **G2 env gate (deterministic, was missing).** `check_venv_compat` runs on
+  `.venv` (and `.venv-repo` in two-venv mode) with no LLM discretion, plus a
+  repo-import smoke test (import the top-level modules of `plan.tools`
+  targets in the tools venv). On failure: one bounded debugger round →
+  re-check → still broken = stage reset with the failure note. The Coder
+  never writes against a broken venv.
+- **Validation is a deterministic code loop** over per-tool checks: direct
+  invocation (execution status) + the pytest suite (smoke/invoc split). All
+  failures across tools are **batched into one debugger call** ("fix all at
+  once") so shared root causes (a missing dep hitting 5 tools) cost one round,
+  and the fix propagates to neighboring tools. Debugger rounds capped by
+  `DEBUGGING_ROUNDS` (default 10, on by default).
+- **The MCP server is generated last, deterministically** (Q&A). `server.py`
+  is rendered by code from the verified function signatures (AST) — every tool
+  call shells through the tools venv via a generic `helpers/run_function.py`
+  runner (the same script validation used, so serving and validating share one
+  execution path; two-venv works unchanged). The wrapper **LLM agent exists
+  only as a fallback** when the G4 compile/import gate fails. Tests passing on
+  the functions + a compiling generated wrapper ⇒ the server is presumed
+  valid — no live re-validation through MCP.
+- **Exported artefacts** per run: `server.py`, `tools/`, `tests/`,
+  `helpers/`, `setup.sh` — copied by the harness into
+  `runs/<ts>/output/<repo>/`.
+
+## II.4 Two-level tool verdicts (R6)
+
+TM-Bench's split adopted verbatim: **execution status** (shallow — didn't
+crash) vs **invocation correctness** (evidence-based tests). Per-tool metrics
+(Q&A):
+
+| metric | source | notes |
+|---|---|---|
+| tests passed / total | `test_smoke_*` results | `-` if none |
+| exec ok | direct invocation w/ sample_args, 120 s cap | timeout or missing input files ⇒ **runtime success** (not a failure); crash ⇒ failed |
+| invoc passed / total | `test_invoc_*` results | `-` if no evidence basis |
+
+- **Tool `passed`** = all its tests passed **and** it never crashed.
+- **Tool `perfect`** = passed **and** all its invocation-correctness tests
+  passed (requires at least one).
+- **Repo overall** = the counts: tests passed, invocations exec-ok,
+  invocations correct, № passed tools, № perfect tools. No single binary
+  verdict is load-bearing anymore.
+
+GUI / no-visible-output tools get execution-status testing only (documented as
+such by the Explorer), never invocation tests.
+
+## II.5 TM-Bench compatibility (R4, R7)
+
+- **Task-targeted mode** accepts one **or a list of** task specs
+  (`ALEMBIC_TASKS`, JSON/YAML text or paths; old `ALEMBIC_TARGET_TASK` still
+  works). The Explorer gets each task's name/description/typed
+  arguments/returns/example verbatim and MUST plan a tool per task with
+  exactly that name and signature; the plan gate enforces presence.
+- **Multi-task, one repo** (the STAMP case): both tasks ride one pipeline run
+  — the Explorer scopes for both, the Coder implements both functions. If the
+  dual run fails, fall back to separate runs.
+- **Mount data**: `start_chain --mount-dir <dir>` bind-mounts ToolMaker's
+  `benchmark/data` read-only; the pipeline copies each task's
+  `example.mount`/`test_cases` files to `/mount/input/<dst>` before
+  validation. Missing files ⇒ exec-only testing (runtime success), never a
+  crash.
+- **Full export, scored in their harness** (Q&A): after the pipeline, render
+  `code.py` per task (the tool function copied verbatim — self-contained by
+  construction) and tag the committed image
+  `toolmaker-runtime:installed-<task>`. No debugger is wired to their tests;
+  we export what we have and score there.
+- **R7 dataset firewall**: in task mode the Environment agent's prompt
+  prohibits dataset downloads (weights/configs/deps explicitly allowed) even
+  if the exploration report requests them.
+
+## II.6 Reproducibility artefacts (R5)
+
+`setup.sh` is **recorded, not authored** (Q&A): the pipeline logs every
+*successful* `setup_venv`/`bash_env` command the Environment agent runs
+(ToolMaker's `installed_state.bash()` approach) and renders `setup.sh`
+deterministically at env-gate pass. Always matches what actually ran; zero
+LLM effort; exported with the run artefacts.
+
+## II.7 Token hygiene (R8)
+
+`repo_url` is gone from every tool signature except `clone_repo`. The pipeline
+(and `clone_repo`) set a process-wide current-repo; path helpers resolve
+against it. One pipeline = one repo; multi-repo tooling was pure token tax.
+
+## II.8 Updated success criteria
+
+1. Zero repos lost to report formatting/absence — all benchmark data comes
+   from JSON written during the run.
+2. A stage that fails its gate retries from checkpoint (visible as
+   `resets > 0` in stage_status), instead of cascading a zero downstream.
+3. Per-tool passed/perfect counts on `toolmaker_subset.txt` beat the qwen
+   baseline (9 tools passing / 4 repos); final numbers from
+   `openrouter/z-ai/glm-5.2`.
+4. STAMP dual-task run produces both tools from one pipeline; `code.py` +
+   `installed-<task>` tags score in ToolMaker's harness.

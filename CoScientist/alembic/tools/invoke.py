@@ -1,82 +1,33 @@
-"""Validation tools: static syntax/import check, pytest, live tool invocation."""
+"""Validation tools: per-tool static checks, pytest runner, live invocation.
+
+The pipeline's G3 gate and validator loop are code; only ``run_tool_tests`` and
+``invoke_tool_function`` are also exposed to the debugger agent so it can
+verify its fixes with exactly the machinery the validator uses.
+"""
 from __future__ import annotations
 
 import ast
 import asyncio
 import builtins
-import contextvars
 import json
 import os
+import re
 import signal
 import subprocess
-import tempfile
 from pathlib import Path
 
 from alembic.config import (
-    HELPER_IMPORT_CHECK_TIMEOUT, INVOKE_TIMEOUT, MAX_BYTES, PYTEST_TIMEOUT,
-    RESULT_MAX_LIST_ITEMS, RESULT_MAX_STR_LEN, RESULT_SENTINEL,
-    SERVER_IMPORT_CHECK_TIMEOUT,
+    IMPORT_CHECK_TIMEOUT, INVOKE_TIMEOUT, MAX_BYTES,
+    RESULT_MAX_LIST_ITEMS, RESULT_MAX_STR_LEN, RESULT_SENTINEL, TEST_TIMEOUT,
 )
 from alembic.tools.paths import (
-    INVOKE_TOOL_SCRIPT, helper_venv_python, output_dir, repo_path, venv_python,
+    RUN_FUNCTION_SCRIPT, output_dir, repo_path, tools_python, venv_python,
 )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Static syntax / import / undefined-name checks (F28/F39/F45)
+# Static undefined-name check (zero-execution)
 # ══════════════════════════════════════════════════════════════════════════════
-async def validate_syntax(repo_url: str) -> dict:
-    """Check server.py + helpers for syntax errors, failed imports, and
-    undefined names — without running any business logic.
-
-    Example: validate_syntax("https://github.com/Roestlab/massformer")
-    """
-    return await asyncio.to_thread(_validate_syntax_sync, repo_url)
-
-
-def _is_main_guard(node: ast.stmt) -> bool:
-    if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
-        return False
-    sides = [node.test.left, *node.test.comparators]
-    return (any(isinstance(s, ast.Name) and s.id == "__name__" for s in sides)
-            and any(isinstance(s, ast.Constant) and s.value == "__main__" for s in sides))
-
-
-def _import_safe_prefix(source: str) -> str:
-    """Leading slice of top-level statements safe to execute without running
-    the helper's argparse/business logic (F28). Recognized-safe shapes:
-    argparse-gated flat code (stop at the ArgumentParser/parse_args line) or a
-    def main()+__main__-guard wrapper (whole thing safe). A script matching
-    neither (F39) is treated as unsafe — only imports/defs and sys.path setup
-    are kept."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return source
-    has_main_guard = any(_is_main_guard(n) for n in tree.body)
-    has_argparse   = "ArgumentParser(" in source or "parse_args(" in source
-    safe: list[ast.stmt] = []
-    for node in tree.body:
-        if _is_main_guard(node):
-            continue
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
-                             ast.Import, ast.ImportFrom)):
-            safe.append(node)
-            continue
-        segment = ast.get_source_segment(source, node) or ""
-        if has_argparse:
-            if "ArgumentParser(" in segment or "parse_args(" in segment:
-                break
-            safe.append(node)
-        elif has_main_guard:
-            safe.append(node)
-        elif "sys.path.insert(" in segment or "sys.path.append(" in segment:
-            safe.append(node)
-        else:
-            break
-    return "\n".join(ast.get_source_segment(source, n) or "" for n in safe)
-
-
 _BUILTIN_NAMES = frozenset(dir(builtins)) | {
     "__name__", "__file__", "__doc__", "__package__", "__spec__", "__loader__",
     "__builtins__", "__annotations__", "__dict__",
@@ -93,8 +44,8 @@ def _extract_target_names(node: ast.expr, out: set[str]) -> None:
         _extract_target_names(node.value, out)
 
 
-def _find_undefined_names(source: str) -> list[str] | None:
-    """F45: whole-file, zero-execution pass — flag any Name(Load) reference not
+def find_undefined_names(source: str) -> list[str] | None:
+    """Whole-file, zero-execution pass — flag any Name(Load) reference not
     bound anywhere in the file and not a builtin (catches `torch.x` with no
     `import torch`). Deliberately whole-file-permissive; bails on `import *`."""
     try:
@@ -153,98 +104,173 @@ def _find_undefined_names(source: str) -> list[str] | None:
     return sorted(referenced - bound - _BUILTIN_NAMES) or None
 
 
-def _check_helper_imports(python: str, helper: Path, repo_dir: Path, timeout: int) -> str | None:
-    """F28: execute only the import-safe prefix (with argv[1]=repo dir) to
-    confirm imports resolve, as a real script file (server.py invokes helpers
-    that way, so sys.path[0] matches). Returns an error string or None."""
-    prefix = _import_safe_prefix(helper.read_text(encoding="utf-8", errors="replace"))
-    fd, tmp_path = tempfile.mkstemp(dir=str(helper.parent), suffix=".py")
+# ══════════════════════════════════════════════════════════════════════════════
+# G3: per-tool artefact checks (deterministic, run in the actual container venv)
+# ══════════════════════════════════════════════════════════════════════════════
+def _tool_file_errors(name: str, out_dir: Path, python: str) -> list[str]:
+    """Static checks for one tools/<name>.py: exists, defines <name>, compiles,
+    no undefined names, module imports cleanly under the tools venv."""
+    f = out_dir / "tools" / f"{name}.py"
+    if not f.exists():
+        return [f"tools/{name}.py is missing"]
+    source = f.read_text(encoding="utf-8", errors="replace")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(prefix)
-        r = subprocess.run([python, tmp_path, str(repo_dir)],
-                           capture_output=True, text=True, timeout=timeout, cwd=str(repo_dir))
-    except subprocess.TimeoutExpired:
-        return f"{helper.name}: import check timed out after {timeout} seconds"
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-    return f"{helper.name}: {r.stderr.strip()}" if r.returncode != 0 else None
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return [f"tools/{name}.py: SyntaxError: {e}"]
+    if not any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+               for n in tree.body):
+        return [f"tools/{name}.py defines no top-level function named '{name}'"]
+    errs = []
+    undefined = find_undefined_names(source)
+    if undefined:
+        errs.append(f"tools/{name}.py: name(s) {', '.join(undefined)} are used but never "
+                    f"imported or defined — will NameError at runtime")
+    r = subprocess.run([python, "-c", f"import sys; sys.path.insert(0, {str(out_dir)!r}); "
+                                      f"import tools.{name}"],
+                       capture_output=True, text=True, timeout=IMPORT_CHECK_TIMEOUT,
+                       cwd=str(out_dir))
+    if r.returncode != 0:
+        errs.append(f"import tools.{name} failed: {r.stderr.strip()[-800:]}")
+    return errs
 
 
-def _validate_syntax_sync(repo_url: str) -> dict:
-    out_dir = output_dir(repo_url).resolve()
-    server  = out_dir / "server.py"
-    python  = venv_python(out_dir)
-    if not server.exists():
-        return {"passed": False, "stage": "syntax", "error": f"server.py not found at {server}"}
-
-    r1 = subprocess.run([python, "-m", "py_compile", str(server)], capture_output=True, text=True)
-    if r1.returncode != 0:
-        return {"passed": False, "stage": "syntax", "error": r1.stderr.strip()}
-
-    load = ("import importlib.util as _u, sys as _s; "
-            f"_s.path.insert(0, r'{server.parent}'); "
-            f"_spec=_u.spec_from_file_location('server', r'{server}'); "
-            "_mod=_u.module_from_spec(_spec); _spec.loader.exec_module(_mod)")
-    r2 = subprocess.run([python, "-c", load], capture_output=True, text=True,
-                        timeout=SERVER_IMPORT_CHECK_TIMEOUT, cwd=str(server.parent))
-    if r2.returncode != 0:
-        return {"passed": False, "stage": "imports", "error": r2.stderr.strip()}
-
-    helpers_dir = out_dir / "helpers"
-    if helpers_dir.is_dir():
-        repo_dir = repo_path(repo_url).resolve()
-        helper_python = helper_venv_python(out_dir)
-        for helper in sorted(helpers_dir.glob("*.py")):
-            rc = subprocess.run([helper_python, "-m", "py_compile", str(helper)],
-                                capture_output=True, text=True)
-            if rc.returncode != 0:
-                return {"passed": False, "stage": "helper_syntax", "error": f"{helper.name}: {rc.stderr.strip()}"}
-            undefined = _find_undefined_names(helper.read_text(encoding="utf-8", errors="replace"))
-            if undefined:
-                return {"passed": False, "stage": "helper_undefined_names",
-                        "error": (f"{helper.name}: name(s) {', '.join(undefined)} are used but never "
-                                  f"imported or defined in the file — will NameError at runtime.")}
-            err = _check_helper_imports(helper_python, helper, repo_dir, HELPER_IMPORT_CHECK_TIMEOUT)
-            if err:
-                return {"passed": False, "stage": "helper_imports", "error": err}
-    return {"passed": True}
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# pytest
-# ══════════════════════════════════════════════════════════════════════════════
-async def run_tests(repo_url: str) -> dict:
-    """Run the generated pytest suite. Example: run_tests("https://github.com/x/y")"""
-    return await asyncio.to_thread(_run_tests_sync, repo_url)
-
-
-def _run_tests_sync(repo_url: str) -> dict:
-    out_dir  = output_dir(repo_url).resolve()
-    test_dir = out_dir / "tests"
-    python   = venv_python(out_dir)
-    if not test_dir.exists():
-        return {"passed": False, "output": f"Test directory not found: {test_dir}"}
+def _test_file_errors(name: str, out_dir: Path, python: str) -> list[str]:
+    """Static checks for tests/test_<name>.py: exists, has >=1 test_smoke_*,
+    imports tools.<name>, and pytest can collect it (imports resolve)."""
+    f = out_dir / "tests" / f"test_{name}.py"
+    if not f.exists():
+        return [f"tests/test_{name}.py is missing"]
+    source = f.read_text(encoding="utf-8", errors="replace")
     try:
-        r = subprocess.run([python, "-m", "pytest", str(test_dir), "-v", "--tb=short", "--no-header"],
-                           capture_output=True, text=True, timeout=PYTEST_TIMEOUT, cwd=str(out_dir))
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return [f"tests/test_{name}.py: SyntaxError: {e}"]
+    errs = []
+    if not any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name.startswith("test_smoke") for n in tree.body):
+        errs.append(f"tests/test_{name}.py has no test_smoke_* function")
+    imported = any(
+        (isinstance(n, ast.ImportFrom) and n.module == f"tools.{name}")
+        or (isinstance(n, ast.Import) and any(a.name == f"tools.{name}" for a in n.names))
+        for n in ast.walk(tree))
+    if not imported:
+        errs.append(f"tests/test_{name}.py must import the function as "
+                    f"'from tools.{name} import {name}'")
+    r = subprocess.run([python, "-m", "pytest", str(f), "--collect-only", "-q",
+                        "-p", "no:cacheprovider"],
+                       capture_output=True, text=True, timeout=IMPORT_CHECK_TIMEOUT,
+                       cwd=str(out_dir))
+    if r.returncode not in (0, 5):   # 5 = no tests collected (already reported above)
+        errs.append(f"pytest cannot collect tests/test_{name}.py: "
+                    f"{(r.stdout + r.stderr).strip()[-800:]}")
+    return errs
+
+
+def check_tool_artefacts(tool_names: list[str]) -> dict:
+    """G3 gate body: every planned tool has a compiling, importable function
+    file and a collectable test file. Returns {passed, errors: {tool: [...]}}."""
+    out_dir = output_dir().resolve()
+    python  = tools_python(out_dir)
+    (out_dir / "tools" / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
+    (out_dir / "tools" / "__init__.py").touch()
+    errors: dict[str, list[str]] = {}
+    for name in tool_names:
+        try:
+            errs = _tool_file_errors(name, out_dir, python) + _test_file_errors(name, out_dir, python)
+        except subprocess.TimeoutExpired:
+            errs = [f"static check for '{name}' timed out"]
+        if errs:
+            errors[name] = errs
+    return {"passed": not errors, "errors": errors}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G2 helper: repo-import smoke test (env gate)
+# ══════════════════════════════════════════════════════════════════════════════
+def check_repo_imports(modules: list[str]) -> dict:
+    """Import each top-level module named by the plan's tool targets, in the
+    tools venv with the repo (and its ``src/``) on sys.path — verifies the built
+    environment can actually load the code the tools will wrap. A ``src/``-layout
+    repo (module under ``repo/src``) or a properly pip-installed package both
+    pass. Returns {passed, errors}."""
+    out_dir  = output_dir().resolve()
+    repo_dir = repo_path().resolve()
+    python   = tools_python(out_dir)
+    paths = [str(repo_dir)] + ([str(repo_dir / "src")] if (repo_dir / "src").is_dir() else [])
+    errors: dict[str, str] = {}
+    for mod in modules:
+        code = (f"import sys; sys.path[:0] = {paths!r}; import {mod}")
+        try:
+            r = subprocess.run([python, "-c", code], capture_output=True, text=True,
+                               timeout=IMPORT_CHECK_TIMEOUT, cwd=str(repo_dir))
+        except subprocess.TimeoutExpired:
+            continue   # slow import ≠ broken env (heavy ML packages)
+        if r.returncode != 0:
+            errors[mod] = r.stderr.strip()[-500:]
+    return {"passed": not errors, "errors": errors}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Per-tool pytest run (R6: smoke vs invocation split, 120 s cap)
+# ══════════════════════════════════════════════════════════════════════════════
+_TEST_LINE = re.compile(r"::(test_\w+)(?:\[[^\]]*\])?\s+(PASSED|FAILED|ERROR|XPASS|XFAIL|SKIPPED)")
+
+
+async def run_tool_tests(tool_name: str) -> dict:
+    """Run tests/test_<tool_name>.py and return the smoke/invocation split.
+
+    Returns {smoke_passed, smoke_total, invoc_passed, invoc_total,
+    timeout: bool, failures: str}. test_smoke_* functions count as smoke
+    (quick sanity), test_invoc_* as evidence-based invocation-correctness
+    tests; any other test_* counts as smoke.
+
+    Example: run_tool_tests("predict")
+    """
+    return await asyncio.to_thread(_run_tool_tests_sync, tool_name)
+
+
+def _run_tool_tests_sync(tool_name: str) -> dict:
+    out_dir = output_dir().resolve()
+    f = out_dir / "tests" / f"test_{tool_name}.py"
+    python = tools_python(out_dir)
+    if not f.exists():
+        return {"error": f"{f} not found"}
+    proc = subprocess.Popen(
+        [python, "-m", "pytest", str(f), "-v", "--tb=short", "--no-header",
+         "-p", "no:cacheprovider"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        cwd=str(out_dir), start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=TEST_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return {"passed": False, "output": f"pytest timed out after {PYTEST_TIMEOUT} seconds."}
-    return {"passed": r.returncode == 0, "output": (r.stdout + r.stderr)[:MAX_BYTES]}
+        _kill_group(proc)
+        return {"timeout": True, "smoke_passed": None, "smoke_total": None,
+                "invoc_passed": None, "invoc_total": None,
+                "failures": f"test run exceeded {TEST_TIMEOUT}s"}
+
+    counts = {"smoke": [0, 0], "invoc": [0, 0]}   # [passed, total]
+    for m in _TEST_LINE.finditer(out):
+        name, status = m.group(1), m.group(2)
+        if status in ("SKIPPED", "XFAIL"):
+            continue
+        kind = "invoc" if name.startswith("test_invoc") else "smoke"
+        counts[kind][1] += 1
+        if status in ("PASSED", "XPASS"):
+            counts[kind][0] += 1
+
+    failed_tail = ""
+    if proc.returncode != 0:
+        failed_tail = out[-3000:]
+    return {"smoke_passed": counts["smoke"][0], "smoke_total": counts["smoke"][1],
+            "invoc_passed": counts["invoc"][0], "invoc_total": counts["invoc"][1],
+            "timeout": False, "failures": failed_tail}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Live tool invocation
+# Live function invocation (execution-level status)
 # ══════════════════════════════════════════════════════════════════════════════
-_skip_tools: contextvars.ContextVar[frozenset] = contextvars.ContextVar("skip_tools", default=frozenset())
-
-
-def set_skip_tools(names) -> None:
-    """F25 code-enforced SKIP gate — populated by the pipeline before validation."""
-    _skip_tools.set(frozenset(names))
-
-
-# N3: file extensions that mark a string arg as a local-file path worth
+# File extensions that mark a string arg as a local-file path worth
 # existence-checking before invocation. Deliberately narrow (a curated set,
 # not "anything with a slash") so HF ids like "MahmoodLab/UNI2-h" and device
 # strings like "cuda:0" are never mistaken for paths.
@@ -257,40 +283,36 @@ _PATH_EXTS = {
 }
 
 
-def _bad_sample_reason(args: dict, repo_dir: Path, out_dir: Path) -> str | None:
-    """N3: return a reason if a path-shaped string arg doesn't resolve — so a
-    bad sample is reported distinctly instead of burning a debugger round on a
-    code bug that isn't one. Conservative: only flags values with a known file
-    extension that resolve nowhere."""
+def _missing_input_files(args: dict, repo_dir: Path, out_dir: Path) -> str | None:
+    """R6: a path-shaped input arg that resolves nowhere means the sample data
+    simply isn't available — the tool stays a runtime success, not a failure.
+    Covers files with a known data extension AND TM-Bench ``/mount/input/...``
+    paths (whole-slide dirs etc. that are gated / not bundled)."""
     for key, val in (args or {}).items():
         if not isinstance(val, str) or "://" in val:
             continue
-        if Path(val).suffix.lower() not in _PATH_EXTS:
+        is_mount_input = val.startswith("/mount/input/")
+        if not is_mount_input and Path(val).suffix.lower() not in _PATH_EXTS:
             continue
         candidates = [Path(val), repo_dir / val, out_dir / val]
         if not any(c.exists() for c in candidates):
-            return (f"sample arg {key}={val!r} looks like a file path but does not "
-                    f"exist under the repo — bad sample, not a code bug")
+            kind = "mount input" if is_mount_input else "input file"
+            return f"{kind} for {key}={val!r} not available"
     return None
 
 
-async def invoke_mcp_tool(repo_url: str, tool_name: str, args: dict | None = None) -> dict:
-    """Invoke an @mcp.tool() from the generated server.py live, in the server
-    venv, and return its result.
-
-    Returns {"ok": True, "result": ...} on success; {"ok": False, "error",
-    "traceback", "stderr"} on a real error; or {"skipped": True, "reason": ...}
-    when the tool is SKIP-listed, timed out (>INVOKE_TIMEOUT, treated as
-    resource-heavy), or was given a non-resolving file-path sample (bad sample).
-
-    Example:
-        invoke_mcp_tool("https://github.com/x/y", "predict", {"input": "data/x.csv"})
-    """
-    return await asyncio.to_thread(_invoke_mcp_tool_sync, repo_url, tool_name, args)
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Kill the WHOLE process tree — the function may spawn its own uncapped
+    subprocesses; killing only the immediate child leaks them."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
 
 
 def _truncate_large_result(value):
-    """F30: recursively cap list length / string length in a tool result."""
+    """Recursively cap list length / string length in a tool result."""
     if isinstance(value, list):
         out = [_truncate_large_result(v) for v in value[:RESULT_MAX_LIST_ITEMS]]
         if len(value) > RESULT_MAX_LIST_ITEMS:
@@ -304,9 +326,8 @@ def _truncate_large_result(value):
 
 
 def _parse_result(stdout: str) -> dict | None:
-    """N5: extract the JSON after the last RESULT_SENTINEL line, so library
-    banners / progress bars printed before it never break the parse. Falls back
-    to the last non-empty line for older/sentinel-less helpers."""
+    """Extract the JSON after the last RESULT_SENTINEL line, so banners /
+    progress bars printed before it never break the parse."""
     if RESULT_SENTINEL in stdout:
         tail = stdout.rsplit(RESULT_SENTINEL, 1)[1].strip()
     else:
@@ -318,51 +339,81 @@ def _parse_result(stdout: str) -> dict | None:
         return None
 
 
-def _invoke_mcp_tool_sync(repo_url: str, tool_name: str, args: dict | None = None) -> dict:
-    if tool_name in _skip_tools.get():
-        return {"skipped": True, "reason": f"'{tool_name}' is SKIP-listed (F25) — not invoked."}
+async def invoke_tool_function(tool_name: str, args: dict | None = None) -> dict:
+    """Invoke a generated tool function (tools/<tool_name>.py) live, in the
+    tools venv, and return its result.
 
-    out_dir = output_dir(repo_url).resolve()
-    server  = out_dir / "server.py"
-    venv_py = out_dir / ".venv" / "bin" / "python"
-    if not server.exists():
-        return {"ok": False, "error": f"server.py not found at {server}"}
-    if not venv_py.exists():
-        return {"ok": False, "error": f"server venv python not found at {venv_py}"}
+    Returns {"ok": True, "result": ...} on success; {"ok": False, "error",
+    "traceback", "stderr"} on a crash; or {"ok": True, "runtime_success": True,
+    "reason": ...} when the call ran past the time cap or its sample input
+    files are not available (execution-level success, correctness unknown).
 
-    bad = _bad_sample_reason(args or {}, repo_path(repo_url).resolve(), out_dir)
-    if bad:
-        return {"skipped": True, "bad_sample": True, "reason": bad}
+    Example:
+        invoke_tool_function("predict", {"input_path": "data/x.csv"})
+    """
+    return await asyncio.to_thread(_invoke_tool_function_sync, tool_name, args)
 
-    env = os.environ.copy()
-    env["SERVER_PATH"]    = str(server)
-    env["TOOL_NAME"]      = tool_name
-    env["TOOL_ARGS_JSON"] = json.dumps(args or {})
 
-    # start_new_session=True → own process group so a timeout kills the WHOLE
-    # tree (server.py spawns its own uncapped helper subprocess), not just the
-    # immediate child (F37).
-    proc = subprocess.Popen([str(venv_py), str(INVOKE_TOOL_SCRIPT)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            env=env, cwd=str(out_dir), start_new_session=True)
+def _invoke_tool_function_sync(tool_name: str, args: dict | None = None) -> dict:
+    out_dir = output_dir().resolve()
+    python  = tools_python(out_dir)
+    if not (out_dir / "tools" / f"{tool_name}.py").exists():
+        return {"ok": False, "error": f"tools/{tool_name}.py not found"}
+
+    missing = _missing_input_files(args or {}, repo_path().resolve(), out_dir)
+    if missing:
+        return {"ok": True, "runtime_success": True,
+                "reason": f"not invoked: {missing}"}
+
+    proc = subprocess.Popen(
+        [python, str(RUN_FUNCTION_SCRIPT), str(out_dir), tool_name,
+         json.dumps(args or {})],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=str(out_dir), start_new_session=True)
     try:
         stdout, stderr = proc.communicate(timeout=INVOKE_TIMEOUT)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
-        return {"skipped": True, "reason": (
-            f"'{tool_name}' did not return within {INVOKE_TIMEOUT}s and was killed — "
-            f"treated as resource-heavy and SKIPPED, not FAILED (not a confirmed bug).")}
+        _kill_group(proc)
+        return {"ok": True, "runtime_success": True,
+                "reason": f"still running after {INVOKE_TIMEOUT}s — treated as "
+                          f"runtime success (resource-heavy, not a confirmed bug)"}
 
     parsed = _parse_result(stdout.strip())
     if parsed is None:
-        return {"ok": False, "error": "could not parse invoker output",
-                "returncode": proc.returncode, "stdout": stdout[-1500:], "stderr": stderr[-1500:]}
+        return {"ok": False, "error": "could not parse runner output",
+                "returncode": proc.returncode,
+                "stdout": stdout[-1500:], "stderr": stderr[-1500:]}
     if not parsed.get("ok") and stderr:
         parsed.setdefault("stderr", stderr[-2000:])
     if parsed.get("ok") and "result" in parsed:
         parsed["result"] = _truncate_large_result(parsed["result"])
     return parsed
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G4: generated server check
+# ══════════════════════════════════════════════════════════════════════════════
+def check_server() -> dict:
+    """Compile + import server.py under the server venv (imports are light by
+    construction: fastmcp + stdlib only). Returns {passed, error}."""
+    out_dir = output_dir().resolve()
+    server  = out_dir / "server.py"
+    python  = venv_python(out_dir)
+    if not server.exists():
+        return {"passed": False, "error": f"server.py not found at {server}"}
+    r = subprocess.run([python, "-m", "py_compile", str(server)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return {"passed": False, "error": r.stderr.strip()[:MAX_BYTES]}
+    load = ("import importlib.util as _u, sys as _s; "
+            f"_s.path.insert(0, r'{server.parent}'); "
+            f"_spec=_u.spec_from_file_location('server', r'{server}'); "
+            "_mod=_u.module_from_spec(_spec); _spec.loader.exec_module(_mod)")
+    try:
+        r2 = subprocess.run([python, "-c", load], capture_output=True, text=True,
+                            timeout=IMPORT_CHECK_TIMEOUT, cwd=str(server.parent))
+    except subprocess.TimeoutExpired:
+        return {"passed": False, "error": "server.py import timed out"}
+    if r2.returncode != 0:
+        return {"passed": False, "error": r2.stderr.strip()[-2000:]}
+    return {"passed": True}

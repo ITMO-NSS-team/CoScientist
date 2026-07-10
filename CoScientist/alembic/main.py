@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Alembic pipeline orchestration.
 
-Five phases, four stage names the harness knows
-(explorer/environment/coder/validator). Two of the phases are deterministic
-code gates, not LLM turns — that is the core of the remaster: the LLM proposes,
-code disposes.
+Five stage names the harness knows (explorer/environment/coder/validator/
+wrapper), interleaved with deterministic gates — the LLM proposes, code
+disposes. Every LLM stage runs inside a reset loop (R1): a failed gate rolls
+the stage's files back to its start-of-stage checkpoint and reruns it with a
+short note about the previous failure.
 
-    clone → EXPLORER ─▶ [plan gate] ─▶ ENVIRONMENT ─▶ CODER ─▶ [static gate] ─▶ VALIDATOR(code loop)
-    (LLM)              (AST verify +                (LLM)     (AST import      (deterministic: syntax /
-                        layout, code)                          check, code)     tests / invoke + debugger;
-                                                                                code renders validation.md)
+    clone → EXPLORER ─▶ [G1 plan] ─▶ ENVIRONMENT ─▶ [G2 env] ─▶ CODER
+          ─▶ [G3 artefacts] ─▶ VALIDATOR (code loop + batched debugger)
+          ─▶ WRAPPER (codegen; LLM only on G4 failure) ─▶ export
+
+All run data (stage_status.json, validation.json, metrics.json) is written
+incrementally by code — the benchmark parses no reports (R2).
 """
 from __future__ import annotations
 
@@ -26,69 +29,146 @@ import json
 import shutil
 import time
 
+import yaml
 from loguru import logger
 from google.adk.sessions import InMemorySessionService
 
 from alembic import config
-from alembic.agents import explorer_agent, environment_agent, coder_agent, debugger_agent
+from alembic.agents import (
+    coder_agent, debugger_agent, environment_agent, explorer_agent, wrapper_agent,
+)
 from alembic.agent_runtime import classify_error, run_agent
 from alembic.contract import (
-    EnvSpec, Plan, ToolSpec, Validation, ToolVerdict, SampleSpec,
-    parse_json_block, parse_samples, save_plan, write_validation,
+    EnvSpec, Plan, ToolReport, ToolSpec, Validation,
+    load_plan, parse_json_block, save_plan, update_stage_status, write_validation,
 )
-from alembic.tools import WORKDIR, get_repo_name, invoke_mcp_tool, run_tests, validate_syntax
-from alembic.tools.analysis import decide_layout, symbol_table, verify_target
-from alembic.tools.invoke import set_skip_tools
-from alembic.tools.paths import output_dir, repo_path, reports_dir
+from alembic.tools import (
+    WORKDIR, check_server, check_tool_artefacts, ensure_pytest, get_repo_name,
+    invoke_tool_function, run_tool_tests, set_current_repo,
+    start_env_recording, stop_env_recording,
+)
+from alembic.tools.venv import ensure_pkg
+from alembic.tools.analysis import decide_layout, symbol_table, target_top_modules, verify_target
+from alembic.tools.codegen import function_param_names, render_code_py, write_server, write_setup_sh
+from alembic.tools.fs import _clone_repo_sync
+from alembic.tools.invoke import check_repo_imports
+from alembic.tools.paths import MOUNT_DATA, MOUNT_INPUT, output_dir, repo_path, reports_dir, tools_python
+from alembic.tools.venv import _check_venv_compat_sync
 
 STAGES = config.STAGES
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Target-task (TM-Bench) support
+# Target tasks (TM-Bench, R4)
 # ══════════════════════════════════════════════════════════════════════════════
-def _load_target_task(cli_value: str | None) -> dict | None:
-    """A target-task spec is JSON/YAML text or a path to such a file. Returns
-    a dict {description, arguments, returns, example} or None (native mode)."""
-    raw = cli_value or config.TARGET_TASK
+def _load_tasks(cli_value: str | None) -> list[dict]:
+    """Task spec(s): JSON/YAML text, a path, or comma-separated paths. Each task
+    is {name, description, arguments, returns, example, ...}. [] = native mode."""
+    raw = cli_value or config.TASKS
     if not raw:
-        return None
-    p = Path(raw)
-    text = p.read_text(encoding="utf-8") if p.exists() else raw
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
+        return []
+    texts: list[str] = []
+    if all(Path(p.strip()).exists() for p in raw.split(",") if p.strip()):
+        texts = [Path(p.strip()).read_text(encoding="utf-8") for p in raw.split(",") if p.strip()]
+    else:
+        texts = [raw]
+    tasks: list[dict] = []
+    for text in texts:
         try:
-            import yaml
-            v = yaml.safe_load(text)
-            return v if isinstance(v, dict) else None
-        except Exception:
-            logger.warning("[target-task] could not parse spec — ignoring, running native mode.")
-            return None
+            v = yaml.safe_load(text)   # YAML is a JSON superset
+        except yaml.YAMLError:
+            logger.warning("[tasks] unparseable task spec — ignoring one entry.")
+            continue
+        if isinstance(v, dict):
+            tasks.append(v)
+        elif isinstance(v, list):
+            tasks.extend(t for t in v if isinstance(t, dict))
+    for t in tasks:
+        t.setdefault("name", "task")
+    return tasks
 
 
-def _target_task_prompt(task: dict | None) -> str:
-    if not task:
+def _tasks_prompt(tasks: list[dict]) -> str:
+    if not tasks:
         return ""
-    return (
-        "\n\nTARGET TASK (you MUST expose one tool that implements exactly this):\n"
-        f"- description: {task.get('description', '')}\n"
-        f"- arguments: {json.dumps(task.get('arguments', {}))}\n"
-        f"- returns: {json.dumps(task.get('returns', {}))}\n"
-        f"- example invocation: {json.dumps(task.get('example', {}))}\n"
-        "Ensure a tool matches this capability, signature, and return keys."
-    )
+    lines = ["", "", "REQUIRED TASKS — your plan MUST include one tool per task, "
+             "named EXACTLY as given, with EXACTLY these argument names:"]
+    for t in tasks:
+        lines += [f"- name: {t.get('name')}",
+                  f"  description: {t.get('description', '')}",
+                  f"  arguments: {json.dumps(t.get('arguments', {}))}",
+                  f"  returns: {json.dumps(t.get('returns', {}))}",
+                  f"  example invocation: {json.dumps(t.get('example', {}))}"]
+    return "\n".join(lines)
+
+
+_DATA_POLICY = ("\n\nDATA POLICY (absolute): do NOT download any datasets, even if the "
+                "exploration report or the repo README asks for one. Allowed downloads: "
+                "package dependencies, configs, and pretrained model weights/checkpoints "
+                "needed so the tools work standalone.")
+
+
+def _stage_task_inputs(tasks: list[dict]) -> None:
+    """Copy each task's example/test_case mount files from the bind-mounted
+    data dir into /mount/input, per the task's mount mapping. Missing files are
+    noted, never fatal (exec-level testing degrades gracefully, R6)."""
+    if not MOUNT_DATA.exists():
+        if tasks and any(_task_mounts(t) for t in tasks):
+            logger.warning("[tasks] no /mount/data bind mount — task input files unavailable.")
+        return
+    for t in tasks:
+        for src, dst in _task_mounts(t):
+            s, d = MOUNT_DATA / src, MOUNT_INPUT / dst
+            if not s.exists():
+                logger.warning(f"[tasks] mount source missing: {s}")
+                continue
+            d.parent.mkdir(parents=True, exist_ok=True)
+            if d.exists() or d.is_symlink():
+                continue
+            # Symlink, not copy — WSI dirs are tens of GB and read-only inputs;
+            # copying them into the container is slow and wastes disk.
+            try:
+                d.symlink_to(s, target_is_directory=s.is_dir())
+            except OSError:
+                (shutil.copytree if s.is_dir() else shutil.copy)(s, d)
+
+
+def _task_mounts(task: dict) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for inv in [task.get("example") or {}, *(task.get("test_cases") or {}).values()]:
+        if isinstance(inv, dict):
+            pairs += [(s, d) for s, d in (inv.get("mount") or {}).items()]
+    return pairs
+
+
+def _task_ref(tasks: list[dict]) -> str | None:
+    """The commit/branch to pin the clone to. Tasks that pin different refs on
+    one repo (the STAMP dual case) can't all be honoured — use the first and
+    warn; a single-task run pins faithfully."""
+    refs = []
+    for t in tasks:
+        repo = t.get("repo") or {}
+        r = repo.get("commit") or repo.get("branch")
+        if r:
+            refs.append(str(r))
+    if not refs:
+        return None
+    if len(set(refs)) > 1:
+        logger.warning(f"[tasks] tasks pin different refs {set(refs)} — cloning at {refs[0]}; "
+                       f"tools for the other ref may not resolve (run separately if so).")
+    return refs[0]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Pipeline
 # ══════════════════════════════════════════════════════════════════════════════
 async def run_pipeline(repo_url: str, resume_from: str | None = None,
-                       stop_after: str | None = None, target_task_cli: str | None = None):
+                       stop_after: str | None = None, tasks_cli: str | None = None):
+    set_current_repo(repo_url)
     name = get_repo_name(repo_url)
     base = WORKDIR / name
     session_service = InMemorySessionService()
-    target_task = _load_target_task(target_task_cli)
+    tasks = _load_tasks(tasks_cli)
 
     for stg in (resume_from, stop_after):
         if stg is not None and stg not in STAGES:
@@ -100,17 +180,12 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
     else:
         logger.info(f"[Resume] from stage: {resume_from} (workdir preserved)")
 
-    venv_python = str((base / "output" / ".venv" / "bin" / "python").resolve())
     log_file = base / "pipeline.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     sink_id = logger.add(log_file, format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
                          level="DEBUG", encoding="utf-8")
     logger.info(f"[Run] {name} — log → {log_file}"
-                + (f"  (target-task mode)" if target_task else ""))
-
-    for suffix in ("explorer", "environment", "coder"):
-        await session_service.create_session(app_name=config.APP_NAME, user_id=config.USER_ID,
-                                              session_id=f"{name}_{suffix}")
+                + (f"  ({len(tasks)} target task(s))" if tasks else ""))
 
     metrics = _new_metrics()
 
@@ -123,109 +198,165 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
         return True
 
     try:
-        # ── 1. Explorer ────────────────────────────────────────────────────
+        _clone_repo_sync(repo_url, ref=_task_ref(tasks))  # idempotent; explorer reuses it
+        _stage_task_inputs(tasks)
+
+        # ── 1. Explorer + plan gate ─────────────────────────────────────────
+        plan_ok = True
         if _should_run("explorer"):
             _banner(1, f"Explorer ({repo_url})")
-            msg = repo_url + _target_task_prompt(target_task)
-            final = await _run_llm_stage("explorer", explorer_agent, f"{name}_explorer",
-                                         msg, metrics, session_service, required_report="exploration")
-            _salvage_report(repo_url, "exploration", final, needs_plan=True)
-            if final:
-                logger.info(f"[Explorer done] → {base}/reports/exploration.md")
-            # Plan gate (deterministic): verify proposed tools + decide layout.
-            _plan_gate(repo_url)
+            plan_ok = await _staged_llm(
+                "explorer", explorer_agent, name, metrics, session_service,
+                message_fn=lambda note: repo_url + _tasks_prompt(tasks) + note,
+                gate_fn=lambda: _plan_gate(repo_url, tasks),
+                owned=[reports_dir() / "exploration.md", reports_dir() / "plan.json"],
+                required_report="exploration",
+                post_fn=lambda final: _salvage_report("exploration", final, needs_plan=True),
+            )
+            if not plan_ok:
+                logger.error("[explorer] no usable plan after resets — downstream stages skipped.")
 
-        # ── 2. Environment ─────────────────────────────────────────────────
-        if _should_run("environment"):
+        # ── 2. Environment + env gate ───────────────────────────────────────
+        if plan_ok and _should_run("environment"):
             _banner(2, f"Environment ({repo_url})")
-            final = await _run_llm_stage("environment", environment_agent, f"{name}_environment",
-                                         _environment_message(repo_url), metrics, session_service,
-                                         required_report="environment", venv_guard_path=venv_python)
-            _salvage_report(repo_url, "environment", final)
-            if final:
-                logger.info(f"[Environment done] → {base}/reports/environment.md")
+            start_env_recording()
+            await _staged_llm(
+                "environment", environment_agent, name, metrics, session_service,
+                message_fn=lambda note: _environment_message(repo_url, tasks) + note,
+                gate_fn=lambda: _env_gate(name, session_service, metrics),
+                owned=[output_dir() / ".venv", output_dir() / ".venv-repo"],
+                on_reset=start_env_recording,
+            )
+            write_setup_sh(stop_env_recording())
 
-        # ── 3. Coder ───────────────────────────────────────────────────────
-        if _should_run("coder"):
+        # ── 3. Coder + artefact gate ────────────────────────────────────────
+        if plan_ok and _should_run("coder"):
             _banner(3, f"Coder ({repo_url})")
-            final = await _run_llm_stage("coder", coder_agent, f"{name}_coder",
-                                         _coder_message(repo_url, target_task), metrics, session_service,
-                                         required_report="server")
-            _salvage_report(repo_url, "server", final)
-            if final:
-                logger.info(f"[Coder done] → {base}/output/server.py")
+            await _staged_llm(
+                "coder", coder_agent, name, metrics, session_service,
+                message_fn=lambda note: _coder_message(repo_url, tasks) + note,
+                gate_fn=lambda: _coder_gate(),
+                owned=[output_dir() / "tools", output_dir() / "tests"],
+            )
 
-        # ── 4. Validator (deterministic code loop) ─────────────────────────
-        if _should_run("validator"):
-            ok, missing = _coder_artefacts_present(base)
-            if not ok:
-                logger.error(f"[validator] required artefacts missing: {missing} — skipping validation.")
-            else:
-                _banner(4, f"Validator ({repo_url})")
-                await _validate(repo_url, name, session_service, metrics)
-                _report_completion(name, base, log_file)
+        # ── 4. Validator (deterministic loop + batched debugger) ────────────
+        if plan_ok and _should_run("validator"):
+            _banner(4, f"Validator ({repo_url})")
+            await _validate(repo_url, name, session_service, metrics)
+
+        # ── 5. Wrapper (codegen + gate + LLM fallback) + export ─────────────
+        if plan_ok and _should_run("wrapper"):
+            _banner(5, f"Wrapper ({repo_url})")
+            await _wrap(name, session_service, metrics)
+            _export_task_code(tasks)
+            _report_completion(name, base)
 
     finally:
         _finalize_metrics(base, metrics)
         logger.remove(sink_id)
 
 
-# ── LLM stage wrapper ─────────────────────────────────────────────────────────
-async def _run_llm_stage(stage, agent, session_id, message, metrics, session_service,
-                         required_report=None, venv_guard_path=None) -> str:
+# ── LLM stage runner with reset loop (R1) ─────────────────────────────────────
+async def _staged_llm(stage, agent, name, metrics, session_service, message_fn,
+                      gate_fn, owned, required_report=None, post_fn=None,
+                      on_reset=None) -> bool:
+    """Run one LLM stage; verify its exit gate; on failure roll back the
+    stage-owned paths and rerun with a note (≤ STAGE_RESET extra loops).
+    Returns whether the gate ever passed."""
+    note = ""
+    for attempt in range(config.STAGE_RESET + 1):
+        sid = f"{name}_{stage}_r{attempt}"
+        await session_service.create_session(
+            app_name=config.APP_NAME, user_id=config.USER_ID, session_id=sid)
+        final = await _run_llm_stage(stage, agent, sid, message_fn(note),
+                                     metrics, session_service, required_report)
+        if post_fn:
+            post_fn(final)
+        gate = gate_fn()
+        if asyncio.iscoroutine(gate):
+            gate = await gate
+        update_stage_status(stage, status="passed" if gate["ok"] else "failed",
+                            resets=attempt, gate=gate.get("info", {}))
+        if gate["ok"]:
+            logger.info(f"[{stage}] gate passed"
+                        + (f" after {attempt} reset(s)" if attempt else ""))
+            return True
+        note = ("\n\nNOTE — previous attempt failed its exit gate; do better this time:\n"
+                + gate.get("note", "unknown failure"))
+        if attempt < config.STAGE_RESET:
+            _rollback(owned)
+            if on_reset:
+                on_reset()
+            logger.warning(f"[{stage}] gate FAILED — reset "
+                           f"{attempt + 1}/{config.STAGE_RESET}: {gate.get('note','')[:300]}")
+    logger.error(f"[{stage}] gate still failing after {config.STAGE_RESET} reset(s) — moving on.")
+    return False
+
+
+async def _run_llm_stage(stage, agent, session_id, message, metrics,
+                         session_service, required_report=None) -> str:
     started = time.monotonic()
-    soft_deadline = started + config.STAGE_TIMEOUT[stage] * config.REPORT_GRACE_FRACTION
+    timeout = config.STAGE_TIMEOUT.get(stage)          # None = no wall clock (R1)
+    deadline = started + timeout * config.REPORT_GRACE_FRACTION if timeout else None
+    coro = run_agent(agent, session_service, session_id, message,
+                     required_report=required_report, deadline=deadline)
     try:
-        final, steps, tokens, sm = await asyncio.wait_for(
-            run_agent(agent, session_service, session_id, message,
-                      required_report=required_report, venv_guard_path=venv_guard_path,
-                      deadline=soft_deadline),
-            timeout=config.STAGE_TIMEOUT[stage])
+        if timeout:
+            final, steps, tokens, sm = await asyncio.wait_for(coro, timeout=timeout)
+        else:
+            final, steps, tokens, sm = await coro
     except asyncio.TimeoutError:
-        logger.error(f"[{stage}] STAGE TIMEOUT after {config.STAGE_TIMEOUT[stage]}s — continuing.")
-        metrics["durations_per_stage"][stage] = round(time.monotonic() - started, 1)
+        logger.error(f"[{stage}] STAGE TIMEOUT after {timeout}s — continuing.")
+        _accumulate_stage(metrics, stage, round(time.monotonic() - started, 1), 0, 0, None)
         metrics["abort_reason_per_stage"][stage] = "stage_timeout"
         return ""
-    _record_stage(metrics, stage, round(time.monotonic() - started, 1), steps, tokens, sm)
+    _accumulate_stage(metrics, stage, round(time.monotonic() - started, 1), steps, tokens, sm)
     return final
 
 
-def _salvage_report(repo_url: str, report_name: str, final_text: str,
+def _rollback(paths: list[Path]) -> None:
+    for p in paths:
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.exists():
+            p.unlink(missing_ok=True)
+
+
+def _salvage_report(report_name: str, final_text: str,
                     needs_plan: bool = False) -> None:
-    """Guarantee a stage's report exists even when the agent narrated its answer
-    instead of calling write_report (a common, intermittent LLM slip that would
-    otherwise silently zero the stage). LLM proposes; code disposes: persist the
-    agent's final response text when the report is missing/empty — or, for the
-    plan-bearing exploration report, when the file holds no parseable JSON plan
-    but the final response does."""
-    path = reports_dir(repo_url) / f"{report_name}.md"
+    """Persist the agent's final response text when write_report wasn't called
+    (a common, intermittent LLM slip) — or, for the plan-bearing exploration
+    report, when the file holds no parseable JSON plan but the response does."""
+    path = reports_dir() / f"{report_name}.md"
     existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
     final_text = final_text or ""
     if final_text.strip() in ("", "Agent did not produce a final response."):
-        return  # nothing worth salvaging (timeout / empty / runtime default)
-    if needs_plan and not parse_json_block(existing):
-        if parse_json_block(final_text):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(final_text, encoding="utf-8")
-            logger.warning(f"[{report_name}] salvaged plan from the agent's final response "
-                           f"(write_report was not called)")
-            return
+        return
+    if needs_plan and not parse_json_block(existing) and parse_json_block(final_text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(final_text, encoding="utf-8")
+        logger.warning(f"[{report_name}] salvaged plan from the agent's final response")
+        return
     if not existing.strip() and final_text.strip():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(final_text, encoding="utf-8")
-        logger.warning(f"[{report_name}] salvaged the agent's final response "
-                       f"(write_report was not called)")
+        logger.warning(f"[{report_name}] salvaged the agent's final response")
 
 
-# ── Plan gate (deterministic) ─────────────────────────────────────────────────
-def _plan_gate(repo_url: str) -> Plan:
+# ══════════════════════════════════════════════════════════════════════════════
+# G1 — Plan gate (deterministic)
+# ══════════════════════════════════════════════════════════════════════════════
+def _plan_gate(repo_url: str, tasks: list[dict]) -> dict:
     """Verify the Explorer's proposed tools against the real repo AST, extract
-    real parameter names, drop clear hallucinations, and decide the venv layout.
-    Writes plan.json. Purely deterministic — no LLM."""
-    repo_dir = repo_path(repo_url).resolve()
-    proposal = parse_json_block((reports_dir(repo_url) / "exploration.md").read_text(encoding="utf-8", errors="replace")) \
-        if (reports_dir(repo_url) / "exploration.md").exists() else None
-    proposal = proposal or {}
+    real parameter names, drop clear hallucinations, decide the venv layout,
+    and (task mode) require one tool per task. Writes plan.json."""
+    repo_dir = repo_path().resolve()
+    exploration = reports_dir() / "exploration.md"
+    proposal = parse_json_block(exploration.read_text(encoding="utf-8", errors="replace")) \
+        if exploration.exists() else None
+    if not proposal:
+        return {"ok": False, "note": "exploration.md contains no parseable ```json plan block — "
+                                     "end the report with the required fenced JSON plan."}
 
     layout = decide_layout(repo_dir)
     env_raw = proposal.get("env", {}) if isinstance(proposal.get("env"), dict) else {}
@@ -238,6 +369,7 @@ def _plan_gate(repo_url: str) -> Plan:
     )
 
     table = symbol_table(repo_dir)
+    task_by_name = {t.get("name"): t for t in tasks}
     tools: list[ToolSpec] = []
     dropped: list[str] = []
     for t in (proposal.get("tools") or [])[: config.MAX_TOOLS + 4]:
@@ -247,179 +379,369 @@ def _plan_gate(repo_url: str) -> Plan:
         if not v["ok"]:
             dropped.append(f"{t['name']} ({t['target']}: {v['reason']})")
             continue
+        sample = t.get("sample_args") if isinstance(t.get("sample_args"), dict) else None
+        task = task_by_name.get(t["name"])
+        if task and isinstance((task.get("example") or {}).get("arguments"), dict):
+            sample = task["example"]["arguments"]   # authoritative for task tools
         tools.append(ToolSpec(name=t["name"], target=t["target"], purpose=t.get("purpose", ""),
-                              params=v["params"], verified=True, note=v["reason"]))
+                              params=v["params"], sample_args=sample,
+                              evidence=str(t.get("evidence") or ""), verified=True, note=v["reason"]))
         if len(tools) >= config.MAX_TOOLS:
             break
 
-    plan = Plan(repo_url=repo_url, env=env, tools=tools)
+    missing_tasks = [n for n in task_by_name if n not in {t.name for t in tools}]
+    plan = Plan(repo_url=repo_url, env=env, tools=tools, tasks=tasks)
     save_plan(plan)
+    info = {"layout": env.layout, "verified": len(tools), "dropped": len(dropped),
+            "missing_tasks": missing_tasks}
     logger.info(f"[plan gate] layout={env.layout} ({layout['source']}); "
-                f"verified {len(tools)} tool(s), dropped {len(dropped)} hallucinated/unverifiable.")
+                f"verified {len(tools)} tool(s), dropped {len(dropped)}."
+                + (f" MISSING required task tools: {missing_tasks}" if missing_tasks else ""))
     if dropped:
         logger.info(f"[plan gate] dropped: {'; '.join(dropped)}")
-    return plan
 
-
-# ── Stage messages built from the plan ────────────────────────────────────────
-def _environment_message(repo_url: str) -> str:
-    from alembic.contract import load_plan
-    plan = load_plan(repo_url)
-    if not plan:
-        return repo_url
-    e = plan.env
-    lines = [repo_url, "", "Computed environment layout — trust this, it is authoritative:",
-             f"  layout: {e.layout}", f"  server_python: {e.server_python}"]
-    if e.repo_python:
-        lines.append(f"  repo_python: {e.repo_python}  (build .venv-repo on this)")
-    if e.requirements_files:
-        lines.append(f"  requirements files: {', '.join(e.requirements_files)}")
-    if e.system_libs:
-        lines.append(f"  likely system libs: {', '.join(e.system_libs)}")
-    if e.weights:
-        lines.append(f"  external weights to download: {json.dumps(e.weights)}")
-    return "\n".join(lines)
-
-
-def _coder_message(repo_url: str, target_task: dict | None) -> str:
-    from alembic.contract import load_plan
-    plan = load_plan(repo_url)
-    lines = [repo_url]
-    if plan and plan.tools:
-        lines += ["", "Verified tools to implement (targets confirmed to exist in the repo; "
-                  "params are the REAL signature — build argv accordingly):"]
-        for t in plan.tools:
-            lines.append(f"  - {t.name}  ->  {t.target}  params={t.params}  # {t.purpose}")
-    return "\n".join(lines) + _target_task_prompt(target_task)
+    if not tools:
+        return {"ok": False, "info": info,
+                "note": "none of the proposed tool targets exist in the repo: "
+                        + "; ".join(dropped[:6])}
+    if missing_tasks:
+        return {"ok": False, "info": info,
+                "note": f"the plan must include tool(s) named exactly {missing_tasks} "
+                        f"implementing the required task(s), targeting real repo code."}
+    return {"ok": True, "info": info}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Validator — deterministic loop calling the debugger only for the hard part
+# G2 — Env gate (deterministic compat + repo-import smoke; one debugger round)
+# ══════════════════════════════════════════════════════════════════════════════
+async def _env_gate(name: str, session_service, metrics) -> dict:
+    """Deterministic env verification. HARD failures fail the gate (venv
+    missing, pytest/fastmcp absent, or a planned tool's target module won't
+    import). check_venv_compat conflicts are SOFT — a broken numpy ABI would
+    already fail the repo-import smoke, so a surviving conflict is in peripheral
+    code the tools don't touch; surface it to the debugger but don't loop a
+    version-pinned repo forever on it."""
+    plan = load_plan()
+    out = output_dir()
+
+    async def _checks() -> tuple[list[str], list[str]]:
+        hard: list[str] = []
+        soft: list[str] = []
+        if not (out / ".venv" / "bin" / "python").exists():
+            return [f"server venv missing: {out}/.venv was never created"], []
+        if plan and plan.env.layout == "two-venv" and not (out / ".venv-repo" / "bin" / "python").exists():
+            return [f"two-venv layout requires {out}/.venv-repo — it was never created"], []
+        pytest_err = await asyncio.to_thread(ensure_pytest, tools_python(out.resolve()))
+        if pytest_err:
+            hard.append(pytest_err)
+        # server.py runs under .venv and imports fastmcp — a hand-rebuilt venv
+        # often lacks it (setup_venv would have added it).
+        server_py = str((out / ".venv" / "bin" / "python").resolve())
+        fastmcp_err = await asyncio.to_thread(ensure_pkg, server_py, "fastmcp")
+        if fastmcp_err:
+            hard.append(fastmcp_err)
+        venvs = [".venv"] + ([".venv-repo"] if plan and plan.env.layout == "two-venv" else [])
+        for vn in venvs:
+            r = await asyncio.to_thread(_check_venv_compat_sync, vn)
+            if r.get("error"):
+                soft.append(f"compat check on {vn}: {r['error']}")
+            else:
+                for stmt, detail in list(r.get("conflicts", {}).items())[:8]:
+                    soft.append(f"[{vn}] `{stmt}` fails: {detail.get('error', '')[:200]}")
+        mods = target_top_modules([t.target for t in (plan.tools if plan else [])])
+        if mods:
+            ri = await asyncio.to_thread(check_repo_imports, mods)
+            for mod, err in ri["errors"].items():
+                hard.append(f"repo-import smoke: `import {mod}` fails in the tools venv: {err[:300]}")
+        return hard, soft
+
+    hard, soft = await _checks()
+    if hard or soft:
+        # one bounded debugger round before deciding (R3)
+        logger.warning(f"[env gate] {len(hard)} hard + {len(soft)} soft problem(s) — "
+                       f"one debugger round.")
+        await _call_debugger(
+            name, session_service, metrics,
+            "The built Python environment fails its deterministic checks. Fix the "
+            "environment (install/downgrade packages into the RIGHT venv, apt-get "
+            "system libs). The 'repo-import smoke' failures are the critical ones. "
+            "Problems:\n- " + "\n- ".join(hard + soft))
+        hard, soft = await _checks()
+
+    info = {"hard": hard[:8], "soft": soft[:8]}
+    if hard:
+        return {"ok": False, "info": info, "note": "\n".join(hard[:8])}
+    if soft:
+        logger.info(f"[env gate] passing with {len(soft)} residual compat conflict(s) in "
+                    f"peripheral code (tool modules import cleanly): {soft[0][:160]}")
+    return {"ok": True, "info": info}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G3 — Coder artefact gate
+# ══════════════════════════════════════════════════════════════════════════════
+def _coder_gate() -> dict:
+    plan = load_plan()
+    names = [t.name for t in (plan.tools if plan else [])]
+    if not names:
+        return {"ok": False, "note": "no planned tools to check"}
+    r = check_tool_artefacts(names)
+    if r["passed"]:
+        return {"ok": True, "info": {"tools": names}}
+    note = "\n".join(f"{tool}: {'; '.join(errs)}" for tool, errs in r["errors"].items())
+    return {"ok": False, "info": {"errors": r["errors"]}, "note": note}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Validator — deterministic loop, batched debugger (R3/R6)
 # ══════════════════════════════════════════════════════════════════════════════
 async def _validate(repo_url, name, session_service, metrics):
     started = time.monotonic()
-    deadline = started + config.STAGE_TIMEOUT["validator"] * config.REPORT_GRACE_FRACTION
+    plan = load_plan()
+    if not plan or not plan.tools:
+        logger.error("[validator] no plan/tools — nothing to validate.")
+        update_stage_status("validator", status="failed", gate={"note": "no plan"})
+        return
+
     v = Validation()
-    problem_summaries: list[str] = []
-    dbg_counter = [0]
-    failures: dict[str, int] = {}
+    reports = {t.name: ToolReport(name=t.name) for t in plan.tools}
+    v.tools = list(reports.values())
+    failures_by_class: dict[str, int] = {}
     n_actions = 0
 
-    async def debug(msg: str) -> str:
-        dbg_counter[0] += 1
-        sid = f"{name}_debugger_{dbg_counter[0]}"
-        await session_service.create_session(app_name=config.APP_NAME, user_id=config.USER_ID, session_id=sid)
-        mem = ("\n\nPrevious fix attempts this run (do NOT repeat them):\n- "
-               + "\n- ".join(problem_summaries)) if problem_summaries else ""
-        try:
-            final, _, _, _ = await asyncio.wait_for(
-                run_agent(debugger_agent, session_service, sid, msg + mem),
-                timeout=config.DEBUGGER_CALL_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning(f"[validator] debugger call timed out after {config.DEBUGGER_CALL_TIMEOUT}s.")
-            return "debugger timed out"
-        problem_summaries.append(final[:400])
-        return final
-
-    # 1. Syntax & imports (static) — repair-loop bounded.
-    for attempt in range(config.MAX_STATIC_GATE_RETRIES + 1):
-        r = await validate_syntax(repo_url)
-        n_actions += 1
-        if r.get("passed"):
-            v.syntax_ok = True
+    frozen: set[str] = set()          # tools whose failure didn't change → give up
+    last_sig: dict[str, str] = {}
+    for rnd in range(config.DEBUGGING_ROUNDS + 1):
+        failures: list[str] = []
+        for t in plan.tools:
+            rep = reports[t.name]
+            if (rnd and rep.passed) or t.name in frozen:
+                continue                      # skip green + given-up tools
+            fails = await _check_tool(t, rep)
+            n_actions += 1 + bool(t.sample_args)
+            if fails and rnd:
+                sig = fails[0][:200]
+                if last_sig.get(t.name) == sig:
+                    # a debugger round changed nothing for this tool — stop
+                    # burning rounds on it (e.g. a genuinely unfixable dep).
+                    frozen.add(t.name)
+                    v.notes.append(f"{t.name}: unchanged failure after debug — frozen")
+                    continue
+                last_sig[t.name] = sig
+            elif fails:
+                last_sig[t.name] = fails[0][:200]
+            for f in fails:
+                failures_by_class[classify_error(f)] = failures_by_class.get(classify_error(f), 0) + 1
+            failures += fails
+            write_validation(repo_url, name, v)   # incremental (R2)
+        if not failures:
             break
-        v.syntax_error = f"[{r.get('stage')}] {r.get('error', '')}"
-        failures[classify_error(v.syntax_error)] = failures.get(classify_error(v.syntax_error), 0) + 1
-        if attempt >= config.MAX_STATIC_GATE_RETRIES or time.monotonic() >= deadline:
+        if rnd >= config.DEBUGGING_ROUNDS:
+            v.notes.append(f"debugger budget exhausted with {len(failures)} failure(s) left")
             break
-        summary = await debug(f"Repository: {repo_url}\n\nvalidate_syntax failed at stage "
-                              f"'{r.get('stage')}':\n{r.get('error','')}\n\nFix server.py or the "
-                              f"named helper, then confirm it imports.")
-        v.debugger_actions.append(f"syntax: {summary[:200]}")
-
-    # 2. pytest (only if syntax passed and there's time).
-    if v.syntax_ok and time.monotonic() < deadline:
-        r = await run_tests(repo_url)
-        n_actions += 1
-        v.tests_ran = True
-        out = r.get("output", "")
-        v.tests_passed, v.tests_failed = _parse_pytest_counts(out)
-        if not r.get("passed"):
-            v.tests_error = out[-800:]
-            failures[classify_error(out)] = failures.get(classify_error(out), 0) + 1
-
-    # 3. Per-tool live invocation + repair.
-    samples = parse_samples(repo_url)
-    set_skip_tools([s.name for s in samples if s.skip])
-    for s in samples:
-        if time.monotonic() >= deadline:
-            v.tools.append(ToolVerdict(s.name, "SKIPPED", "not reached (stage out of time)"))
-            continue
-        if s.skip:
-            v.tools.append(ToolVerdict(s.name, "SKIPPED", s.skip_reason or "marked SKIP"))
-            continue
-        verdict, extra = await _validate_one_tool(repo_url, s, debug, v, failures, deadline)
-        n_actions += extra
-        v.tools.append(verdict)
+        v.debugger_rounds += 1
+        logger.info(f"[validator] round {rnd + 1}: {len(failures)} failure(s) → batched debugger call.")
+        summary = await _call_debugger(
+            name, session_service, metrics,
+            f"Repository: {repo_url}\n\nThe following tool failures were observed. "
+            f"Look for shared root causes first; fix ALL of them, then verify with "
+            f"run_tool_tests / invoke_tool_function:\n\n" + "\n\n".join(failures[:12]),
+            memory=v.debugger_actions)
+        v.debugger_actions.append(summary[:300])
 
     write_validation(repo_url, name, v)
-    logger.info(f"[Validator done] → {reports_dir(repo_url)}/validation.md  "
-                f"(syntax={'ok' if v.syntax_ok else 'FAIL'}, "
-                f"tools P/F/S={sum(t.status=='PASSED' for t in v.tools)}/"
-                f"{sum(t.status=='FAILED' for t in v.tools)}/{sum(t.status=='SKIPPED' for t in v.tools)})")
+    c = v.counts()
+    update_stage_status("validator", status="passed", counts=c,
+                        debugger_rounds=v.debugger_rounds)
+    logger.info(f"[Validator done] tools passed {c['tools_passed']}/{c['tools_total']} "
+                f"(perfect {c['tools_perfect']}); tests {c['tests_passed']}/{c['tests_total']}; "
+                f"exec ok {c['exec_ok']}/{c['exec_attempted']}")
 
     metrics["durations_per_stage"]["validator"] = round(time.monotonic() - started, 1)
     metrics["actions_per_stage"]["validator"] = n_actions
     metrics["total_actions"] += n_actions
-    for label, c in failures.items():
-        metrics["failures_by_class"][label] = metrics["failures_by_class"].get(label, 0) + c
+    for label, cnt in failures_by_class.items():
+        metrics["failures_by_class"][label] = metrics["failures_by_class"].get(label, 0) + cnt
 
 
-async def _validate_one_tool(repo_url, s: SampleSpec, debug, v: Validation,
-                             failures: dict, deadline: float) -> tuple[ToolVerdict, int]:
-    """Invoke one tool; on failure debug + independently re-invoke (F24), bounded.
-    Returns (verdict, n_extra_actions)."""
-    n = 0
-    last_error = None
-    for attempt in range(3):
-        if time.monotonic() >= deadline:
-            return ToolVerdict(s.name, "FAILED" if last_error else "SKIPPED",
-                               "stage out of time mid-repair" if last_error else "not reached"), n
-        r = await invoke_mcp_tool(repo_url, s.name, s.sample_args or {})
-        n += 1
-        if r.get("skipped"):
-            return ToolVerdict(s.name, "SKIPPED", r.get("reason", "")[:200]), n
+def _clean_sample_args(t: ToolSpec) -> dict:
+    """Drop sample-arg keys the tool's generated function doesn't accept —
+    otherwise `fn(**args)` TypeErrors on an unexpected kwarg and the debugger
+    (which can't rewrite plan sample_args) loops on it. Filter against the REAL
+    signature of the written ``tools/<name>.py`` — NOT the repo target's params,
+    which task tools deliberately rename (e.g. task ``slide_dir`` → repo
+    ``wsi_dir``). Skip filtering when the function takes ``**kwargs`` or its
+    signature can't be read."""
+    args = dict(t.sample_args or {})
+    names, has_kwargs = function_param_names(t.name)
+    if not names or has_kwargs:
+        return args
+    dropped = [k for k in args if k not in names]
+    if dropped:
+        logger.info(f"[validator] {t.name}: dropping sample args not in the "
+                    f"function signature {sorted(names)}: {dropped}")
+        for k in dropped:
+            args.pop(k)
+    return args
+
+
+async def _check_tool(t: ToolSpec, rep: ToolReport) -> list[str]:
+    """Run one tool's exec check + pytest file; update its report; return
+    failure descriptions for the batched debugger."""
+    fails: list[str] = []
+
+    if t.sample_args is not None:
+        args = _clean_sample_args(t)
+        r = await invoke_tool_function(t.name, args)
         if r.get("ok"):
-            note = _semantic_note(s, r.get("result"))
-            # held-out invocation (F3) — advisory, does not flip the verdict.
-            if s.holdout_args:
-                hr = await invoke_mcp_tool(repo_url, s.name, s.holdout_args)
-                n += 1
-                if not hr.get("ok") and not hr.get("skipped"):
-                    note = (note + "; " if note else "") + "held-out input failed (possible overfit)"
-            return ToolVerdict(s.name, "PASSED", note), n
-        # failure
-        err = f"{r.get('error','')}\n{r.get('traceback','')}"
-        failures[classify_error(err)] = failures.get(classify_error(err), 0) + 1
-        if last_error and err.splitlines()[0:1] == last_error.splitlines()[0:1]:
-            return ToolVerdict(s.name, "FAILED", (r.get("error") or "")[:200] + " (repeated)"), n
-        last_error = err
-        if attempt >= 2:
-            break
-        summary = await debug(
-            f"Repository: {repo_url}\n\ninvoke_mcp_tool('{s.name}', {json.dumps(s.sample_args or {})}) failed:\n"
-            f"error: {r.get('error','')}\ntraceback: {r.get('traceback','')}\nstderr: {r.get('stderr','')}\n\n"
-            f"Fix the missing dependency or the code bug, then re-run this tool to confirm.")
-        v.debugger_actions.append(f"invoke {s.name}: {summary[:200]}")
-    return ToolVerdict(s.name, "FAILED", (last_error or "").splitlines()[0][:200] if last_error else "failed"), n
+            rep.exec_ok = True
+            rep.exec_note = r.get("reason", "")        # runtime-success detail (R6)
+        else:
+            rep.exec_ok = False
+            rep.error = (r.get("error") or "")[:300]
+            fails.append(f"invoke_tool_function('{t.name}', {json.dumps(args)}) crashed:\n"
+                         f"{r.get('error','')}\n{(r.get('traceback') or r.get('stderr') or '')[-1200:]}")
+    else:
+        rep.exec_ok, rep.exec_note = None, "no cheap real invocation exists"
+
+    tr = await run_tool_tests(t.name)
+    if tr.get("error"):
+        rep.tests_passed = rep.tests_total = None
+        fails.append(f"tests for '{t.name}': {tr['error']}")
+    elif tr.get("timeout"):
+        rep.tests_passed = rep.tests_total = None
+        rep.exec_note = (rep.exec_note + "; " if rep.exec_note else "") + tr["failures"]
+    else:
+        rep.tests_passed, rep.tests_total = tr["smoke_passed"], tr["smoke_total"]
+        rep.invoc_passed, rep.invoc_total = tr["invoc_passed"], tr["invoc_total"]
+        if tr["failures"]:
+            fails.append(f"pytest tests/test_{t.name}.py has failures:\n{tr['failures'][-1500:]}")
+    return fails
 
 
-def _semantic_note(s: SampleSpec, result) -> str:
-    """F2 (advisory): note declared-return keys that are missing from the result."""
-    if not s.returns or not isinstance(result, dict):
-        return ""
-    missing = [k for k in s.returns if k not in result]
-    return f"note: result missing declared keys {missing}" if missing else ""
+async def _call_debugger(name, session_service, metrics, message, memory=None) -> str:
+    sid = f"{name}_debugger_{time.monotonic_ns()}"
+    await session_service.create_session(app_name=config.APP_NAME, user_id=config.USER_ID,
+                                         session_id=sid)
+    mem = ("\n\nPrevious fix attempts this run (do NOT repeat them):\n- "
+           + "\n- ".join(m[:200] for m in memory)) if memory else ""
+    try:
+        final, steps, tokens, _ = await asyncio.wait_for(
+            run_agent(debugger_agent, session_service, sid, message + mem),
+            timeout=config.DEBUGGER_CALL_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(f"[debugger] call timed out after {config.DEBUGGER_CALL_TIMEOUT}s.")
+        return "debugger timed out"
+    metrics["total_actions"] += steps
+    metrics["total_tokens"] += tokens
+    return final
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Wrapper — deterministic codegen; LLM only when G4 fails (Q&A)
+# ══════════════════════════════════════════════════════════════════════════════
+async def _wrap(name, session_service, metrics):
+    started = time.monotonic()
+    plan = load_plan()
+    out = output_dir()
+    names = [t.name for t in (plan.tools if plan else [])
+             if (out / "tools" / f"{t.name}.py").exists()]
+    if not names:
+        update_stage_status("wrapper", status="failed", gate={"note": "no tool files exist"})
+        logger.error("[wrapper] no tool files to wrap.")
+        return
+
+    res = write_server(name, names)
+    gate = check_server()
+    used_fallback = False
+    if not gate["passed"]:
+        used_fallback = True
+        logger.warning(f"[wrapper] G4 failed — calling fallback wrapper agent: {gate['error'][:200]}")
+        sid = f"{name}_wrapper"
+        await session_service.create_session(app_name=config.APP_NAME, user_id=config.USER_ID,
+                                             session_id=sid)
+        try:
+            await asyncio.wait_for(
+                run_agent(wrapper_agent, session_service, sid,
+                          f"The generated server.py fails its compile/import gate.\n"
+                          f"Output dir: {out}\nError:\n{gate['error']}"),
+                timeout=config.WRAPPER_CALL_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[wrapper] fallback agent timed out.")
+        gate = check_server()
+
+    update_stage_status("wrapper", status="passed" if gate["passed"] else "failed",
+                        gate={"tools_wrapped": res["tools"], "skipped": res["skipped"],
+                              "llm_fallback": used_fallback,
+                              "error": "" if gate["passed"] else gate.get("error", "")[:500]})
+    metrics["durations_per_stage"]["wrapper"] = round(time.monotonic() - started, 1)
+    if gate["passed"]:
+        logger.info(f"[wrapper] server.py OK — {len(res['tools'])} tool(s) exposed"
+                    + (" (via LLM fallback)" if used_fallback else ""))
+    else:
+        logger.error(f"[wrapper] server.py still failing: {gate.get('error','')[:300]}")
+
+
+def _export_task_code(tasks: list[dict]) -> None:
+    """TM-Bench export: code.py per task (verbatim self-contained function)."""
+    for t in tasks:
+        code = render_code_py(t["name"])
+        dest = output_dir() / "tmbench" / t["name"] / "code.py"
+        if code:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(code, encoding="utf-8")
+            logger.info(f"[export] {dest}")
+        else:
+            logger.warning(f"[export] no function source for task '{t['name']}' — code.py skipped.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Stage messages built from the plan (exploration report appended, R3)
+# ══════════════════════════════════════════════════════════════════════════════
+def _exploration_text() -> str:
+    p = reports_dir() / "exploration.md"
+    return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+
+
+def _environment_message(repo_url: str, tasks: list[dict]) -> str:
+    plan = load_plan()
+    lines = [repo_url, "", "Computed environment layout — trust this, it is authoritative:"]
+    if plan:
+        e = plan.env
+        lines += [f"  layout: {e.layout}", f"  server_python: {e.server_python}"]
+        if e.repo_python:
+            lines.append(f"  repo_python: {e.repo_python}  (build .venv-repo on this)")
+        if e.requirements_files:
+            lines.append(f"  requirements files: {', '.join(e.requirements_files)}")
+        if e.system_libs:
+            lines.append(f"  likely system libs: {', '.join(e.system_libs)}")
+        if e.weights:
+            lines.append(f"  external weights to download: {json.dumps(e.weights)}")
+    msg = "\n".join(lines)
+    if tasks:
+        msg += ("\n\nThis run targets TM-Bench task(s): "
+                + ", ".join(t.get("name", "?") for t in tasks)
+                + ". The tools for these tasks must work standalone." + _DATA_POLICY)
+    return msg + "\n\n--- EXPLORATION REPORT ---\n" + _exploration_text()
+
+
+def _coder_message(repo_url: str, tasks: list[dict]) -> str:
+    plan = load_plan()
+    lines = [repo_url]
+    if plan and plan.tools:
+        lines += ["", "Verified tools to implement (targets confirmed to exist; params are "
+                  "the REAL signature; sample_args/evidence guide your tests):"]
+        for t in plan.tools:
+            lines.append(f"  - {t.name}  ->  {t.target}  params={t.params}")
+            lines.append(f"      purpose: {t.purpose}")
+            lines.append(f"      sample_args: {json.dumps(t.sample_args)}")
+            lines.append(f"      evidence: {t.evidence or '(none — smoke tests only)'}")
+    msg = "\n".join(lines) + _tasks_prompt(tasks)
+    if tasks:
+        msg += ("\n\nFor each required task, the function signature must use EXACTLY the "
+                "task's argument names, and the returned dict must contain EXACTLY the "
+                "declared return keys.")
+    return msg + "\n\n--- EXPLORATION REPORT ---\n" + _exploration_text()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -437,21 +759,6 @@ def _clean_workdir(name: str) -> None:
         logger.debug(f"[clean] removed {d}")
 
 
-def _coder_artefacts_present(base: Path) -> tuple[bool, list[str]]:
-    required = [base / "output" / "server.py", base / "output" / "tests" / "test_server.py",
-                base / "reports" / "server.md"]
-    missing = [str(p.relative_to(base)) for p in required if not p.exists()]
-    return (not missing), missing
-
-
-def _parse_pytest_counts(output: str) -> tuple[int | None, int | None]:
-    import re
-    p = re.search(r"(\d+)\s+passed", output)
-    f = re.search(r"(\d+)\s+failed", output)
-    return (int(p.group(1)) if p else (0 if output else None),
-            int(f.group(1)) if f else 0)
-
-
 def _new_metrics() -> dict:
     return {"actions_per_stage": {}, "tokens_per_stage": {}, "durations_per_stage": {},
             "tool_calls_per_stage": {}, "guard_retries_per_stage": {},
@@ -459,19 +766,28 @@ def _new_metrics() -> dict:
             "failures_by_class": {}, "total_actions": 0, "total_tokens": 0}
 
 
-def _record_stage(metrics, stage, duration, steps, tokens, sm) -> None:
-    metrics["durations_per_stage"][stage] = duration
-    metrics["actions_per_stage"][stage] = steps
-    metrics["tokens_per_stage"][stage] = tokens
+def _accumulate_stage(metrics, stage, duration, steps, tokens, sm) -> None:
+    """Accumulate across reset attempts (a stage may run several times, R1)."""
+    metrics["durations_per_stage"][stage] = metrics["durations_per_stage"].get(stage, 0) + duration
+    metrics["actions_per_stage"][stage] = metrics["actions_per_stage"].get(stage, 0) + steps
+    metrics["tokens_per_stage"][stage] = metrics["tokens_per_stage"].get(stage, 0) + tokens
     metrics["total_actions"] += steps
     metrics["total_tokens"] += tokens
-    metrics["tool_calls_per_stage"][stage] = sm["tool_calls"]
-    metrics["guard_retries_per_stage"][stage] = sm["guard_retries"]
-    metrics["transient_fault_retries_per_stage"][stage] = sm["transient_fault_retries"]
-    if sm["abort_reason"]:
-        metrics["abort_reason_per_stage"][stage] = sm["abort_reason"]
-    for label, c in sm["failures_by_class"].items():
-        metrics["failures_by_class"][label] = metrics["failures_by_class"].get(label, 0) + c
+    if sm:
+        for key, mkey in [("tool_calls", "tool_calls_per_stage"),
+                          ("guard_retries", "guard_retries_per_stage"),
+                          ("transient_fault_retries", "transient_fault_retries_per_stage")]:
+            val = sm[key]
+            if isinstance(val, dict):
+                cur = metrics[mkey].setdefault(stage, {})
+                for k, c in val.items():
+                    cur[k] = cur.get(k, 0) + c
+            else:
+                metrics[mkey][stage] = metrics[mkey].get(stage, 0) + val
+        if sm["abort_reason"]:
+            metrics["abort_reason_per_stage"][stage] = sm["abort_reason"]
+        for label, c in sm["failures_by_class"].items():
+            metrics["failures_by_class"][label] = metrics["failures_by_class"].get(label, 0) + c
 
 
 def _finalize_metrics(base: Path, metrics: dict) -> None:
@@ -488,20 +804,19 @@ def _finalize_metrics(base: Path, metrics: dict) -> None:
         logger.error(f"[pipeline] error saved → {d}/error.json")
 
 
-def _report_completion(name: str, base: Path, log_file: Path) -> None:
+def _report_completion(name: str, base: Path) -> None:
     sep = "=" * 60
-    vp = base / "reports" / "validation.md"
-    if vp.exists():
-        logger.success(f"\n{sep}\n  Pipeline complete: {name}\n  Reports: {base}/reports/\n{sep}")
+    if (base / "reports" / "validation.json").exists():
+        logger.success(f"\n{sep}\n  Pipeline complete: {name}\n  Run data: {base}/reports/\n{sep}")
     else:
-        logger.error(f"\n{sep}\n  Pipeline incomplete: {name} — no validation.md written.\n{sep}")
+        logger.error(f"\n{sep}\n  Pipeline incomplete: {name} — no validation.json written.\n{sep}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         logger.error("Usage: python -m alembic.main <repo_url> [--resume <stage>] "
-                     "[--until <stage>] [--target-task <spec>]")
+                     "[--until <stage>] [--tasks <spec>]")
         logger.error(f"       stages: {', '.join(STAGES)}")
         sys.exit(1)
 
@@ -516,7 +831,8 @@ if __name__ == "__main__":
 
     try:
         asyncio.run(run_pipeline(sys.argv[1], resume_from=_arg("--resume"),
-                                 stop_after=_arg("--until"), target_task_cli=_arg("--target-task")))
+                                 stop_after=_arg("--until"),
+                                 tasks_cli=_arg("--tasks") or _arg("--target-task")))
     except Exception:
         logger.exception("Pipeline error:")
         raise

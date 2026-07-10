@@ -1,11 +1,10 @@
-"""The structured inter-stage contract + deterministic report rendering.
+"""The structured inter-stage contract + run-data records.
 
-Machine-critical data (tool list, signatures, sample args, SKIP set, expected
-returns, venv layout) travels between stages as structured data parsed and
-validated by code — not as free-text markdown the next LLM must re-read
-correctly. Reports stay human-readable, but every field a *gate* depends on is
-extracted here, and ``validation.md`` is rendered by code (never hand-formatted
-by an LLM) so the benchmark harness can always parse it.
+Machine-critical data (tool list, signatures, sample args, env layout, per-tool
+verdicts, stage/gate status) travels between stages and out to the benchmark as
+structured JSON parsed and written by code — never as free-text a later stage
+or the harness must re-read correctly. ``validation.md`` is still rendered, but
+purely for humans: nothing parses it anymore (R2).
 """
 from __future__ import annotations
 
@@ -13,22 +12,18 @@ import json
 import re
 from dataclasses import dataclass, field, asdict
 
-import yaml
-
 from alembic.tools.paths import reports_dir
 
 # ── Fenced-block extraction ──────────────────────────────────────────────────
 # Models frequently forget the closing ``` fence, so we do NOT require it: grab
 # everything after the opening fence, cut a closing fence only if present, and
-# recover the object structurally (balanced braces / forgiving YAML). This makes
-# the whole inter-stage contract resilient to the single most common LLM slip.
+# recover the object structurally (balanced braces, trailing-comma tolerant).
 def _after_fence(text: str, lang: str) -> str | None:
     """Text following the first ```<lang> fence, up to a closing ``` if any."""
     m = re.search(rf"```[ \t]*{lang}[ \t]*\n?(.*)", text or "", re.DOTALL | re.IGNORECASE)
     if not m:
         return None
-    body = m.group(1)
-    return body.split("```", 1)[0]
+    return m.group(1).split("```", 1)[0]
 
 
 def _brace_slice(s: str) -> str | None:
@@ -75,20 +70,6 @@ def parse_json_block(text: str) -> dict | None:
     return None
 
 
-def parse_yaml_block(text: str) -> dict | None:
-    """First ```yaml block in ``text`` as a dict — tolerant of a missing
-    closing fence. No whole-document fallback (arbitrary markdown must not be
-    coerced into a YAML mapping)."""
-    body = _after_fence(text, "ya?ml")
-    if not body:
-        return None
-    try:
-        val = yaml.safe_load(body)
-    except yaml.YAMLError:
-        return None
-    return val if isinstance(val, dict) else None
-
-
 # ── Plan (Explorer proposal → verified by the Plan gate) ─────────────────────
 @dataclass
 class ToolSpec:
@@ -96,6 +77,8 @@ class ToolSpec:
     target: str                       # "module.path:symbol" or "script:relpath"
     purpose: str = ""
     params: list[str] = field(default_factory=list)   # real names (Plan gate)
+    sample_args: dict | None = None   # cheap real invocation args (Explorer)
+    evidence: str = ""                # documented basis for correctness tests (R6)
     verified: bool = False            # AST-verified against the clone
     note: str = ""                    # why unverified / demoted
 
@@ -116,11 +99,12 @@ class Plan:
     repo_url: str
     env: EnvSpec
     tools: list[ToolSpec]
+    tasks: list[dict] = field(default_factory=list)   # TM-Bench task specs (R4)
 
     def to_json(self) -> str:
         return json.dumps(
             {"repo_url": self.repo_url, "env": asdict(self.env),
-             "tools": [asdict(t) for t in self.tools]},
+             "tools": [asdict(t) for t in self.tools], "tasks": self.tasks},
             indent=2, ensure_ascii=False,
         )
 
@@ -131,7 +115,7 @@ def save_plan(plan: Plan) -> None:
     (d / "plan.json").write_text(plan.to_json(), encoding="utf-8")
 
 
-def load_plan(repo_url: str) -> Plan | None:
+def load_plan(repo_url: str | None = None) -> Plan | None:
     p = reports_dir(repo_url) / "plan.json"
     if not p.exists():
         return None
@@ -140,154 +124,141 @@ def load_plan(repo_url: str) -> Plan | None:
     except json.JSONDecodeError:
         return None
     return Plan(
-        repo_url=raw.get("repo_url", repo_url),
+        repo_url=raw.get("repo_url", ""),
         env=EnvSpec(**raw.get("env", {})),
         tools=[ToolSpec(**t) for t in raw.get("tools", [])],
+        tasks=raw.get("tasks", []),
     )
 
 
-# ── Coder samples block (server.md → drives the validator loop) ──────────────
+# ── Per-tool validation record (R6: two-level verdicts) ──────────────────────
 @dataclass
-class SampleSpec:
-    name: str
-    sample_args: dict | None          # None => SKIP
-    holdout_args: dict | None = None
-    returns: dict | None = None       # {key: type} expected output shape (F2)
-    skip: bool = False
-    skip_reason: str = ""
+class ToolReport:
+    """Execution status and test statistics for one tool.
 
-
-def parse_samples(repo_url: str) -> list[SampleSpec]:
-    """Parse server.md's ``samples:`` YAML block into SampleSpecs.
-
-    Each entry is either ``SKIP`` or a dict. A dict with a ``sample_args`` key
-    uses the rich shape (sample_args/holdout_args/returns/skip_reason); a plain
-    dict of args is accepted as sample_args directly (lenient back-compat).
-    Returns [] on any parse failure — the caller treats that as "no guidance."
+    Semantics (maintainer-specified):
+      * ``tests_*``  — the coder's regular/smoke tests (test_smoke_*). None = none exist.
+      * ``exec_ok``  — did a direct invocation crash? True also covers "runtime
+        success": a timeout or missing input files is NOT a crash (R6).
+        None = never invoked (no sample args).
+      * ``invoc_*``  — evidence-based correctness tests (test_invoc_*).
+        None = no grounds for one existed.
+      * passed  = all tests green AND never crashed (and at least one signal exists).
+      * perfect = passed AND all invocation-correctness tests green (≥1 exists).
     """
-    server_md = reports_dir(repo_url) / "server.md"
-    if not server_md.exists():
-        return []
-    block = parse_yaml_block(server_md.read_text(encoding="utf-8", errors="replace"))
-    samples = (block or {}).get("samples")
-    if not isinstance(samples, dict):
-        return []
-
-    specs: list[SampleSpec] = []
-    for name, v in samples.items():
-        if isinstance(v, str) and v.strip().upper() == "SKIP":
-            specs.append(SampleSpec(name=name, sample_args=None, skip=True,
-                                    skip_reason="marked SKIP by coder"))
-        elif isinstance(v, dict) and "sample_args" in v:
-            sa = v.get("sample_args")
-            is_skip = (isinstance(sa, str) and sa.strip().upper() == "SKIP") or sa is None
-            specs.append(SampleSpec(
-                name=name,
-                sample_args=None if is_skip else sa,
-                holdout_args=v.get("holdout_args"),
-                returns=v.get("returns"),
-                skip=is_skip,
-                skip_reason=v.get("skip_reason", "") if is_skip else "",
-            ))
-        elif isinstance(v, dict):
-            specs.append(SampleSpec(name=name, sample_args=v))
-        # anything else: ignore silently
-    return specs
-
-
-# ── Validation result (produced by the code-driven validator loop) ───────────
-@dataclass
-class ToolVerdict:
     name: str
-    status: str                       # PASSED | FAILED | SKIPPED
-    reason: str = ""
+    tests_passed: int | None = None
+    tests_total: int | None = None
+    exec_ok: bool | None = None
+    exec_note: str = ""
+    invoc_passed: int | None = None
+    invoc_total: int | None = None
+    error: str = ""                   # last failure detail (debugger input)
+
+    @property
+    def passed(self) -> bool:
+        if self.exec_ok is False:
+            return False
+        if self.tests_total and (self.tests_passed or 0) < self.tests_total:
+            return False
+        return bool(self.tests_total) or self.exec_ok is not None
+
+    @property
+    def perfect(self) -> bool:
+        return (self.passed and bool(self.invoc_total)
+                and (self.invoc_passed or 0) == self.invoc_total)
+
+    @property
+    def status(self) -> str:
+        if self.perfect:
+            return "perfect"
+        if self.passed:
+            return "passed"
+        if self.exec_ok is None and not self.tests_total and not self.invoc_total:
+            return "untested"
+        return "failed"
 
 
 @dataclass
 class Validation:
-    syntax_ok: bool = False
-    syntax_error: str = ""
-    tests_ran: bool = False
-    tests_passed: int | None = None
-    tests_failed: int | None = None
-    tests_error: str = ""
-    tools: list[ToolVerdict] = field(default_factory=list)
+    tools: list[ToolReport] = field(default_factory=list)
+    debugger_rounds: int = 0
     debugger_actions: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
-    @property
-    def overall_ok(self) -> bool:
-        if not self.syntax_ok:
-            return False
-        if any(t.status == "FAILED" for t in self.tools):
-            return False
-        # at least one tool must have actually been invoked & passed
-        return any(t.status == "PASSED" for t in self.tools)
+    def counts(self) -> dict:
+        def _sum(attr):
+            vals = [getattr(t, attr) for t in self.tools if getattr(t, attr) is not None]
+            return sum(vals) if vals else None
+        return {
+            "tools_total":    len(self.tools),
+            "tools_passed":   sum(t.passed for t in self.tools),
+            "tools_perfect":  sum(t.perfect for t in self.tools),
+            "tests_passed":   _sum("tests_passed"),
+            "tests_total":    _sum("tests_total"),
+            "invoc_passed":   _sum("invoc_passed"),
+            "invoc_total":    _sum("invoc_total"),
+            "exec_ok":        sum(1 for t in self.tools if t.exec_ok),
+            "exec_attempted": sum(1 for t in self.tools if t.exec_ok is not None),
+        }
+
+
+def _fmt_frac(passed: int | None, total: int | None) -> str:
+    return "-" if not total else f"{passed or 0}/{total}"
 
 
 def render_validation_md(repo_name: str, v: Validation) -> str:
-    """Render validation.md in the EXACT format run_benchmark.parse_validation
-    expects: ## Syntax & Imports / ## Tests / ## Tool Invocations / ## Overall.
-    """
-    L = [f"# {repo_name} Validation Report", ""]
-
-    L += ["## Syntax & Imports", "PASSED" if v.syntax_ok else "FAILED"]
-    if not v.syntax_ok and v.syntax_error:
-        L.append(v.syntax_error.strip()[:1000])
-    L.append("")
-
-    L.append("## Tests")
-    if v.tests_ran and v.tests_passed is not None:
-        head = "PASSED" if (v.tests_failed or 0) == 0 else "FAILED"
-        L.append(f"{head} — {v.tests_passed} passed, {v.tests_failed or 0} failed")
-    else:
-        L.append("FAILED — 0 passed, 0 failed")
-        if v.tests_error:
-            L.append(v.tests_error.strip()[:1000])
-    L.append("")
-
-    L.append("## Tool Invocations")
-    if v.tools:
-        for t in v.tools:
-            reason = f" ({t.reason})" if t.reason else ""
-            L.append(f"- **{t.name}** — {t.status}{reason}")
-    else:
-        L.append("- (no tools were declared)")
-    L.append("")
-
-    L.append("## Debugger Actions")
-    if v.debugger_actions:
-        L += [f"- {a}" for a in v.debugger_actions]
-    else:
-        L.append("None required.")
-    L.append("")
-
-    L.append("## Overall")
-    if v.overall_ok:
-        L.append("PASSED (all invoked tools succeeded; SKIPPED tools do not count as failure)")
-    else:
-        failed = [t.name for t in v.tools if t.status == "FAILED"]
-        bits = []
-        if not v.syntax_ok:
-            bits.append("syntax/imports failed")
-        if failed:
-            bits.append("failing tools: " + ", ".join(failed))
-        if not any(t.status == "PASSED" for t in v.tools):
-            bits.append("no tool passed a live invocation")
-        L.append("FAILED (" + "; ".join(bits) + ")" if bits else "FAILED")
+    """Human-readable validation summary. Nothing parses this file (R2)."""
+    c = v.counts()
+    L = [f"# {repo_name} Validation Report", "",
+         f"**Tools: {c['tools_passed']}/{c['tools_total']} passed, "
+         f"{c['tools_perfect']} perfect** — tests {_fmt_frac(c['tests_passed'], c['tests_total'])}, "
+         f"exec ok {c['exec_ok']}/{c['exec_attempted']}, "
+         f"invocation tests {_fmt_frac(c['invoc_passed'], c['invoc_total'])}", "",
+         "| Tool | Smoke tests | Exec | Invocation tests | Verdict |",
+         "|---|---|---|---|---|"]
+    for t in v.tools:
+        if t.exec_ok is None:
+            ex = "not invoked"
+        else:
+            ex = "ok" if t.exec_ok else "CRASHED"
+        if t.exec_note:
+            ex += f" ({t.exec_note})"
+        L.append(f"| {t.name} | {_fmt_frac(t.tests_passed, t.tests_total)} | {ex} "
+                 f"| {_fmt_frac(t.invoc_passed, t.invoc_total)} | {t.status} |")
+    L += ["", f"## Debugger — {v.debugger_rounds} round(s)"]
+    L += [f"- {a}" for a in v.debugger_actions] or ["None required."]
+    if v.notes:
+        L += ["", "## Notes"] + [f"- {n}" for n in v.notes]
     return "\n".join(L) + "\n"
 
 
-def write_validation(repo_url: str, repo_name: str, v: Validation) -> None:
+def write_validation(repo_url: str | None, repo_name: str, v: Validation) -> None:
+    """Persist validation.json (the harness contract) + validation.md (humans).
+    Called incrementally during validation so a crash still leaves valid data."""
     d = reports_dir(repo_url)
     d.mkdir(parents=True, exist_ok=True)
+    (d / "validation.json").write_text(json.dumps({
+        "tools": [{**asdict(t), "passed": t.passed, "perfect": t.perfect,
+                   "status": t.status} for t in v.tools],
+        "counts": v.counts(),
+        "debugger_rounds": v.debugger_rounds,
+        "debugger_actions": v.debugger_actions,
+        "notes": v.notes,
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
     (d / "validation.md").write_text(render_validation_md(repo_name, v), encoding="utf-8")
-    (d / "validation.json").write_text(
-        json.dumps({
-            "syntax_ok": v.syntax_ok, "tests_passed": v.tests_passed,
-            "tests_failed": v.tests_failed,
-            "tools": [asdict(t) for t in v.tools],
-            "debugger_actions": v.debugger_actions,
-            "overall_ok": v.overall_ok,
-        }, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+
+
+# ── Stage status (R2: run data, written incrementally) ───────────────────────
+def update_stage_status(stage: str, repo_url: str | None = None, **fields) -> None:
+    """Merge ``fields`` into reports/stage_status.json[stage]. The file is the
+    harness's source of truth for how far a run got and what each gate saw."""
+    d = reports_dir(repo_url)
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / "stage_status.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except json.JSONDecodeError:
+        data = {}
+    data.setdefault(stage, {}).update(fields)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -8,3 +8,4 @@ fastmcp
 mcp==1.26.0
 pyyaml==6.0.3
 packaging>=23.0
+pytest>=8.0

@@ -107,6 +107,99 @@ DESIGN_CHOICES §8 / the `alembic-remaster` memory.
   `benchmarks/alembic/toolmaker_results.md`.
 - **Accept:** completed run + summary table; note glm-5.2 vs qwen delta.
 
+> **Status 2026-07-10:** W1–W9 done (qwen baseline: 12/14 syntax, 9 passing
+> tools, 4 repos with passing tools). W10 superseded by Phase 2 below — the
+> final glm-5.2 run happens on the upgraded architecture.
+
+---
+
+# Phase 2 — Upgrade (R1–R8)
+
+Implements [upgrade.md](./upgrade.md) per DESIGN_CHOICES Part II. Locked
+choices: JSON-only harness extraction; passed/perfect per-tool semantics; full
+TM-Bench export; deterministic wrapper + LLM fallback; in-container fs
+checkpoints; code-recorded setup.sh; fast run = 2-repo glm-5.2 smoke then
+STAMP dual-task.
+
+### U1 — Core plumbing (config / paths / contract)
+- `config.py`: `STAGE_RESET` (default 2), `DEBUGGING_ROUNDS` (default 10),
+  stage timeouts default **None** with `ALEMBIC_TIMEOUT_<STAGE>` overrides,
+  `TEST_TIMEOUT=120`, `ALEMBIC_TASKS` (+ back-compat `ALEMBIC_TARGET_TASK`),
+  `STAGES` gains `wrapper`.
+- `tools/paths.py`: `set_current_repo(url)` + 0-arg path helpers (R8);
+  `tools_python()` (repo venv in two-venv mode, else server venv).
+- `contract.py`: `ToolSpec` + `sample_args`/`evidence`; `ToolReport`
+  {tests_passed/total, exec_ok/note, invoc_passed/total, passed/perfect};
+  `Validation` v2 with repo-level counts; `stage_status.json` writer;
+  `validation.md` renderer becomes human-only (new format).
+- **Accept:** container-import clean; unit check on ToolReport semantics
+  (timeout ⇒ runtime success; passed/perfect boundaries).
+
+### U2 — Tools layer v2
+- All agent tools lose `repo_url` (R8); `clone_repo` sets current repo.
+- `shell.py`/`venv.py`: record successful env-stage commands → rendered
+  `setup.sh` (R5). `setup_venv` also readies pytest in the tools venv.
+- `invoke.py` v2: per-tool static gate checks (compile/imports/undefined names
+  on `tools/<name>.py` + test files); per-tool pytest runner (120 s cap,
+  smoke/invoc split parsed from `-v` output); `invoke_tool_function` running
+  `scripts/run_function.py` (sentinel protocol; missing-input/timeout ⇒
+  runtime success).
+- `codegen.py` (new): render `server.py` from AST signatures + docstrings
+  (subprocess through `helpers/run_function.py`); render `setup.sh`; render
+  TM-Bench `code.py` (verbatim function copy).
+- **Accept:** gate_checks cover: run_function round-trip, pytest split parse,
+  codegen output compiles, code.py self-contained.
+
+### U3 — Instructions + agents
+- Explorer: plan JSON gains per-tool `sample_args` + `evidence`; documents
+  test basis (R6); task section when `ALEMBIC_TASKS` set (name/signature
+  MUST match).
+- Environment: no write_report; venvs only + weights; dataset prohibition in
+  task mode (R7).
+- Coder: plain function files (imports in body) + `tests/test_<name>.py`
+  (`test_smoke_*`/`test_invoc_*`); no argparse, no server.py.
+- Debugger: batch-failure mode (all failures in one message, fix shared root
+  causes first).
+- New `wrapper` fallback instruction (fix generated server.py only).
+- **Accept:** prompts import; each references its gate contract.
+
+### U4 — Orchestration rewrite (main.py)
+- Stage-reset loops (fs checkpoints per stage-owned paths, fresh session +
+  failure note, ≤ STAGE_RESET) around every LLM stage.
+- Gates: G1 plan (≥1 verified tool, task tools present); G2 env
+  (check_venv_compat + repo-import smoke; 1 debugger round then reset); G3
+  artefacts (per-tool file/def/compile/imports/undefined + tests exist &
+  import); G4 server (compile+import in .venv; wrapper LLM fallback).
+- Deterministic validation: mount-file staging (tasks), per-tool exec + pytest,
+  batched debugger ≤ DEBUGGING_ROUNDS, incremental validation.json.
+- Export step: setup.sh, code.py per task; stage_status.json throughout;
+  exploration report appended to env/coder prompts; timeouts only when set.
+- **Accept:** `--until explorer` yields exploration.md + plan.json +
+  stage_status.json; forced gate failure triggers visible reset.
+
+### U5 — Harness v2 (run_benchmark.py + start_chain.py)
+- start_chain: `--mount-dir` (ro bind mount), `ALEMBIC_TASKS` passthrough,
+  stage choices + `wrapper`.
+- run_benchmark: extraction = stage_status.json + validation.json +
+  metrics.json (no md parsing); summary columns = stage reached / tests /
+  exec-ok / invoc / passed / perfect; artefact export via `docker cp` →
+  `runs/<ts>/output/<repo>/`; `--tasks` (files/dir) grouping by repo URL
+  (STAMP dual-task); `toolmaker-runtime:installed-<task>` tagging in task mode.
+- **Accept:** bench of a stub image produces the new summary from JSON only.
+
+### U6 — Rebuild + in-container regression checks
+- Update `tests/gate_checks.py` for v2 contracts; rebuild `alembic-base`;
+  all checks pass in-container.
+
+### U7 — Fast run 1: cytopus + TabPFN, `--parallel 2`, `MODEL=openrouter/z-ai/glm-5.2`
+- Validates the restructure end-to-end; iterate on failures; `docker rmi`
+  per repo.
+
+### U8 — Fast run 2: STAMP dual-task
+- Fetch both stamp task yamls (ToolMaker branch `original`); one pipeline run
+  with both tasks; verify dual tools + code.py export + tags. Fallback:
+  separate runs.
+
 ---
 
 ## Risks & mitigations

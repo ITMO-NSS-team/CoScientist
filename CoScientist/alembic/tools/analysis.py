@@ -124,6 +124,20 @@ def verify_target(target: str, table: dict, repo_dir: Path) -> dict:
     return {"ok": True, "params": chosen["params"], "reason": note}
 
 
+def target_top_modules(targets: list[str]) -> list[str]:
+    """Top-level module names referenced by plan tool targets — the env gate
+    imports these in the tools venv as a repo-import smoke test (R3)."""
+    mods = set()
+    for target in targets:
+        target = (target or "").strip()
+        if target.startswith("script:") or ":" not in target:
+            continue
+        module = target.rpartition(":")[0]
+        if module:
+            mods.add(module.split(".")[0])
+    return sorted(mods)
+
+
 # ── Layout decision ──────────────────────────────────────────────────────────
 _SERVER_CANDIDATES = ["3.11", "3.12", "3.13", "3.10"]   # preference order, all ≥3.10
 _OLD_CANDIDATES    = ["3.9", "3.8", "3.7"]

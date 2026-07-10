@@ -13,8 +13,7 @@ R2. More reliable benchmark metrics
 Right now benchmark metrics still rely on final report, and in benchmarks/alembic/runs/2026-07-09_remaster-qwen/summary.md 
 there were STILL two fails because final report md was not accessible. - this is unacceptable. Partially fixed by R2
 I want each stage's readiness, syntax / smoke / tool invocation (name, status, reason as currently) tests statistics 
-to be excracted directly from run data, not from a report in the end. Therefore, i want all the data to be guaranteed extracted
-from the run data itself, the final report is not really needed.
+to be excracted directly from run data, not from a report in the end. Therefore, i want all the data to be guaranteed extracted from the run data itself, the final report is not really needed.
 
 R3. Structure update
 
@@ -32,6 +31,7 @@ the tools scripts should be imported stript.tool_name in smoke.invoc tests - mak
 Writing reports is now needed only for explorer, all else is replaced by gates
 Environment and coder read explorer report at the beginning (and not by calling a tool but just appended to prompt, this is explorer's report)
 
+Debugger has an optional limit of DEBUGGING-ROUNDS=10 so that we are not stuck in an infinite loop, turned on by default.
 
 After that, we give all that to mcp-wrapper agent that would implement the two-layer logic on the functions (this is purely artefacts now, we presume that tests for individual tools pass -> we assume that mcp server as valid) with 
 
@@ -42,16 +42,21 @@ After that, we give all that to mcp-wrapper agent that would implement the two-l
     5. CODER 
     6. [GATE: scripts + tests available]
     7. VALIDATION (static) - run all tests, call debugger to fix all at once if encountered real errors - parallelism required to propagate errors within neighboring tools 
+    + TMBench tests integration if we run with it (R4) - this only gets called on tests that fail, if a invocation test got a metric than we don't mark that as a failed test.
     8. MCP WRAPPER
     9. [Gate for server and helper scripts present and compile]
 
 so still no validation agent, but a new wrapper agent
 
+the final artefacts that we clone into [run's folder]/output/<reponame> are the server, helper scripts and setup.sh
+all else tracked from benchmark is the same + all the new points of validation.
+
+
 R4. TMBench compatability
 
 In practice I want our agent to be fully compatible with the TMBench - and that is partially implemented right now. 
 I want to be sure that in this case the explorer gets the context of the tools he is required to discover, and writing that in plan
-with the files that are available
+with the files that are available being copied to container
 
 Environment embeds TMBench task description into report if we're running with it, stating that this is the
 
@@ -87,18 +92,40 @@ Environment embeds TMBench task description into report if we're running with it
         tcga_brca_patch_png: {...}
         tcga_brca_patch_jpg: {...}
 
+One more thing - there are two task in TMBench that require the same stamp_train_classification_model and stamp_extract_features - let's add a option to run these two simultaneously, meaning explorer has to find all that is needed for both tools and coder has to also code both.
+
+I understand that this might be tough but it would really showcase the actual Repo-to-MCP evolution of our project. If it fails, we'll just run them separately.
+
+the actual tests: 
+
+  For run_tool() (toolmaker/run.py:49-119) to execute a test
+  invocation, it needs:
+
+  1. A pre-built Docker checkpoint image — toolmaker-runtime:installed-<name>. Must already exist (allow_build=False —
+  see last answer); nothing gets built on the fly.
+  2. code.py — read as raw text (tool_folder.joinpath("code.py").read_text(), toolmaker/run.py:76). And yes, in
+  practice it's exactly what you said: one standalone Python function, self-contained with its own imports inside the
+  function body (that's an explicit requirement in the codegen prompt — see
+  toolmaker/tasks/implement_function.py:24-35, "You are only allowed to write a single python function"). No class, no
+  decorator, nothing else in the file.
+  3. task_definition.yaml → parsed into a ToolDefinition, which supplies the test_cases (each a ToolInvocation =
+  {arguments: {...}, mount: {...}}).
+  4. The actual input data files, copied into run_folder/input per the mount mapping (Mounts.reset(),
+  toolmaker/runtime/client.py:121-146), sourced from benchmark/data.
+
+- when we run TMBench this is included in validation-debugger loop, before our other tests. If debugger is exhausted on TMBench tests, it gets the same amount of retry attempts on this.
 
 R5. ToolMaker-inspired checkpoints
 
 Stemming from the R1, we want to remember the current condition of our run if we execute agent reset, after each stage 
 completion gate is passed.
 
-In ToolMaker:
+In ToolMaker:S
 
     1. Checkpoint = docker commit. Once the agent finishes, runtime.save_checkpoint(tag=f"installed-{name}")
     (toolmaker/cli.py:108) calls:
     def save_checkpoint(self, tag: str) -> None:
-        container = get_docker().containers.get(self.name)
+        container = get_docker().containers.get(self.name)S
         container.commit(repository=self.repository, tag=tag)
     2. (toolmaker/runtime/client.py:290-295) — this snapshots the container's entire filesystem (all installed packages,
     cloned repo, downloaded models) into a new image toolmaker-runtime:installed-<name>. That's the checkpoint; nothing
@@ -177,3 +204,6 @@ so that would modify env agent's prompt, even if explorer (which must document a
 
 R8. Remove the need to constanlty mention repo url in every tool call except git clone
 This just wastes tokens, we don't really need multi-repo action now. Only the very first git clone it is needed.
+
+
+Remember to keep all code concise, well structured, readable and not over-documented.

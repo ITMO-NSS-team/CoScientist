@@ -1,9 +1,35 @@
-"""Shell-execution tools exposed to the agents: bash / bash_env."""
+"""Shell-execution tools exposed to the agents: bash / bash_env.
+
+``bash_env`` additionally records every SUCCESSFUL command while recording is
+armed (the Environment stage) — the transcript becomes ``setup.sh`` (R5),
+ToolMaker's ``installed_state.bash()`` approach: the artefact is what actually
+ran, not what an agent claims ran.
+"""
 import asyncio
 import subprocess
 from pathlib import Path
 
 from alembic.config import BASH_ENV_TIMEOUT, BASH_TIMEOUT, MAX_BYTES
+
+_recorded: list[str] = []
+_recording = False
+
+
+def start_env_recording() -> None:
+    global _recording
+    _recorded.clear()
+    _recording = True
+
+
+def stop_env_recording() -> list[str]:
+    global _recording
+    _recording = False
+    return list(_recorded)
+
+
+def record_env_command(cmd: str) -> None:
+    if _recording:
+        _recorded.append(cmd)
 
 
 def _glob_command(stripped: str) -> dict | None:
@@ -23,7 +49,7 @@ def _glob_command(stripped: str) -> dict | None:
     return {"matches": matched}
 
 
-def _run_shell(command: str, timeout: int) -> dict:
+def _run_shell(command: str, timeout: int, record: bool = False) -> dict:
     """Shared body for ``bash`` / ``bash_env``: glob shortcut + shell run."""
     stripped = command.strip()
     if not stripped:
@@ -40,7 +66,9 @@ def _run_shell(command: str, timeout: int) -> dict:
         output = result.stdout
         if result.returncode != 0 and result.stderr:
             output += "\n[stderr] " + result.stderr
-        return {"output": output[:MAX_BYTES]}
+        if record and result.returncode == 0:
+            record_env_command(stripped)
+        return {"output": output[:MAX_BYTES], "exit_code": result.returncode}
     except subprocess.TimeoutExpired:
         return {"error": f"Command timed out after {timeout} seconds."}
 
@@ -48,22 +76,19 @@ def _run_shell(command: str, timeout: int) -> dict:
 async def bash(command: str) -> dict:
     """Run a shell command with a 15 s timeout.
 
-    The pipeline is intended to run inside an ephemeral container, so any
-    command line is accepted — the container is the security boundary. The
-    custom ``glob <pattern>`` shortcut is still recognised as a convenience.
+    The pipeline runs inside an ephemeral container, so any command line is
+    accepted — the container is the security boundary. The custom
+    ``glob <pattern>`` shortcut is recognised as a convenience.
 
     Examples:
         bash("ls .alembic/massformer/repos")
-        bash("grep -r 'def train' .alembic/massformer/repos -l")
+        bash("grep -rn 'def train' .alembic/massformer/repos -l")
         bash("head -n 30 .alembic/massformer/repos/README.md")
         bash("glob .alembic/massformer/repos/**/*.yaml")
-        bash("python -m py_compile .alembic/massformer/output/server.py && echo OK")
     """
-    # F23: offload the blocking subprocess.run to a worker thread — ADK calls
-    # non-async tools with a plain synchronous call (no run_in_executor), so a
-    # sync bash()/bash_env() here would freeze the whole event loop for the
-    # duration of the command, silently defeating any asyncio.wait_for-based
-    # timeout wrapping this turn.
+    # Offload the blocking subprocess.run to a worker thread — ADK calls
+    # non-async tools synchronously, which would freeze the event loop and
+    # silently defeat any asyncio-based timeout wrapping this turn.
     return await asyncio.to_thread(_run_shell, command, BASH_TIMEOUT)
 
 
@@ -71,21 +96,15 @@ async def bash_env(command: str) -> dict:
     """Run a shell command with a 900 s timeout — for slow installs and downloads.
 
     Same semantics as ``bash``, just a longer timeout so package managers
-    (pip / uv / apt-get / conda) have time to download and build, and so a
-    pretrained-model-weight download (huggingface-cli / hf_hub_download,
-    potentially multi-GB) has room to finish (F6). Inherits this process's
-    full environment, so HF_TOKEN (if set) is automatically visible to any
-    huggingface_hub/huggingface-cli call run through this tool — never pass
-    it explicitly on the command line.
+    (pip / uv / apt-get) have time to build, and a pretrained-weight download
+    (potentially multi-GB) has room to finish. Inherits this process's full
+    environment, so HF_TOKEN (if set) is automatically visible to any
+    huggingface_hub/huggingface-cli call — never pass it on the command line.
 
     Examples:
-        bash_env("uv venv .alembic/massformer/output/.venv --python 3.11")
-        bash_env("uv pip install --python .alembic/massformer/output/.venv/bin/python torch torchvision")
-        bash_env("pip install -r .alembic/massformer/repos/requirements.txt")
-        bash_env("which python3")
-        # System libs (container only, /var/lib/apt/lists is empty):
+        bash_env("uv venv .alembic/massformer/output/.venv-repo --python 3.9")
+        bash_env("uv pip install --python .alembic/massformer/output/.venv/bin/python torch")
         bash_env("apt-get update && apt-get install -y --no-install-recommends libpoppler-cpp-dev")
-        # Pretrained weights (F6) — HF_TOKEN used automatically, never inline it:
         bash_env("huggingface-cli download MahmoodLab/UNI2-h --local-dir .alembic/UNI/repos/checkpoints")
     """
-    return await asyncio.to_thread(_run_shell, command, BASH_ENV_TIMEOUT)
+    return await asyncio.to_thread(_run_shell, command, BASH_ENV_TIMEOUT, True)

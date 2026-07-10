@@ -1,4 +1,10 @@
-"""Workdir layout: constants, per-repo path helpers, and subprocess scripts."""
+"""Workdir layout: current-repo state, per-repo path helpers, script paths.
+
+R8: one pipeline works on exactly one repo, so tools no longer take repo_url —
+``set_current_repo`` is called once (by the pipeline and by ``clone_repo``) and
+every path helper resolves against it. Helpers still accept an explicit
+``repo_url`` for host-side callers (benchmark, unit checks).
+"""
 import os
 from pathlib import Path
 
@@ -10,7 +16,11 @@ WORKDIR = Path(os.environ.get("ALEMBIC_WORKDIR", ".alembic"))
 # Standalone scripts run inside a repo's venv (see venv.py / invoke.py).
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
 COMPAT_CHECK_SCRIPT = _SCRIPTS_DIR / "compat_check.py"
-INVOKE_TOOL_SCRIPT  = _SCRIPTS_DIR / "invoke_tool.py"
+RUN_FUNCTION_SCRIPT = _SCRIPTS_DIR / "run_function.py"
+
+# Where TM-Bench-style input data lands inside the container (R4).
+MOUNT_DATA  = Path("/mount/data")    # host benchmark/data, bind-mounted ro
+MOUNT_INPUT = Path("/mount/input")   # per-task staged inputs
 
 IGNORE = {
     ".git", "__pycache__", ".eggs", "*.egg-info", "dist", "build",
@@ -24,29 +34,46 @@ IGNORE_EXTS = {
     ".pt", ".pth", ".ckpt", ".pkl", ".npy", ".npz", ".parquet",
 }
 
+_current_repo: str | None = None
 
-def _repo_base(repo_url: str) -> Path:
+
+def set_current_repo(repo_url: str) -> None:
+    global _current_repo
+    _current_repo = repo_url
+
+
+def current_repo() -> str:
+    if _current_repo is None:
+        raise RuntimeError("current repo not set — call set_current_repo() first")
+    return _current_repo
+
+
+def _url(repo_url: str | None) -> str:
+    return repo_url if repo_url else current_repo()
+
+
+def _repo_base(repo_url: str | None = None) -> Path:
     """Root dir for everything related to this repo: <WORKDIR>/<repo-name>/"""
-    return WORKDIR / get_repo_name(repo_url)
+    return WORKDIR / get_repo_name(_url(repo_url))
 
 
-def repo_path(repo_url: str) -> Path:
+def repo_path(repo_url: str | None = None) -> Path:
     """Where the repo is cloned: <WORKDIR>/<repo-name>/repos/"""
     return _repo_base(repo_url) / "repos"
 
 
-def output_dir(repo_url: str) -> Path:
-    """Where server.py, tests, .venv live: <WORKDIR>/<repo-name>/output/"""
+def output_dir(repo_url: str | None = None) -> Path:
+    """Where tools/, tests/, server.py, .venv live: <WORKDIR>/<repo-name>/output/"""
     return _repo_base(repo_url) / "output"
 
 
-def reports_dir(repo_url: str) -> Path:
-    """Where .md reports live: <WORKDIR>/<repo-name>/reports/"""
+def reports_dir(repo_url: str | None = None) -> Path:
+    """Where reports + structured run data live: <WORKDIR>/<repo-name>/reports/"""
     return _repo_base(repo_url) / "reports"
 
 
 def venv_python(out_dir: Path) -> str:
-    """Return the venv python path if it exists, else fall back to 'python'.
+    """The server venv python if it exists, else 'python'.
 
     Uses the venv symlink path directly — do NOT resolve(), as that follows
     the symlink to the bare uv Python binary which lacks the venv site-packages.
@@ -55,18 +82,12 @@ def venv_python(out_dir: Path) -> str:
     return str(candidate.absolute()) if candidate.exists() else "python"
 
 
-def helper_venv_python(out_dir: Path) -> str:
-    """Return the python that helper scripts actually run under (F28).
+def tools_python(out_dir: Path) -> str:
+    """The python that tool functions actually run under.
 
-    Mirrors server.py's own two-venv PYTHON selection (coder.py:
-    ``PYTHON = _REPO_VENV if _REPO_VENV.exists() else _SERVER_VENV``): when
-    the Environment stage had to create a separate ``.venv-repo`` (repo
-    deps need an older Python / conflict with fastmcp/pytest in ``.venv``),
-    helper scripts run under that repo venv, not the server venv —
-    checking a helper's imports against the wrong venv produces false
-    ModuleNotFoundErrors for packages that are only ever installed
-    repo-side (confirmed against `ase`'s real two-venv layout: `numpy`
-    lives in `.venv-repo`, not `.venv`).
+    Two-venv layout (repo needs an older Python / conflicts with fastmcp in
+    ``.venv``): tool functions import the repo, so they run under
+    ``.venv-repo``. One-venv: everything runs under ``.venv``.
     """
     repo_venv = out_dir / ".venv-repo" / "bin" / "python"
     return str(repo_venv.absolute()) if repo_venv.exists() else venv_python(out_dir)

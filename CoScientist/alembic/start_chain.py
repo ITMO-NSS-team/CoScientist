@@ -44,10 +44,13 @@ PASSTHROUGH_ENV = (
     # LLM / agent providers
     "OPENROUTER_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY",
     "GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-    "MODEL", "MODEL_TEMPERATURE", "MODEL_TOP_P", "ALEMBIC_TARGET_TASK",
+    "MODEL", "MODEL_TEMPERATURE", "MODEL_TOP_P",
+    "ALEMBIC_TARGET_TASK", "ALEMBIC_TASKS", "STAGE_RESET", "DEBUGGING_ROUNDS",
     "MCP_URLS", "OR_APP_NAME", "FEDOTMAS_DEFAULT_MODEL",
     # HuggingFace — needed by ToolMaker subset (CONCH, UNI, MUSK, ...)
     "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN",
+    # TabPFN gated model access
+    "TABPFN_TOKEN",
     # Wandb — some train/finetune tools call wandb.init at import time.
     # Set WANDB_MODE=offline to disable without leaking the key.
     "WANDB_API_KEY", "WANDB_MODE",
@@ -114,6 +117,8 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         cmd += ["--platform", ns.platform]
     if ns.gpus:
         cmd += ["--gpus", ns.gpus]
+    if ns.mount_dir:
+        cmd += ["-v", f"{Path(ns.mount_dir).resolve()}:/mount/data:ro"]
     cmd += _env_args(ns.env_file)
     cmd += [BASE_IMAGE, "build", repo_url]
     if ns.resume:
@@ -210,14 +215,17 @@ def parse_args() -> argparse.Namespace:
                          'wheels (dgl, old torchvision, etc.) run via Rosetta. '
                          'Pass "native" to force the host architecture.')
     ap.add_argument("--resume", default=None,
-                    choices=("explorer", "environment", "coder", "validator"),
+                    choices=("explorer", "environment", "coder", "validator", "wrapper"),
                     help="Resume the alembic pipeline from a specific stage")
     ap.add_argument("--until", default=None,
-                    choices=("explorer", "environment", "coder", "validator"),
+                    choices=("explorer", "environment", "coder", "validator", "wrapper"),
                     help="Stop the pipeline after completing this stage "
                          "(e.g. --until explorer runs only exploration). "
                          "Forwarded to alembic.main; implies no serve unless "
-                         "it is 'validator'.")
+                         "it is 'wrapper'.")
+    ap.add_argument("--mount-dir", default=None,
+                    help="Host directory bind-mounted read-only at /mount/data "
+                         "inside the build container (TM-Bench input data).")
     ap.add_argument("--no-serve", action="store_true",
                     help="Build and commit only; do not launch the MCP server")
     ap.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE,
@@ -240,9 +248,9 @@ def main() -> None:
     image = build_image(ns.repo_url, ns)
     if ns.no_serve:
         return
-    if ns.until and ns.until != "validator":
+    if ns.until and ns.until != "wrapper":
         print(f"[start-chain] --until {ns.until}: not serving "
-              f"(server.py is only produced by the coder stage).")
+              f"(server.py is only produced by the wrapper stage).")
         return
     serve_image(ns.repo_url, image, ns)
 

@@ -13,8 +13,6 @@ import json
 import logging
 import sys
 import time
-from pathlib import Path
-
 from loguru import logger
 from google.adk.runners import Runner
 from google.genai import types
@@ -127,14 +125,16 @@ def _log_event(agent_name: str, event) -> None:
             logger.debug(f"[{agent_name}] RESP  {part.function_response.name} → {_trunc(str(part.function_response.response))}")
 
 
-_VALIDATION_TOOLS = {"invoke_mcp_tool", "validate_syntax", "run_tests"}
+_VALIDATION_TOOLS = {"invoke_tool_function", "run_tool_tests"}
 
 
 def _tool_outcome(name: str, response) -> tuple[bool | None, str]:
     if not isinstance(response, dict):
         return None, ""
-    if name == "invoke_mcp_tool":
+    if name == "invoke_tool_function":
         return response.get("ok"), f"{response.get('error','')}\n{response.get('traceback','')}"
+    if name == "run_tool_tests":
+        return not response.get("failures"), str(response.get("failures") or response.get("error") or "")
     return response.get("passed"), str(response.get("error") or response.get("output") or "")
 
 
@@ -216,9 +216,8 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
 
 
 async def run_agent(agent, session_service, session_id, message,
-                    required_report=None, venv_guard_path=None,
-                    deadline=None, progress=None):
-    """Run an agent, retrying if guards (write_report / venv) aren't satisfied.
+                    required_report=None, deadline=None, progress=None):
+    """Run an agent, retrying if the write_report guard isn't satisfied.
 
     Returns (final_text, total_steps, total_tokens, stage_metrics) where
     stage_metrics = {tool_calls, failures_by_class, guard_retries,
@@ -268,9 +267,6 @@ async def run_agent(agent, session_service, session_id, message,
             else:
                 nudges.append(f"You have not called write_report with report_name='{required_report}'. "
                               f"Call write_report now to save your findings.")
-        if venv_guard_path and not Path(venv_guard_path).exists():
-            nudges.append(f"The virtual environment was not created. Expected python at {venv_guard_path}. "
-                          f"Set up the environment before finishing.")
 
         if not nudges:
             break
