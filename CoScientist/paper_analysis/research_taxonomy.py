@@ -2,7 +2,10 @@ from typing import Literal, TypeAlias
 
 
 ResearchDomain: TypeAlias = Literal[
-    "Chemistry"
+    "Physical Sciences",
+    "Social Sciences",
+    "Life Sciences",
+    "Health Sciences",
 ]
 
 
