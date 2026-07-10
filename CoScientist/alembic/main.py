@@ -47,7 +47,7 @@ from alembic.tools import (
     invoke_tool_function, run_tool_tests, set_current_repo,
     start_env_recording, stop_env_recording,
 )
-from alembic.tools.venv import ensure_pkg
+from alembic.tools.venv import ensure_server_packages
 from alembic.tools.analysis import decide_layout, symbol_table, target_top_modules, verify_target
 from alembic.tools.codegen import function_param_names, render_code_py, write_server, write_setup_sh
 from alembic.tools.fs import _clone_repo_sync
@@ -434,12 +434,14 @@ async def _env_gate(name: str, session_service, metrics) -> dict:
         pytest_err = await asyncio.to_thread(ensure_pytest, tools_python(out.resolve()))
         if pytest_err:
             hard.append(pytest_err)
-        # server.py runs under .venv and imports fastmcp — a hand-rebuilt venv
-        # often lacks it (setup_venv would have added it).
+        # server.py runs under .venv and imports the MCP runtime — a hand-rebuilt
+        # venv (bare `uv venv`, no pip) often lacks it (setup_venv would have added
+        # it). Ensure it lands *inside* the server venv, or hard-fail here rather
+        # than let the wrapper shim a fastmcp-less server past G4.
         server_py = str((out / ".venv" / "bin" / "python").resolve())
-        fastmcp_err = await asyncio.to_thread(ensure_pkg, server_py, "fastmcp")
-        if fastmcp_err:
-            hard.append(fastmcp_err)
+        server_pkg_err = await asyncio.to_thread(ensure_server_packages, server_py)
+        if server_pkg_err:
+            hard.append(server_pkg_err)
         venvs = [".venv"] + ([".venv-repo"] if plan and plan.env.layout == "two-venv" else [])
         for vn in venvs:
             r = await asyncio.to_thread(_check_venv_compat_sync, vn)

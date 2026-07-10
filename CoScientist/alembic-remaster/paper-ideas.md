@@ -73,7 +73,7 @@ We use glm-5.2 as our main model
 We report on the runs of alembic, ToolMaker and openhands with GLM-5.2
 Alembic runs its own suite, producing artefacts for TMBench scoring, ToolMaker and openhands are re-launched from toolmaker repo with a modern model. 
 
-The toolmaker repo and bench had caveats that required fixing for consistent work, but those touched only the insignificant parts of code, not the data, logic or scoring and is available at https://github.com/stas1f1/ToolMaker.
+The toolmaker repo and bench had caveats that required fixing for consistent work, but those touched only the insignificant parts of code, like download command flags, container leakage upon run failiure, and support of models not tracked by cost in litellm and is available at https://github.com/stas1f1/ToolMaker.
 
 TMBench comes with caveats - one of them being the huge dataset size of TCGA dataset:
 
@@ -94,6 +94,9 @@ leaving the ability to download file weights, and cloning the required data for 
 We run alembic with known target mode - it still extracts all workflows it finds, and we report metrics for 
 total MCP conversion, as well as the TMBench-defined metrics presented in the initial paper
 
+There are two task in TMBench that require the same STAMP stamp_train_classification_model and stamp_extract_features - let's add a option to run these two simultaneously, meaning explorer has to find all that is needed for both tools and coder has to also code both.
+
+I understand that this might be tough but it would really showcase the actual Repo-to-MCP evolution of our project. If it fails, we'll just run them separately.
 
 
 4. Results & Discussion

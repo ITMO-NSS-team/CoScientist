@@ -237,6 +237,24 @@ def main() -> int:
     ri2 = check_repo_imports(["definitely_absent_mod"])
     check("truly-missing module still fails smoke", not ri2["passed"])
 
+    # ── venv-locality guard: ensure_pkg / G4 refuse a leaked or shimmed dep ────
+    # (regression: esm shipped a server whose fastmcp was a shim — it imported but
+    #  never served, and the old G4 accepted it. The new probes require the real
+    #  package to resolve *inside* the server venv, not via a system/PYTHONPATH
+    #  leak or an inline stub.) The fake venv above is a bare symlink to the base
+    #  interpreter, so no dep is venv-local under output/.venv.
+    from alembic.tools.invoke import check_server
+    from alembic.tools.venv import _resolves_in_venv
+    check("resolves_in_venv rejects a non-venv-local (stdlib) module",
+          not _resolves_in_venv(str(py), "json"))
+    check("resolves_in_venv rejects a missing module",
+          not _resolves_in_venv(str(py), "definitely_absent_mod"))
+    (output_dir() / "server.py").write_text(
+        "from fastmcp import FastMCP\nmcp = FastMCP('demo')\n")
+    cs = check_server()
+    check("G4 rejects a server without a venv-local fastmcp",
+          not cs["passed"] and "fastmcp" in cs.get("error", ""))
+
     print("\n" + ("SOME CHECKS FAILED" if check.failed else "ALL GATE CHECKS PASSED"))
     return 1 if check.failed else 0
 

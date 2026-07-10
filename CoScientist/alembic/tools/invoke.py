@@ -395,12 +395,41 @@ def _invoke_tool_function_sync(tool_name: str, args: dict | None = None) -> dict
 # ══════════════════════════════════════════════════════════════════════════════
 def check_server() -> dict:
     """Compile + import server.py under the server venv (imports are light by
-    construction: fastmcp + stdlib only). Returns {passed, error}."""
+    construction: fastmcp + stdlib only). Returns {passed, error}.
+
+    Guards against a *shimmed* server: if fastmcp is absent from the venv, an LLM
+    fallback (or a stray local ``fastmcp.py``) can make ``server.py`` import via a
+    stub ``FastMCP`` that never actually serves. So before trusting the import we
+    require the real fastmcp module to resolve inside the server venv — the probe
+    strips PYTHONPATH and runs from the venv dir so a leak or local stub cannot
+    satisfy it (version-agnostic: no 3.11-only flags)."""
     out_dir = output_dir().resolve()
     server  = out_dir / "server.py"
     python  = venv_python(out_dir)
     if not server.exists():
         return {"passed": False, "error": f"server.py not found at {server}"}
+    probe = ("import importlib.util as u; s=u.find_spec('fastmcp'); "
+             "print(s.origin if s and s.origin else '')")
+    _venv = Path(python)
+    _cwd = str(_venv.parent.parent) if _venv.parent.name == "bin" else None
+    _env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    rp = subprocess.run([python, "-c", probe], capture_output=True, text=True,
+                        env=_env, cwd=_cwd)
+    origin = rp.stdout.strip()
+    if rp.returncode != 0 or not origin:
+        return {"passed": False, "error": (
+            "fastmcp is not a real install in the server venv — server.py would "
+            "only import via a shim and the committed image could not serve MCP")}
+    _root = _venv.parent.parent if _venv.parent.name == "bin" else None
+    if _root is not None:
+        try:
+            venv_local = Path(origin).resolve().is_relative_to(_root.resolve())
+        except (ValueError, OSError):
+            venv_local = False
+        if not venv_local:
+            return {"passed": False, "error": (
+                f"fastmcp resolves to {origin} outside the server venv — the "
+                "committed isolated venv would not import it at serve time")}
     r = subprocess.run([python, "-m", "py_compile", str(server)],
                        capture_output=True, text=True)
     if r.returncode != 0:

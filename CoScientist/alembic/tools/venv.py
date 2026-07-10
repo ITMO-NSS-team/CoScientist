@@ -1,6 +1,7 @@
 """Venv creation and dependency-compatibility checking."""
 import asyncio
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -8,6 +9,11 @@ from pathlib import Path
 from alembic.config import VENV_COMPAT_TIMEOUT, VENV_SETUP_TIMEOUT
 from alembic.tools.paths import COMPAT_CHECK_SCRIPT, output_dir, repo_path
 from alembic.tools.shell import record_env_command
+
+# The MCP runtime the generated server.py needs at serve time. `pytest` lives in
+# the *tools* venv (it runs the tests), so it is ensured separately; fastmcp+mcp
+# must be importable inside the *server* venv or the committed image cannot serve.
+SERVER_PACKAGES = ("fastmcp", "mcp")
 
 
 def _pip_install(use_uv: bool, python: str, venv_dir: Path, *args: str) -> None:
@@ -90,7 +96,7 @@ def _setup_venv_sync(packages: list[str] | None,
         else:
             errors.append(f"requirements file not found: {req_path}")
 
-    install_pkgs = ["fastmcp", "pytest", "mcp"] + (packages or [])
+    install_pkgs = ["pytest", *SERVER_PACKAGES] + (packages or [])
     try:
         _pip_install(use_uv, python, venv_dir, *install_pkgs)
     except subprocess.CalledProcessError as e:
@@ -103,13 +109,55 @@ def _setup_venv_sync(packages: list[str] | None,
     return {"success": True, "venv": str(venv_dir), "python": python}
 
 
+def _venv_root(python: str) -> Path | None:
+    """The venv directory for a ``.../<venv>/bin/python`` interpreter, or None
+    when ``python`` is not a venv interpreter (system python)."""
+    p = Path(python)
+    return p.parent.parent if p.parent.name == "bin" else None
+
+
+def _clean_probe_env() -> dict:
+    """Environment for an import probe with ``PYTHONPATH`` stripped — a leaked
+    PYTHONPATH can otherwise satisfy the probe from a copy that is not in the
+    venv and will not survive into the committed image."""
+    return {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+
+
+def _resolves_in_venv(python: str, import_name: str) -> bool:
+    """True iff ``import_name`` imports under ``python`` AND its module file
+    physically lives inside that interpreter's venv. The probe strips PYTHONPATH
+    and runs from the venv root (not the output dir) so neither a system/PYTHONPATH
+    leak nor a stray ``<name>.py`` in the working dir can satisfy it — only a real
+    install in the venv counts. For a non-venv python (no venv root) mere
+    importability is accepted. Version-agnostic (no 3.11-only flags)."""
+    root = _venv_root(python)
+    code = (f"import importlib.util as u; s=u.find_spec({import_name!r}); "
+            "print(s.origin if s and s.origin else '')")
+    r = subprocess.run([python, "-c", code], capture_output=True, text=True,
+                       env=_clean_probe_env(), cwd=str(root) if root else None)
+    origin = r.stdout.strip()
+    if r.returncode != 0 or not origin:
+        return False
+    if root is None:
+        return True
+    try:
+        return Path(origin).resolve().is_relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+
+
 def ensure_pkg(python: str, import_name: str, pip_name: str | None = None) -> str | None:
-    """Deterministically make sure ``import_name`` is importable under ``python``,
-    installing ``pip_name`` (default = import_name) if not. Called by the env
-    gate, not the LLM — a debugger that rebuilds a venv by hand often drops
-    pytest (tools venv) or fastmcp (server venv) that setup_venv would add.
-    Returns an error string or None."""
-    if subprocess.run([python, "-c", f"import {import_name}"], capture_output=True).returncode == 0:
+    """Deterministically make sure ``import_name`` really lives inside ``python``'s
+    venv, installing ``pip_name`` (default = import_name) if not. Called by the env
+    gate, not the LLM — a debugger that rebuilds a venv by hand (bare ``uv venv``,
+    no pip) often drops pytest (tools venv) or fastmcp (server venv) that setup_venv
+    would add. Returns an error string or None.
+
+    The check verifies the package resolves *inside the venv* (not via a
+    PYTHONPATH/system leak) and re-verifies after installing — an ``uv pip
+    install`` that reports success but does not land must not pass silently, which
+    is exactly what let a fastmcp-less server reach the wrapper and get shimmed."""
+    if _resolves_in_venv(python, import_name):
         return None
     cmd = ["uv", "pip", "install", "--python", python, pip_name or import_name]
     try:
@@ -119,11 +167,25 @@ def ensure_pkg(python: str, import_name: str, pip_name: str | None = None) -> st
     if r.returncode != 0:
         return f"{import_name} install failed: {r.stderr.strip()[:300]}"
     record_env_command(shlex.join(cmd))
+    if not _resolves_in_venv(python, import_name):
+        return (f"{import_name} still not importable inside {python}'s venv after "
+                f"install — the venv may lack pip or the install did not land")
     return None
 
 
 def ensure_pytest(python: str) -> str | None:
     return ensure_pkg(python, "pytest")
+
+
+def ensure_server_packages(server_python: str) -> str | None:
+    """Guarantee the MCP server runtime (fastmcp + mcp) is importable inside the
+    *server* venv. Returns the first blocking error, or None. The wrapper's
+    deterministic codegen and G4 both assume this holds."""
+    for pkg in SERVER_PACKAGES:
+        err = ensure_pkg(server_python, pkg)
+        if err:
+            return err
+    return None
 
 
 async def check_venv_compat(venv_name: str = ".venv") -> dict:
