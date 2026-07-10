@@ -92,6 +92,8 @@ agents:
     hitl: true
     callbacks:
       after_model: [sanitize_json_output]
+      # Save the ТЗ + literature queries as shareable Markdown & HTML files.
+      after_agent: [export_tz_and_queries]
 
   # ── Planning ───────────────────────────────────────────────────────────────
   PlannerAgent:

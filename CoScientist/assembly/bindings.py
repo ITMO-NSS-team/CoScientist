@@ -400,6 +400,11 @@ def _save_tz_document():
     return save_tz_document
 
 
+def _export_tz_and_queries():
+    from CoScientist.microfluidics.export import export_tz_and_queries
+    return export_tz_and_queries
+
+
 def _guard_unknown_tools(ctx):
     """after_model guard capturing the agent's REAL tool names from its context,
     so a hallucinated tool call is corrected instead of crashing the run."""
@@ -442,6 +447,8 @@ _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())
 # Render the approved ТЗ into the reference Markdown document (state + file).
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
+# Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
+_cb("export_tz_and_queries", "after_agent", factory=lambda ctx: _export_tz_and_queries())
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
