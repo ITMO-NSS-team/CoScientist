@@ -73,24 +73,27 @@ def reports_dir(repo_url: str | None = None) -> Path:
 
 
 def venv_python(out_dir: Path) -> str:
-    """The server venv python if it exists, else 'python'.
+    """The MAIN venv python (``.venv``) — the repo + its deps + pytest, where
+    tool functions and tests run. 'python' if it doesn't exist yet.
 
-    Uses the venv symlink path directly — do NOT resolve(), as that follows
-    the symlink to the bare uv Python binary which lacks the venv site-packages.
+    Uses the venv symlink path directly — do NOT resolve(), as that follows the
+    symlink to the bare uv Python binary, which lacks the venv's site-packages
+    (and, on a PEP-668 host, is externally-managed so installs into it fail).
     """
     candidate = out_dir / ".venv" / "bin" / "python"
     return str(candidate.absolute()) if candidate.exists() else "python"
 
 
 def tools_python(out_dir: Path) -> str:
-    """The python that tool functions actually run under.
+    """Where tool functions and tests run — always the main venv (``.venv``)."""
+    return venv_python(out_dir)
 
-    Two-venv layout (repo needs an older Python / conflicts with fastmcp in
-    ``.venv``): tool functions import the repo, so they run under
-    ``.venv-repo``. One-venv: everything runs under ``.venv``.
-    """
-    repo_venv = out_dir / ".venv-repo" / "bin" / "python"
-    return str(repo_venv.absolute()) if repo_venv.exists() else venv_python(out_dir)
+
+def server_python(out_dir: Path) -> str:
+    """The SERVER venv python (``.venv-server``) — fastmcp only, runs server.py;
+    built at the wrapper stage. Symlink path directly (see ``venv_python``)."""
+    candidate = out_dir / ".venv-server" / "bin" / "python"
+    return str(candidate.absolute()) if candidate.exists() else "python"
 
 
 def rel_or_ignored(path: Path, root: Path) -> str | None:

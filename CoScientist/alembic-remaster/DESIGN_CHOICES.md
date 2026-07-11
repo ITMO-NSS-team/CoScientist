@@ -105,7 +105,11 @@ libs, downloads weights (HF via `HF_TOKEN`, gdown for Drive). Records the
 successful commands into an `install.sh` artifact (cheap; supports the paper's
 reproducibility story without changing the commit flow — see §6).
 
-### Coder (LLM, given verified signatures) — *write*
+### Coder (LLM, given verified signatures) — *write*Check the latest run of the same repo - it's running in circles again. I think we should split the repos for
+  double-env path for good. First, let's upgrade to python 3.12 in our base image. Second, the server-env does not
+  even bother us, we'll only need it when the wrapper has done its job and we launch mcp-server into production. No
+  more need to install any extras in the working tools env - is always static-install, python always gets only
+  pytest and fastmcp
 Writes `server.py` + `helpers/*.py` + `tests/test_server.py`. Prompt is short
 because signatures are pre-verified and the gates catch the rest. Keeps the
 proven patterns: subprocess-through-`PYTHON`, helper-per-tool, JSON on stdout,

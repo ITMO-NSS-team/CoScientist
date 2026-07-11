@@ -136,8 +136,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 _OUT = Path(__file__).resolve().parent
-_REPO_VENV = _OUT / ".venv-repo" / "bin" / "python"
-_PYTHON = str(_REPO_VENV if _REPO_VENV.exists() else _OUT / ".venv" / "bin" / "python")
+_PYTHON = str(_OUT / ".venv" / "bin" / "python")   # main venv: repo + deps
 _RUNNER = str(_OUT / "helpers" / "run_function.py")
 _SENTINEL = "<<<ALEMBIC_RESULT>>>"
 

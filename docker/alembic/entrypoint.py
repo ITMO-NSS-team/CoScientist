@@ -48,13 +48,15 @@ def _run_serve(args: list[str]) -> None:
     workdir  = Path(os.environ.get("ALEMBIC_WORKDIR", "/work/.alembic"))
     output   = workdir / _repo_name(repo_url) / "output"
     server   = output / "server.py"
-    venv_py  = output / ".venv" / "bin" / "python"
+    # serve.py + server.py need fastmcp, which lives in the isolated server venv;
+    # server.py in turn shells to the main .venv to run each tool (two-venv model).
+    venv_py  = output / ".venv-server" / "bin" / "python"
 
     if not server.exists():
         sys.stderr.write(f"[entrypoint] No server.py found at {server}\n")
         sys.exit(1)
     if not venv_py.exists() or not os.access(venv_py, os.X_OK):
-        sys.stderr.write(f"[entrypoint] No venv python at {venv_py}\n")
+        sys.stderr.write(f"[entrypoint] No server venv python at {venv_py}\n")
         sys.exit(1)
 
     port = os.environ.get("MCP_PORT", "8000")

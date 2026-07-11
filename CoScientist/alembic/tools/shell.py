@@ -6,6 +6,8 @@ ToolMaker's ``installed_state.bash()`` approach: the artefact is what actually
 ran, not what an agent claims ran.
 """
 import asyncio
+import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -49,8 +51,25 @@ def _glob_command(stripped: str) -> dict | None:
     return {"matches": matched}
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the command's whole process group, so any grandchild the shell
+    spawned (a ``sudo``/``apt-get``/download it kicked off) dies with it instead
+    of lingering as an orphan waiting on a prompt."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+
+
 def _run_shell(command: str, timeout: int, record: bool = False) -> dict:
-    """Shared body for ``bash`` / ``bash_env``: glob shortcut + shell run."""
+    """Shared body for ``bash`` / ``bash_env``: glob shortcut + shell run.
+
+    Commands run in a NEW SESSION with stdin closed: detached from any
+    controlling terminal, a command that would otherwise block on a prompt
+    (``sudo`` asking for a password, an interactive installer) fails fast with
+    "no tty present" instead of hanging until the timeout. On timeout the whole
+    process group is killed so nothing is left orphaned.
+    """
     stripped = command.strip()
     if not stripped:
         return {"error": "empty command"}
@@ -59,18 +78,27 @@ def _run_shell(command: str, timeout: int, record: bool = False) -> dict:
     if glob_result is not None:
         return glob_result
 
+    proc = subprocess.Popen(
+        stripped, shell=True, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
     try:
-        result = subprocess.run(
-            stripped, shell=True, capture_output=True, text=True, timeout=timeout,
-        )
-        output = result.stdout
-        if result.returncode != 0 and result.stderr:
-            output += "\n[stderr] " + result.stderr
-        if record and result.returncode == 0:
-            record_env_command(stripped)
-        return {"output": output[:MAX_BYTES], "exit_code": result.returncode}
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         return {"error": f"Command timed out after {timeout} seconds."}
+
+    output = stdout or ""
+    if proc.returncode != 0 and stderr:
+        output += "\n[stderr] " + stderr
+    if record and proc.returncode == 0:
+        record_env_command(stripped)
+    return {"output": output[:MAX_BYTES], "exit_code": proc.returncode}
 
 
 async def bash(command: str) -> dict:
@@ -102,7 +130,7 @@ async def bash_env(command: str) -> dict:
     huggingface_hub/huggingface-cli call — never pass it on the command line.
 
     Examples:
-        bash_env("uv venv .alembic/massformer/output/.venv-repo --python 3.9")
+        bash_env("uv venv .alembic/massformer/output/.venv --python 3.9")
         bash_env("uv pip install --python .alembic/massformer/output/.venv/bin/python torch")
         bash_env("apt-get update && apt-get install -y --no-install-recommends libpoppler-cpp-dev")
         bash_env("huggingface-cli download MahmoodLab/UNI2-h --local-dir .alembic/UNI/repos/checkpoints")

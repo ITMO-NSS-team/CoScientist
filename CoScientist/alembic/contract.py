@@ -85,9 +85,9 @@ class ToolSpec:
 
 @dataclass
 class EnvSpec:
-    layout: str = "one-venv"          # "one-venv" | "two-venv"
-    server_python: str = "3.11"
-    repo_python: str | None = None
+    layout: str = "two-venv"          # always two-venv: .venv (main) + .venv-server
+    server_python: str = "3.11"       # .venv-server python (fastmcp)
+    repo_python: str | None = "3.11"  # .venv (main) python: repo + deps + pytest
     requirements_files: list[str] = field(default_factory=list)
     dependencies: list[str] = field(default_factory=list)
     system_libs: list[str] = field(default_factory=list)

@@ -21,7 +21,7 @@ from alembic.config import (
     RESULT_MAX_LIST_ITEMS, RESULT_MAX_STR_LEN, RESULT_SENTINEL, TEST_TIMEOUT,
 )
 from alembic.tools.paths import (
-    RUN_FUNCTION_SCRIPT, output_dir, repo_path, tools_python, venv_python,
+    RUN_FUNCTION_SCRIPT, output_dir, repo_path, server_python, tools_python,
 )
 
 
@@ -405,7 +405,7 @@ def check_server() -> dict:
     satisfy it (version-agnostic: no 3.11-only flags)."""
     out_dir = output_dir().resolve()
     server  = out_dir / "server.py"
-    python  = venv_python(out_dir)
+    python  = server_python(out_dir)
     if not server.exists():
         return {"passed": False, "error": f"server.py not found at {server}"}
     probe = ("import importlib.util as u; s=u.find_spec('fastmcp'); "

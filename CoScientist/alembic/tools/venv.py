@@ -6,8 +6,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from alembic.config import VENV_COMPAT_TIMEOUT, VENV_SETUP_TIMEOUT
-from alembic.tools.paths import COMPAT_CHECK_SCRIPT, output_dir, repo_path
+from alembic.config import BASH_ENV_TIMEOUT, VENV_COMPAT_TIMEOUT, VENV_SETUP_TIMEOUT
+from alembic.tools.paths import COMPAT_CHECK_SCRIPT, output_dir, repo_path, venv_python
 from alembic.tools.shell import record_env_command
 
 # The MCP runtime the generated server.py needs at serve time. `pytest` lives in
@@ -32,13 +32,14 @@ def _pip_install(use_uv: bool, python: str, venv_dir: Path, *args: str) -> None:
 async def setup_venv(packages: list[str] | None = None,
                      requirements_file: str | None = None,
                      python_version: str | None = None) -> dict:
-    """Create the server .venv and install dependencies.
+    """Create the MAIN ``.venv`` (where tools + tests run) and install deps.
 
-    Uses `uv` when available, falls back to `python -m venv` + `pip`.
-    Always installs `fastmcp`, `pytest`, `mcp` automatically. Editable
-    installs are intentionally NOT supported (they almost always fail on
-    Cython/C-extension repos) — pass runtime deps via ``packages`` or a
-    ``requirements_file`` instead.
+    Uses `uv` when available, falls back to `python -m venv` + `pip`. Installs
+    `pytest` automatically. The repo package ITSELF is installed deterministically
+    by the pipeline (``install_repo``: editable `pip install -e .`, or a `.pth`
+    for non-package repos) — you do not need to install it here; just get the
+    Python version and runtime deps right. fastmcp/mcp are NOT installed here
+    (they live in the separate ``.venv-server`` built at wrapper time).
 
     Args:
         packages:          Extra pip-installable package names.
@@ -96,7 +97,9 @@ def _setup_venv_sync(packages: list[str] | None,
         else:
             errors.append(f"requirements file not found: {req_path}")
 
-    install_pkgs = ["pytest", *SERVER_PACKAGES] + (packages or [])
+    # The MAIN venv only needs pytest on top of the repo's deps; fastmcp/mcp go
+    # into the separate .venv-server at wrapper time.
+    install_pkgs = ["pytest"] + (packages or [])
     try:
         _pip_install(use_uv, python, venv_dir, *install_pkgs)
     except subprocess.CalledProcessError as e:
@@ -107,6 +110,84 @@ def _setup_venv_sync(packages: list[str] | None,
     if errors:
         return {"success": False, "venv": str(venv_dir), "error": "; ".join(errors)}
     return {"success": True, "venv": str(venv_dir), "python": python}
+
+
+def _add_repo_pth(out: Path, repo: Path) -> bool:
+    """Put the repo root on the main venv's import path via a ``.pth`` file — the
+    fallback for repos with no installable project (pure-Python script repos)."""
+    sps = sorted((out / ".venv").glob("lib/python*/site-packages"))
+    if not sps:
+        return False
+    try:
+        (sps[0] / "_alembic_repo.pth").write_text(str(repo) + "\n", encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def install_repo() -> dict:
+    """Deterministically make the cloned repo importable in the MAIN venv — one
+    fixed procedure per repo, keyed on which files exist (no LLM decision):
+
+      1. ``requirements.txt``        → ``uv pip install -r requirements.txt``
+      2. ``pyproject.toml``/``setup.py`` → ``uv pip install -e .`` (package + its
+         deps + builds any Cython/C extension); on editable failure, retry
+         non-editable ``uv pip install .``.
+      3. neither (script-only repo)  → drop a ``.pth`` pointing at the repo root
+         into the venv's site-packages.
+
+    Idempotent (safe to re-run). Successful commands are recorded into setup.sh
+    (R5). Returns ``{"ok", "steps", "note"}`` — ``ok`` means the procedure ran;
+    the env gate's repo-import smoke is the source of truth for whether imports
+    actually resolve."""
+    out = output_dir().resolve()
+    repo = repo_path().resolve()
+    python = venv_python(out)
+    if not Path(python).exists():
+        return {"ok": False, "steps": [], "note": "main venv (.venv) not built yet"}
+
+    # setup.sh runs `cd /work` then replays these commands, so what we RECORD must
+    # be workdir-relative (portable into a container), interpreter-targeted, and
+    # NOT the absolute host paths / bare `uv pip install` we execute locally.
+    rel_python = str(output_dir() / ".venv" / "bin" / "python")   # .alembic/<name>/output/.venv/bin/python
+    rel_repo   = str(repo_path())                                 # .alembic/<name>/repos
+
+    steps: list[str] = []
+    notes: list[str] = []
+
+    def _uv(exec_args: list[str], record_args: list[str]) -> subprocess.CompletedProcess:
+        cmd = ["uv", "pip", "install", "--python", python, *exec_args]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               cwd=str(out), timeout=BASH_ENV_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(cmd, 124, "", "install timed out")
+        if r.returncode == 0:
+            record_env_command("uv pip install --python " + rel_python + " " + " ".join(record_args))
+        return r
+
+    req = repo / "requirements.txt"
+    if req.exists():
+        r = _uv(["-r", str(req)], ["-r", str(repo_path() / "requirements.txt")])
+        steps.append(f"requirements.txt rc={r.returncode}")
+        if r.returncode != 0:
+            notes.append(f"requirements.txt install failed: {r.stderr[-300:]}")
+
+    if (repo / "pyproject.toml").exists() or (repo / "setup.py").exists():
+        r = _uv(["-e", str(repo)], ["-e", rel_repo])
+        if r.returncode != 0:
+            notes.append("editable install failed — retrying non-editable")
+            r = _uv([str(repo)], [rel_repo])
+        steps.append(f"package rc={r.returncode}")
+        if r.returncode != 0:
+            notes.append(f"package install failed: {r.stderr[-400:]}")
+    else:
+        ok = _add_repo_pth(out, repo)
+        steps.append(f"pth={'ok' if ok else 'fail'}")
+        if not ok:
+            notes.append("no installable project and could not add a .pth")
+
+    return {"ok": True, "steps": steps, "note": "; ".join(notes)}
 
 
 def _venv_root(python: str) -> Path | None:
@@ -199,15 +280,13 @@ async def check_venv_compat(venv_name: str = ".venv") -> dict:
 
     Args:
         venv_name: Directory name of the venv to check, relative to the repo
-                   output dir. Default ".venv" (the server venv). Pass
-                   ".venv-repo" to check the repo-side venv in the two-venv
-                   layout.
+                   output dir. Default ".venv" (the main venv — repo + deps,
+                   where tools run).
 
     Returns only failures; successful imports are omitted to keep output small.
 
     Example:
         check_venv_compat()
-        check_venv_compat(venv_name=".venv-repo")
     """
     # Run on a worker thread — see bash()/bash_env() in shell.py for why.
     return await asyncio.to_thread(_check_venv_compat_sync, venv_name)

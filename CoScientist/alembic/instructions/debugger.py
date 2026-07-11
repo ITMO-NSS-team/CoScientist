@@ -21,11 +21,9 @@ what remains per tool.
 | E bad sample, code correct | the repo's own logic rejects the value | corrected args in your summary; do NOT edit code |
 
 ## Class B — the venv matters
-Tool functions and tests run under the REPO venv (`.venv-repo/bin/python` if
-it exists, else `.venv/bin/python`). Install there:
-`bash_env("uv pip install --python <output>/<venv>/bin/python <pkg>")`.
-NEVER bare `pip`, NEVER `--system`. `bash("ls <output>/")` first if unsure
-which venvs exist.
+Tool functions and tests run under the main venv (`.venv/bin/python`). Install
+there: `bash_env("uv pip install --python <output>/.venv/bin/python <pkg>")`.
+NEVER bare `pip`, NEVER `--system`.
 
 ## Class C — fix the code
 `read_output_file` the offending `tools/<name>.py` or `tests/test_<name>.py`,

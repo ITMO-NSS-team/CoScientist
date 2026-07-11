@@ -176,12 +176,15 @@ def _poetry_to_pep440(spec: str) -> str:
 def decide_layout(repo_dir: Path) -> dict:
     """Return {"layout","server_python","repo_python","source"}.
 
-    fastmcp needs Python ≥3.10 in the server venv. If the repo's own constraint
-    admits any ≥3.10 version → one-venv on that version. If it requires an older
-    Python → two-venv (server ≥3.10 for fastmcp, repo venv on the old version).
-    """
-    default = {"layout": "one-venv", "server_python": "3.11",
-               "repo_python": None, "source": "default (no constraint declared)"}
+    Always two-venv: the server venv (``.venv-server``, fastmcp) is isolated from
+    the main venv (``.venv`` — the repo + its deps + pytest), so fastmcp's
+    dependency tree can never conflict with the repo's. ``server_python`` is a
+    fixed ≥3.10 version for fastmcp; ``repo_python`` is what the repo's own
+    ``requires-python`` asks for (a modern version it admits, else the newest
+    older one, else a modern default)."""
+    SERVER = "3.11"
+    default = {"layout": "two-venv", "server_python": SERVER,
+               "repo_python": "3.11", "source": "default (no constraint declared)"}
     spec = _read_python_constraint(repo_dir)
     if not spec:
         return default
@@ -192,12 +195,12 @@ def decide_layout(repo_dir: Path) -> dict:
     except Exception:
         return {**default, "source": f"unparseable constraint {spec!r}"}
 
-    server_ok = [v for v in _SERVER_CANDIDATES if Version(v) in S]
-    if server_ok:
-        chosen = "3.11" if "3.11" in server_ok else server_ok[0]
-        return {"layout": "one-venv", "server_python": chosen,
-                "repo_python": None, "source": f"requires-python {spec!r}"}
-    repo_ok = [v for v in _OLD_CANDIDATES if Version(v) in S]
-    return {"layout": "two-venv", "server_python": "3.11",
-            "repo_python": repo_ok[0] if repo_ok else "3.9",
-            "source": f"requires-python {spec!r} (< 3.10 → two-venv)"}
+    modern = [v for v in _SERVER_CANDIDATES if Version(v) in S]
+    if modern:
+        repo_py, src = ("3.11" if "3.11" in modern else modern[0]), f"requires-python {spec!r}"
+    else:
+        old = [v for v in _OLD_CANDIDATES if Version(v) in S]
+        repo_py = old[0] if old else "3.11"
+        src = f"requires-python {spec!r} (older Python)"
+    return {"layout": "two-venv", "server_python": SERVER,
+            "repo_python": repo_py, "source": src}

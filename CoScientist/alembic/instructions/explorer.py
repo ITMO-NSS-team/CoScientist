@@ -28,9 +28,10 @@ repo→MCP server, so ALSO propose the repo's other most important workflow tool
 your exploration to cover every required task AND find these additional tools.
 
 ## Budget
-At most ~25 tool calls. Once you have the README, tree, a few key files, and
-one real test/example, stop and write the report. If you catch yourself
-re-reading files, you are done — write the report.
+**At most ~25 tool calls.** Once you have the README, tree, a few key files, and
+at least one real test/example if present, stop and write the report. If you catch 
+yourself re-reading files, you are done — write the report. Do not exhaustively 
+read all - only what is needed.
 
 ## Report — `write_report("exploration", <content>)`
 Prose sections for humans + a machine-read JSON block. Structure:
@@ -81,8 +82,7 @@ Rules for the `tools` list:
   values, shapes, expected output files) with its source. Empty string when
   the repo shows nothing checkable — the tool then gets smoke-testing only.
 - Propose only tools that return a checkable result (JSON-serializable value
-  or a produced file). Do NOT propose GUI/notebook/REPL launchers or
-  plot-display functions.
+  or a produced file, link). Do NOT propose GUI/notebook/REPL launchers.
 - Prefer wrapping the repo's own CLI/API 1:1; keep each tool to one operation.
-- Propose at most ~10 tools, best first.
+- Propose 2-5 tools, best first.
 '''

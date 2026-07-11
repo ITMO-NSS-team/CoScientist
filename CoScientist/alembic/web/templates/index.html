@@ -118,7 +118,7 @@
 <body class="bg-background text-on-surface overflow-hidden h-screen flex flex-col antialiased">
 
   <!-- ── Header ─────────────────────────────────────────────────────── -->
-  <header class="flex items-center gap-5 px-6 h-16 border-b border-outline-variant/20 bg-surface-lowest shrink-0">
+  <header class="flex items-center gap-5 px-6 min-h-16 py-2 border-b border-outline-variant/20 bg-surface-lowest shrink-0">
     <div class="flex items-center gap-2.5 shrink-0">
       <span class="material-symbols-outlined text-primary text-[26px]">experiment</span>
       <div class="leading-none">
@@ -127,20 +127,28 @@
       </div>
     </div>
 
-    <div class="flex-1 flex items-center gap-2 max-w-3xl">
-      <div class="flex-1 flex items-center gap-2 bg-surface rounded-control border border-outline-variant/30 px-3 h-10 focus-within:border-primary/60 transition-colors">
-        <span class="material-symbols-outlined text-outline text-[19px]">link</span>
-        <input id="repo-input" type="text" spellcheck="false" placeholder="https://github.com/Roestlab/massformer"
-          class="flex-1 bg-transparent border-0 focus:ring-0 p-0 text-sm font-mono text-on-surface placeholder:text-outline/70" />
+    <div class="flex-1 flex flex-col gap-1.5 max-w-3xl">
+      <div class="flex items-center gap-2">
+        <div class="flex-1 flex items-center gap-2 bg-surface rounded-control border border-outline-variant/30 px-3 h-10 focus-within:border-primary/60 transition-colors">
+          <span class="material-symbols-outlined text-outline text-[19px]">link</span>
+          <input id="repo-input" type="text" spellcheck="false" placeholder="https://github.com/Roestlab/massformer"
+            class="flex-1 bg-transparent border-0 focus:ring-0 p-0 text-sm font-mono text-on-surface placeholder:text-outline/70" />
+        </div>
+        <button id="run-btn"
+          class="flex items-center gap-1.5 bg-primary text-on-primary font-head font-semibold text-sm px-4 h-10 rounded-control hover:brightness-110 active:scale-[.98] transition disabled:opacity-40">
+          <span class="material-symbols-outlined text-[19px]">play_arrow</span> Run
+        </button>
+        <button id="stop-btn"
+          class="hidden items-center gap-1.5 bg-error/15 text-error font-head font-semibold text-sm px-4 h-10 rounded-control hover:bg-error/25 active:scale-[.98] transition">
+          <span class="material-symbols-outlined text-[19px]">stop</span> Stop
+        </button>
       </div>
-      <button id="run-btn"
-        class="flex items-center gap-1.5 bg-primary text-on-primary font-head font-semibold text-sm px-4 h-10 rounded-control hover:brightness-110 active:scale-[.98] transition disabled:opacity-40">
-        <span class="material-symbols-outlined text-[19px]">play_arrow</span> Run
-      </button>
-      <button id="stop-btn"
-        class="hidden items-center gap-1.5 bg-error/15 text-error font-head font-semibold text-sm px-4 h-10 rounded-control hover:bg-error/25 active:scale-[.98] transition">
-        <span class="material-symbols-outlined text-[19px]">stop</span> Stop
-      </button>
+      <div class="flex items-center gap-2 bg-surface/60 rounded-control border border-outline-variant/20 px-3 h-7 focus-within:border-primary/40 transition-colors">
+        <span class="material-symbols-outlined text-outline text-[15px]">target</span>
+        <input id="target-input" type="text" spellcheck="false"
+          placeholder="optional target task — JSON spec or path (forces a tool for a specific experiment)"
+          class="flex-1 bg-transparent border-0 focus:ring-0 p-0 text-[11px] font-mono text-on-surface placeholder:text-outline/55" />
+      </div>
     </div>
   </header>
 
@@ -166,6 +174,17 @@
         <span class="material-symbols-outlined text-primary text-[18px]">build</span>
         <h2 class="font-head text-sm font-semibold text-on-surface-dim">Generated tools</h2>
         <div id="check-badges" class="ml-auto flex items-center gap-1.5"></div>
+        <a id="serve-status" href="#" target="_blank" class="hidden text-[11px] font-mono px-2 h-6 rounded-full border items-center gap-1"></a>
+        <label id="serve-toggle-wrap" title="Build + serve the MCP in a container (docker)"
+          class="flex items-center gap-1 text-[11px] font-mono text-outline cursor-pointer select-none px-2 h-6 rounded-full border border-outline-variant/25 hover:border-primary/40 transition">
+          <input id="serve-toggle" type="checkbox" class="accent-primary w-3 h-3 cursor-pointer" />
+          <span class="material-symbols-outlined text-[14px]">dns</span>serve
+        </label>
+        <button id="download-btn" title="Download build artefacts (zip)"
+          class="flex items-center gap-1 text-[11px] font-mono text-outline px-2 h-6 rounded-full border border-outline-variant/25 hover:border-primary/40 hover:text-on-surface transition disabled:opacity-40"
+          disabled>
+          <span class="material-symbols-outlined text-[14px]">download</span>
+        </button>
       </div>
       <div id="right-panel" class="flex-1 overflow-y-auto scroll grid-bg p-4 min-h-0"></div>
     </section>
@@ -199,6 +218,7 @@
 
     // ─── state ──────────────────────────────────────────────────────
     let ws;
+    let lastRepo = "";               // repo of the most recent run (for artefacts / serve)
     const stageState = {};
     // left panel = an accumulating column, filled as the run progresses
     const left = { exploration: null, files: null, setup: null, examples: null };
@@ -498,7 +518,11 @@
     const fmtVal = v => typeof v === "string" ? v : JSON.stringify(v);
     function kvTable(obj) {
       return `<div class="kv">` + Object.entries(obj)
-        .map(([k, v]) => `<div class="kvk">${esc(k)}</div><div class="kvv">${esc(fmtVal(v))}</div>`)
+        .map(([k, v]) => {
+          const cell = (typeof v === "string" && (/^data:image\//.test(v) || /<svg[\s>]/i.test(v)))
+            ? vizOutput(v) : esc(fmtVal(v));
+          return `<div class="kvk">${esc(k)}</div><div class="kvv">${cell}</div>`;
+        })
         .join("") + `</div>`;
     }
     const prettyJson = v => {
@@ -526,6 +550,8 @@
       if (typeof v === "number" || typeof v === "boolean")
         return `<div class="stat">${esc(String(v))}</div>`;
       if (Array.isArray(v)) {
+        if (v.some(x => typeof x === "string" && /^data:image\//.test(x)))
+          return v.map(x => vizOutput(x)).join("");
         if (v.length && v.every(x => typeof x === "number")) return bars(v);
         if (v.length && v.length <= 60 && v.every(x => typeof x === "string" && x.length <= 48))
           return v.map(x => `<span class="chip">${esc(x)}</span>`).join("");
@@ -536,6 +562,9 @@
         if (typeof val === "string" && (/<svg[\s>]/i.test(val) || /^data:image\//.test(val)))
           return vizOutput(val) + kvTable(omit(v, k));
       }
+      // any other key holding an inlined image (e.g. a converted output_path)
+      const anyImg = Object.keys(v).find(k => typeof v[k] === "string" && /^data:image\//.test(v[k]));
+      if (anyImg) return vizOutput(v[anyImg]) + kvTable(omit(v, anyImg));
       for (const k of ["path", "file", "output_path", "image_path", "svg_path"]) {
         const val = v[k];
         if (typeof val === "string" && IMG_RE.test(val))
@@ -623,9 +652,20 @@
         case "files": left.files = m.files || []; renderLeft(); break;
         case "setup": left.setup = m.content || ""; renderLeft(); break;
         case "examples": left.examples = m.examples || []; renderLeft(); break;
-        case "server": serverTools = m.tools || []; renderServer(); break;
+        case "server":
+          serverTools = m.tools || []; renderServer();
+          document.getElementById("download-btn").disabled = !serverTools.length;
+          break;
         case "validation": patchValidation(m); break;
         case "check": setCheck(m.name, m.passed, m.detail); break;
+        case "serve_status":
+          if (m.status === "ready") setServeStatus("ready", "MCP ▸ " + m.url, m.url);
+          else if (m.status === "error") {
+            setServeStatus("error", m.message || "serve failed", null);
+            document.getElementById("serve-toggle").checked = false;
+          } else setServeStatus("building", m.message || "building…", null);
+          break;
+        case "serve_log": pushFeed("serve", "docker", { line: m.line }); break;
         case "invoke_result": {
           const nm = m.tool, cs = callState[nm] || {};
           callState[nm] = {
@@ -669,6 +709,9 @@
       emptyState(document.getElementById("left-panel"), "search", `analysing ${m.repo || 'repo'}`);
       emptyState(document.getElementById("right-panel"), "build", "awaiting explorer");
       document.getElementById("check-badges").innerHTML = "";
+      document.getElementById("download-btn").disabled = true;
+      document.getElementById("serve-toggle").checked = false;
+      document.getElementById("serve-status").classList.add("hidden");
       document.getElementById("feed").innerHTML = "";
       feedN = 0; document.getElementById("feed-count").textContent = 0;
       setNow("", "");
@@ -684,13 +727,35 @@
     document.getElementById("run-btn").onclick = () => {
       const url = document.getElementById("repo-input").value.trim();
       if (!url || !ws || ws.readyState !== 1) return;
-      ws.send(JSON.stringify({ type: "run", repo_url: url }));
+      lastRepo = url;
+      const target = document.getElementById("target-input").value.trim();
+      ws.send(JSON.stringify({ type: "run", repo_url: url, target: target || undefined }));
     };
     document.getElementById("stop-btn").onclick = () => {
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" }));
     };
     document.getElementById("repo-input").addEventListener("keydown", e => {
       if (e.key === "Enter") document.getElementById("run-btn").click();
+    });
+
+    // download build artefacts (zip) for the current repo
+    document.getElementById("download-btn").onclick = () => {
+      if (lastRepo) window.open("/artifacts?repo=" + encodeURIComponent(lastRepo), "_blank");
+    };
+    // serve toggle: on enable, build + run the MCP in a container
+    function setServeStatus(state, text, url) {
+      const el = document.getElementById("serve-status");
+      el.classList.remove("hidden"); el.classList.add("flex");
+      const col = { building: "#ffcf6b", ready: "#40e56c", error: "#ffb4ab" }[state] || "#8c90a1";
+      el.style.borderColor = col + "66"; el.style.color = col;
+      el.textContent = text; el.href = (state === "ready" && url) ? url : "#";
+    }
+    document.getElementById("serve-toggle").addEventListener("change", e => {
+      if (!e.target.checked) { document.getElementById("serve-status").classList.add("hidden"); return; }
+      const repo = lastRepo || document.getElementById("repo-input").value.trim();
+      if (!repo || !ws || ws.readyState !== 1) { e.target.checked = false; return; }
+      setServeStatus("building", "building container…", null);
+      ws.send(JSON.stringify({ type: "serve", repo_url: repo }));
     });
     document.getElementById("feed-toggle").onclick = () => {
       feedOpen = !feedOpen;

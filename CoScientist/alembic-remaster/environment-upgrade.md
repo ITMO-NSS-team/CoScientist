@@ -1,0 +1,7 @@
+I think we should split the repos for double-env path - I don't see a reason to not do that every time. 
+First, let's upgrade to python 3.12 in our base image. 
+
+Second, the server-env does not even bother us, we'll only need it when the wrapper has done its job and we launch mcp-server into production - basically it's always the same pre-defined install step with only fastmcp needed as it will only run a single fastmcp server script that calls helpers with their main env - to not confuse any agents we may actually install it right before wrapper starts its step - and he knows the difference between the server-env that runs server.py and env that runs the helpers he makes from the tool scripts we got before no not make confusion.
+
+The main env is the one we actually set up with environment agent for testing tools - we only extra we need every time is pytest. 
+Honestly most repos are just uv / pip install over pyproject toml or requirements txt without specifying the version (and this is scenario we want most), only then come specific version, conflict resolution if the repo requirements file is actually ill-composed. However most repos we run are not that and we still break, that's what i want to fix. And the gate must reflect this - throw out all related to mcp and server-venv.

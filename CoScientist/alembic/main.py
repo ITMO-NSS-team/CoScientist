@@ -27,6 +27,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 import asyncio
 import json
 import shutil
+import subprocess
 import time
 
 import yaml
@@ -48,12 +49,13 @@ from alembic.tools import (
     invoke_tool_function, run_tool_tests, set_current_repo,
     start_env_recording, stop_env_recording,
 )
-from alembic.tools.venv import ensure_server_packages
+from alembic.tools.venv import ensure_server_packages, install_repo
 from alembic.tools.analysis import decide_layout, symbol_table, target_top_modules, verify_target
 from alembic.tools.codegen import function_param_names, render_code_py, write_server, write_setup_sh
 from alembic.tools.fs import _clone_repo_sync
 from alembic.tools.invoke import check_repo_imports
-from alembic.tools.paths import MOUNT_DATA, MOUNT_INPUT, output_dir, repo_path, reports_dir, tools_python
+from alembic.tools.paths import MOUNT_DATA, MOUNT_INPUT, output_dir, repo_path, reports_dir, server_python, tools_python
+from alembic.tools.shell import record_env_command
 from alembic.tools.venv import _check_venv_compat_sync
 
 STAGES = config.STAGES
@@ -237,7 +239,7 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
                 "environment", environment_agent, name, metrics, session_service,
                 message_fn=lambda note: _environment_message(repo_url, tasks) + note,
                 gate_fn=lambda: _env_gate(name, session_service, metrics),
-                owned=[output_dir() / ".venv", output_dir() / ".venv-repo"],
+                owned=[output_dir() / ".venv"],
                 on_reset=start_env_recording,
             )
             write_setup_sh(stop_env_recording())
@@ -434,10 +436,47 @@ def _plan_gate(repo_url: str, tasks: list[dict]) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # G2 — Env gate (deterministic compat + repo-import smoke; one debugger round)
 # ══════════════════════════════════════════════════════════════════════════════
+def _uv_venv(path: Path, python_version: str) -> str | None:
+    """Create a venv at ``path`` on ``python_version`` via uv. Returns an error
+    string or None."""
+    try:
+        r = subprocess.run(["uv", "venv", str(path), "--python", python_version],
+                           capture_output=True, text=True, timeout=config.VENV_SETUP_TIMEOUT)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return f"venv creation failed: {e}"
+    return None if r.returncode == 0 else f"venv creation failed: {r.stderr[-300:]}"
+
+
+def _ensure_main_venv(plan) -> None:
+    """Guarantee the main ``.venv`` exists on the repo's Python (build it if the
+    env agent didn't) so the deterministic ``install_repo`` has somewhere to go."""
+    out = output_dir()
+    if (out / ".venv" / "bin" / "python").exists():
+        return
+    py = (plan.env.repo_python if plan and plan.env.repo_python else "3.11")
+    err = _uv_venv(out / ".venv", py)
+    if err:
+        logger.warning(f"[env gate] could not pre-build .venv: {err}")
+
+
+def _ensure_server_venv(plan) -> str | None:
+    """Build the isolated ``.venv-server`` (fastmcp only) — deferred to the
+    wrapper stage so the environment stage never touches server concerns.
+    Returns an error string or None."""
+    out = output_dir()
+    if not (out / ".venv-server" / "bin" / "python").exists():
+        py = (plan.env.server_python if plan else "3.11")
+        err = _uv_venv(out / ".venv-server", py)
+        if err:
+            return err
+    return ensure_server_packages(server_python(out.resolve()))
+
+
 async def _env_gate(name: str, session_service, metrics) -> dict:
-    """Deterministic env verification. HARD failures fail the gate (venv
-    missing, pytest/fastmcp absent, or a planned tool's target module won't
-    import). check_venv_compat conflicts are SOFT — a broken numpy ABI would
+    """Deterministic env verification. HARD failures fail the gate (main venv
+    missing, pytest absent, or a planned tool's target module won't import).
+    fastmcp is NOT checked here — the server venv is a wrapper-stage concern.
+    check_venv_compat conflicts are SOFT — a broken numpy ABI would
     already fail the repo-import smoke, so a surviving conflict is in peripheral
     code the tools don't touch; surface it to the debugger but don't loop a
     version-pinned repo forever on it."""
@@ -448,45 +487,56 @@ async def _env_gate(name: str, session_service, metrics) -> dict:
         hard: list[str] = []
         soft: list[str] = []
         if not (out / ".venv" / "bin" / "python").exists():
-            return [f"server venv missing: {out}/.venv was never created"], []
-        if plan and plan.env.layout == "two-venv" and not (out / ".venv-repo" / "bin" / "python").exists():
-            return [f"two-venv layout requires {out}/.venv-repo — it was never created"], []
+            return [f"main venv missing: {out}/.venv was never created"], []
         pytest_err = await asyncio.to_thread(ensure_pytest, tools_python(out.resolve()))
         if pytest_err:
             hard.append(pytest_err)
-        # server.py runs under .venv and imports the MCP runtime — a hand-rebuilt
-        # venv (bare `uv venv`, no pip) often lacks it (setup_venv would have added
-        # it). Ensure it lands *inside* the server venv, or hard-fail here rather
-        # than let the wrapper shim a fastmcp-less server past G4.
-        server_py = str((out / ".venv" / "bin" / "python").resolve())
-        server_pkg_err = await asyncio.to_thread(ensure_server_packages, server_py)
-        if server_pkg_err:
-            hard.append(server_pkg_err)
-        venvs = [".venv"] + ([".venv-repo"] if plan and plan.env.layout == "two-venv" else [])
-        for vn in venvs:
-            r = await asyncio.to_thread(_check_venv_compat_sync, vn)
-            if r.get("error"):
-                soft.append(f"compat check on {vn}: {r['error']}")
-            else:
-                for stmt, detail in list(r.get("conflicts", {}).items())[:8]:
-                    soft.append(f"[{vn}] `{stmt}` fails: {detail.get('error', '')[:200]}")
+        # Compat check only on the main venv — the server venv (fastmcp) is
+        # built and probed at the wrapper stage, isolated from the repo's deps.
+        r = await asyncio.to_thread(_check_venv_compat_sync, ".venv")
+        if r.get("error"):
+            soft.append(f"compat check on .venv: {r['error']}")
+        else:
+            for stmt, detail in list(r.get("conflicts", {}).items())[:8]:
+                soft.append(f"[.venv] `{stmt}` fails: {detail.get('error', '')[:200]}")
         mods = target_top_modules([t.target for t in (plan.tools if plan else [])])
         if mods:
             ri = await asyncio.to_thread(check_repo_imports, mods)
             for mod, err in ri["errors"].items():
-                hard.append(f"repo-import smoke: `import {mod}` fails in the tools venv: {err[:300]}")
+                hard.append(f"repo-import smoke: `import {mod}` fails in the main venv: {err[:300]}")
         return hard, soft
 
+    # Deterministic first (R3, 'code disposes'): guarantee the main venv exists
+    # and install the repo + its deps into it BEFORE checking — a repo-import
+    # smoke failure is almost always just the un-installed repo package, and one
+    # unified install path (requirements → editable → .pth fallback) beats
+    # spending an LLM debugger round rediscovering the same command every run.
+    await asyncio.to_thread(_ensure_main_venv, plan)
+    ir = await asyncio.to_thread(install_repo)
+    if ir.get("steps") or ir.get("note"):
+        logger.info(f"[env gate] deterministic install_repo: "
+                    f"{'; '.join(ir.get('steps', [])) or ir.get('note', '')}")
+
     hard, soft = await _checks()
+
     if hard or soft:
         # one bounded debugger round before deciding (R3)
         logger.warning(f"[env gate] {len(hard)} hard + {len(soft)} soft problem(s) — "
                        f"one debugger round.")
         await _call_debugger(
             name, session_service, metrics,
-            "The built Python environment fails its deterministic checks. Fix the "
-            "environment (install/downgrade packages into the RIGHT venv, apt-get "
-            "system libs). The 'repo-import smoke' failures are the critical ones. "
+            "The built Python environment fails its deterministic checks. Fix ONLY "
+            "the environment — do NOT write any application code. Everything installs "
+            "into the single main venv `.venv`: `uv pip install --python "
+            "<output>/.venv/bin/python <pkg-or-repo-dir>`, and do NOT create "
+            "additional venvs (the fastmcp server venv is built separately, later). "
+            "A 'repo-import smoke' failure means the repo package itself is not "
+            "importable in `.venv` (usually a missing system lib or an unresolved "
+            "dependency the automatic install could not satisfy) — the repo dir was "
+            "already installed for you, so fix the underlying cause; it is NOT a tool "
+            "to create. There are NO tool or test files yet (the Coder stage has not "
+            "run): do NOT create tools/, tests/, or any .py files, and do NOT call "
+            "run_tool_tests / invoke_tool_function. Only shell/install commands. "
             "Problems:\n- " + "\n- ".join(hard + soft))
         hard, soft = await _checks()
 
@@ -683,6 +733,13 @@ async def _wrap(name, session_service, metrics):
         await emit({"type": "stage", "stage": "wrapper", "status": "failed"})
         return
 
+    # Build the isolated fastmcp server venv (.venv-server) now — the only place
+    # that touches server concerns, kept out of the environment stage so the
+    # repo's deps and fastmcp's can never conflict (two-venv model).
+    server_err = await asyncio.to_thread(_ensure_server_venv, plan)
+    if server_err:
+        logger.warning(f"[wrapper] server venv setup problem (continuing): {server_err}")
+
     res = write_server(name, names)
     gate = check_server()
     used_fallback = False
@@ -743,9 +800,8 @@ def _environment_message(repo_url: str, tasks: list[dict]) -> str:
     lines = [repo_url, "", "Computed environment layout — trust this, it is authoritative:"]
     if plan:
         e = plan.env
-        lines += [f"  layout: {e.layout}", f"  server_python: {e.server_python}"]
         if e.repo_python:
-            lines.append(f"  repo_python: {e.repo_python}  (build .venv-repo on this)")
+            lines.append(f"  python: {e.repo_python}  (the main venv .venv is built on this)")
         if e.requirements_files:
             lines.append(f"  requirements files: {', '.join(e.requirements_files)}")
         if e.system_libs:
