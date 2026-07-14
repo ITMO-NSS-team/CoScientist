@@ -2,7 +2,9 @@
 
 The YAML declares every agent of the system in one place. Per agent:
 
-  class:        llm | sequential | parallel | custom:<registered name>
+  class:        llm | sequential | parallel | loop | custom:<registered name>
+                (`loop` repeats its children until a child escalates; cap it
+                with options.max_iterations)
   enabled:      bool, or "${settings.path}" resolved against app settings —
                 a disabled agent is still BUILT (so it can be served standalone
                 over A2A) but is not attached to / advertised by its parents
@@ -39,6 +41,9 @@ DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
 # honours it, so one deployment can run a differently-shaped CoScientist
 # without touching the default system.yaml.
 CONFIG_ENV_VAR = "COSCIENTIST_CONFIG"
+
+# Classes that only sequence `children` and carry no prompt/tools of their own.
+COMPOSITE_CLASSES = ("sequential", "parallel", "loop")
 
 
 def resolve_config_path(ref: Optional[str] = None) -> Path:
@@ -136,15 +141,16 @@ class AgentConfig(BaseModel):
     @field_validator("cls")
     @classmethod
     def _known_class(cls, v: str) -> str:
-        if v in ("llm", "sequential", "parallel") or v.startswith("custom:"):
+        if v in COMPOSITE_CLASSES or v == "llm" or v.startswith("custom:"):
             return v
         raise ValueError(
-            f"class must be llm | sequential | parallel | custom:<name>, got {v!r}"
+            f"class must be llm | {' | '.join(COMPOSITE_CLASSES)} | custom:<name>, "
+            f"got {v!r}"
         )
 
     @model_validator(mode="after")
     def _shape(self) -> "AgentConfig":
-        composite = self.cls in ("sequential", "parallel")
+        composite = self.cls in COMPOSITE_CLASSES
         if composite:
             if not self.children:
                 raise ValueError(f"{self.cls} agent needs non-empty children")

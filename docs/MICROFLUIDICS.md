@@ -4,23 +4,42 @@
 веществ (например, ПАВ) с получением целевых молекул на проточном /
 микрофлюидном реакторе. Из полной системы оставлены только оркестратор с
 планером и анализ литературы; добавлен агент постановки ТЗ, портированный из
-проекта **VibePAV** (`VibePAV/`).
+проекта **VibePAV** (`VibePAV/`), и стадии 3–11 — от молекулярного дизайна до
+финального отчёта.
 
 ## Пайплайн
 
-Каждый запрос в этом деплойменте — кейс микрофлюидики, поэтому стадия ТЗ
-выполняется детерминированно ПЕРЕД планированием:
+Граф **модульный**: `RootOrchestrator` маршрутизирует только модули целиком и
+никогда не заглядывает внутрь — границу пересекают ровно три ребра (2→3, 4→6,
+7→11), остальные рёбра модуль разруливает сам. Каждый запрос в этом
+деплойменте — кейс микрофлюидики, поэтому стадия ТЗ выполняется
+детерминированно ПЕРЕД планированием:
 
 ```
 запрос заказчика
-  └─ InitAgent (sequential)
-       ├─ TZAgent (sequential)                        ← порт VibePAV
-       │    ├─ TZSpecAgent      → state["structured_tz"]          таблица ТЗ
-       │    └─ TZQueryGenAgent  → state["tz_literature_queries"]  LIT-01…LIT-06
-       ├─ PlannerAgent          → create_plan: одна задача на каждый LIT-запрос
-       └─ OrchestratorAgent     → делегирует LIT-задачи ResearchAgent,
-                                  собирает финальный отчёт по ТЗ
+  └─ RootOrchestrator (llm)                      маршрутизирует ТОЛЬКО модули
+       ├─ ModuleA_TZLiterature (sequential)      стадии 1–2
+       │    ├─ TZAgent (sequential)                        ← порт VibePAV
+       │    │    ├─ TZSpecAgent      → state["structured_tz"]          таблица ТЗ
+       │    │    └─ TZQueryGenAgent  → state["tz_literature_queries"]  LIT-01…LIT-06
+       │    ├─ PlannerAgent          → create_plan: одна задача на каждый LIT-запрос
+       │    └─ LiteratureOrchestrator→ делегирует LIT-задачи ResearchAgent
+       ├─ ModuleB_Design (sequential)            стадии 3–5
+       │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
+       ├─ ModuleC_Experiment (sequential)        стадии 6–10
+       │    ├─ ExpPlannerAgent
+       │    └─ ExperimentLoop (loop, max_iterations=3)     цикл 7⇄8
+       │         ├─ EquipmentAgent   → узлы 9/10 — его ТУЛЫ (CFD, установка)
+       │         └─ OptimizerAgent   → finish_optimization завершает цикл
+       └─ ReportAgent (llm)                      стадия 11 → final_report
 ```
+
+> **Стадии 3–11 работают на ЗАГЛУШКАХ** (`CoScientist/microfluidics/stubs.py`):
+> сервисы молдизайна, ретросинтеза, экономики, CFD и установки ещё не
+> подключены. Заглушка возвращает статичный правдоподобный ответ с полем
+> `"stub": true`; подключение реального сервиса — замена ТЕЛА функции, YAML и
+> граф при этом не меняются. Дизайн:
+> `docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md`.
 
 - **TZSpecAgent** — превращает свободный запрос в структурированный
   **документ ТЗ** формата эталонного примера
@@ -47,9 +66,38 @@
   (`{structured_tz?}`, `{tz_literature_queries?}`) и регистрирует план:
   одна задача на LIT-запрос, assignee `ResearchAgent`, `query_en` — дословно
   в описании задачи.
-- **OrchestratorAgent** исполняет план, передавая `query_en` и список
-  извлекаемых данных в `ResearchAgent` (websearch + papers_search +
-  paper_analysis), затем собирает отчёт по структуре ТЗ.
+- **LiteratureOrchestrator** (бывший `OrchestratorAgent`, опущен внутрь
+  модуля A) исполняет план, передавая `query_en` и список извлекаемых данных в
+  `ResearchAgent` (websearch + papers_search + paper_analysis), затем сводит
+  находки по структуре ТЗ.
+
+### Стадии 3–11
+
+Контракт по состоянию сессии — каждый узел пишет ключ, который читает
+следующий; на этом и держатся рёбра графа:
+
+| # | Агент | Читает | Пишет (`output_key`) |
+|---|---|---|---|
+| 3 | `MolDesignAgent` | `structured_tz`, `search_results` | `design_candidates` — SMILES + свойства |
+| 4 | `SynthRouteAgent` | `design_candidates` | `synthesis_routes` — маршрут + условия операций |
+| 5 | `EconomicsAgent` | `synthesis_routes` | `economics` — стоимость, доступность в РФ, риски |
+| 6 | `ExpPlannerAgent` | `synthesis_routes` | `experiment_plan` — план опытов |
+| 7 | `EquipmentAgent` | `experiment_plan` | `experiment_journal` — данные эксперимента |
+| 8 | `OptimizerAgent` | `experiment_journal` | `experiment_plan` (уточнённый) |
+| 11 | `ReportAgent` | всё вышеперечисленное | `final_report` |
+
+- **Цикл 7⇄8** — ADK `LoopAgent` (`class: loop` в YAML, примитив ассемблера).
+  Ключ `experiment_plan` намеренно общий у узлов 6 и 8: узел 8 перезаписывает
+  план, и на следующей итерации узел 7 читает уже уточнённый — это и есть
+  ребро 8→7. Выход из цикла — тул `finish_optimization` (единственный у узла
+  8), он ставит `actions.escalate`; `max_iterations: 3` — страховка, каждая
+  итерация стоит минимум два вызова LLM.
+- **Узел 5 — тупиковый лист**: `economics` никто не потребляет до отчёта.
+  Поэтому модуль B отрабатывает целиком, и только затем маршруты уходят в C.
+- **Узел 7 — с HITL** (`hitl: true`): он подаёт команды на реальную установку.
+  Сейчас это заглушка, но подтверждение оператора заложено сразу. Остальные
+  новые узлы — без HITL, иначе цикл 7⇄8 требовал бы ответа оператора на каждой
+  итерации.
 
 ## Запуск отдельного инстанса
 
@@ -138,12 +186,20 @@ python scripts/run_microfluidics_web.py --no-hitl   # то же самое дл�
 ## Тесты
 
 ```bash
-# структурные (без LLM): сборка профиля, ТЗ-стадия первая, промпты согласованы
+# структурные (без LLM): сборка профиля, границы модулей, цикл 7⇄8, промпты
 pytest tests/unit/test_microfluidics_assembly.py -q
 
-# живой e2e: запрос → таблица ТЗ → план → проверка, что в ResearchAgent
+# заглушки стадий 3–11: детерминированность ответа и выход из цикла
+pytest tests/unit/test_microfluidics_stubs.py -q
+
+# живой e2e модуля A: запрос → таблица ТЗ → план → проверка, что в ResearchAgent
 # приходит запрос, выведенный из ТЗ (нужны .env и сеть; HITL отключается)
 pytest tests/integration/test_microfluidics_e2e.py -q -s
+
+# живой headless-прогон стадий 3–11 (B → C → D) на засеянном ТЗ: доходит до
+# узла 11 с final_report, цикл 7⇄8 крутится и завершается через
+# finish_optimization. Нужен только LLM-эндпоинт — стадии 3–11 заглушены.
+pytest tests/integration/test_microfluidics_stages_3_11.py -q -s
 
 # живой тест HITL-цикла ТЗ-стадии: скриптованный «оператор» шлёт правку (EDIT),
 # агент переписывает таблицу; плюс headless pass-through

@@ -62,6 +62,27 @@ class PromptContext:
     def has_subordinate(self, agent_name: str) -> bool:
         return any(s.name == agent_name for s in self.subordinates)
 
+    def _delegators_beside_me(self) -> List[AgentConfig]:
+        """Enabled agents that sit beside me under the same composite parent and
+        delegate to subordinates of their own.
+
+        The planner is a CHILD of a composite (it runs before the orchestrator
+        rather than under it), so its roster cannot be found through
+        ``parents_of``, which only walks subordinates. Found by SHAPE rather
+        than by name: the profiles name their orchestrator differently
+        (OrchestratorAgent, LiteratureOrchestrator), and a roster that silently
+        empties on a rename is worse than no roster at all.
+        """
+        out = []
+        for parent in self.system.agents.values():
+            if self.config.name not in parent.children or not parent.is_enabled():
+                continue
+            for name in parent.children:
+                agent = self.system.agent(name)
+                if name != self.config.name and agent.subordinates and agent.is_enabled():
+                    out.append(agent)
+        return out
+
     def siblings(self) -> List[AgentConfig]:
         """Enabled co-subordinates: my parents' other enabled subordinates.
 
@@ -70,8 +91,9 @@ class PromptContext:
         steps to.
         """
         if self.config.name == "PlannerAgent":
-            if "OrchestratorAgent" in self.system.agents:
-                return self.system.enabled_subordinates("OrchestratorAgent")
+            delegators = self._delegators_beside_me()
+            if delegators:
+                return self.system.enabled_subordinates(delegators[0].name)
 
         seen, out = set(), []
         for parent in self.system.parents_of(self.config.name):

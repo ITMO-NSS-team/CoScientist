@@ -2,24 +2,33 @@
 # CoScientist — MICROFLUIDICS profile.
 #
 # A reduced CoScientist deployment for the microfluidics case (ПАВ / target
-# molecules synthesised on a flow / microfluidic reactor). Compared to the
-# default system.yaml everything is stripped except:
+# molecules synthesised on a flow / microfluidic reactor), covering stages 1–11
+# from the ТЗ to the final report.
 #
-#   * TZAgent            — ported from the VibePAV project: turns the free-form
-#                          customer request into a structured ТЗ and a set of
-#                          literature queries (LIT-01…) BEFORE any planning
-#   * PlannerAgent       — builds the roadmap FROM the structured ТЗ
-#   * OrchestratorAgent  — executes the roadmap
-#   * ResearchAgent      — literature / web analysis (the only executor)
+# The graph is MODULAR. RootOrchestrator routes whole modules and never reaches
+# inside one: only 3 edges cross a module boundary (2→3, 4→6, 7→11), every other
+# edge is the module's own business.
 #
-# Root flow (every request in this deployment IS the microfluidics case):
+#   RootOrchestrator (llm, root)              routes MODULES only
+#   ├─ ModuleA_TZLiterature (sequential)      stages 1–2 — ТЗ + literature
+#   │    ├─ TZAgent (sequential)              ported from VibePAV
+#   │    │    ├─ TZSpecAgent      -> state["structured_tz"]         (ТЗ table)
+#   │    │    └─ TZQueryGenAgent  -> state["tz_literature_queries"] (LIT-01…)
+#   │    ├─ PlannerAgent          -> create_plan(…), one task per LIT query
+#   │    └─ LiteratureOrchestrator-> delegates each LIT task to ResearchAgent
+#   ├─ ModuleB_Design (sequential)            stages 3–5
+#   │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
+#   ├─ ModuleC_Experiment (sequential)        stages 6–10
+#   │    ├─ ExpPlannerAgent
+#   │    └─ ExperimentLoop (loop, max 3)      the 7⇄8 cycle
+#   │         ├─ EquipmentAgent   nodes 9/10 are its TOOLS (CFD, rig)
+#   │         └─ OptimizerAgent   finish_optimization ends the loop
+#   └─ ReportAgent (llm)                      stage 11
 #
-#   InitAgent (sequential)
-#     ├─ TZAgent (sequential)
-#     │    ├─ TZSpecAgent      -> state["structured_tz"]         (ТЗ table)
-#     │    └─ TZQueryGenAgent  -> state["tz_literature_queries"] (LIT-01…)
-#     ├─ PlannerAgent          -> create_plan(…), one task per LIT query
-#     └─ OrchestratorAgent     -> delegates each LIT task to ResearchAgent
+# Stages 3–11 run on STUBS (see CoScientist/microfluidics/stubs.py): the
+# molecular design, retrosynthesis, economics, CFD and rig services are not
+# connected yet. Connecting one replaces a stub BODY — this file does not change.
+# Design: docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md
 #
 # Run a separate CoScientist instance with this profile:
 #
@@ -33,15 +42,33 @@ defaults:
   model: main
 
 agents:
-  # ── Root ───────────────────────────────────────────────────────────────────
-  InitAgent:
-    class: sequential
+  # ── Root — routes MODULES, never their internals ───────────────────────────
+  RootOrchestrator:
+    class: llm
     root: true
+    description: >-
+      CoScientist microfluidics root orchestrator — runs the case module by
+      module: ТЗ + literature, design, experiment, report.
+    prompt: microfluidics_root_orchestrator
+    subordinates:
+      - ModuleA_TZLiterature
+      - ModuleB_Design
+      - ModuleC_Experiment
+      - ReportAgent
+
+  # ── Module A — stages 1–2: ТЗ + literature (was the whole profile) ─────────
+  ModuleA_TZLiterature:
+    class: sequential
+    description: >-
+      составляет ТЗ из запроса заказчика и выполняет по нему анализ литературы —
+      возвращает аналоги и факты. Всегда первый модуль.
+    routing: >-
+      always run this FIRST — it produces the structured ТЗ every later module
+      reads, plus the literature analogues and facts.
     children:
       - TZAgent
       - PlannerAgent
-      - OrchestratorAgent
-    description: CoScientist microfluidics pipeline — ТЗ, roadmap, literature analysis.
+      - LiteratureOrchestrator
 
   # ── ТЗ stage (ported from VibePAV) ─────────────────────────────────────────
   TZAgent:
@@ -106,14 +133,17 @@ agents:
     output_key: planner_roadmap
     hitl: true
 
-  # ── Execution ──────────────────────────────────────────────────────────────
-  OrchestratorAgent:
+  # ── Execution (inside module A) ────────────────────────────────────────────
+  # Was the root OrchestratorAgent when the profile stopped at literature.
+  # It now lives INSIDE module A: the 1→2 edge is internal to the module, so
+  # routing it through RootOrchestrator would break the module boundary.
+  LiteratureOrchestrator:
     class: llm
     include_contents: none
     description: >-
-      Microfluidics CoScientist Orchestrator — executes the roadmap by
-      delegating literature tasks to ResearchAgent and composes the final
-      report against the ТЗ.
+      Microfluidics literature orchestrator — executes the roadmap by
+      delegating literature tasks to ResearchAgent and sums up the findings
+      against the ТЗ.
     prompt: microfluidics_orchestrator
     tools: [task_tracker]
     subordinates:
@@ -146,3 +176,118 @@ agents:
       before_tool: [WebSearchLimiter]
       after_tool: [log_research_tool_calls]
     hitl: true
+
+  # ── Module B — stages 3–5: design ──────────────────────────────────────────
+  # Edge 4→5 stays inside B while 4→6 leaves for C: B runs to completion (the
+  # economics are costed) before the orchestrator hands the routes to C.
+  ModuleB_Design:
+    class: sequential
+    description: >-
+      проектирует целевые молекулы под ТЗ, выводит маршруты синтеза с условиями
+      операций и считает их экономику (стоимость, доступность реагентов в РФ).
+    routing: >-
+      run after module A, once the ТЗ and the literature findings exist. It
+      needs the analogues and facts A produced.
+    children:
+      - MolDesignAgent
+      - SynthRouteAgent
+      - EconomicsAgent
+
+  MolDesignAgent:
+    class: llm
+    description: >-
+      молекулярный дизайн — предлагает молекулы-кандидаты (SMILES + свойства)
+      под требования ТЗ, опираясь на аналоги из литературы.
+    prompt: microfluidics_mol_design
+    tools: [molecular_design_stub]
+    output_key: design_candidates
+
+  SynthRouteAgent:
+    class: llm
+    description: >-
+      ретросинтез — строит маршруты синтеза кандидатов с условиями каждой
+      операции и оценивает их пригодность для проточного реактора.
+    prompt: microfluidics_synth_route
+    tools: [retrosynthesis_stub]
+    output_key: synthesis_routes
+
+  # Node 5 is a LEAF: nothing consumes `economics` until the report (11).
+  EconomicsAgent:
+    class: llm
+    description: >-
+      экономика маршрутов — стоимость за кг, доступность реагентов в РФ, риски
+      поставок.
+    prompt: microfluidics_economics
+    tools: [economics_mcp_stub]
+    output_key: economics
+
+  # ── Module C — stages 6–10: experiment ─────────────────────────────────────
+  ModuleC_Experiment:
+    class: sequential
+    description: >-
+      планирует опыты по маршрутам синтеза и ведёт цикл «установка ⇄
+      оптимизация», пока оптимизация не перестанет давать выигрыш.
+    routing: >-
+      run after module B, passing the synthesis routes and their operating
+      conditions. It ends when the optimizer stops the cycle.
+    children:
+      - ExpPlannerAgent
+      - ExperimentLoop
+
+  ExpPlannerAgent:
+    class: llm
+    description: >-
+      планировщик опытов — превращает маршрут синтеза в план экспериментов на
+      микрофлюидной установке с числовыми критериями успеха.
+    prompt: microfluidics_exp_planner
+    output_key: experiment_plan
+
+  # The 7⇄8 cycle. The body repeats until OptimizerAgent calls
+  # finish_optimization (which escalates); max_iterations is the backstop —
+  # every iteration costs at least two LLM calls.
+  ExperimentLoop:
+    class: loop
+    description: >-
+      цикл эксперимента: исполнение плана на установке и оптимизация плана по
+      результатам.
+    children:
+      - EquipmentAgent
+      - OptimizerAgent
+    options:
+      max_iterations: 3
+
+  # Nodes 9 (CFD) and 10 (rig) are this agent's TOOLS, not agents of their own.
+  # hitl: it commands real hardware — the approval is wired now, while it is
+  # still a stub, so connecting the rig later needs no rework.
+  EquipmentAgent:
+    class: llm
+    description: >-
+      установка — исполняет план опытов: считает течение в чипе (CFD) и подаёт
+      команды на микрофлюидную установку, снимая телеметрию.
+    prompt: microfluidics_equipment
+    tools: [cfd_mcp_stub, rig_mcp_stub]
+    output_key: experiment_journal
+    hitl: true
+
+  # Writes back into `experiment_plan` ON PURPOSE: that shared key IS edge 8→7,
+  # so the next iteration of EquipmentAgent runs the refined plan.
+  OptimizerAgent:
+    class: llm
+    description: >-
+      оптимизация — по журналу эксперимента уточняет план опытов или завершает
+      цикл, когда критерии достигнуты.
+    prompt: microfluidics_optimizer
+    tools: [finish_optimization]
+    output_key: experiment_plan
+
+  # ── Module D — stage 11: report ────────────────────────────────────────────
+  ReportAgent:
+    class: llm
+    description: >-
+      финальный отчёт — сводит ТЗ, литературу, кандидатов, маршруты, экономику
+      и эксперименты в ответ заказчику.
+    routing: >-
+      run LAST, once the experiment module is finished or it is clear no
+      further optimization is needed (edge 7→11).
+    prompt: microfluidics_report
+    output_key: final_report

@@ -68,6 +68,22 @@ def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
 
+
+def _microfluidics_stub(name: str):
+    """Wrap one microfluidics STUB (stages 3–11) as an attachable function tool.
+
+    The external services are not connected yet; only the function BODY in
+    CoScientist/microfluidics/stubs.py changes when they are, so the names
+    registered below — and the YAML that references them — stay put.
+    """
+    def factory():
+        from google.adk.tools import FunctionTool
+        from CoScientist.microfluidics import stubs
+
+        return [FunctionTool(getattr(stubs, name))]
+
+    return factory
+
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
     factory=_websearch,
@@ -175,6 +191,102 @@ REGISTRY.register_tool(ToolEntry(
             name="create_plan",
             signature="create_plan(tasks)",
             purpose="Replace all tasks with a new plan. Each task needs title, description, and assignee.",
+        ),
+    ),
+))
+
+# ── Microfluidics stages 3–11 ────────────────────────────────────────────────
+# Stubs for the services behind nodes 3, 4, 5, 9 and 10 (see the design in
+# docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md), plus
+# finish_optimization — the REAL tool that ends the 7⇄8 optimization loop.
+
+REGISTRY.register_tool(ToolEntry(
+    key="molecular_design_stub",
+    factory=_microfluidics_stub("molecular_design_stub"),
+    docs=(
+        ToolDoc(
+            name="molecular_design_stub",
+            signature="molecular_design_stub(requirements)",
+            purpose=(
+                "(ЗАГЛУШКА) Predicts target molecules for the ТЗ from the "
+                "literature analogues: SMILES + the properties the quality "
+                "criteria are checked against."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="retrosynthesis_stub",
+    factory=_microfluidics_stub("retrosynthesis_stub"),
+    docs=(
+        ToolDoc(
+            name="retrosynthesis_stub",
+            signature="retrosynthesis_stub(smiles)",
+            purpose=(
+                "(ЗАГЛУШКА) Plans a synthesis route to a target molecule: "
+                "ordered steps with reagents and operating conditions."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="economics_mcp_stub",
+    factory=_microfluidics_stub("economics_mcp_stub"),
+    docs=(
+        ToolDoc(
+            name="economics_mcp_stub",
+            signature="economics_mcp_stub(route)",
+            purpose=(
+                "(ЗАГЛУШКА) Costs a synthesis route: price per kg, reagent "
+                "availability in Russia, and supply risks."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="cfd_mcp_stub",
+    factory=_microfluidics_stub("cfd_mcp_stub"),
+    docs=(
+        ToolDoc(
+            name="cfd_mcp_stub",
+            signature="cfd_mcp_stub(geometry, flow)",
+            purpose=(
+                "(ЗАГЛУШКА) Simulates the flow in the chip (CFD): pressure "
+                "drop, mixing efficiency, residence time."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="rig_mcp_stub",
+    factory=_microfluidics_stub("rig_mcp_stub"),
+    docs=(
+        ToolDoc(
+            name="rig_mcp_stub",
+            signature="rig_mcp_stub(command)",
+            purpose=(
+                "(ЗАГЛУШКА) Sends a command to the microfluidic rig and reads "
+                "back its status and telemetry."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="finish_optimization",
+    factory=_microfluidics_stub("finish_optimization"),
+    docs=(
+        ToolDoc(
+            name="finish_optimization",
+            signature="finish_optimization(reason)",
+            purpose=(
+                "Ends the experiment optimization loop and moves on to the "
+                "report. Call it once the plan needs no further refining."
+            ),
         ),
     ),
 ))

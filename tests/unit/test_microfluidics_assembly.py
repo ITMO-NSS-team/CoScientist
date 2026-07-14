@@ -2,7 +2,13 @@
 
 These build the real reduced system (no LLM calls) and assert the invariants
 of the microfluidics pipeline: ТЗ stage runs FIRST, the planner receives the
-structured ТЗ, and the orchestrator can only delegate to ResearchAgent.
+structured ТЗ, and the literature orchestrator can only delegate to
+ResearchAgent.
+
+Since stages 3–11 landed the profile is a MODULAR graph: RootOrchestrator
+routes only whole modules (A → B → C → D), while the edges inside a module are
+the module's own business. The tests below pin that boundary, because it is
+what keeps the finished stages 1–2 out of the root's reach.
 
 Run from the repo root:  pytest tests/unit/test_microfluidics_assembly.py -q
 """
@@ -32,25 +38,58 @@ def test_profile_resolves_by_name():
     assert path.name == "microfluidics.yaml" and path.exists()
 
 
-def test_root_pipeline_runs_tz_first(config):
-    """ТЗ agent runs BEFORE the planner, which runs before the orchestrator."""
-    assert config.root.name == "InitAgent"
-    assert config.root.children == ["TZAgent", "PlannerAgent", "OrchestratorAgent"]
+def test_root_orchestrator_routes_only_modules(config):
+    """The root sees MODULES, never their internals: an edge inside a module
+    (e.g. ТЗ → literature) must not travel through the root."""
+    assert config.root.name == "RootOrchestrator"
+    assert config.root.cls == "llm"
+    assert config.root.subordinates == [
+        "ModuleA_TZLiterature",
+        "ModuleB_Design",
+        "ModuleC_Experiment",
+        "ReportAgent",
+    ]
+    assert not config.root.children, "the root routes, it does not sequence"
+
+
+def test_modules_encapsulate_their_stages(config):
+    """Each module owns its nodes; only 3 edges cross a module boundary
+    (2→3, 4→6, 7→11) and those are the root's job."""
+    assert config.agent("ModuleA_TZLiterature").children == [
+        "TZAgent", "PlannerAgent", "LiteratureOrchestrator",
+    ]
+    assert config.agent("ModuleB_Design").children == [
+        "MolDesignAgent", "SynthRouteAgent", "EconomicsAgent",
+    ]
+    assert config.agent("ModuleC_Experiment").children == [
+        "ExpPlannerAgent", "ExperimentLoop",
+    ]
     assert config.agent("TZAgent").children == ["TZSpecAgent", "TZQueryGenAgent"]
 
 
-def test_everything_but_literature_analysis_is_stripped(config):
-    """The profile keeps only ТЗ + planner + orchestrator + research."""
+def test_literature_orchestrator_is_scoped_to_module_a(config):
+    """The old OrchestratorAgent is renamed and demoted INTO module A, where it
+    still drives ResearchAgent — it is not the root any more."""
+    assert "OrchestratorAgent" not in config.agents
+    assert config.agent("LiteratureOrchestrator").subordinates == ["ResearchAgent"]
+
+
+def test_profile_holds_exactly_the_declared_graph(config):
     assert set(config.agents) == {
-        "InitAgent",
-        "TZAgent",
-        "TZSpecAgent",
-        "TZQueryGenAgent",
-        "PlannerAgent",
-        "OrchestratorAgent",
-        "ResearchAgent",
+        "RootOrchestrator",
+        # module A — ТЗ + literature (stages 1–2, was the whole profile)
+        "ModuleA_TZLiterature",
+        "TZAgent", "TZSpecAgent", "TZQueryGenAgent",
+        "PlannerAgent", "LiteratureOrchestrator", "ResearchAgent",
+        # module B — design (3, 4, 5)
+        "ModuleB_Design",
+        "MolDesignAgent", "SynthRouteAgent", "EconomicsAgent",
+        # module C — experiment (6, 7⇄8 with 9/10 as tools of 7)
+        "ModuleC_Experiment",
+        "ExpPlannerAgent", "ExperimentLoop", "EquipmentAgent", "OptimizerAgent",
+        # module D — report (11)
+        "ReportAgent",
     }
-    assert config.agent("OrchestratorAgent").subordinates == ["ResearchAgent"]
 
 
 def test_tz_stage_outputs_feed_the_session_state(config):
@@ -58,6 +97,98 @@ def test_tz_stage_outputs_feed_the_session_state(config):
     assert config.agent("TZSpecAgent").output_schema == "structured_tz"
     assert config.agent("TZQueryGenAgent").output_key == "tz_literature_queries"
     assert config.agent("TZQueryGenAgent").output_schema == "tz_literature_queries"
+
+
+def test_node_output_contracts(config):
+    """Every node writes the state key the next one reads — the graph's edges
+    exist only because these keys line up."""
+    assert config.agent("ResearchAgent").output_key == "search_results"
+    assert config.agent("MolDesignAgent").output_key == "design_candidates"
+    assert config.agent("SynthRouteAgent").output_key == "synthesis_routes"
+    assert config.agent("EconomicsAgent").output_key == "economics"
+    assert config.agent("ExpPlannerAgent").output_key == "experiment_plan"
+    assert config.agent("EquipmentAgent").output_key == "experiment_journal"
+    assert config.agent("ReportAgent").output_key == "final_report"
+
+
+def test_optimizer_rewrites_the_plan_the_rig_reads(config):
+    """Edge 8→7 IS the shared key: node 8 overwrites `experiment_plan`, so the
+    next iteration of node 7 picks up the refined plan. Same key by design."""
+    assert config.agent("OptimizerAgent").output_key == "experiment_plan"
+    assert config.agent("ExpPlannerAgent").output_key == "experiment_plan"
+
+
+# ── the experiment loop (7 ⇄ 8) ──────────────────────────────────────────────
+
+def test_experiment_loop_cycles_the_rig_and_the_optimizer(config, system):
+    """The 7⇄8 cycle is the one edge a plain tree cannot express — it is an ADK
+    LoopAgent whose body is exactly [rig, optimizer]."""
+    from google.adk.agents.loop_agent import LoopAgent
+
+    assert config.agent("ExperimentLoop").cls == "loop"
+    assert config.agent("ExperimentLoop").children == ["EquipmentAgent", "OptimizerAgent"]
+
+    loop = system.agent("ExperimentLoop")
+    assert isinstance(loop, LoopAgent)
+    assert [child.name for child in loop.sub_agents] == ["EquipmentAgent", "OptimizerAgent"]
+
+
+def test_experiment_loop_is_bounded(config, system):
+    """max_iterations is the backstop: each iteration costs ≥2 LLM calls, and a
+    model that never calls finish_optimization must not spin forever."""
+    loop = system.agent("ExperimentLoop")
+    assert loop.max_iterations == 3
+    assert config.agent("ExperimentLoop").options["max_iterations"] == 3
+
+
+def test_only_the_optimizer_can_end_the_loop(config, system):
+    """Node 8 alone holds finish_optimization — the escape hatch of the cycle."""
+    assert config.agent("OptimizerAgent").tools == ["finish_optimization"]
+
+    attached = {t.name for t in system.agent("OptimizerAgent").tools}
+    assert "finish_optimization" in attached
+    for other in ("EquipmentAgent", "ExpPlannerAgent", "ReportAgent"):
+        names = {t.name for t in system.agent(other).tools}
+        assert "finish_optimization" not in names, f"{other} could break the loop"
+
+
+def test_equipment_agent_drives_cfd_and_the_rig(config, system):
+    """Nodes 9 and 10 are TOOLS of node 7, not agents of their own."""
+    assert config.agent("EquipmentAgent").tools == ["cfd_mcp_stub", "rig_mcp_stub"]
+
+    attached = {t.name for t in system.agent("EquipmentAgent").tools}
+    assert {"cfd_mcp_stub", "rig_mcp_stub"} <= attached
+    for node in ("cfd_mcp_stub", "rig_mcp_stub"):
+        assert node not in config.agents, f"{node} must be a tool, not an agent"
+
+
+def test_the_rig_asks_the_operator_but_the_loop_does_not(config):
+    """Node 7 commands real hardware → HITL. Its loop partner must NOT, or every
+    iteration would stop for the operator."""
+    assert config.agent("EquipmentAgent").hitl is True
+    for silent in ("OptimizerAgent", "MolDesignAgent", "SynthRouteAgent",
+                   "EconomicsAgent", "ExpPlannerAgent", "ReportAgent"):
+        assert config.agent(silent).hitl is False, f"{silent}: HITL would stall the graph"
+
+
+# ── stubs ────────────────────────────────────────────────────────────────────
+
+def test_stub_tools_are_registered_and_documented(config, system):
+    """The external services are stubbed; the YAML references them by name, so
+    the swap to real implementations touches neither the YAML nor the graph."""
+    from CoScientist.assembly.registry import REGISTRY
+
+    for key in ("molecular_design_stub", "retrosynthesis_stub", "economics_mcp_stub",
+                "cfd_mcp_stub", "rig_mcp_stub", "finish_optimization"):
+        entry = REGISTRY.tool(key)  # raises if unregistered
+        assert entry.factory() is not None, f"{key}: not attachable"
+        assert [d.name for d in entry.docs] == [key], f"{key}: doc name must match"
+
+
+def test_design_nodes_call_their_stubs(config):
+    assert config.agent("MolDesignAgent").tools == ["molecular_design_stub"]
+    assert config.agent("SynthRouteAgent").tools == ["retrosynthesis_stub"]
+    assert config.agent("EconomicsAgent").tools == ["economics_mcp_stub"]
 
 
 # ── built system invariants ──────────────────────────────────────────────────
@@ -80,14 +211,66 @@ def test_planner_prompt_consumes_the_tz(system):
         assert absent not in instruction
 
 
-def test_orchestrator_prompt_carries_tz_context_and_research_routing(system):
-    instruction = system.agent("OrchestratorAgent").instruction
+def test_planner_roster_survives_the_orchestrator_rename(config):
+    """The planner's roster lists whoever the orchestrator BESIDE it can
+    delegate to. It is derived from the graph, so renaming that orchestrator
+    (OrchestratorAgent → LiteratureOrchestrator) and demoting it into module A
+    must not silently empty the roster."""
+    from CoScientist.assembly.prompting import PromptContext
+
+    roster = PromptContext(config=config.agent("PlannerAgent"), system=config)
+    rendered = roster.render_sibling_roster()
+
+    assert "ResearchAgent" in rendered
+    assert "PlannerAgent" not in rendered, "the planner must not plan for itself"
+
+
+def test_literature_orchestrator_prompt_carries_tz_context_and_research_routing(system):
+    instruction = system.agent("LiteratureOrchestrator").instruction
     assert "{structured_tz?}" in instruction
     assert "{active_tasks}" in instruction
     assert "ResearchAgent" in instruction
     assert "query_en" in instruction  # the ТЗ-derived query must be passed on
     for absent in ("TaskExecutorAgent", "CoderAgent", "retrieve_tools"):
         assert absent not in instruction
+
+
+def test_root_orchestrator_prompt_pins_the_module_order(system):
+    """Risk mitigation from the design: the route A→B→C→D is effectively fixed,
+    so the LLM router is told the order and the exit condition explicitly."""
+    instruction = system.agent("RootOrchestrator").instruction
+
+    for module in ("ModuleA_TZLiterature", "ModuleB_Design", "ModuleC_Experiment",
+                   "ReportAgent"):
+        assert module in instruction, f"{module} missing from the root prompt"
+    # It must not reach past a module boundary into the module's own nodes.
+    for internal in ("TZSpecAgent", "ResearchAgent", "EquipmentAgent", "OptimizerAgent"):
+        assert internal not in instruction, f"{internal}: root must not route to it"
+
+
+def test_new_node_prompts_read_their_upstream_state(system):
+    """Each new node's prompt injects exactly the state its contract names."""
+    reads = {
+        "MolDesignAgent": ("{structured_tz?}", "{search_results?}"),
+        "SynthRouteAgent": ("{design_candidates?}",),
+        "EconomicsAgent": ("{synthesis_routes?}",),
+        "ExpPlannerAgent": ("{synthesis_routes?}",),
+        "EquipmentAgent": ("{experiment_plan?}",),
+        "OptimizerAgent": ("{experiment_journal?}",),
+    }
+    for name, keys in reads.items():
+        instruction = system.agent(name).instruction
+        for key in keys:
+            assert key in instruction, f"{name}: prompt does not read {key}"
+
+
+def test_report_prompt_gathers_every_stage(system):
+    """Node 11 is where node 5 (a dead end otherwise) is finally consumed."""
+    instruction = system.agent("ReportAgent").instruction
+    for key in ("{structured_tz?}", "{search_results?}", "{design_candidates?}",
+                "{synthesis_routes?}", "{economics?}", "{experiment_plan?}",
+                "{experiment_journal?}"):
+        assert key in instruction, f"report ignores {key}"
 
 
 def test_tz_spec_prompt_has_all_tz_blocks(system):

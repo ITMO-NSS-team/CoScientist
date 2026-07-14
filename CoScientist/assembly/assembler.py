@@ -8,6 +8,8 @@ constructs every declared agent:
                        callbacks, HITL tools, output_key/schema, planner
   * ``sequential``  -> SequentialAgent over ``children``
   * ``parallel``    -> ParallelAgent over ``children``
+  * ``loop``        -> LoopAgent over ``children``, repeating them until one
+                       escalates (``options.max_iterations`` bounds the loop)
   * ``custom:<x>``  -> the registered class (e.g. SessionAgent), passing
                        ``options`` through as constructor kwargs
 
@@ -29,6 +31,7 @@ from typing import Dict, List, Optional, Set
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.agents.loop_agent import LoopAgent
 from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.sequential_agent import SequentialAgent
 from google.adk.tools.agent_tool import AgentTool
@@ -41,6 +44,7 @@ from CoScientist.assembly.bindings import HITL_TOOL_DOCS
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, ToolEntry
 from CoScientist.assembly.schema import (
+    COMPOSITE_CLASSES,
     AgentConfig,
     SystemConfig,
     get_config,
@@ -50,6 +54,12 @@ from CoScientist.assembly.schema import (
 _logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_RE = re.compile(r"<<[A-Z_]+>>")
+
+_COMPOSITE_AGENT_CLASSES = {
+    "sequential": SequentialAgent,
+    "parallel": ParallelAgent,
+    "loop": LoopAgent,
+}
 
 
 @dataclass
@@ -273,8 +283,8 @@ def build_system(
         cfg = config.agent(name)
         if cfg.cls == "llm":
             agent = _build_llm_agent(cfg, config, built, remote_subagents)
-        elif cfg.cls in ("sequential", "parallel"):
-            cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
+        elif cfg.cls in COMPOSITE_CLASSES:
+            cls = _COMPOSITE_AGENT_CLASSES[cfg.cls]
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,

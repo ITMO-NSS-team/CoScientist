@@ -1,7 +1,7 @@
-"""Live end-to-end test of the MICROFLUIDICS profile.
+"""Live end-to-end test of the MICROFLUIDICS profile, stages 1–2.
 
-Runs the real reduced pipeline (TZAgent -> PlannerAgent -> OrchestratorAgent
--> ResearchAgent) on a microfluidics-case request and verifies the contract
+Runs module A (TZAgent -> PlannerAgent -> LiteratureOrchestrator ->
+ResearchAgent) on a microfluidics-case request and verifies the contract
 the profile exists for:
 
   1. the ТЗ agent produces a structured ТЗ table from the free-form request;
@@ -9,6 +9,11 @@ the profile exists for:
   3. the planner registers them as tasks assigned to ResearchAgent;
   4. the request that actually REACHES ResearchAgent carries the ТЗ-derived
      query (query_en terms), i.e. the ТЗ table drives the literature search.
+
+Scoped to module A on purpose: since stages 3–11 landed, the ROOT
+(RootOrchestrator) would also run design, experiment and report, which is a
+different (and far more expensive) test — see
+test_microfluidics_stages_3_11.py for those.
 
 Requires the real LLM (.env) and network; HITL is disabled for the run.
 
@@ -74,7 +79,11 @@ async def _run_pipeline():
     await session_service.create_session(
         app_name=APP, user_id=USER, session_id=SESSION
     )
-    runner = Runner(agent=system.root, app_name=APP, session_service=session_service)
+    runner = Runner(
+        agent=system.agent("ModuleA_TZLiterature"),
+        app_name=APP,
+        session_service=session_service,
+    )
 
     research_requests: list[dict] = []
     async for event in runner.run_async(
