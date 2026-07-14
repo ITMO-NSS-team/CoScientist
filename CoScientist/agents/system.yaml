@@ -327,6 +327,9 @@ agents:
     output_schema: tool_ranking
     callbacks:
       before_model: [skip_retriever_context]
+      # Not every provider honours response_format: strip prose/```json fences
+      # around the JSON before ADK's strict output_schema validation.
+      after_model: [sanitize_json_output]
       after_agent: [collect_reranked_tools]
 
   ToolWebSearcherAgent:
@@ -343,6 +346,9 @@ agents:
     output_key: reranked_web_servers
     output_schema: mcp_ranking
     callbacks:
+      # Not every provider honours response_format: strip prose/```json fences
+      # around the JSON before ADK's strict output_schema validation.
+      after_model: [sanitize_json_output]
       after_agent: [collect_reranked_mcps]
 
   WebToolsDeployerAgent:
