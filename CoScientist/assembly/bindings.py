@@ -170,7 +170,11 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="retrieve_tools",
             signature="retrieve_tools(query)",
-            purpose="Retrieves tools from MCP servers using RAG.",
+            purpose=(
+                "Searches the MCP registry by capability. Returns ranked tool "
+                "records with tool name, server_id, full description, input_schema, "
+                "and score; use the metadata to determine exact requirement coverage."
+            ),
         ),
         ToolDoc(
             name="get_server_info",
@@ -562,6 +566,21 @@ def _web_search_limiter():
     return SearchLimiter(max_searches=2).limit_searches
 
 
+def _sanitize_json_output():
+    from CoScientist.agents.callbacks import sanitize_json_output
+    return sanitize_json_output
+
+
+def _save_tz_document():
+    from CoScientist.microfluidics.tz_agent import save_tz_document
+    return save_tz_document
+
+
+def _export_tz_and_queries():
+    from CoScientist.microfluidics.export import export_tz_and_queries
+    return export_tz_and_queries
+
+
 def _guard_unknown_tools(ctx):
     """after_model guard capturing the agent's REAL tool names from its context,
     so a hallucinated tool call is corrected instead of crashing the run.
@@ -622,6 +641,13 @@ _cb("inject_research_context", "before_agent", factory=_inject_research_context)
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
+# Trim prose/fences/trailing text around a JSON answer BEFORE strict
+# output_schema validation (providers don't always honour response_format).
+_cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())
+# Render the approved ТЗ into the reference Markdown document (state + file).
+_cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
+# Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
+_cb("export_tz_and_queries", "after_agent", factory=lambda ctx: _export_tz_and_queries())
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
@@ -632,16 +658,24 @@ _cb("post_action_critique", "after_tool", factory=_post_action_critique)
 def _register_classes() -> None:
     from CoScientist.agents.custom_agents import WebToolsDeployerAgent
     from CoScientist.hitl.session_agent import SessionAgent
+    from CoScientist.microfluidics.tz_agent import TZSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
+    # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
+    REGISTRY.register_agent_class("tz_session", TZSessionAgent)
 
 
 def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
+    from CoScientist.microfluidics.models import LiteratureQueries, StructuredTZ
 
     REGISTRY.register_output_schema("tool_ranking", ToolRanking)
     REGISTRY.register_output_schema("mcp_ranking", MCPRanking)
+    # Microfluidics profile: structured ТЗ and the literature queries derived
+    # from it (see CoScientist/agents/microfluidics.yaml).
+    REGISTRY.register_output_schema("structured_tz", StructuredTZ)
+    REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
 
 
 def _register_planners() -> None:

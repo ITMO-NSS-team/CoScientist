@@ -146,6 +146,19 @@ def test_planner_roster_uses_real_agent_names(config, system):
     assert "Hypothesis Agent" not in instruction
 
 
+def test_planner_optimizes_for_capability_coverage_not_step_count(system):
+    """MCP metadata compresses delegation units instead of expanding them."""
+    instruction = system.agent("PlannerAgent").instruction
+    assert "SHORTEST executable roadmap" in instruction
+    assert "FULL description and `input_schema`" in instruction
+    assert "one task per independent user deliverable" in instruction
+    assert "run a compression pass" in instruction
+    assert "Do not add an OrchestratorAgent task" in instruction
+    assert "Prefer a ready direct generation/inference tool" in instruction
+    assert "Never assume that TaskExecutorAgent can" in instruction
+    assert "make ONE task" in instruction
+
+
 def test_orchestrator_tool_discovery_gate(config, system):
     """Structural invariant: the retrieval tool is documented iff attached, and
     when attached the retrieve_tools gate is positioned BEFORE the routing roster

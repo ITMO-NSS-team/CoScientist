@@ -217,9 +217,21 @@ class RetrievalToolSet(BaseToolset):
             except Exception:  # noqa: BLE001
                 pass
 
+        # get_server returns None when no server matches the id — don't call
+        # model_dump on it (AttributeError), report a clean not-found instead.
+        if server is None:
+            return {
+                "status": "error",
+                "result": None,
+                "message": f"No MCP server found for server_id={server_id!r}.",
+            }
+
         return {
             "status": "success",
-            "result": server,
+            # model_dump(mode="json") so datetime/enum fields become JSON-native
+            # — a raw MCPServer (or its datetime fields) is not JSON serializable
+            # and would crash any json.dumps consumer (web ws, Opik trace, ADK state).
+            "result": server.model_dump(mode="json"),
         }
 
 
