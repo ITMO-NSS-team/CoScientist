@@ -17,6 +17,25 @@ from CoScientist.tools.task_tracker import task_tracker_instance
 
 logger = logging.getLogger("CoScientist.hitl.session_agent")
 
+
+def render_task_plan(tasks) -> str:
+    """Render the registered delegation plan without model/tool narration."""
+    if not isinstance(tasks, list) or not tasks:
+        return ""
+    lines = [f"План: {len(tasks)} задач(и)"]
+    for index, task in enumerate(tasks, 1):
+        title = task.get("title") or f"Задача {index}"
+        assignee = task.get("assignee") or "не назначен"
+        lines.extend((f"\n{index}. {title}", f"Исполнитель: {assignee}"))
+        description = (task.get("description") or "").strip()
+        if description:
+            lines.append(description)
+        depends_on = task.get("parent_id")
+        if depends_on:
+            lines.append(f"Зависит от: {depends_on}")
+    return "\n".join(lines)
+
+
 class SessionAgent(LlmAgent):
     """A planner that generates a roadmap and asks the human.
     If the human requests changes, it automatically feeds the changes back
@@ -54,6 +73,12 @@ class SessionAgent(LlmAgent):
         Subclasses may run a multi-step dialogue instead (e.g. the ТЗ agent
         first reviews the document, then interviews the operator question by
         question) as long as they return one HITLResponse."""
+        review_output = output_text
+        if self.name == "PlannerAgent":
+            registered_plan = render_task_plan(ctx.session.state.get("active_tasks"))
+            if registered_plan:
+                review_output = registered_plan
+
         request = HITLRequest(
             agent_name=self.name,
             action_type=HITLAction.APPROVE,
@@ -61,7 +86,7 @@ class SessionAgent(LlmAgent):
                 f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes "
                 "its result. Please review."
             ),
-            context={"output": self._review_output(output_text)},
+            context={"output": self._review_output(review_output)},
             invoked_via="internal_loop",
         )
         return await self.hitl_handler.handle_request(request)
@@ -72,17 +97,21 @@ class SessionAgent(LlmAgent):
             output_text = ""
             final_event = None
 
+            # Never review a stale plan from an earlier attempt/session turn if
+            # the current planner run fails before create_plan succeeds.
+            if self.name == "PlannerAgent":
+                ctx.session.state.pop("active_tasks", None)
+
             async with Aclosing(super()._run_async_impl(ctx)) as agen:
                 async for event in agen:
-                    # Collect text for potential HITL refinement
-                    if event.content and event.content.parts:
-                        for part in event.content.parts:
-                            if part.text:
-                                output_text += part.text
-
                     if event.is_final_response():
-                        # Hold — emit only after HITL decision
                         final_event = event
+                        # Earlier text events contain reasoning and tool-call
+                        # narration. Only the final response may reach HITL.
+                        output_text = "".join(
+                            part.text or ""
+                            for part in (event.content.parts if event.content else [])
+                        )
                     else:
                         yield event
 
