@@ -11,11 +11,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
+import os
 from typing import Optional
 import logging
 
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
+from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings
@@ -33,6 +35,52 @@ settings = get_settings()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _compaction_config():
+    """Build the events-compaction config: when an agent's prompt grows past the
+    token threshold, ADK summarizes older events (with the agent's own model),
+    keeping the last N raw events. Disable with AGENT_CONTEXT_TOKEN_THRESHOLD=0.
+    """
+    try:
+        from google.adk.apps.app import EventsCompactionConfig
+        threshold = int(os.getenv("AGENT_CONTEXT_TOKEN_THRESHOLD", "150000"))
+        if threshold <= 0:
+            return None
+        return EventsCompactionConfig(
+            compaction_interval=int(os.getenv("AGENT_COMPACTION_INTERVAL", "15")),
+            overlap_size=int(os.getenv("AGENT_COMPACTION_OVERLAP", "2")),
+            token_threshold=threshold,
+            event_retention_size=int(os.getenv("AGENT_CONTEXT_RETENTION", "12")),
+        )
+    except Exception:  # noqa: BLE001 — compaction is best-effort, never block startup
+        return None
+
+
+def reset_session_state() -> None:
+    """Clear PER-SESSION state on a fresh start / interrupt: the planner's task
+    tracker (persisted to disk, so it would otherwise leak across runs) and the
+    in-process execution graph. The cross-run knowledge MEMORY is preserved."""
+    try:
+        from CoScientist.tools import task_tracker_instance
+        task_tracker_instance.reset()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from CoScientist.graph.memory import knowledge_graph
+        knowledge_graph.reset_session()
+    except Exception:  # noqa: BLE001
+        pass
+    # The research context graph outlives a single chat session by default (a
+    # research spans many prompts), so it is NOT reset here unless explicitly
+    # configured. When RESEARCH_GRAPH__RESET_ON_SESSION=true, archive + clear it.
+    try:
+        from CoScientist.config import get_settings
+        if get_settings().research_graph.reset_on_session:
+            from CoScientist.graph.research.store import research_graph
+            research_graph.reset(archive=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> str:
@@ -93,7 +141,12 @@ class CoScientistManager:
         """Initialize session + runner."""
         if self._initialized:
             return
-    
+
+        # Fresh session: clear stale PER-SESSION state (planner tasks + the
+        # execution graph) so a previous run's context never leaks in. The
+        # cross-run knowledge MEMORY is intentionally kept.
+        reset_session_state()
+
         # Session service
         self.session_service = InMemorySessionService()
 
@@ -106,12 +159,34 @@ class CoScientistManager:
         # Build the agent system (reads start_mode + tunable params from settings).
         system = build_for_mode()
 
-        # Runner
-        self.runner = Runner(
-            agent=system.root,
-            app_name=self.app_name,
-            session_service=self.session_service,
+        # Runner plugins:
+        # - EventLoggerPlugin: same local-file + console trace as the A2A
+        #   servers (a2a/server.py) and `adk web` (agent.py);
+        # - GraphMemoryPlugin: grows the shared in-process knowledge graph so any
+        #   agent can read the history/roster via the graph tools.
+        # Toggle both with LOG_AGENT_EVENTS / AGENT_LOG_FILE.
+        from google.adk.apps.app import App
+        from CoScientist.logging.event_logger import EventLoggerPlugin
+        from CoScientist.graph.plugin import GraphMemoryPlugin
+        from CoScientist.graph.research.validator import background_validator_plugin
+        from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+
+        # An App carries the plugins + the events-compaction config (summarize the
+        # context once it crosses the token threshold). ToolResultTruncationPlugin
+        # MUST be last: ADK stops at the first non-None after_tool return, so the
+        # logger/graph observe the full result first, then truncation bounds what
+        # reaches the LLM context.
+        # background_validator_plugin judges hypotheses asynchronously (fire-and-
+        # forget) as evidence lands — before the truncation plugin so it sees the
+        # full research_commit result. It never blocks the run loop.
+        app = App(
+            name=self.app_name,
+            root_agent=system.root,
+            plugins=[EventLoggerPlugin(), GraphMemoryPlugin(),
+                     background_validator_plugin, ToolResultTruncationPlugin()],
+            events_compaction_config=_compaction_config(),
         )
+        self.runner = Runner(app=app, session_service=self.session_service)
 
         if self._hitl_handler:
             hitl_toolset._handler = self._hitl_handler
@@ -154,6 +229,12 @@ class CoScientistManager:
                 user_id=self.user_id,
                 session_id=self.session_id,
                 new_message=content,
+                # ADK caps a run at 500 LLM calls by default, which a long
+                # autonomous research run overruns mid-work; lift the ceiling so
+                # one prompt can drive the whole job (finite, as a cost backstop).
+                run_config=RunConfig(
+                    max_llm_calls=get_settings().orchestrator.max_llm_calls
+                ),
             ):
                 if verbose:
                     print(
@@ -249,37 +330,8 @@ __all__ = [
     "create_manager"
 ]
 
-# CLI entrypoint
+# CLI entrypoint — thin shim. Prefer: python -m CoScientist cli
 if __name__ == "__main__":
-    async def main():
+    from CoScientist.cli import run_repl
 
-        manager = await create_manager()
-
-        print("CoScientist (ADK) initialized\n")
-
-        try:
-            while True:
-                print(
-                    "\n"
-                    "==============================\n"
-                    "🚀  WEB INTERFACE NOT RUNNING\n"
-                    "==============================\n"
-                    "Do not run main.py directly, run web/server.py instead.\n"
-                    "Start it with:\n\n"
-                    "    uv run CoScientist/web/server.py\n\n"
-                )
-                query = input("Enter query (or 'exit'): ")
-
-                if query.lower() in {"exit", "quit"}:
-                    break
-
-                result = await manager.run(query)
-
-                print("\n=== Final Response ===")
-                print(result)
-                print()
-
-        finally:
-            await manager.close()
-
-    asyncio.run(main())
+    run_repl()

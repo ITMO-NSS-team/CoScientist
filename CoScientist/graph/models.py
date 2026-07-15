@@ -9,17 +9,22 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-NodeKind = Literal["goal", "agent_call", "tool_call", "decision", "reflection"]
-NodeStatus = Literal["running", "success", "failed", "pruned"]
-EdgeType = Literal[
-    "caused_by",
-    "delegated_to",
-    "produced",
-    "failed_into",
-    "depends_on",
-    "validated_by",
-    "branches_to",
+NodeKind = Literal[
+    "system",      # root: the whole MAS (parent of the agent roster)
+    "agent",       # a roster entry: one agent and its capabilities
+    "goal",        # a user query / top-level objective
+    "agent_call",  # a delegation to a sub-agent
+    "tool_call",   # an ordinary tool invocation
+    "result",      # a produced answer / artifact
+    "decision",
+    "reflection",
+    "entity",      # a knowledge-graph entity (its DOMAIN type lives in semantic.type)
 ]
+NodeStatus = Literal["running", "success", "failed", "pruned"]
+# Edge types are open: control-flow uses the names below; the knowledge layer
+# adds domain relations (has_property, about, supports, generated_by, …). Kept as
+# a free string so new relation types never need a code change.
+EdgeType = str
 
 
 class Semantic(BaseModel):

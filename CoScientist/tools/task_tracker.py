@@ -26,6 +26,12 @@ class TaskTrackerToolset(BaseToolset):
     async def close(self) -> None:
         pass
 
+    def reset(self) -> None:
+        """Clear all tracked tasks (in memory and on disk). Called on a fresh
+        session / interrupt so stale tasks from a previous run never leak in."""
+        self.tasks = []
+        self._save()
+
     def create_plan(self, tasks: List[Dict[str, Any]], tool_context: ToolContext) -> Dict[str, Any]:  
 
         """Replace ALL tasks with a new plan provided by the planner agent.

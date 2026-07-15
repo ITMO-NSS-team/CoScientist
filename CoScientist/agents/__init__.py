@@ -11,7 +11,6 @@ from CoScientist.assembly import build_system
 from CoScientist.assembly.schema import load_config
 from CoScientist.logging import multi_agent_tracer
 from CoScientist.agents.llm_repair import install_json_repair
-from opik.integrations.adk import track_adk_agent_recursive
 
 # Guard the LiteLlm tool-call JSON boundary process-wide BEFORE any runner executes:
 # a malformed tool-call payload (qwen truncation / missing comma) must not kill the run.
@@ -43,7 +42,11 @@ tool_websearcher_agent = _system.agents.get("ToolWebSearcherAgent")
 fedot_agent = _system.agents.get("ExperimentAgent")
 tz_agent = _system.agents.get("TZAgent")
 
-track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
+# Attach the Opik tracer only when tracing is enabled (see OPIK__ENABLED).
+if multi_agent_tracer is not None:
+    from opik.integrations.adk import track_adk_agent_recursive
+
+    track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
 
 
 def build_for_mode():

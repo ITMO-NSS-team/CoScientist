@@ -51,6 +51,11 @@ def _fedot():
     return fedot_toolset_instance
 
 
+def _dynamic_tools():
+    from CoScientist.tools import dynamic_mcp_toolset_instance
+    return dynamic_mcp_toolset_instance
+
+
 def _medical():
     from CoScientist.tools import med_toolset_instance
     return med_toolset_instance
@@ -67,6 +72,32 @@ def _task_tracker():
 def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
+
+def _graph():
+    from CoScientist.graph.agent_tools import graph_reader_instance
+    return graph_reader_instance
+
+
+def _research_graph_enabled() -> bool:
+    try:
+        from CoScientist.config import get_settings
+        return get_settings().research_graph.enabled
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _research_graph():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_worker_toolset
+    return research_worker_toolset
+
+
+def _research_graph_orchestrator():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_orchestrator_toolset
+    return research_orchestrator_toolset
 
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
@@ -172,6 +203,117 @@ REGISTRY.register_tool(ToolEntry(
 ))
 
 REGISTRY.register_tool(ToolEntry(
+    key="graph",
+    factory=_graph,
+    runtime_resolved=True,  # BaseToolset — tool surface comes from get_tools()
+    docs=(
+        ToolDoc(
+            name="read_research_graph",
+            signature="read_research_graph()",
+            purpose="Read the shared knowledge graph: roster + every step so far.",
+        ),
+        ToolDoc(
+            name="get_graph_history",
+            signature="get_graph_history(limit)",
+            purpose="Chronological history of steps taken in this session.",
+        ),
+        ToolDoc(
+            name="get_agents_info",
+            signature="get_agents_info()",
+            purpose="Structured info about all agents in the system.",
+        ),
+        ToolDoc(
+            name="search_knowledge_memory",
+            signature="search_knowledge_memory(query)",
+            purpose="Search facts learned in PRIOR runs (cross-run memory) relevant to a query.",
+        ),
+        ToolDoc(
+            name="get_entity_neighbors",
+            signature="get_entity_neighbors(entity)",
+            purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
+        ),
+        ToolDoc(
+            name="get_knowledge_memory",
+            signature="get_knowledge_memory()",
+            purpose="Full cross-run knowledge memory (entities + relations).",
+        ),
+    ),
+))
+
+# ── Research Context Graph ────────────────────────────────────────────────────
+# The typed blackboard (CoScientist/graph/research). Two surfaces: workers get
+# read + research_commit; the orchestrator additionally gets init/triggers/focus.
+# Both optional (drop out when RESEARCH_GRAPH__ENABLED is false) and
+# runtime_resolved (BaseToolset — real tool names come from get_tools()).
+_RESEARCH_COMMIT_DOC = ToolDoc(
+    name="research_commit",
+    signature="research_commit(nodes, edges, status_updates)",
+    purpose=("Record your results in the shared research graph in ONE "
+             "transaction (validated + applied all-or-nothing). You may only "
+             "write types/edges/status changes your role allows."),
+    usage=(
+        'create a node: {"type": "Evidence", "attrs": {...}, "status"?: "...", "ref"?: "e1"}',
+        'enrich an existing node: {"id": "EB1", "attrs": {...}} (no "type")',
+        'edge: {"type": "supports", "from": "E4", "to": "H2"} — use "#e1" to point at a node created in this call',
+        'status change: {"id": "H2", "status": "under_verification", "reason"?: "..."}',
+        "on ok=false, read errors, fix the payload, and call it again (nothing was saved).",
+    ),
+)
+_RESEARCH_SLICE_DOC = ToolDoc(
+    name="research_context_slice",
+    signature="research_context_slice(node_id, depth=1)",
+    purpose="Get one node plus its 1–2 hop neighborhood (the focused view to work from).",
+)
+_RESEARCH_OVERVIEW_DOC = ToolDoc(
+    name="research_overview",
+    signature="research_overview()",
+    purpose="Compact index of the whole research graph (ids, types, statuses, labels).",
+)
+_RESEARCH_PROVENANCE_DOC = ToolDoc(
+    name="research_provenance",
+    signature="research_provenance(node_id)",
+    purpose="Trace a node back to the root question (chain of nodes/edges + sources).",
+)
+_RESEARCH_WORKER_DOCS = (_RESEARCH_COMMIT_DOC, _RESEARCH_SLICE_DOC,
+                         _RESEARCH_OVERVIEW_DOC, _RESEARCH_PROVENANCE_DOC)
+_RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
+    ToolDoc(
+        name="research_init",
+        signature="research_init(question, attrs, constraints, tools, resources, empirical_bases)",
+        purpose=("Start a NEW research: create the root ResearchQuestion + its "
+                 "context star. Call once at the start; archives any active graph."),
+    ),
+    ToolDoc(
+        name="research_triggers",
+        signature="research_triggers()",
+        purpose=("Evaluate the decision triggers (READY / BLOCKED / REFUTE / "
+                 "CLOSABLE / PENDING / TOOLS / RESOURCES / QUESTIONS / PROGRESS)."),
+    ),
+    ToolDoc(
+        name="research_set_focus",
+        signature="research_set_focus(node_id)",
+        purpose=("Set the node the NEXT delegated worker focuses on — it "
+                 "receives that node's slice automatically. Call before delegating."),
+    ),
+)
+
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph",
+    factory=_research_graph,
+    optional=True,
+    runtime_resolved=True,
+    docs=_RESEARCH_WORKER_DOCS,
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph_orchestrator",
+    factory=_research_graph_orchestrator,
+    optional=True,
+    runtime_resolved=True,
+    docs=_RESEARCH_ORCH_DOCS,
+))
+
+REGISTRY.register_tool(ToolEntry(
     key="create_plan_tool",
     factory=_create_plan_tool,
     docs=(
@@ -206,6 +348,22 @@ REGISTRY.register_tool(ToolEntry(
             name="fedot_tool",
             signature="fedot_tool(task_description)",
             purpose="Builds and executes a multi-agent pipeline to solve the task.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="dynamic_tools",
+    factory=_dynamic_tools,
+    runtime_resolved=True,  # tool surface is the task's MCP servers, resolved per turn from state
+    docs=(
+        ToolDoc(
+            name="<dynamic MCP tools>",
+            signature="(varies)",
+            purpose=(
+                "The MCP tools selected for THIS task by the tool-prep pipeline "
+                "(filtered_tools/deployed_mcps). Call them directly to run the work."
+            ),
         ),
     ),
 ))
@@ -389,6 +547,20 @@ def _before_get_task():
     return before_get_task
 
 
+def _inject_graph_root():
+    from CoScientist.agents.callbacks import inject_graph_root
+    return inject_graph_root
+
+
+def _inject_research_context(ctx):
+    """before_agent callback seeding state['research_context']. The orchestrator
+    (root) gets the overview + trigger digest; a worker gets its focus slice.
+    Which branch is baked in at build time from the agent's role."""
+    from CoScientist.graph.research.agent_tools import make_inject_research_context
+    is_root = bool(getattr(ctx.config, "root", False))
+    return make_inject_research_context(is_root=is_root)
+
+
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     from CoScientist.config import get_settings
@@ -412,9 +584,28 @@ def _export_tz_and_queries():
 
 def _guard_unknown_tools(ctx):
     """after_model guard capturing the agent's REAL tool names from its context,
-    so a hallucinated tool call is corrected instead of crashing the run."""
+    so a hallucinated tool call is corrected instead of crashing the run.
+
+    The valid set must include BOTH the agent's function tools AND its
+    subordinate AgentTools: sub-agents (e.g. CoderAgent, DatasetCollectorAgent)
+    are legitimate call targets but are attached outside `tool_entries`, so
+    leaving them out makes the guard false-block real delegations.
+
+    Agents whose tool surface is resolved at runtime (dynamic MCP toolsets,
+    e.g. ExperimentAgent) can't be guarded — their real tools aren't known at
+    build time — so skip the guard for them to avoid blocking valid calls."""
     from CoScientist.agents.callbacks import make_unknown_tool_guard
-    names = [d.name for e in ctx.tool_entries for d in e.docs]
+    docs = [d for e in ctx.tool_entries for d in e.docs]
+    # A placeholder doc (name in <angle brackets>, e.g. "<dynamic MCP tools>")
+    # marks a toolset whose real tool names are resolved per turn from state
+    # (ExperimentAgent's dynamic MCP tools) — we can't enumerate them at build
+    # time, so skip the guard rather than false-block valid calls. Fixed
+    # BaseToolsets (graph, task_tracker) are runtime_resolved too but DO declare
+    # their real tool names in docs, so they stay guarded.
+    if any(d.name.startswith("<") for d in docs):
+        return None
+    names = [d.name for d in docs]
+    names += [s.name for s in ctx.subordinates]  # subordinate AgentTools
     return make_unknown_tool_guard(names)
 
 
@@ -443,6 +634,10 @@ _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranke
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+# Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
+_cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
+# Seed state['research_context'] from the research blackboard (role-dependent).
+_cb("inject_research_context", "before_agent", factory=_inject_research_context)
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
