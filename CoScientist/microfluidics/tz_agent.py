@@ -124,7 +124,7 @@ class TZSessionAgent(SessionAgent):
         if not questions:
             return response
 
-        answers = await self._interview(questions)
+        answers = await self._interview(questions, ctx)
         # Nothing that changes the ТЗ — no rewrite needed, keep the approval.
         if not answers or all(a == "не знаю" for _b, a in answers.values()):
             return response
@@ -142,7 +142,7 @@ class TZSessionAgent(SessionAgent):
             action=HITLAction.EDIT, approved=False, instructions=feedback
         )
 
-    async def _interview(self, questions) -> dict:
+    async def _interview(self, questions, ctx: InvocationContext) -> dict:
         """Ask ONE HITL window per question; return {qid: (block, answer)}."""
         from CoScientist.microfluidics.questionnaire import (
             OPT_AGENT,
@@ -161,7 +161,13 @@ class TZSessionAgent(SessionAgent):
                 action_type=HITLAction.PROVIDE_INPUT,
                 message=f"Уточнение ТЗ — вопрос {i} из {total}: «{q.block}»",
                 options=list(QUESTION_OPTIONS),
-                context={"output": render_question_card(q, i, total)},
+                context={
+                    "output": render_question_card(q, i, total),
+                    "_session": {
+                        "user_id": ctx.session.user_id,
+                        "session_id": ctx.session.id,
+                    },
+                },
                 invoked_via="internal_loop",
             )
             response = await self.hitl_handler.handle_request(request)

@@ -1,4 +1,3 @@
-from CoScientist.tools.task_tracker import task_tracker_instance
 import os
 
 from google.adk.agents.callback_context import CallbackContext
@@ -113,10 +112,15 @@ def after_fullset_reranker_agent(
     return
 
 def before_get_task(callback_context: CallbackContext):  
-    """Get task before agent is called"""  
-    active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)  
-    callback_context.state['active_tasks'] = active_tasks
-    return None 
+    """Ensure the current session has a task list before the agent runs.
+
+    Task data already lives in ADK session state.  In particular, do not reload
+    it from process-global storage here: that used to resurrect stale plans and
+    mix concurrent users.
+    """
+    if callback_context.state.get("active_tasks") is None:
+        callback_context.state["active_tasks"] = []
+    return None
 
 # Recognisable token the orchestrator prompt / post-critic key off to re-route.
 NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"

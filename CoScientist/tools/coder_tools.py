@@ -205,7 +205,11 @@ class CoderToolset(BaseToolset):
 
     # ── bash ─────────────────────────────────────────────────────────────────
 
-    async def _maybe_request_approval(self, command: str) -> Optional[Dict[str, Any]]:
+    async def _maybe_request_approval(
+        self,
+        command: str,
+        tool_context: ToolContext,
+    ) -> Optional[Dict[str, Any]]:
         """If the command needs approval and a handler is set, ask the human.
 
         Returns a denial dict when the human rejects (so execute_bash should
@@ -225,7 +229,14 @@ class CoderToolset(BaseToolset):
                 "CoderAgent wants to run a command that is outward-facing or hard "
                 f"to reverse:\n\n    {command}\n\nApprove execution?"
             ),
-            context={"command": command, "matched_rule": matched},
+            context={
+                "command": command,
+                "matched_rule": matched,
+                "_session": {
+                    "user_id": tool_context.session.user_id,
+                    "session_id": tool_context.session.id,
+                },
+            },
             invoked_via="callback",
         )
         response = await self._hitl_handler.handle_request(request)
@@ -294,7 +305,7 @@ class CoderToolset(BaseToolset):
             }
 
         # Human approval gate for outward-facing / hard-to-reverse commands.
-        approval = await self._maybe_request_approval(command)
+        approval = await self._maybe_request_approval(command, tool_context)
         if approval is not None:
             return approval
 

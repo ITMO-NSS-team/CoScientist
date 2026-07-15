@@ -59,7 +59,13 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
             agent_name=agent_name,
             action_type=action_type,
             message=f"[CALLBACK: AFTER_AGENT] Agent '{agent_name}' proposes the following output. Please review.",
-            context={"output": str(agent_output)},
+            context={
+                "output": str(agent_output),
+                "_session": {
+                    "user_id": callback_context.session.user_id,
+                    "session_id": callback_context.session.id,
+                },
+            },
             options=_parse_options(str(agent_output)) if action_type == HITLAction.SELECT else [],
             invoked_via="callback"
         )
@@ -131,6 +137,12 @@ def make_hitl_before_callback(handler: AbstractHITLHandler):
             agent_name=agent_name,
             action_type=HITLAction.APPROVE,
             message=f"[CALLBACK: BEFORE_AGENT] {msg}",
+            context={
+                "_session": {
+                    "user_id": callback_context.session.user_id,
+                    "session_id": callback_context.session.id,
+                }
+            },
             invoked_via="callback"
         )
 

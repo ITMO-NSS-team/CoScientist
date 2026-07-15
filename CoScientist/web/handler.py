@@ -1,24 +1,28 @@
+"""Session-aware Human-in-the-Loop handler for the local Web UI."""
+
 import asyncio
 import logging
 import time
 import uuid
 
 from CoScientist.hitl.handler import AbstractHITLHandler
-from CoScientist.hitl.models import HITLRequest, HITLResponse, HITLAction
+from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 
 logger = logging.getLogger("CoScientist.web.hitl")
+SessionKey = tuple[str, str]
 
 
 class WebHITLHandler(AbstractHITLHandler):
+    """Route HITL requests only to tabs displaying the owning session."""
+
+    HITL_TIMEOUT_SECONDS: int = 300
 
     def __init__(self):
-        # request_id -> {"future": asyncio.Future, "payload": dict, "created": float}
+        # request_id -> future/payload/session metadata
         self._pending: dict[str, dict] = {}
-        # ALL connected browser sockets. HITL requests are BROADCAST to every
-        # tab (chat events are per-connection, but a review bound to a single
-        # "last" socket silently vanishes when another tab/window is open).
-        self._sockets: list = []
-        # event log that the frontend can poll
+        # (user_id, session_id) -> connected browser sockets. ``None`` is kept
+        # solely for backwards-compatible callers that have no session context.
+        self._sockets: dict[SessionKey | None, list] = {}
         self._event_log: list[dict] = []
 
     def __deepcopy__(self, memo):
@@ -26,69 +30,107 @@ class WebHITLHandler(AbstractHITLHandler):
 
     @property
     def _websocket(self):
-        """Back-compat: the most recently attached socket (None when empty)."""
-        return self._sockets[-1] if self._sockets else None
+        """Backwards-compatible access to the most recently attached socket."""
+        sockets = [socket for group in self._sockets.values() for socket in group]
+        return sockets[-1] if sockets else None
 
     def set_websocket(self, ws):
-        """Legacy setter: make `ws` the only known socket (None clears all)."""
-        self._sockets = [] if ws is None else [ws]
+        """Legacy setter: register one unscoped socket, or clear all sockets."""
+        self._sockets = {} if ws is None else {None: [ws]}
 
-    def has_connections(self) -> bool:
-        return bool(self._sockets)
+    def connection_count(self) -> int:
+        return sum(len(group) for group in self._sockets.values())
 
-    async def attach_websocket(self, ws):
-        """Register a (re)connected browser socket and re-deliver pending
-        requests to it, so a review raised while this tab was away reappears
-        instead of silently auto-approving on timeout."""
-        if ws not in self._sockets:
-            self._sockets.append(ws)
-        logger.info("HITL websocket attached (%d connection(s))", len(self._sockets))
+    def has_connections(self, session_key: SessionKey | None = None) -> bool:
+        if session_key is None:
+            return self.connection_count() > 0
+        return bool(self._sockets.get(session_key))
+
+    async def attach_websocket(
+        self,
+        ws,
+        session_key: SessionKey | None = None,
+    ) -> None:
+        """Attach a tab and redeliver its unresolved session requests."""
+        sockets = self._sockets.setdefault(session_key, [])
+        if ws not in sockets:
+            sockets.append(ws)
+        logger.info("HITL websocket attached (%d connection(s))", self.connection_count())
+
         for request_id, entry in list(self._pending.items()):
+            if entry.get("session_key") not in (None, session_key):
+                continue
             try:
                 await ws.send_json(entry["payload"])
-                logger.info(
-                    "HITL request %s (%s) re-delivered to the new connection",
-                    request_id[:8], entry["payload"].get("agent_name"),
-                )
-            except Exception as exc:  # noqa: BLE001 — delivery is best-effort
-                logger.warning("HITL re-delivery of %s failed: %s", request_id[:8], exc)
+                logger.info("HITL request %s redelivered", request_id[:8])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("HITL redelivery of %s failed: %s", request_id[:8], exc)
 
-    def detach_websocket(self, ws):
+    def detach_websocket(
+        self,
+        ws,
+        session_key: SessionKey | None = None,
+    ) -> None:
+        sockets = self._sockets.get(session_key, [])
         try:
-            self._sockets.remove(ws)
+            sockets.remove(ws)
         except ValueError:
             pass
-        logger.info("HITL websocket detached (%d connection(s) left)", len(self._sockets))
+        if not sockets:
+            self._sockets.pop(session_key, None)
+        logger.info("HITL websocket detached (%d connection(s) left)", self.connection_count())
 
-    async def _broadcast(self, payload) -> int:
-        """Send to every connected tab, pruning dead sockets. Returns count."""
+    async def _broadcast(
+        self,
+        payload: dict,
+        session_key: SessionKey | None,
+    ) -> int:
+        """Send a request to one session, or all tabs for legacy unscoped calls."""
+        if session_key is None:
+            targets = [socket for group in self._sockets.values() for socket in group]
+        else:
+            targets = list(self._sockets.get(session_key, []))
+
         delivered = 0
-        for ws in list(self._sockets):
+        for ws in targets:
             try:
                 await ws.send_json(payload)
                 delivered += 1
-            except Exception as exc:  # noqa: BLE001 — prune and continue
-                logger.warning("HITL delivery to a socket failed (%s) — pruning", exc)
-                self.detach_websocket(ws)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("HITL delivery failed (%s); pruning socket", exc)
+                for key, sockets in list(self._sockets.items()):
+                    if ws in sockets:
+                        self.detach_websocket(ws, key)
         return delivered
 
-    # Seconds to wait for a HITL response before auto-approving (prevents infinite hang)
-    HITL_TIMEOUT_SECONDS: int = 300
-
     def pending_summary(self) -> list[dict]:
-        """Diagnostics for /api/hitl-status."""
         now = time.time()
         return [
             {
-                "request_id": rid[:8],
+                "request_id": request_id[:8],
                 "agent_name": entry["payload"].get("agent_name"),
+                "session_key": entry.get("session_key"),
                 "age_seconds": round(now - entry["created"], 1),
             }
-            for rid, entry in self._pending.items()
+            for request_id, entry in self._pending.items()
         ]
+
+    @staticmethod
+    def _request_session_key(request: HITLRequest) -> SessionKey | None:
+        session = (request.context or {}).get("_session")
+        if not isinstance(session, dict):
+            return None
+        user_id = session.get("user_id")
+        session_id = session.get("session_id")
+        if not user_id or not session_id:
+            return None
+        return str(user_id), str(session_id)
 
     async def handle_request(self, request: HITLRequest) -> HITLResponse:
         request_id = str(uuid.uuid4())
+        session_key = self._request_session_key(request)
+        public_context = dict(request.context or {})
+        public_context.pop("_session", None)
 
         payload = {
             "type": "hitl_request",
@@ -97,31 +139,31 @@ class WebHITLHandler(AbstractHITLHandler):
             "action_type": request.action_type.value,
             "message": request.message,
             "options": request.options,
-            "context": request.context,
+            "context": public_context,
             "invoked_via": request.invoked_via,
         }
 
-        self._event_log.append(payload)
+        log_payload = dict(payload)
+        log_payload["_session_key"] = session_key
+        self._event_log.append(log_payload)
 
-        # Register BEFORE sending so a reconnect between send and await
-        # re-delivers instead of losing the request.
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._pending[request_id] = {
-            "future": future, "payload": payload, "created": time.time(),
+            "future": future,
+            "payload": payload,
+            "created": time.time(),
+            "session_key": session_key,
         }
 
-        delivered = await self._broadcast(payload)
+        delivered = await self._broadcast(payload, session_key)
         if delivered:
-            logger.info(
-                "HITL request %s (%s) sent to %d browser tab(s)",
-                request_id[:8], request.agent_name, delivered,
-            )
+            logger.info("HITL request %s sent to %d tab(s)", request_id[:8], delivered)
         else:
             logger.warning(
-                "HITL request %s (%s): NO live browser connection — will "
-                "re-deliver on reconnect; auto-approve in %ss",
-                request_id[:8], request.agent_name, self.HITL_TIMEOUT_SECONDS,
+                "HITL request %s has no live tab; waiting %ss for reconnect",
+                request_id[:8],
+                self.HITL_TIMEOUT_SECONDS,
             )
 
         try:
@@ -129,24 +171,18 @@ class WebHITLHandler(AbstractHITLHandler):
                 asyncio.shield(future),
                 timeout=self.HITL_TIMEOUT_SECONDS,
             )
-            logger.info(
-                "HITL response for %s (%s): %s",
-                request_id[:8], request.agent_name,
-                {k: response_data.get(k) for k in ("action", "approved")},
-            )
         except asyncio.TimeoutError:
             self._pending.pop(request_id, None)
-            logger.warning(
-                "HITL TIMEOUT for %s (%s): no browser response in %ss — AUTO-APPROVING",
-                request_id[:8], request.agent_name, self.HITL_TIMEOUT_SECONDS,
-            )
             response_data = {"action": "approve", "approved": True}
-            await self._broadcast({
-                "type": "hitl_timeout",
-                "request_id": request_id,
-                "agent_name": request.agent_name,
-                "timeout_seconds": self.HITL_TIMEOUT_SECONDS,
-            })
+            await self._broadcast(
+                {
+                    "type": "hitl_timeout",
+                    "request_id": request_id,
+                    "agent_name": request.agent_name,
+                    "timeout_seconds": self.HITL_TIMEOUT_SECONDS,
+                },
+                session_key,
+            )
 
         action = HITLAction(response_data.get("action", "approve"))
         return HITLResponse(
@@ -157,22 +193,47 @@ class WebHITLHandler(AbstractHITLHandler):
             free_input=response_data.get("free_input"),
         )
 
-    def resolve_request(self, request_id: str, response_data: dict):
-        """Called when the browser sends a HITL response."""
+    def resolve_request(
+        self,
+        request_id: str,
+        response_data: dict,
+        session_key: SessionKey | None = None,
+    ) -> bool:
+        """Resolve a request, rejecting responses from a different session."""
+        entry = self._pending.get(request_id)
+        if entry and session_key is not None and entry.get("session_key") not in (None, session_key):
+            logger.warning("Ignoring HITL response %s from wrong session", request_id[:8])
+            return False
         entry = self._pending.pop(request_id, None)
         if entry and not entry["future"].done():
             entry["future"].set_result(response_data)
+            return True
+        return False
 
-    def reset(self):
-        """Cancel all pending requests and clear state."""
-        for entry in list(self._pending.values()):
+    def reset(self, session_key: SessionKey | None = None) -> None:
+        """Cancel unresolved requests globally or only for one session."""
+        for request_id, entry in list(self._pending.items()):
+            if session_key is not None and entry.get("session_key") != session_key:
+                continue
             if not entry["future"].done():
                 entry["future"].cancel()
-        self._pending.clear()
-        self._event_log.clear()
+            self._pending.pop(request_id, None)
+        self.clear_event_log(session_key)
 
-    def get_event_log(self) -> list[dict]:
-        return list(self._event_log)
+    def get_event_log(self, session_key: SessionKey | None = None) -> list[dict]:
+        events = self._event_log
+        if session_key is not None:
+            events = [event for event in events if event.get("_session_key") == session_key]
+        return [
+            {key: value for key, value in event.items() if key != "_session_key"}
+            for event in events
+        ]
 
-    def clear_event_log(self):
-        self._event_log.clear()
+    def clear_event_log(self, session_key: SessionKey | None = None) -> None:
+        if session_key is None:
+            self._event_log.clear()
+        else:
+            self._event_log = [
+                event for event in self._event_log
+                if event.get("_session_key") != session_key
+            ]

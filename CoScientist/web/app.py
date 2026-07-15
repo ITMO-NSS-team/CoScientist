@@ -2,20 +2,25 @@ import asyncio
 import json
 import logging
 import os
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any
+from uuid import uuid4
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
+from CoScientist.web.session_registry import LocalSessionRegistry
 from CoScientist.agents import agent_system
 from CoScientist.hitl.tool import hitl_toolset
 
+from google.adk.events.event import Event
+from google.adk.events.event_actions import EventActions
+from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from google.adk.workflow.utils._workflow_hitl_utils import (
     has_request_input_function_call,
@@ -44,60 +49,111 @@ def _json_safe(value):
 
 
 # ---------------------------------------------------------------------------
-# Globals
+# Runtime types and constants
 # ---------------------------------------------------------------------------
 WEB_DIR = Path(__file__).parent
 TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
-
-# Manager will be lazily created so the import doesn't trigger heavy init
-_manager = None
-_manager_lock = asyncio.Lock()
-
-# Store agent events for the frontend
-_agent_events: list[dict] = []
-
-# Pending HITL requests: interrupt_id -> { "event": asyncio.Event, "response": dict }
-_pending_hitl: dict[str, dict] = {}
-
-# WebHITLHandler for SessionAgent's custom HITL (used by PlannerAgent)
-_web_hitl_handler = WebHITLHandler()
+APP_NAME = "coscientist_app"
+SessionKey = tuple[str, str]
 
 
-async def _get_manager():
-    """Lazy-init CoScientistManager."""
-    global _manager
-    if _manager is not None:
-        return _manager
+class WebRuntime:
+    """Process-local users, ADK sessions, managers, sockets, and event logs."""
 
-    async with _manager_lock:
-        if _manager is not None:
-            return _manager
+    def __init__(self) -> None:
+        self.session_service = InMemorySessionService()
+        self.registry = LocalSessionRegistry()
+        self.managers: dict[SessionKey, CoScientistManager] = {}
+        self.manager_lock = asyncio.Lock()
+        self.execution_locks: dict[SessionKey, asyncio.Lock] = {}
+        self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
+        self.pending_hitl: dict[str, dict[str, Any]] = {}
+        self.hitl_handler = WebHITLHandler()
+        self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
+        self.active_runs: dict[SessionKey, asyncio.Task] = {}
 
-        _manager = CoScientistManager()
-        await _manager.initialize()
+    async def get_manager(self, user_id: str, session_id: str) -> CoScientistManager:
+        self.registry.require_session(user_id, session_id)
+        key = (user_id, session_id)
+        manager = self.managers.get(key)
+        if manager is not None:
+            return manager
+        async with self.manager_lock:
+            manager = self.managers.get(key)
+            if manager is None:
+                manager = CoScientistManager(
+                    app_name=APP_NAME,
+                    user_id=user_id,
+                    session_id=session_id,
+                    session_service=self.session_service,
+                )
+                await manager.initialize()
+                self.managers[key] = manager
+                self.execution_locks[key] = asyncio.Lock()
+        return manager
 
-        # Wire WebHITLHandler into every session agent with a HITL review loop
-        # (PlannerAgent, and the ТЗ agents of the microfluidics profile) and
-        # into the HITL toolset. We use set_delegate because the workflow
-        # deepcopies references at init.
-        wired = []
-        for _name, _agent in agent_system.agents.items():
-            handler = getattr(_agent, 'hitl_handler', None)
-            if handler is not None and hasattr(handler, 'set_delegate'):
-                handler.set_delegate(_web_hitl_handler)
-                wired.append(_name)
-        logging.getLogger("CoScientist.web").info(
-            "WebHITLHandler wired into session agents: %s "
-            "(empty list => HITL disabled via HITL__ENABLED)", wired,
+    def attach_socket(self, key: SessionKey, ws: WebSocket) -> None:
+        if ws not in self.sockets[key]:
+            self.sockets[key].append(ws)
+
+    def detach_socket(self, key: SessionKey, ws: WebSocket) -> None:
+        sockets = self.sockets.get(key)
+        if not sockets:
+            return
+        try:
+            sockets.remove(ws)
+        except ValueError:
+            pass
+        if not sockets:
+            self.sockets.pop(key, None)
+
+    async def send(self, key: SessionKey, payload: dict[str, Any]) -> None:
+        """Broadcast an event only to tabs viewing this session."""
+        for socket in list(self.sockets.get(key, [])):
+            try:
+                await socket.send_json(payload)
+            except Exception:
+                self.detach_socket(key, socket)
+
+    async def close(self) -> None:
+        tasks = list(self.active_runs.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(
+            *(manager.close() for manager in self.managers.values()),
+            return_exceptions=True,
         )
 
-        # Also update the hitl_toolset if it's delegating
-        if hasattr(hitl_toolset._handler, 'set_delegate'):
-            hitl_toolset._handler.set_delegate(_web_hitl_handler)
-        else:
-            hitl_toolset._handler = _web_hitl_handler
 
-        return _manager
+def _wire_hitl(runtime: WebRuntime) -> None:
+    """Wire the routing Web handler once for this application runtime."""
+
+    # SessionAgent handlers are delegates because workflow assembly deep-copies
+    # their references.
+    wired = []
+    for name, agent in agent_system.agents.items():
+        handler = getattr(agent, "hitl_handler", None)
+        if handler is not None and hasattr(handler, "set_delegate"):
+            handler.set_delegate(runtime.hitl_handler)
+            wired.append(name)
+
+    if hasattr(hitl_toolset._handler, "set_delegate"):
+        hitl_toolset._handler.set_delegate(runtime.hitl_handler)
+    else:
+        hitl_toolset._handler = runtime.hitl_handler
+
+    # CoderToolset owns its approval handler separately from the agent-level
+    # delegates. Preserve HITL__ENABLED semantics while routing Web approvals.
+    from CoScientist.tools.coder_tools import coder_toolset
+    if coder_toolset._hitl_handler is not None:
+        coder_toolset._hitl_handler = runtime.hitl_handler
+
+    logging.getLogger("CoScientist.web").info(
+        "Session-routing WebHITLHandler wired into: %s", wired,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -108,8 +164,7 @@ async def lifespan(app: FastAPI):
     print("[CoScientist Web] Starting up …")
     yield
     print("[CoScientist Web] Shutting down …")
-    if _manager:
-        await _manager.close()
+    await app.state.runtime.close()
 
 
 # ---------------------------------------------------------------------------
@@ -117,11 +172,14 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 def create_app() -> FastAPI:
     os.environ["COSCIENTIST_WEB_MODE"] = "true"
+    runtime = WebRuntime()
+    _wire_hitl(runtime)
     app = FastAPI(
         title="CoScientist Web UI",
         version="1.0.0",
         lifespan=lifespan,
     )
+    app.state.runtime = runtime
 
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)
@@ -132,6 +190,76 @@ def create_app() -> FastAPI:
             TEMPLATE_PATH.read_text(encoding="utf-8"),
             headers={"Cache-Control": "no-store"},
         )
+
+    # --- Local users and sessions (process lifetime only) ---
+    @app.get("/api/users")
+    async def list_users():
+        return JSONResponse({"users": runtime.registry.list_users()})
+
+    @app.post("/api/users")
+    async def create_user(data: dict):
+        try:
+            user = runtime.registry.create_user(data.get("nickname", ""))
+        except ValueError as exc:
+            status_code = 409 if "already registered" in str(exc) else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        return JSONResponse({"user": user}, status_code=201)
+
+    @app.get("/api/users/{user_id}/sessions")
+    async def list_user_sessions(user_id: str):
+        try:
+            sessions = runtime.registry.list_sessions(user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"sessions": sessions})
+
+    @app.post("/api/users/{user_id}/sessions")
+    async def create_user_session(user_id: str, data: dict):
+        try:
+            runtime.registry.require_user(user_id)
+            raw_title = data.get("title", "")
+            if not isinstance(raw_title, str):
+                raise ValueError("Session title must be a string.")
+            title = " ".join(raw_title.strip().split()) or "New session"
+            if len(title) > 120:
+                raise ValueError("Session title must be at most 120 characters.")
+            session_id = f"session_{uuid4().hex}"
+            await runtime.session_service.create_session(
+                app_name=APP_NAME,
+                user_id=user_id,
+                session_id=session_id,
+                state={"active_tasks": []},
+            )
+            session = runtime.registry.create_session(
+                user_id,
+                title,
+                session_id=session_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"session": session}, status_code=201)
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}")
+    async def get_user_session(user_id: str, session_id: str):
+        try:
+            session = runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"session": session})
+
+    @app.patch("/api/users/{user_id}/sessions/{session_id}")
+    async def rename_user_session(user_id: str, session_id: str, data: dict):
+        try:
+            session = runtime.registry.rename_session(
+                user_id, session_id, data.get("title", "")
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"session": session})
 
     # --- HITL diagnostics ---
     @app.get("/api/hitl-status")
@@ -146,40 +274,64 @@ def create_app() -> FastAPI:
         }
         return JSONResponse({
             "hitl_enabled": get_settings().hitl.enabled,
-            "websocket_connections": len(_web_hitl_handler._sockets),
+            "websocket_connections": runtime.hitl_handler.connection_count(),
             "session_agents_with_handler": agents,
-            "pending_requests": _web_hitl_handler.pending_summary(),
-            "auto_approve_timeout_seconds": _web_hitl_handler.HITL_TIMEOUT_SECONDS,
+            "pending_requests": runtime.hitl_handler.pending_summary(),
+            "auto_approve_timeout_seconds": runtime.hitl_handler.HITL_TIMEOUT_SECONDS,
         })
 
     # --- Roadmap endpoints ---
-    @app.get("/api/roadmap")
-    async def get_roadmap():
-        path = Path("task_tracker_data.json")
-        if not path.exists():
-            path = Path(__file__).parent.parent.parent / "task_tracker_data.json"
-        
-        if not path.exists():
-            return JSONResponse({"content": "", "error": "task_tracker_data.json not found"}, status_code=404)
-        
+    @app.get("/api/users/{user_id}/sessions/{session_id}/roadmap")
+    async def get_roadmap(user_id: str, session_id: str):
         try:
-            content = path.read_text(encoding="utf-8")
-            return JSONResponse({"content": content})
-        except Exception as e:
-            return JSONResponse({"content": "", "error": str(e)}, status_code=500)
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        adk_session = await runtime.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if adk_session is None:
+            raise HTTPException(status_code=404, detail="ADK session not found.")
+        tasks = adk_session.state.get("active_tasks", [])
+        return JSONResponse({
+            "content": json.dumps(tasks, ensure_ascii=False, indent=2),
+            "tasks": _json_safe(tasks),
+        })
 
-    @app.post("/api/roadmap")
-    async def save_roadmap(data: dict):
-        content = data.get("content", "")
-        path = Path("task_tracker_data.json")
-        if not path.exists():
-            path = Path(__file__).parent.parent.parent / "task_tracker_data.json"
-            
+    @app.post("/api/users/{user_id}/sessions/{session_id}/roadmap")
+    async def save_roadmap(user_id: str, session_id: str, data: dict):
         try:
-            path.write_text(content, encoding="utf-8")
-            return JSONResponse({"status": "success"})
-        except Exception as e:
-            return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        content = data.get("content", "")
+        try:
+            tasks = json.loads(content) if isinstance(content, str) and content.strip() else []
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid roadmap JSON: {exc.msg}") from exc
+        if not isinstance(tasks, list):
+            raise HTTPException(status_code=400, detail="Roadmap must be a JSON list of tasks.")
+
+        adk_session = await runtime.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if adk_session is None:
+            raise HTTPException(status_code=404, detail="ADK session not found.")
+        await runtime.session_service.append_event(
+            adk_session,
+            Event(
+                invocation_id=f"roadmap_{uuid4().hex}",
+                author="user",
+                actions=EventActions(state_delta={"active_tasks": tasks}),
+            ),
+        )
+        runtime.registry.touch_session(user_id, session_id)
+        return JSONResponse({"status": "success", "tasks": _json_safe(tasks)})
 
 
     # --- ТЗ document (microfluidics profile) ---
@@ -230,28 +382,61 @@ def create_app() -> FastAPI:
         })
 
     # --- Events log ---
-    @app.get("/api/events")
-    async def get_events():
-        return JSONResponse({"events": _agent_events[-100:]})
+    @app.get("/api/users/{user_id}/sessions/{session_id}/events")
+    async def get_events(user_id: str, session_id: str):
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"events": runtime.agent_events[(user_id, session_id)][-100:]})
 
     # --- WebSocket ---
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
+        user_id = (ws.query_params.get("user_id") or "").strip()
+        session_id = (ws.query_params.get("session_id") or "").strip()
         await ws.accept()
+        try:
+            user = runtime.registry.require_user(user_id)
+            session_meta = runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            await ws.send_json({"type": "error", "message": str(exc)})
+            await ws.close(code=4404, reason="Unknown user or session")
+            return
 
-        # Bind the socket AND re-deliver any pending HITL requests: a review
-        # raised during a reconnect (or bound to a closed tab) must reappear
-        # instead of silently auto-approving on timeout.
-        await _web_hitl_handler.attach_websocket(ws)
-
-        # Send initial connection confirmation
+        key = (user_id, session_id)
+        runtime.registry.touch_session(user_id, session_id)
+        runtime.attach_socket(key, ws)
         await ws.send_json({
             "type": "connected",
             "timestamp": datetime.now().isoformat(),
-            "message": "Connected to CoScientist backend",
+            "message": f"Connected as {user['nickname']}",
         })
-
-        active_task: Optional[asyncio.Task] = None
+        adk_session = await runtime.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        current_run = runtime.active_runs.get(key)
+        await ws.send_json({
+            "type": "session_snapshot",
+            "user": user,
+            "session": session_meta,
+            "messages": runtime.agent_events[key],
+            "active_tasks": (
+                _json_safe(adk_session.state.get("active_tasks", []))
+                if adk_session else []
+            ),
+            "status": "processing" if current_run and not current_run.done() else "idle",
+        })
+        # Re-deliver only HITL requests belonging to this session.
+        await runtime.hitl_handler.attach_websocket(ws, key)
+        delivered_interrupts = set()
+        for pending in runtime.pending_hitl.values():
+            payload = pending.get("payload")
+            if pending.get("session_key") == key and payload and id(payload) not in delivered_interrupts:
+                await ws.send_json(payload)
+                delivered_interrupts.add(id(payload))
 
         try:
             while True:
@@ -260,47 +445,44 @@ def create_app() -> FastAPI:
                 msg_type = data.get("type", "")
 
                 if msg_type == "chat_message":
+                    active_task = runtime.active_runs.get(key)
                     if active_task and not active_task.done():
                         active_task.cancel()
                         try:
                             await active_task
                         except asyncio.CancelledError:
                             pass
-                    active_task = asyncio.create_task(_handle_chat(ws, data))
-                elif msg_type == "stop_chat":
-                    if active_task and not active_task.done():
-                        active_task.cancel()
-                        try:
-                            await active_task
-                        except asyncio.CancelledError:
-                            pass
-                        active_task = None
-                    
-                    # Cancel all pending HITL requests
-                    _cancel_pending_hitl()
-                    _web_hitl_handler.reset()
+                    active_task = asyncio.create_task(_handle_chat(runtime, key, data))
+                    runtime.active_runs[key] = active_task
 
-                    # Erase manager memory
-                    global _manager
-                    async with _manager_lock:
-                        if _manager:
-                            await _manager.close()
-                            _manager = None
-                    
-                    # Clear events log
-                    _agent_events.clear()
-                    
-                    await ws.send_json({
+                    def discard_finished(task, *, run_key=key):
+                        if runtime.active_runs.get(run_key) is task:
+                            runtime.active_runs.pop(run_key, None)
+
+                    active_task.add_done_callback(discard_finished)
+                elif msg_type == "stop_chat":
+                    active_task = runtime.active_runs.get(key)
+                    if active_task and not active_task.done():
+                        active_task.cancel()
+                        try:
+                            await active_task
+                        except asyncio.CancelledError:
+                            pass
+                    runtime.active_runs.pop(key, None)
+                    _cancel_pending_hitl(runtime, key)
+                    runtime.hitl_handler.reset(key)
+                    runtime.registry.touch_session(user_id, session_id, status="idle")
+                    await runtime.send(key, {
                         "type": "status",
                         "status": "idle",
-                        "message": "Agent execution stopped, memory cleared.",
+                        "message": "Agent execution stopped. Session history was preserved.",
                     })
-                    await ws.send_json({
+                    await runtime.send(key, {
                         "type": "final_response",
                         "content": "Stopped",
                     })
                 elif msg_type == "hitl_response":
-                    _handle_hitl_response(data)
+                    _handle_hitl_response(runtime, key, data)
                 elif msg_type == "ping":
                     await ws.send_json({"type": "pong"})
                 else:
@@ -309,16 +491,12 @@ def create_app() -> FastAPI:
                         "message": f"Unknown message type: {msg_type}",
                     })
         except WebSocketDisconnect:
-            # Only drop THIS socket. Pending HITL reviews stay alive: they are
-            # re-delivered when a tab reconnects, and auto-approve on timeout.
-            _web_hitl_handler.detach_websocket(ws)
-            if active_task and not active_task.done():
-                active_task.cancel()
+            runtime.hitl_handler.detach_websocket(ws, key)
+            runtime.detach_socket(key, ws)
             print("[WebSocket] Client disconnected")
         except Exception as exc:
-            _web_hitl_handler.detach_websocket(ws)
-            if active_task and not active_task.done():
-                active_task.cancel()
+            runtime.hitl_handler.detach_websocket(ws, key)
+            runtime.detach_socket(key, ws)
             print(f"[WebSocket] Error: {exc}")
 
     return app
@@ -327,17 +505,19 @@ def create_app() -> FastAPI:
 # ---------------------------------------------------------------------------
 # HITL helpers
 # ---------------------------------------------------------------------------
-def _cancel_pending_hitl():
-    """Cancel all pending HITL requests."""
-    for info in _pending_hitl.values():
-        info["event"].set()  # unblock any waiters
-    _pending_hitl.clear()
+def _cancel_pending_hitl(runtime: WebRuntime, key: SessionKey):
+    """Cancel ADK RequestInput waits belonging to one session."""
+    for interrupt_id, info in list(runtime.pending_hitl.items()):
+        if info.get("session_key") != key:
+            continue
+        info["event"].set()
+        runtime.pending_hitl.pop(interrupt_id, None)
 
 
 # ---------------------------------------------------------------------------
 # Message handlers
 # ---------------------------------------------------------------------------
-async def _handle_chat(ws: WebSocket, data: dict):
+async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     """Run user query through the agent pipeline, streaming events.
     
     Handles ADK RequestInput HITL: when the workflow pauses (interrupt event),
@@ -346,36 +526,67 @@ async def _handle_chat(ws: WebSocket, data: dict):
     """
     query = data.get("message", "").strip()
     if not query:
-        await ws.send_json({"type": "error", "message": "Empty query"})
+        await runtime.send(key, {"type": "error", "message": "Empty query"})
         return
 
+    user_id, session_id = key
+
     # Echo user message
-    _agent_events.append({
+    runtime.agent_events[key].append({
         "type": "user_message",
         "message": query,
         "timestamp": datetime.now().isoformat(),
     })
 
-    await ws.send_json({
+    await runtime.send(key, {
         "type": "status",
         "status": "processing",
         "message": f"Processing query: {query}",
     })
 
     try:
-        manager = await _get_manager()
+        manager = await runtime.get_manager(user_id, session_id)
+        runtime.registry.touch_session(user_id, session_id, status="processing")
+        execution_lock = runtime.execution_locks[key]
 
-        # The message to send for this invocation (initially the user query)
-        current_message = types.Content(
-            role="user",
-            parts=[types.Part(text=query)],
-        )
+        async with execution_lock:
+            await _run_chat_invocation(runtime, key, manager, query)
 
-        final_response = "No response"
+    except asyncio.CancelledError:
+        runtime.registry.touch_session(user_id, session_id, status="idle")
+        raise
+    except Exception as exc:
+        runtime.registry.touch_session(user_id, session_id, status="idle")
+        error_msg = f"Error processing query: {str(exc)}"
+        error_event = {
+            "type": "error",
+            "message": error_msg,
+            "timestamp": datetime.now().isoformat(),
+        }
+        await runtime.send(key, error_event)
+        runtime.agent_events[key].append(error_event)
 
+
+async def _run_chat_invocation(
+    runtime: WebRuntime,
+    key: SessionKey,
+    manager: CoScientistManager,
+    query: str,
+) -> None:
+    """Execute one serialized ADK invocation for a session."""
+    user_id, session_id = key
+    current_message = types.Content(
+        role="user",
+        parts=[types.Part(text=query)],
+    )
+
+    final_response = "No response"
+
+    try:
         # Loop: run -> check for HITL interrupt -> wait for response -> resume
         while True:
             hitl_interrupt_event = None
+            pending_wait_event = None
 
             async for event in manager.runner.run_async(
                 user_id=manager.user_id,
@@ -444,6 +655,8 @@ async def _handle_chat(ws: WebSocket, data: dict):
                     # Send HITL request to browser
                     hitl_payload = {
                         "type": "hitl_request",
+                        "request_id": interrupt_ids[0] if interrupt_ids else "",
+                        "interrupt_id": interrupt_ids[0] if interrupt_ids else "",
                         "interrupt_ids": interrupt_ids,
                         "message": hitl_message,
                         "response_schema": hitl_schema,
@@ -451,10 +664,20 @@ async def _handle_chat(ws: WebSocket, data: dict):
                         "timestamp": datetime.now().isoformat(),
                     }
                     event_data["hitl_request"] = hitl_payload
-                    await ws.send_json(hitl_payload)
+                    # Register before delivery so an immediate browser answer
+                    # cannot race ahead of the pending-request table.
+                    pending_wait_event = asyncio.Event()
+                    for iid in interrupt_ids:
+                        runtime.pending_hitl[iid] = {
+                            "event": pending_wait_event,
+                            "response": None,
+                            "session_key": key,
+                            "payload": hitl_payload,
+                        }
+                    await runtime.send(key, hitl_payload)
 
-                _agent_events.append(event_data)
-                await ws.send_json(event_data)
+                runtime.agent_events[key].append(event_data)
+                await runtime.send(key, event_data)
 
                 if event.is_final_response() and not hitl_interrupt_event:
                     if event.content and event.content.parts:
@@ -466,10 +689,13 @@ async def _handle_chat(ws: WebSocket, data: dict):
             if hitl_interrupt_event:
                 interrupt_ids = get_request_input_interrupt_ids(hitl_interrupt_event)
                 
-                # Register pending HITL for each interrupt_id
-                wait_event = asyncio.Event()
+                wait_event = pending_wait_event or asyncio.Event()
                 for iid in interrupt_ids:
-                    _pending_hitl[iid] = {"event": wait_event, "response": None}
+                    runtime.pending_hitl.setdefault(iid, {
+                        "event": wait_event,
+                        "response": None,
+                        "session_key": key,
+                    })
                 
                 print(f"[HITL] Waiting for browser response for interrupts: {interrupt_ids}")
                 
@@ -479,13 +705,13 @@ async def _handle_chat(ws: WebSocket, data: dict):
                 except asyncio.TimeoutError:
                     print(f"[HITL] Timeout waiting for response, auto-approving")
                     for iid in interrupt_ids:
-                        if iid in _pending_hitl and _pending_hitl[iid]["response"] is None:
-                            _pending_hitl[iid]["response"] = {"approved": True}
+                        if iid in runtime.pending_hitl and runtime.pending_hitl[iid]["response"] is None:
+                            runtime.pending_hitl[iid]["response"] = {"approved": True}
 
                 # Build FunctionResponse message for resume
                 response_parts = []
                 for iid in interrupt_ids:
-                    info = _pending_hitl.pop(iid, None)
+                    info = runtime.pending_hitl.pop(iid, None)
                     response_data = (info["response"] if info and info["response"] else {"approved": True})
                     response_parts.append(
                         create_request_input_response(iid, response_data)
@@ -497,7 +723,7 @@ async def _handle_chat(ws: WebSocket, data: dict):
                     parts=response_parts,
                 )
                 
-                await ws.send_json({
+                await runtime.send(key, {
                     "type": "status",
                     "status": "processing",
                     "message": "Resuming workflow after HITL response...",
@@ -509,30 +735,32 @@ async def _handle_chat(ws: WebSocket, data: dict):
                 # No interrupt, we're done
                 break
 
-        await ws.send_json({
+        runtime.registry.touch_session(user_id, session_id, status="idle")
+        await runtime.send(key, {
             "type": "final_response",
             "content": final_response,
             "timestamp": datetime.now().isoformat(),
         })
 
     except asyncio.CancelledError:
-        # Propagate task cancellation cleanly
+        runtime.registry.touch_session(user_id, session_id, status="idle")
         raise
     except Exception as exc:
+        runtime.registry.touch_session(user_id, session_id, status="idle")
         error_msg = f"Error processing query: {str(exc)}"
-        await ws.send_json({
+        await runtime.send(key, {
             "type": "error",
             "message": error_msg,
             "timestamp": datetime.now().isoformat(),
         })
-        _agent_events.append({
+        runtime.agent_events[key].append({
             "type": "error",
             "message": error_msg,
             "timestamp": datetime.now().isoformat(),
         })
 
 
-def _handle_hitl_response(data: dict):
+def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
     """Resolve a pending HITL request from the browser.
     
     Routes responses to either:
@@ -553,9 +781,11 @@ def _handle_hitl_response(data: dict):
 
     # 1) Try WebHITLHandler (SessionAgent / PlannerAgent HITL)
     if request_id:
-        _web_hitl_handler.resolve_request(request_id, data)
+        resolved = runtime.hitl_handler.resolve_request(request_id, data, key)
+        if resolved:
+            return
         # If it was resolved there, no need to check _pending_hitl
-        if request_id not in {k for k in _pending_hitl}:
+        if request_id not in runtime.pending_hitl:
             return
 
     # 2) Try ADK RequestInput mechanism
@@ -564,25 +794,34 @@ def _handle_hitl_response(data: dict):
         print("[HITL] No interrupt_id or request_id in hitl_response, ignoring")
         return
 
-    info = _pending_hitl.get(lookup_id)
+    info = runtime.pending_hitl.get(lookup_id)
     if not info:
         # Already handled by WebHITLHandler or unknown
         return
+    if info.get("session_key") != key:
+        logging.getLogger("CoScientist.web").warning(
+            "Ignoring RequestInput response from the wrong session"
+        )
+        return
     
     # Store the response data
-    info["response"] = {
+    response = {
         "approved": data.get("approved", False),
         "feedback": data.get("feedback"),
         "instructions": data.get("instructions"),
         "free_input": data.get("free_input"),
     }
+    info["response"] = response
     
     # Check if all interrupt IDs sharing this wait_event have responses
     wait_event = info["event"]
+    for pending in runtime.pending_hitl.values():
+        if pending["event"] is wait_event and pending.get("session_key") == key:
+            pending["response"] = response
     all_resolved = all(
         v["response"] is not None
-        for v in _pending_hitl.values()
-        if v["event"] is wait_event
+        for v in runtime.pending_hitl.values()
+        if v["event"] is wait_event and v.get("session_key") == key
     )
     if all_resolved:
         wait_event.set()  # Unblock the _handle_chat loop

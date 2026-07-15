@@ -160,12 +160,12 @@ REGISTRY.register_tool(ToolEntry(
     docs=(
         ToolDoc(
             name="get_active_tasks",
-            signature="get_active_tasks(query)",
-            purpose="Get tasks from TaskTracker",
+            signature="get_active_tasks()",
+            purpose="Get tasks from the current ADK session",
         ),
         ToolDoc(
             name="update_task_status",
-            signature="update_task_status(task_id)",
+            signature="update_task_status(task_id, status, notes=None)",
             purpose="Set task status to DONE/FAILED/IN_PROGRESS",
         ),
     ),

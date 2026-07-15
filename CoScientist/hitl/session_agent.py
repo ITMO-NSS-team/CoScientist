@@ -7,6 +7,7 @@ from google.genai import types
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
+from google.adk.events.event_actions import EventActions
 from google.adk.utils.context_utils import Aclosing
 
 from CoScientist.hitl.handler import AbstractHITLHandler
@@ -86,7 +87,13 @@ class SessionAgent(LlmAgent):
                 f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes "
                 "its result. Please review."
             ),
-            context={"output": self._review_output(review_output)},
+            context={
+                "output": self._review_output(review_output),
+                "_session": {
+                    "user_id": ctx.session.user_id,
+                    "session_id": ctx.session.id,
+                },
+            },
             invoked_via="internal_loop",
         )
         return await self.hitl_handler.handle_request(request)
@@ -100,7 +107,18 @@ class SessionAgent(LlmAgent):
             # Never review a stale plan from an earlier attempt/session turn if
             # the current planner run fails before create_plan succeeds.
             if self.name == "PlannerAgent":
-                ctx.session.state.pop("active_tasks", None)
+                # Session services return copies and persist only state deltas;
+                # mutating ``ctx.session.state`` directly can let an old plan
+                # reappear on the next invocation. Commit the empty plan first.
+                await ctx.session_service.append_event(
+                    ctx.session,
+                    Event(
+                        invocation_id=ctx.invocation_id,
+                        author=self.name,
+                        branch=ctx.branch,
+                        actions=EventActions(state_delta={"active_tasks": []}),
+                    ),
+                )
 
             async with Aclosing(super()._run_async_impl(ctx)) as agen:
                 async for event in agen:
@@ -148,7 +166,23 @@ class SessionAgent(LlmAgent):
                             class DummyContext:
                                 def __init__(self, state):
                                     self.state = state
-                            task_tracker_instance.create_plan(parsed, DummyContext(ctx.session.state))
+                            prepared_state = {}
+                            task_tracker_instance.create_plan(
+                                parsed, DummyContext(prepared_state)
+                            )
+                            await ctx.session_service.append_event(
+                                ctx.session,
+                                Event(
+                                    invocation_id=ctx.invocation_id,
+                                    author=self.name,
+                                    branch=ctx.branch,
+                                    actions=EventActions(state_delta={
+                                        "active_tasks": prepared_state.get(
+                                            "active_tasks", []
+                                        )
+                                    }),
+                                ),
+                            )
                     except Exception:
                         pass
 

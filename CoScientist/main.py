@@ -13,8 +13,10 @@ load_dotenv()
 import asyncio
 from typing import Optional
 import logging
+from uuid import uuid4
 
 from google.adk.sessions import InMemorySessionService
+from google.adk.sessions.base_session_service import BaseSessionService
 from google.adk.runners import Runner
 from google.genai import types
 
@@ -72,17 +74,21 @@ class CoScientistManager:
     def __init__(
         self,
         app_name: str = "coscientist_app",
-        user_id: str = "user_1",
-        session_id: str = "session_001",
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         hitl_handler: Optional[AbstractHITLHandler] = None,
+        session_service: Optional[BaseSessionService] = None,
     ):
         self.app_name = app_name
-        self.user_id = user_id
-        self.session_id = session_id
+        self.user_id = user_id or f"user_{uuid4().hex}"
+        self.session_id = session_id or f"session_{uuid4().hex}"
 
-        self.session_service: Optional[InMemorySessionService] = None
+        # Web mode injects one shared service so managers can reopen existing
+        # sessions. CLI mode falls back to a private in-memory service.
+        self.session_service: Optional[BaseSessionService] = session_service
         self.runner: Optional[Runner] = None
         self._initialized = False
+        self._initialize_lock = asyncio.Lock()
 
         # HITL setup
         self._hitl_handler = hitl_handler
@@ -92,27 +98,37 @@ class CoScientistManager:
         """Initialize session + runner."""
         if self._initialized:
             return
-    
-        # Session service
-        self.session_service = InMemorySessionService()
+        async with self._initialize_lock:
+            if self._initialized:
+                return
 
-        await self.session_service.create_session(
-            app_name=self.app_name,
-            user_id=self.user_id,
-            session_id=self.session_id,
-        )
+            if self.session_service is None:
+                self.session_service = InMemorySessionService()
 
-        # Runner
-        self.runner = Runner(
-            agent=root_agent,
-            app_name=self.app_name,
-            session_service=self.session_service,
-        )
+            session = await self.session_service.get_session(
+                app_name=self.app_name,
+                user_id=self.user_id,
+                session_id=self.session_id,
+            )
+            if session is None:
+                await self.session_service.create_session(
+                    app_name=self.app_name,
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    state={"active_tasks": []},
+                )
 
-        if self._hitl_handler:
-            hitl_toolset._handler = self._hitl_handler
+            # Runner
+            self.runner = Runner(
+                agent=root_agent,
+                app_name=self.app_name,
+                session_service=self.session_service,
+            )
 
-        self._initialized = True
+            if self._hitl_handler:
+                hitl_toolset._handler = self._hitl_handler
+
+            self._initialized = True
 
     async def run(self, query: str, verbose: bool = True) -> str:
         """
