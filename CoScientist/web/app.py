@@ -25,6 +25,25 @@ from google.adk.workflow.utils._workflow_hitl_utils import (
 )
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _json_safe(value):
+    """Return a deeply JSON-serializable copy of ``value``.
+
+    ws.send_json() calls json.dumps() WITHOUT a ``default`` hook, so any object
+    it can't natively encode (e.g. a pydantic ``MCPServer`` nested inside a tool
+    result) raises and kills the whole event stream. Round-tripping through
+    json.dumps(default=str) coerces such leaves to strings while preserving the
+    dict/list structure the frontend expects — matching the project's existing
+    logging/graph serialisation convention.
+    """
+    try:
+        return json.loads(json.dumps(value, default=str, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+# ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
 WEB_DIR = Path(__file__).parent
@@ -386,23 +405,18 @@ async def _handle_chat(ws: WebSocket, data: dict):
                             fc = part.function_call
                             tool_calls.append({
                                 "name": fc.name,
-                                "args": dict(fc.args) if fc.args else {},
+                                "args": _json_safe(dict(fc.args) if fc.args else {}),
                             })
                         if hasattr(part, 'function_response') and part.function_response:
                             fr = part.function_response
-                            # Safely serialise – response can be dict, str,
-                            # Pydantic model, etc.
-                            try:
-                                resp_payload = (
-                                    fr.response
-                                    if isinstance(fr.response, (dict, list, str, int, float, bool, type(None)))
-                                    else str(fr.response)
-                                )
-                            except Exception:
-                                resp_payload = str(fr.response)
+                            # Deep JSON-safe: a tool may return a dict that NESTS a
+                            # non-serializable object (e.g. a pydantic MCPServer under
+                            # "result"). A shallow isinstance(dict) check passes such a
+                            # payload straight through and then ws.send_json crashes the
+                            # whole stream — so sanitise recursively (objects -> str).
                             tool_responses.append({
                                 "name": fr.name,
-                                "response": resp_payload,
+                                "response": _json_safe(fr.response),
                             })
                     if tool_calls:
                         event_data["tool_calls"] = tool_calls
