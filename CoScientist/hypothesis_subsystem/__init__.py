@@ -32,6 +32,7 @@ from CoScientist.hypothesis_subsystem.generator_agent import (
 )
 from CoScientist.hypothesis_subsystem.loop_coordinator import HypothesisLoopCoordinator
 from CoScientist.hypothesis_subsystem.moosechem_tool import MooseChemTool
+from CoScientist.hypothesis_subsystem.moosechem_mcp_tool import MooseChemMCPTool
 import logging as _stdlib_logging
 from CoScientist.hypothesis_subsystem.tool_registry import HypothesisToolRegistry
 
@@ -126,7 +127,7 @@ def build_hypothesis_subsystem(
 
     audit = HypothesisAuditLogger(_stdlib_logging.getLogger("hypothesis_subsystem"))
     registry = HypothesisToolRegistry()
-    registry.register(MooseChemTool(model=model))
+    registry.register(MooseChemMCPTool())
 
     generator_agent = _wire_generator(model, registry, audit)
     return AgentTool(agent=generator_agent)
@@ -177,7 +178,7 @@ class HypothesisSubsystemAgent(LlmAgent):
             _stdlib_logging.getLogger("hypothesis_subsystem")
         )
         registry = HypothesisToolRegistry()
-        registry.register(MooseChemTool(model=model_str))
+        registry.register(MooseChemMCPTool())
 
         loop_coordinator = HypothesisLoopCoordinator(model=model_str, audit=audit)
         generator = build_hypothesis_generator(

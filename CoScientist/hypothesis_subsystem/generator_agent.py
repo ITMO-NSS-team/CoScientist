@@ -25,6 +25,7 @@ from CoScientist.hypothesis_subsystem.models import (
     HypothesisList,
     HypothesisQuery,
     HypothesisStatus,
+    Provenance,
     ProvenanceRecord,
     ToolResult,
 )
@@ -94,6 +95,17 @@ async def _generate_via_moosechem(
 
     # Convert to HypothesisList dict for ADK
     hypotheses_dicts = [h.model_dump(mode="json") for h in result.hypotheses]
+
+    # [MooseChem-MCP integration] Stash exact hypotheses via direct state
+    # mutation (verified visible to the next tool call in the same step) so the
+    # critic loop can read them without depending on the LLM-relayed
+    # `hypotheses_json`, which corrupts large (>~15KB) payloads on round-trip.
+    if tool_context is not None:
+        try:
+            tool_context.state["_moosechem_raw_hypotheses"] = {"hypotheses": hypotheses_dicts}
+        except Exception:
+            pass
+
     return {"hypotheses": hypotheses_dicts, "metadata": result.metadata}
 
 
@@ -131,13 +143,44 @@ async def _run_critic_loop(
         # No critic loop available — return as-is
         return json.loads(hypotheses_json)
 
-    # Parse input
-    parsed = json.loads(hypotheses_json) if isinstance(hypotheses_json, str) else hypotheses_json
+    # Parse input. [MooseChem-MCP integration] hypotheses_json is relayed by the
+    # LLM and can be corrupted/truncated on large payloads. Try to parse it, but
+    # fall back to the exact hypotheses stashed in state by
+    # _generate_via_moosechem (verified visible within the same step).
+    parsed = None
+    if isinstance(hypotheses_json, str):
+        try:
+            parsed = json.loads(hypotheses_json)
+        except Exception:
+            parsed = None
+    elif isinstance(hypotheses_json, dict):
+        parsed = hypotheses_json
+
+    if not parsed or not parsed.get("hypotheses"):
+        stashed = tool_context.state.get("_moosechem_raw_hypotheses") if tool_context else None
+        if stashed and stashed.get("hypotheses"):
+            parsed = stashed
+
+    if not parsed:
+        parsed = {"hypotheses": []}
+
     raw_hypotheses = parsed.get("hypotheses", [])
 
-    # Convert to Hypothesis objects
+    # Convert to Hypothesis objects.
+    # [MooseChem-MCP integration] The hypotheses JSON is round-tripped through
+    # the LLM between tool calls, which can drop required technical fields
+    # (provenance, strategy_type, domain, refutation_conditions) while keeping
+    # the scientific content. Backfill ONLY missing required fields via
+    # setdefault (never overwrites what the LLM kept) so the full hypothesis —
+    # variables, tools, evidence_basis — survives instead of collapsing to the
+    # minimal wrapper below. Safe to remove if it proves unnecessary.
     hypotheses: List[Hypothesis] = []
     for h in raw_hypotheses:
+        if isinstance(h, dict):
+            h.setdefault("provenance", {"creator": "MooseChemMCPTool"})
+            h.setdefault("strategy_type", "MooseChem")
+            h.setdefault("domain", "chemistry")
+            h.setdefault("refutation_conditions", "Refuted if the predicted effect is not observed under the verification plan.")
         try:
             hypotheses.append(Hypothesis(**h))
         except Exception:
@@ -150,6 +193,7 @@ async def _run_critic_loop(
                     strategy_type=str(h.get("strategy_type", "unknown")),
                     verification_plan=str(h.get("verification_plan", "")),
                     refutation_conditions=str(h.get("refutation_conditions", "")),
+                    provenance=Provenance(creator="HypothesisGenerator"),
                 )
             )
 
@@ -158,7 +202,23 @@ async def _run_critic_loop(
     # Run critic loop
     refined = await loop_coordinator.run_critic_loop(hypothesis_list, research_question)
 
-    return {"hypotheses": [h.model_dump(mode="json") for h in refined.hypotheses]}
+    result = {"hypotheses": [h.model_dump(mode="json") for h in refined.hypotheses]}
+
+    # [MooseChem-MCP integration] Write refined hypotheses straight into state.
+    # The agent's output_key only captures the LLM's free-text final answer,
+    # which drops/truncates the rich hypothesis JSON on round-trip. Writing the
+    # exact critic-loop output here restores what downstream readers expect.
+    # Safe to remove if it proves unnecessary.
+    if tool_context is not None:
+        try:
+            tool_context.state["generated_hypotheses"] = result
+            # Also stage via actions.state_delta so ADK commits it to session state
+            if getattr(tool_context, "actions", None) is not None:
+                tool_context.actions.state_delta["generated_hypotheses"] = result
+        except Exception:
+            pass
+
+    return result
 
 
 # ============================================================================
@@ -197,7 +257,13 @@ def build_hypothesis_generator(
             "configurable strategy tools (MooseChem pipeline). Iteratively "
             "refines hypotheses via a built-in Critic loop."
         ),
-        output_key="generated_hypotheses",
+        # [MooseChem-MCP integration] output_key disabled: it wrote the LLM's
+        # free-text final answer (a truncated ~25KB JSON) into
+        # state["generated_hypotheses"] on the final event, overwriting the
+        # exact hypotheses dict that _run_critic_loop already stores there.
+        # _run_critic_loop is now the single writer of this key. Restore this
+        # line if the state-write in _run_critic_loop is reverted.
+        # output_key="generated_hypotheses",
         tools=generator_tools,
     )
 

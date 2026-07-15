@@ -209,3 +209,4 @@ trace_manifest.jsonl
 
 # Auxiliary test scaffolding for ported features (not architecture)
 CoScientist/tests/unit/test_llm_repair.py
+tests/integration/hypothehis_generation_integration/output/

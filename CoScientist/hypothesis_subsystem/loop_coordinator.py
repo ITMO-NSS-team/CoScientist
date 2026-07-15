@@ -49,7 +49,7 @@ You MUST:
 
 
 class HypothesisLoopCoordinator:
-    MAX_ITERATIONS = 3
+    MAX_ITERATIONS = 5  # [experiment: increased refinement budget, was 3]
 
     def __init__(self, model: str, audit: HypothesisAuditLogger):
         self._model = model
