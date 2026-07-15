@@ -70,6 +70,16 @@ def reset_session_state() -> None:
         knowledge_graph.reset_session()
     except Exception:  # noqa: BLE001
         pass
+    # The research context graph outlives a single chat session by default (a
+    # research spans many prompts), so it is NOT reset here unless explicitly
+    # configured. When RESEARCH_GRAPH__RESET_ON_SESSION=true, archive + clear it.
+    try:
+        from CoScientist.config import get_settings
+        if get_settings().research_graph.reset_on_session:
+            from CoScientist.graph.research.store import research_graph
+            research_graph.reset(archive=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> str:
@@ -154,6 +164,7 @@ class CoScientistManager:
         from google.adk.apps.app import App
         from CoScientist.logging.event_logger import EventLoggerPlugin
         from CoScientist.graph.plugin import GraphMemoryPlugin
+        from CoScientist.graph.research.validator import background_validator_plugin
         from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
 
         # An App carries the plugins + the events-compaction config (summarize the
@@ -161,10 +172,14 @@ class CoScientistManager:
         # MUST be last: ADK stops at the first non-None after_tool return, so the
         # logger/graph observe the full result first, then truncation bounds what
         # reaches the LLM context.
+        # background_validator_plugin judges hypotheses asynchronously (fire-and-
+        # forget) as evidence lands — before the truncation plugin so it sees the
+        # full research_commit result. It never blocks the run loop.
         app = App(
             name=self.app_name,
             root_agent=root_agent,
-            plugins=[EventLoggerPlugin(), GraphMemoryPlugin(), ToolResultTruncationPlugin()],
+            plugins=[EventLoggerPlugin(), GraphMemoryPlugin(),
+                     background_validator_plugin, ToolResultTruncationPlugin()],
             events_compaction_config=_compaction_config(),
         )
         self.runner = Runner(app=app, session_service=self.session_service)

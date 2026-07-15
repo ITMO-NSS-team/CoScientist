@@ -77,6 +77,28 @@ def _graph():
     from CoScientist.graph.agent_tools import graph_reader_instance
     return graph_reader_instance
 
+
+def _research_graph_enabled() -> bool:
+    try:
+        from CoScientist.config import get_settings
+        return get_settings().research_graph.enabled
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _research_graph():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_worker_toolset
+    return research_worker_toolset
+
+
+def _research_graph_orchestrator():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_orchestrator_toolset
+    return research_orchestrator_toolset
+
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
     factory=_websearch,
@@ -212,6 +234,79 @@ REGISTRY.register_tool(ToolEntry(
             purpose="Full cross-run knowledge memory (entities + relations).",
         ),
     ),
+))
+
+# ── Research Context Graph ────────────────────────────────────────────────────
+# The typed blackboard (CoScientist/graph/research). Two surfaces: workers get
+# read + research_commit; the orchestrator additionally gets init/triggers/focus.
+# Both optional (drop out when RESEARCH_GRAPH__ENABLED is false) and
+# runtime_resolved (BaseToolset — real tool names come from get_tools()).
+_RESEARCH_COMMIT_DOC = ToolDoc(
+    name="research_commit",
+    signature="research_commit(nodes, edges, status_updates)",
+    purpose=("Record your results in the shared research graph in ONE "
+             "transaction (validated + applied all-or-nothing). You may only "
+             "write types/edges/status changes your role allows."),
+    usage=(
+        'create a node: {"type": "Evidence", "attrs": {...}, "status"?: "...", "ref"?: "e1"}',
+        'enrich an existing node: {"id": "EB1", "attrs": {...}} (no "type")',
+        'edge: {"type": "supports", "from": "E4", "to": "H2"} — use "#e1" to point at a node created in this call',
+        'status change: {"id": "H2", "status": "under_verification", "reason"?: "..."}',
+        "on ok=false, read errors, fix the payload, and call it again (nothing was saved).",
+    ),
+)
+_RESEARCH_SLICE_DOC = ToolDoc(
+    name="research_context_slice",
+    signature="research_context_slice(node_id, depth=1)",
+    purpose="Get one node plus its 1–2 hop neighborhood (the focused view to work from).",
+)
+_RESEARCH_OVERVIEW_DOC = ToolDoc(
+    name="research_overview",
+    signature="research_overview()",
+    purpose="Compact index of the whole research graph (ids, types, statuses, labels).",
+)
+_RESEARCH_PROVENANCE_DOC = ToolDoc(
+    name="research_provenance",
+    signature="research_provenance(node_id)",
+    purpose="Trace a node back to the root question (chain of nodes/edges + sources).",
+)
+_RESEARCH_WORKER_DOCS = (_RESEARCH_COMMIT_DOC, _RESEARCH_SLICE_DOC,
+                         _RESEARCH_OVERVIEW_DOC, _RESEARCH_PROVENANCE_DOC)
+_RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
+    ToolDoc(
+        name="research_init",
+        signature="research_init(question, attrs, constraints, tools, resources, empirical_bases)",
+        purpose=("Start a NEW research: create the root ResearchQuestion + its "
+                 "context star. Call once at the start; archives any active graph."),
+    ),
+    ToolDoc(
+        name="research_triggers",
+        signature="research_triggers()",
+        purpose=("Evaluate the decision triggers (READY / BLOCKED / REFUTE / "
+                 "CLOSABLE / PENDING / TOOLS / RESOURCES / QUESTIONS / PROGRESS)."),
+    ),
+    ToolDoc(
+        name="research_set_focus",
+        signature="research_set_focus(node_id)",
+        purpose=("Set the node the NEXT delegated worker focuses on — it "
+                 "receives that node's slice automatically. Call before delegating."),
+    ),
+)
+
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph",
+    factory=_research_graph,
+    optional=True,
+    runtime_resolved=True,
+    docs=_RESEARCH_WORKER_DOCS,
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph_orchestrator",
+    factory=_research_graph_orchestrator,
+    optional=True,
+    runtime_resolved=True,
+    docs=_RESEARCH_ORCH_DOCS,
 ))
 
 REGISTRY.register_tool(ToolEntry(
@@ -453,6 +548,15 @@ def _inject_graph_root():
     return inject_graph_root
 
 
+def _inject_research_context(ctx):
+    """before_agent callback seeding state['research_context']. The orchestrator
+    (root) gets the overview + trigger digest; a worker gets its focus slice.
+    Which branch is baked in at build time from the agent's role."""
+    from CoScientist.graph.research.agent_tools import make_inject_research_context
+    is_root = bool(getattr(ctx.config, "root", False))
+    return make_inject_research_context(is_root=is_root)
+
+
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     return SearchLimiter(max_searches=2).limit_searches
@@ -512,6 +616,8 @@ _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 # Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
+# Seed state['research_context'] from the research blackboard (role-dependent).
+_cb("inject_research_context", "before_agent", factory=_inject_research_context)
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.

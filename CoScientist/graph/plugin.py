@@ -36,6 +36,22 @@ from CoScientist.graph.memory import ROOT_ID, knowledge_graph
 _agent_names_cache: Optional[set] = None
 _composite_parents_cache: Optional[dict] = None
 
+# Fire-and-forget background tasks (semantic extraction, etc.). Held at module
+# level so they are not garbage-collected mid-flight; never awaited by the run
+# loop (full asynchrony). On the web's persistent event loop they complete on
+# their own; in one-shot CLI they are best-effort.
+_BG_TASKS: set = set()
+
+
+def _spawn_background(coro) -> None:
+    try:
+        import asyncio
+        task = asyncio.create_task(coro)
+        _BG_TASKS.add(task)
+        task.add_done_callback(_BG_TASKS.discard)
+    except Exception:  # noqa: BLE001 — no running loop / scheduling failure
+        pass
+
 
 def _agent_names() -> set:
     global _agent_names_cache
@@ -258,19 +274,31 @@ class GraphMemoryPlugin(BasePlugin):
         # Semantic layer (Option B): extract domain entities/relations from the
         # answer and accumulate them in the cross-run knowledge memory. Off unless
         # KG_SEMANTIC_ENABLED=1; one small LLM call per query; never fatal.
+        # FULLY ASYNC: the extraction LLM call is fired as a background task and
+        # NOT awaited here, so the run loop is never blocked waiting on it (on the
+        # web's persistent loop it lands moments after the answer). Mirrors the
+        # fire-and-forget pattern in graph/research/validator.py.
         try:
-            from CoScientist.graph.semantic import extract, semantic_enabled
+            from CoScientist.graph.semantic import semantic_enabled
             if semantic_enabled():
-                from CoScientist.graph.memory_store import knowledge_memory
                 inv = getattr(invocation_context, "invocation_id", "x")
-                # feed existing types back so the schema doesn't proliferate
-                extraction = await extract(text, context=self._goal_text,
-                                           known_types=knowledge_memory.known_types())
-                # provenance points back into the knowledge graph (goal + result node)
-                knowledge_memory.ingest(
-                    extraction, source=_short(self._goal_text, 120),
-                    refs={"run": inv, "goal_id": self._goal_id, "result_id": f"result:{inv}"},
-                )
+                _spawn_background(self._extract_semantic(text, inv))
         except Exception:  # noqa: BLE001
             pass
         return None
+
+    async def _extract_semantic(self, text: str, inv: str) -> None:
+        """Background: extract domain entities/relations from the final answer and
+        accumulate them in the cross-run memory. Best-effort, never awaited by the
+        run loop."""
+        try:
+            from CoScientist.graph.semantic import extract
+            from CoScientist.graph.memory_store import knowledge_memory
+            extraction = await extract(text, context=self._goal_text,
+                                       known_types=knowledge_memory.known_types())
+            knowledge_memory.ingest(
+                extraction, source=_short(self._goal_text, 120),
+                refs={"run": inv, "goal_id": self._goal_id, "result_id": f"result:{inv}"},
+            )
+        except Exception:  # noqa: BLE001
+            pass

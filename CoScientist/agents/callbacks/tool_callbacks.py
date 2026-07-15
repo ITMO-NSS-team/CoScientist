@@ -1,5 +1,6 @@
 from CoScientist.tools.task_tracker import task_tracker_instance
 import os
+import re
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
@@ -275,7 +276,12 @@ class SearchLimiter:
         self.max_searches = max_searches
 
     def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
-        if "search" not in tool.name.lower():
+        # Match "search" as a whole name token, NOT as a substring: otherwise
+        # "re-search" tools (research_commit, research_context_slice, …) are
+        # wrongly counted as searches and blocked once the cap is hit, which
+        # stops agents recording anything in the research graph.
+        tokens = re.split(r"[^a-z]+", tool.name.lower())
+        if "search" not in tokens:
             return None
 
         count = tool_context.state.get(self._STATE_KEY, 0)

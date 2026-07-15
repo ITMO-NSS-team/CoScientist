@@ -214,6 +214,29 @@ class CodeExecSettings(BaseModel):
     workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
 
 # =========================
+# RESEARCH CONTEXT GRAPH
+# =========================
+class ResearchGraphSettings(BaseModel):
+    """The typed research blackboard agents write to (graph/research/).
+
+    Distinct from the auto-recorded execution graph (graph/*). When enabled=False
+    the research tools and prompt sections drop out entirely (the assembler makes
+    the whole feature vanish, prompts stay consistent). Override via
+    RESEARCH_GRAPH__ENABLED etc.
+    """
+    enabled: bool = True
+    dir: str = "./graph_runs"              # snapshot directory (shared with graph_runs)
+    active_file: str = "research_active.json"
+    slice_depth_max: int = 2               # cap on get_context_slice depth
+    slice_char_budget: int = 4000          # cap on a rendered context slice
+    context_char_budget: int = 4000        # cap on the orchestrator trigger digest
+    # The research outlives one chat session by default (a research spans many
+    # prompts), so a fresh session / the web Stop button does NOT wipe it. Set
+    # true to archive+clear the graph on every new session instead.
+    reset_on_session: bool = False
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -232,6 +255,7 @@ class Settings(BaseSettings):
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()
+    research_graph: ResearchGraphSettings = ResearchGraphSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

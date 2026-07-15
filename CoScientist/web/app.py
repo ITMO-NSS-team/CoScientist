@@ -115,19 +115,20 @@ def create_app() -> FastAPI:
     async def api_graph(view: str = "execution"):
         """Current graph (the /graph page polls this).
 
-        view=execution → the raw log graph; view=knowledge → the knowledge-graph
-        projection (Question/Finding/Hypothesis/Method entities).
+        view=research → the typed research context graph (the shared blackboard);
+        view=execution → the raw agent-activity log graph;
+        view=memory → the cross-run knowledge memory.
         """
         try:
+            if view == "research":
+                # The typed research context graph (the blackboard agents write).
+                from CoScientist.graph.research.store import research_graph
+                return JSONResponse(research_graph.to_view())
             if view == "memory":
                 from CoScientist.graph.memory_store import knowledge_memory
                 return JSONResponse(knowledge_memory.full())
             from CoScientist.graph.memory import knowledge_graph
-            full = knowledge_graph.full()
-            if view == "knowledge":
-                from CoScientist.graph.knowledge import to_knowledge_graph
-                return JSONResponse(to_knowledge_graph(full))
-            return JSONResponse(full)
+            return JSONResponse(knowledge_graph.full())
         except Exception as e:  # noqa: BLE001 — never break the UI
             return JSONResponse({"nodes": [], "edges": [], "error": str(e)}, status_code=500)
 
