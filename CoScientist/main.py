@@ -66,8 +66,8 @@ def reset_session_state(
 ) -> None:
     """Explicitly reset graph state for one session only.
 
-    TaskTracker state belongs to ADK session state and semantic memory belongs
-    to the user, so neither is touched here.
+    TaskTracker state belongs to ADK session state and semantic memory is global
+    across the installation, so neither is touched here.
     """
     try:
         from CoScientist.graph.memory import reset_knowledge_graph

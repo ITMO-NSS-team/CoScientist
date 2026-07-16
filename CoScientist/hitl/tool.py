@@ -68,7 +68,6 @@ class HITLToolset(BaseToolset):
             "user_id": user_id,
             "session_id": session_id,
         }
-        user_id, session_id = session_key(tool_context)
         request = HITLRequest(
             agent_name=agent_name,
             action_type=HITLAction.APPROVE,
@@ -102,6 +101,7 @@ class HITLToolset(BaseToolset):
         Returns:
             Dictionary with 'selected' (str) and 'approved' (bool).
         """
+        user_id, session_id = session_key(tool_context)
         request = HITLRequest(
             agent_name=agent_name,
             action_type=HITLAction.SELECT,

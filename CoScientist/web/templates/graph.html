@@ -42,7 +42,8 @@
       <select id="view">
         <option value="research">research graph (blackboard)</option>
         <option value="execution">execution (log)</option>
-        <option value="memory">knowledge memory (cross-run)</option>
+        <option value="knowledge">knowledge (this session)</option>
+        <option value="memory">knowledge memory (global)</option>
       </select>
     </label>
     <div class="legend" id="legend"></div>
@@ -52,7 +53,7 @@
 
   <script>
     // ── execution / knowledge / memory views (unchanged) ──────────────────────
-    const STATUS_COLOR = { running: "#f1c40f", success: "#2ecc71", failed: "#e74c3c", pruned: "#7f8c8d" };
+    const STATUS_COLOR = { running: "#f1c40f", success: "#2ecc71", failed: "#e74c3c", interrupted: "#e67e22", pruned: "#7f8c8d" };
     const IDENTITY_COLOR = { system: "#f4c542", agent: "#7eb6ff",
       question: "#ff9f43", fact: "#f6c453", hypothesis: "#b388ff", finding: "#2ecc71", method: "#1abc9c" };
     const SHAPE = { system: "hexagon", agent: "dot", goal: "diamond",

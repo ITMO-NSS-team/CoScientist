@@ -225,7 +225,7 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="search_knowledge_memory",
             signature="search_knowledge_memory(query)",
-            purpose="Search facts learned in this user's PRIOR sessions relevant to a query.",
+            purpose="Search globally accumulated facts relevant to a query.",
         ),
         ToolDoc(
             name="get_entity_neighbors",
@@ -235,7 +235,7 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="get_knowledge_memory",
             signature="get_knowledge_memory()",
-            purpose="This user's full knowledge memory (entities + relations).",
+            purpose="Global knowledge memory shared across users and sessions.",
         ),
     ),
 ))

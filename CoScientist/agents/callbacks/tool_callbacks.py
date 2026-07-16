@@ -112,7 +112,7 @@ def after_fullset_reranker_agent(
     callback_context.state['retrieval_queries_mcp'] = []
     return
 
-def before_get_task(callback_context: CallbackContext):  
+def before_get_task(callback_context: CallbackContext):
     """Ensure the current session has a task list before the agent runs.
 
     Task data already lives in ADK session state.  In particular, do not reload
@@ -125,13 +125,12 @@ def before_get_task(callback_context: CallbackContext):
 
 
 def inject_graph_root(callback_context: CallbackContext):
-    """Give the agent the session graph root and relevant per-user memory.
+    """Give the agent the session graph root and relevant global memory.
 
     state['graph_root'] (rendered via the {graph_root?} placeholder) gets:
       1. the system root — every agent + its capabilities + this session's trace;
-      2. relevant facts this user's knowledge MEMORY established in earlier sessions
-         (graph memory), retrieved for the current query — so agents build on
-         prior findings instead of redoing them.
+      2. relevant facts accumulated by all completed local research sessions,
+         retrieved for the current query so agents build on prior findings.
     Best-effort — the graph must never break a run.
     """
     parts = []

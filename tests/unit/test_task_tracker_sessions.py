@@ -53,4 +53,3 @@ def test_before_get_task_initializes_list_without_overwriting_plan():
     existing.state["active_tasks"] = tasks
     before_get_task(existing)
     assert existing.state["active_tasks"] is tasks
-

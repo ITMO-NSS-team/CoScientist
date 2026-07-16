@@ -256,6 +256,7 @@
     let intentionalDisconnect = false;
     let activeUser = null;
     let activeSession = null;
+    let runStatusVersion = -1;
     let knownUsers = [];
     let knownSessions = [];
 
@@ -804,9 +805,11 @@
     }
 
     async function activateSession(user, session) {
+      const changingSession = !activeSession || activeSession.id !== session.id;
       disconnectCurrentSocket();
       activeUser = user;
       activeSession = session;
+      if (changingSession) runStatusVersion = -1;
       activeUser.last_session_id = session.id;
       knownUsers = knownUsers.map(item => item.id === user.id ? activeUser : item);
       localStorage.setItem(USER_STORAGE_KEY, user.id);
@@ -846,9 +849,35 @@
       }
     }
 
+    function applyRunStatus(status, version = null) {
+      if (version !== null && version !== undefined) {
+        const parsedVersion = Number(version);
+        if (Number.isFinite(parsedVersion) && parsedVersion < runStatusVersion) return;
+        if (Number.isFinite(parsedVersion)) runStatusVersion = parsedVersion;
+      }
+      const processing = status === 'processing';
+      document.getElementById('status-badge').textContent =
+        'Status: ' + (processing ? 'Processing' : 'Idle');
+      document.getElementById('send-btn').disabled = processing;
+      document.getElementById('stop-btn').classList.toggle('hidden', !processing);
+      if (processing) {
+        showTyping();
+      } else {
+        hideTyping();
+        resetAgents();
+        document.getElementById('hitl-panel').classList.add('hidden');
+        currentPlannerHitlRequest = null;
+        updateRoadmapModalButtons();
+      }
+    }
+
     function renderSessionSnapshot(snapshot) {
+      const previousSessionId = activeSession && activeSession.id;
       activeUser = snapshot.user || activeUser;
       activeSession = snapshot.session || activeSession;
+      if (activeSession && activeSession.id !== previousSessionId) {
+        runStatusVersion = -1;
+      }
       activeUser.last_session_id = activeSession.id;
       knownUsers = knownUsers.map(item => item.id === activeUser.id ? activeUser : item);
       knownSessions = knownSessions.map(item => item.id === activeSession.id ? activeSession : item);
@@ -875,11 +904,7 @@
       eventCount = messages.length;
       document.getElementById('event-count').textContent = 'Events: ' + eventCount;
 
-      const processing = snapshot.status === 'processing';
-      document.getElementById('status-badge').textContent = 'Status: ' + (processing ? 'Processing' : 'Idle');
-      document.getElementById('send-btn').disabled = processing;
-      document.getElementById('stop-btn').classList.toggle('hidden', !processing);
-      if (processing) showTyping(); else hideTyping();
+      applyRunStatus(snapshot.status, snapshot.run_status_version);
       populateUserSelectors();
       populateSessionSelector();
     }
@@ -940,9 +965,13 @@
             renderSessionSnapshot(data);
             break;
           case 'status':
-            document.getElementById('status-badge').textContent = 'Status: ' + data.status;
+            applyRunStatus(data.status, data.run_status_version);
             addTelemetry('STATUS :: ' + data.message);
-            if (data.status === 'processing') showTyping(); else hideTyping();
+            break;
+          case 'user_message':
+            addUserMsg(data.message, data.timestamp);
+            eventCount++;
+            document.getElementById('event-count').textContent = 'Events: ' + eventCount;
             break;
           case 'agent_event':
             if (data.content) {
@@ -971,9 +1000,6 @@
           case 'final_response':
             hideTyping();
             resetAgents();
-            document.getElementById('status-badge').textContent = 'Status: Idle';
-            document.getElementById('send-btn').disabled = false;
-            document.getElementById('stop-btn').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             addTelemetry('COMPLETE :: Final response received');
@@ -990,15 +1016,33 @@
           case 'hitl_timeout':
             disableHitlControls(data.request_id);
             document.getElementById('hitl-panel').classList.add('hidden');
+            currentPlannerHitlRequest = null;
+            updateRoadmapModalButtons();
             addSystemMsg('⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.');
             addTelemetry('HITL :: auto-approve on timeout (' + (data.agent_name || '?') + ')');
             break;
+          case 'hitl_cancelled':
+            disableHitlControls(data.request_id);
+            document.getElementById('hitl-panel').classList.add('hidden');
+            currentPlannerHitlRequest = null;
+            updateRoadmapModalButtons();
+            addTelemetry('HITL :: cancelled with its run');
+            break;
+          case 'chat_rejected':
+            addSystemMsg(data.message);
+            addTelemetry('SEND :: rejected while session is processing');
+            break;
+          case 'chat_accepted': {
+            const input = document.getElementById('chat-input');
+            if (input.value.trim() === String(data.message_text || '').trim()) {
+              input.value = '';
+            }
+            break;
+          }
           case 'error':
             hideTyping();
             addSystemMsg('Error: ' + data.message);
             addTelemetry('ERROR :: ' + data.message);
-            document.getElementById('send-btn').disabled = false;
-            document.getElementById('stop-btn').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             break;
@@ -1016,27 +1060,14 @@
       const input = document.getElementById('chat-input');
       const msg = input.value.trim();
       if (!msg || !ws || ws.readyState !== 1) return;
-      addUserMsg(msg);
       ws.send(JSON.stringify({ type: 'chat_message', message: msg }));
-      input.value = '';
-      document.getElementById('send-btn').disabled = true;
-      document.getElementById('stop-btn').classList.remove('hidden');
       addTelemetry('SEND :: user query');
     });
 
     function stopChat() {
       if (!ws || ws.readyState !== 1) return;
       ws.send(JSON.stringify({ type: 'stop_chat' }));
-      document.getElementById('stop-btn').classList.add('hidden');
-      document.getElementById('send-btn').disabled = false;
-      hideTyping();
-      resetAgents();
-      document.getElementById('status-badge').textContent = 'Status: Idle';
-      document.getElementById('hitl-panel').classList.add('hidden');
-      currentPlannerHitlRequest = null;
-      updateRoadmapModalButtons();
       addTelemetry('STOP :: user requested stop');
-      addSystemMsg('⏹ Chat stopped. Session history and roadmap were preserved.');
     }
 
     function clearChat() {

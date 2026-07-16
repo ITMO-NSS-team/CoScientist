@@ -24,6 +24,7 @@ run. Toggle with LOG_AGENT_EVENTS=0 (shared with the event logger).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -41,14 +42,12 @@ _composite_parents_cache: Optional[dict] = None
 
 # Fire-and-forget background tasks (semantic extraction, etc.). Held at module
 # level so they are not garbage-collected mid-flight; never awaited by the run
-# loop (full asynchrony). On the web's persistent event loop they complete on
-# their own; in one-shot CLI they are best-effort.
+# loop (full asynchrony), but drained when the Runner closes.
 _BG_TASKS: set = set()
 
 
 def _spawn_background(coro) -> None:
     try:
-        import asyncio
         task = asyncio.create_task(coro)
         _BG_TASKS.add(task)
         task.add_done_callback(_BG_TASKS.discard)
@@ -221,11 +220,49 @@ class GraphMemoryPlugin(BasePlugin):
             graph.add_edge(ROOT_ID, state.goal_id, type="caused_by")
         except Exception:  # noqa: BLE001
             pass
-        # A completed invocation will not receive more callbacks. The graph is
-        # persistent, but this transient node bookkeeping must not grow forever
-        # in a long-lived Web process.
-        self._runs.pop(self._run_key(invocation_context), None)
         return None
+
+    async def after_run_callback(self, *, invocation_context) -> None:
+        """Finalize an interrupted tree and release transient bookkeeping.
+
+        Tool and event callbacks run after ``on_user_message_callback`` and
+        still need the goal id, root agent, and function-call mapping created
+        there.  ADK invokes this hook after the run finishes, including runs
+        that do not produce a normal final response, so it is the appropriate
+        lifecycle boundary for cleanup.
+        """
+        state = self._runs.pop(self._run_key(invocation_context), None)
+        if state is None:
+            return
+        try:
+            graph = get_knowledge_graph(invocation_context)
+            nodes = {node["id"]: node for node in graph.full().get("nodes", [])}
+            goal = nodes.get(state.goal_id, {})
+            if goal.get("status") != "running":
+                return
+            now = time.time()
+            active_ids = {
+                state.goal_id,
+                *state.agent_node.values(),
+                *state.node_by_fcid.values(),
+            }
+            for node_id in active_ids:
+                if nodes.get(node_id, {}).get("status") == "running":
+                    graph.set_status(
+                        node_id,
+                        status="interrupted",
+                        output="Run ended before a final response.",
+                        t_end=now,
+                    )
+        except Exception:  # noqa: BLE001 - cleanup must never mask run errors
+            pass
+
+    async def close(self) -> None:
+        """Drain best-effort semantic extraction before Runner shutdown."""
+        self._runs.clear()
+        pending = [task for task in list(_BG_TASKS) if not task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
         if not _enabled():
@@ -330,8 +367,8 @@ class GraphMemoryPlugin(BasePlugin):
             pass
 
         # Semantic layer (Option B): extract domain entities/relations from the
-        # answer and accumulate them in the cross-run knowledge memory. Off unless
-        # KG_SEMANTIC_ENABLED=1; one small LLM call per query; never fatal.
+        # answer and accumulate them in global cross-run knowledge memory. It is
+        # enabled by default (KG_SEMANTIC_ENABLED=0 disables it); never fatal.
         # FULLY ASYNC: the extraction LLM call is fired as a background task and
         # NOT awaited here, so the run loop is never blocked waiting on it (on the
         # web's persistent loop it lands moments after the answer). Mirrors the
@@ -340,14 +377,36 @@ class GraphMemoryPlugin(BasePlugin):
             from CoScientist.graph.semantic import semantic_enabled
             if semantic_enabled():
                 inv = getattr(invocation_context, "invocation_id", "x")
+                user_id, session_id = session_key(invocation_context)
                 memory = get_knowledge_memory(invocation_context)
+                refs = {
+                    "run": inv,
+                    "goal_id": state.goal_id,
+                    "result_id": f"result:{inv}",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "agent": self._root_name(state),
+                    "created_at": time.time(),
+                    # Extraction is immediately reusable, but it is not the
+                    # same thing as a validated Research Context Graph claim.
+                    "validation_status": "provisional",
+                }
+                try:
+                    from CoScientist.graph.research.store import get_research_graph
+                    research_id = get_research_graph(
+                        user_id=user_id,
+                        session_id=session_id,
+                    ).full().get("research_id")
+                    if research_id and research_id != "research":
+                        refs["research_id"] = research_id
+                except Exception:  # noqa: BLE001 - provenance is best-effort
+                    pass
                 _spawn_background(
                     self._extract_semantic(
                         text,
-                        inv,
                         state.goal_text,
-                        state.goal_id,
                         memory,
+                        refs,
                     )
                 )
         except Exception:  # noqa: BLE001
@@ -357,10 +416,9 @@ class GraphMemoryPlugin(BasePlugin):
     async def _extract_semantic(
         self,
         text: str,
-        inv: str,
         goal_text: str,
-        goal_id: str,
         memory,
+        refs: dict[str, Any],
     ) -> None:
         """Background: extract domain entities/relations from the final answer and
         accumulate them in the cross-run memory. Best-effort, never awaited by the
@@ -374,7 +432,7 @@ class GraphMemoryPlugin(BasePlugin):
             )
             memory.ingest(
                 extraction, source=_short(goal_text, 120),
-                refs={"run": inv, "goal_id": goal_id, "result_id": f"result:{inv}"},
+                refs=refs,
             )
         except Exception:  # noqa: BLE001
             pass

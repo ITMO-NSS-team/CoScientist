@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from weakref import WeakKeyDictionary
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -58,6 +59,7 @@ WEB_DIR = Path(__file__).parent
 TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
 APP_NAME = "coscientist_app"
 SessionKey = tuple[str, str]
+SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 
 
 class WebRuntime:
@@ -68,12 +70,137 @@ class WebRuntime:
         self.registry = LocalSessionRegistry()
         self.managers: dict[SessionKey, CoScientistManager] = {}
         self.manager_lock = asyncio.Lock()
+        self.control_locks: dict[SessionKey, asyncio.Lock] = {}
         self.execution_locks: dict[SessionKey, asyncio.Lock] = {}
+        self.socket_locks = WeakKeyDictionary()
+        self.run_versions: dict[SessionKey, int] = defaultdict(int)
+        self.stopping_runs: set[SessionKey] = set()
+        self._closing = False
         self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
+        self.hitl_handler.set_sender(self.send_socket)
         self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
         self.active_runs: dict[SessionKey, asyncio.Task] = {}
+
+    def control_lock(self, key: SessionKey) -> asyncio.Lock:
+        """Serialize start/stop ownership changes for one public session."""
+        lock = self.control_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.control_locks[key] = lock
+        return lock
+
+    def _next_run_version(self, key: SessionKey) -> int:
+        self.run_versions[key] += 1
+        return self.run_versions[key]
+
+    def status_payload(
+        self,
+        key: SessionKey,
+        status: str,
+        message: str,
+        *,
+        version: int | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "type": "status",
+            "status": status,
+            "message": message,
+            "run_status_version": (
+                self.run_versions[key] if version is None else version
+            ),
+        }
+
+    async def start_run(self, key: SessionKey, data: dict[str, Any]) -> bool:
+        """Start one run, rejecting concurrent messages from other tabs."""
+        async with self.control_lock(key):
+            if self._closing or key in self.stopping_runs:
+                return False
+            current = self.active_runs.get(key)
+            if current is not None and not current.done():
+                return False
+
+            version = self._next_run_version(key)
+            run_data = dict(data)
+            run_data["_run_status_version"] = version
+            task = asyncio.create_task(_handle_chat(self, key, run_data))
+            self.active_runs[key] = task
+
+            def schedule_discard(finished: asyncio.Task) -> None:
+                finished.get_loop().create_task(self.discard_run(key, finished))
+
+            task.add_done_callback(schedule_discard)
+        await self.send(key, self.status_payload(
+            key,
+            "processing",
+            f"Processing query: {data.get('message', '').strip()}",
+            version=version,
+        ))
+        return True
+
+    async def discard_run(self, key: SessionKey, task: asyncio.Task) -> bool:
+        """Drop a finished run only if it still owns the session slot."""
+        async with self.control_lock(key):
+            if (
+                self.active_runs.get(key) is not task
+                or key in self.stopping_runs
+            ):
+                return False
+            self.active_runs.pop(key, None)
+            version = self._next_run_version(key)
+        await self.send(key, self.status_payload(
+            key,
+            "idle",
+            "Session is ready for the next request.",
+            version=version,
+        ))
+        return True
+
+    async def stop_run(self, key: SessionKey) -> bool:
+        """Cancel and remove the exact run currently owning this session."""
+        async with self.control_lock(key):
+            task = self.active_runs.get(key)
+            stopped = task is not None
+            self.stopping_runs.add(key)
+            if task is not None:
+                if not task.done():
+                    task.cancel()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+
+        # Keep the stopping gate set through scoped cleanup so a new run cannot
+        # create HITL state that belongs to the next owner and then lose it here.
+        _cancel_pending_hitl(self, key)
+        self.hitl_handler.reset(key)
+        try:
+            self.registry.touch_session(*key, status="idle")
+        except KeyError:
+            pass
+
+        async with self.control_lock(key):
+            if task is not None and self.active_runs.get(key) is task:
+                self.active_runs.pop(key, None)
+            self.stopping_runs.discard(key)
+            version = self._next_run_version(key)
+
+        # Network I/O happens outside the ownership lock so a slow browser
+        # cannot block future control operations for the session.
+        await self.send(key, self.status_payload(
+            key,
+            "idle",
+            (
+                "Agent execution stopped. Session history was preserved."
+                if stopped else "Session is already idle."
+            ),
+            version=version,
+        ))
+        if stopped:
+            await self.send(key, {
+                "type": "final_response",
+                "content": "Stopped",
+            })
+        return stopped
 
     async def get_manager(self, user_id: str, session_id: str) -> CoScientistManager:
         self.registry.require_session(user_id, session_id)
@@ -110,21 +237,96 @@ class WebRuntime:
         if not sockets:
             self.sockets.pop(key, None)
 
+    def socket_lock(self, ws: WebSocket) -> asyncio.Lock:
+        lock = self.socket_locks.get(ws)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.socket_locks[ws] = lock
+        return lock
+
+    async def _send_json_unlocked(self, ws: WebSocket, payload: dict) -> None:
+        await asyncio.wait_for(
+            ws.send_json(payload),
+            timeout=SOCKET_SEND_TIMEOUT_SECONDS,
+        )
+
+    async def send_socket(
+        self,
+        ws: WebSocket,
+        payload: dict,
+        key: SessionKey | None = None,
+    ) -> None:
+        """Serialize writes to one socket and bound backpressure time."""
+        try:
+            async with self.socket_lock(ws):
+                await self._send_json_unlocked(ws, payload)
+        except Exception:
+            if key is not None:
+                self.detach_socket(key, ws)
+            raise
+
+    async def attach_with_snapshot(
+        self,
+        key: SessionKey,
+        ws: WebSocket,
+        *,
+        user: dict[str, Any],
+        session: dict[str, Any],
+        active_tasks: Any,
+    ) -> None:
+        """Attach a tab with an ordered snapshot before any live broadcasts."""
+        async with self.socket_lock(ws):
+            async with self.control_lock(key):
+                self.attach_socket(key, ws)
+                current_run = self.active_runs.get(key)
+                status = (
+                    "processing"
+                    if current_run is not None and not current_run.done()
+                    else "idle"
+                )
+                version = self.run_versions[key]
+                messages = list(self.agent_events[key])
+            try:
+                await self._send_json_unlocked(ws, {
+                    "type": "connected",
+                    "timestamp": datetime.now().isoformat(),
+                    "message": f"Connected as {user['nickname']}",
+                })
+                await self._send_json_unlocked(ws, {
+                    "type": "session_snapshot",
+                    "user": user,
+                    "session": session,
+                    "messages": messages,
+                    "active_tasks": _json_safe(active_tasks),
+                    "status": status,
+                    "run_status_version": version,
+                })
+            except Exception:
+                self.detach_socket(key, ws)
+                raise
+
     async def send(self, key: SessionKey, payload: dict[str, Any]) -> None:
         """Broadcast an event only to tabs viewing this session."""
-        for socket in list(self.sockets.get(key, [])):
+        sockets = list(self.sockets.get(key, []))
+        if not sockets:
+            return
+
+        async def deliver(socket: WebSocket) -> None:
             try:
-                await socket.send_json(payload)
+                await self.send_socket(socket, payload, key)
             except Exception:
                 self.detach_socket(key, socket)
 
+        await asyncio.gather(*(deliver(socket) for socket in sockets))
+
     async def close(self) -> None:
-        tasks = list(self.active_runs.values())
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        self._closing = True
+        await asyncio.gather(
+            *(self.stop_run(key) for key in list(self.active_runs)),
+            return_exceptions=True,
+        )
+        _cancel_pending_hitl(self)
+        self.hitl_handler.reset()
         await asyncio.gather(
             *(manager.close() for manager in self.managers.values()),
             return_exceptions=True,
@@ -302,8 +504,26 @@ def create_app() -> FastAPI:
     async def graph_page():
         return (WEB_DIR / "templates" / "graph.html").read_text(encoding="utf-8")
 
+    @app.get("/api/knowledge")
+    async def api_global_knowledge():
+        """Return the installation-wide semantic Knowledge Memory."""
+        try:
+            from CoScientist.graph.memory_store import get_global_knowledge_memory
+            payload = get_global_knowledge_memory().full()
+            status_code = (
+                200 if payload.get("storage", {}).get("healthy") else 503
+            )
+            return JSONResponse(payload, status_code=status_code)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must stay readable
+            return JSONResponse({
+                "scope": "global",
+                "nodes": [],
+                "edges": [],
+                "error": str(exc),
+            }, status_code=503)
+
     def graph_payload(user_id: str, session_id: str, view: str):
-        """Return one session's graphs (semantic memory is shared per user)."""
+        """Return scoped graphs; ``memory`` aliases the global knowledge graph."""
         runtime.registry.require_session(user_id, session_id)
         try:
             from CoScientist.graph.memory import get_knowledge_graph
@@ -333,6 +553,8 @@ def create_app() -> FastAPI:
                         user_id=user_id,
                         session_id=session_id,
                     ),
+                    user_id=user_id,
+                    session_id=session_id,
                 )
             return execution
         except HTTPException:
@@ -350,7 +572,13 @@ def create_app() -> FastAPI:
             payload = graph_payload(user_id, session_id, view)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse(payload)
+        status_code = (
+            503
+            if view == "memory"
+            and payload.get("storage", {}).get("healthy") is False
+            else 200
+        )
+        return JSONResponse(payload, status_code=status_code)
 
     @app.get("/api/graph")
     async def api_graph(
@@ -492,36 +720,38 @@ def create_app() -> FastAPI:
 
         key = (user_id, session_id)
         runtime.registry.touch_session(user_id, session_id)
-        runtime.attach_socket(key, ws)
-        await ws.send_json({
-            "type": "connected",
-            "timestamp": datetime.now().isoformat(),
-            "message": f"Connected as {user['nickname']}",
-        })
         adk_session = await runtime.session_service.get_session(
             app_name=APP_NAME,
             user_id=user_id,
             session_id=session_id,
         )
-        current_run = runtime.active_runs.get(key)
-        await ws.send_json({
-            "type": "session_snapshot",
-            "user": user,
-            "session": session_meta,
-            "messages": runtime.agent_events[key],
-            "active_tasks": (
-                _json_safe(adk_session.state.get("active_tasks", []))
+        await runtime.attach_with_snapshot(
+            key,
+            ws,
+            user=user,
+            session=session_meta,
+            active_tasks=(
+                adk_session.state.get("active_tasks", [])
                 if adk_session else []
             ),
-            "status": "processing" if current_run and not current_run.done() else "idle",
-        })
+        )
         # Re-deliver only HITL requests belonging to this session.
         await runtime.hitl_handler.attach_websocket(ws, key)
         delivered_interrupts = set()
         for pending in runtime.pending_hitl.values():
             payload = pending.get("payload")
-            if pending.get("session_key") == key and payload and id(payload) not in delivered_interrupts:
-                await ws.send_json(payload)
+            wait_event = pending.get("event")
+            unresolved = (
+                pending.get("response") is None
+                and (wait_event is None or not wait_event.is_set())
+            )
+            if (
+                pending.get("session_key") == key
+                and unresolved
+                and payload
+                and id(payload) not in delivered_interrupts
+            ):
+                await runtime.send_socket(ws, payload, key)
                 delivered_interrupts.add(id(payload))
 
         try:
@@ -531,51 +761,31 @@ def create_app() -> FastAPI:
                 msg_type = data.get("type", "")
 
                 if msg_type == "chat_message":
-                    active_task = runtime.active_runs.get(key)
-                    if active_task and not active_task.done():
-                        active_task.cancel()
-                        try:
-                            await active_task
-                        except asyncio.CancelledError:
-                            pass
-                    active_task = asyncio.create_task(_handle_chat(runtime, key, data))
-                    runtime.active_runs[key] = active_task
-
-                    def discard_finished(task, *, run_key=key):
-                        if runtime.active_runs.get(run_key) is task:
-                            runtime.active_runs.pop(run_key, None)
-
-                    active_task.add_done_callback(discard_finished)
+                    if await runtime.start_run(key, data):
+                        await runtime.send_socket(ws, {
+                            "type": "chat_accepted",
+                            "message_text": data.get("message", ""),
+                        }, key)
+                    else:
+                        await runtime.send_socket(ws, {
+                            "type": "chat_rejected",
+                            "message_text": data.get("message", ""),
+                            "message": (
+                                "This session is already processing a request. "
+                                "Stop it or wait for completion before sending another."
+                            ),
+                        }, key)
                 elif msg_type == "stop_chat":
-                    active_task = runtime.active_runs.get(key)
-                    if active_task and not active_task.done():
-                        active_task.cancel()
-                        try:
-                            await active_task
-                        except asyncio.CancelledError:
-                            pass
-                    runtime.active_runs.pop(key, None)
-                    _cancel_pending_hitl(runtime, key)
-                    runtime.hitl_handler.reset(key)
-                    runtime.registry.touch_session(user_id, session_id, status="idle")
-                    await runtime.send(key, {
-                        "type": "status",
-                        "status": "idle",
-                        "message": "Agent execution stopped. Session history was preserved.",
-                    })
-                    await runtime.send(key, {
-                        "type": "final_response",
-                        "content": "Stopped",
-                    })
+                    await runtime.stop_run(key)
                 elif msg_type == "hitl_response":
                     _handle_hitl_response(runtime, key, data)
                 elif msg_type == "ping":
-                    await ws.send_json({"type": "pong"})
+                    await runtime.send_socket(ws, {"type": "pong"}, key)
                 else:
-                    await ws.send_json({
+                    await runtime.send_socket(ws, {
                         "type": "error",
                         "message": f"Unknown message type: {msg_type}",
-                    })
+                    }, key)
         except WebSocketDisconnect:
             runtime.hitl_handler.detach_websocket(ws, key)
             runtime.detach_socket(key, ws)
@@ -591,10 +801,13 @@ def create_app() -> FastAPI:
 # ---------------------------------------------------------------------------
 # HITL helpers
 # ---------------------------------------------------------------------------
-def _cancel_pending_hitl(runtime: WebRuntime, key: SessionKey):
-    """Cancel ADK RequestInput waits belonging to one session."""
+def _cancel_pending_hitl(
+    runtime: WebRuntime,
+    key: SessionKey | None = None,
+) -> None:
+    """Cancel ADK RequestInput waits for one session, or all on shutdown."""
     for interrupt_id, info in list(runtime.pending_hitl.items()):
-        if info.get("session_key") != key:
+        if key is not None and info.get("session_key") != key:
             continue
         info["event"].set()
         runtime.pending_hitl.pop(interrupt_id, None)
@@ -611,6 +824,9 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     resumes the workflow by calling run_async with a FunctionResponse message.
     """
     query = data.get("message", "").strip()
+    run_status_version = int(
+        data.get("_run_status_version", runtime.run_versions[key])
+    )
     if not query:
         await runtime.send(key, {"type": "error", "message": "Empty query"})
         return
@@ -618,17 +834,13 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     user_id, session_id = key
 
     # Echo user message
-    runtime.agent_events[key].append({
+    user_event = {
         "type": "user_message",
         "message": query,
         "timestamp": datetime.now().isoformat(),
-    })
-
-    await runtime.send(key, {
-        "type": "status",
-        "status": "processing",
-        "message": f"Processing query: {query}",
-    })
+    }
+    runtime.agent_events[key].append(user_event)
+    await runtime.send(key, user_event)
 
     try:
         manager = await runtime.get_manager(user_id, session_id)
@@ -636,12 +848,22 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         execution_lock = runtime.execution_locks[key]
 
         async with execution_lock:
-            await _run_chat_invocation(runtime, key, manager, query)
+            await _run_chat_invocation(
+                runtime,
+                key,
+                manager,
+                query,
+                run_status_version=run_status_version,
+            )
 
     except asyncio.CancelledError:
+        _cancel_pending_hitl(runtime, key)
+        runtime.hitl_handler.reset(key)
         runtime.registry.touch_session(user_id, session_id, status="idle")
         raise
     except Exception as exc:
+        _cancel_pending_hitl(runtime, key)
+        runtime.hitl_handler.reset(key)
         runtime.registry.touch_session(user_id, session_id, status="idle")
         error_msg = f"Error processing query: {str(exc)}"
         error_event = {
@@ -658,6 +880,8 @@ async def _run_chat_invocation(
     key: SessionKey,
     manager: CoScientistManager,
     query: str,
+    *,
+    run_status_version: int,
 ) -> None:
     """Execute one serialized ADK invocation for a session."""
     user_id, session_id = key
@@ -798,6 +1022,13 @@ async def _run_chat_invocation(
                     for iid in interrupt_ids:
                         if iid in runtime.pending_hitl and runtime.pending_hitl[iid]["response"] is None:
                             runtime.pending_hitl[iid]["response"] = {"approved": True}
+                    await runtime.send(key, {
+                        "type": "hitl_timeout",
+                        "request_id": interrupt_ids[0] if interrupt_ids else "",
+                        "interrupt_ids": interrupt_ids,
+                        "agent_name": hitl_interrupt_event.author or "system",
+                        "timeout_seconds": 600,
+                    })
 
                 # Build FunctionResponse message for resume
                 response_parts = []
@@ -814,11 +1045,12 @@ async def _run_chat_invocation(
                     parts=response_parts,
                 )
                 
-                await runtime.send(key, {
-                    "type": "status",
-                    "status": "processing",
-                    "message": "Resuming workflow after HITL response...",
-                })
+                await runtime.send(key, runtime.status_payload(
+                    key,
+                    "processing",
+                    "Resuming workflow after HITL response...",
+                    version=run_status_version,
+                ))
                 
                 # Continue the while loop to call run_async again with the FR message
                 continue
@@ -833,22 +1065,10 @@ async def _run_chat_invocation(
             "timestamp": datetime.now().isoformat(),
         })
 
-    except asyncio.CancelledError:
-        runtime.registry.touch_session(user_id, session_id, status="idle")
-        raise
-    except Exception as exc:
-        runtime.registry.touch_session(user_id, session_id, status="idle")
-        error_msg = f"Error processing query: {str(exc)}"
-        await runtime.send(key, {
-            "type": "error",
-            "message": error_msg,
-            "timestamp": datetime.now().isoformat(),
-        })
-        runtime.agent_events[key].append({
-            "type": "error",
-            "message": error_msg,
-            "timestamp": datetime.now().isoformat(),
-        })
+    finally:
+        # A cancelled/failed runner must not leave RequestInput records that a
+        # reconnecting tab could mistake for a live approval request.
+        _cancel_pending_hitl(runtime, key)
 
 
 def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):

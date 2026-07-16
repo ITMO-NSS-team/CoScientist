@@ -50,7 +50,7 @@ def test_parent_scope_is_pinned_and_wins_over_agenttool_child_session_id():
     assert session_key(child) == (user_id, parent_session_id)
 
 
-def test_agenttool_child_resolves_parent_graphs_and_user_memory(
+def test_agenttool_child_resolves_parent_graphs_and_global_memory(
     tmp_path,
     monkeypatch,
 ):
@@ -98,3 +98,10 @@ def test_agenttool_child_resolves_parent_graphs_and_user_memory(
     assert get_knowledge_graph(other_parent) is not parent_execution
     assert research_store.get_research_graph(other_parent) is not parent_research
     assert get_knowledge_memory(other_parent) is parent_memory
+
+    other_user = _context(
+        state={},
+        user_id=f"other-user-{token}",
+        session_id=f"other-user-session-{token}",
+    )
+    assert get_knowledge_memory(other_user) is parent_memory

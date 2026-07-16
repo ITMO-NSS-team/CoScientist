@@ -64,7 +64,7 @@ def search_knowledge_memory(
     tool_context: ToolContext,
     limit: int = 10,
 ) -> Dict[str, Any]:
-    """Search this user's KNOWLEDGE MEMORY for facts from EARLIER sessions.
+    """Search the global KNOWLEDGE MEMORY for facts from earlier research.
 
     Returns the domain entities (targets, molecules, metrics, papers, hypotheses,
     methods) most relevant to the query, with their attributes — so you can build
@@ -91,8 +91,10 @@ def get_entity_neighbors(entity: str, tool_context: ToolContext) -> Dict[str, An
 
 
 def get_knowledge_memory(tool_context: ToolContext) -> Dict[str, Any]:
-    """Get this user's full knowledge memory (entities + relations learned across
-    previous sessions). Prefer search_knowledge_memory + get_entity_neighbors."""
+    """Get the global knowledge memory shared across users and sessions.
+
+    Prefer search_knowledge_memory + get_entity_neighbors for focused retrieval.
+    """
     return resolve_knowledge_memory(tool_context).full()
 
 

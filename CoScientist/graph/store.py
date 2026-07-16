@@ -104,8 +104,7 @@ class GraphStore:
             return list(self._graphs.keys())
 
     def clear(self, run_id: str) -> None:
-        """Drop a run's graph (in memory and its snapshot) — used to reset the
-        per-session graph on a fresh start / interrupt."""
+        """Explicitly drop one run in memory and replace its snapshot."""
         with self._lock:
             # Do not let the following snapshot operation lazy-load the graph
             # that is being deliberately cleared.

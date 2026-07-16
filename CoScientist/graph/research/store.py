@@ -3,9 +3,9 @@
 One active research per user/session scope (one graph = one root question), held
 in a NetworkX MultiDiGraph (parallel typed edges like E1-supports→H1 plus
 E1-relates_to→H1 must coexist) and snapshotted atomically to JSON after every
-write — the blackboard survives restarts and session resets. Re-initializing a
-research archives the previous graph file; nothing is ever deleted from a
-graph (refuted branches stay as negative results).
+write — the blackboard survives restarts, browser refresh and Web Stop. An
+explicit reset or re-initialization archives the previous active graph first;
+refuted branches remain available as negative results in that archive.
 
 Writes go through ``commit`` — the transactional API from spec §5.3: ALL nodes,
 edges and status changes of one agent step are validated together against the

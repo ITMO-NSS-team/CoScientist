@@ -24,6 +24,7 @@ class WebHITLHandler(AbstractHITLHandler):
         # solely for backwards-compatible callers that have no session context.
         self._sockets: dict[SessionKey | None, list] = {}
         self._event_log: list[dict] = []
+        self._sender = None
 
     def __deepcopy__(self, memo):
         return self
@@ -37,6 +38,16 @@ class WebHITLHandler(AbstractHITLHandler):
     def set_websocket(self, ws):
         """Legacy setter: register one unscoped socket, or clear all sockets."""
         self._sockets = {} if ws is None else {None: [ws]}
+
+    def set_sender(self, sender) -> None:
+        """Use the Web runtime's serialized socket writer when available."""
+        self._sender = sender
+
+    async def _send_json(self, ws, payload: dict, session_key) -> None:
+        if self._sender is not None:
+            await self._sender(ws, payload, session_key)
+        else:
+            await ws.send_json(payload)
 
     def connection_count(self) -> int:
         return sum(len(group) for group in self._sockets.values())
@@ -58,10 +69,14 @@ class WebHITLHandler(AbstractHITLHandler):
         logger.info("HITL websocket attached (%d connection(s))", self.connection_count())
 
         for request_id, entry in list(self._pending.items()):
+            future = entry.get("future")
+            if future is None or future.done():
+                self._pending.pop(request_id, None)
+                continue
             if entry.get("session_key") not in (None, session_key):
                 continue
             try:
-                await ws.send_json(entry["payload"])
+                await self._send_json(ws, entry["payload"], session_key)
                 logger.info("HITL request %s redelivered", request_id[:8])
             except Exception as exc:  # noqa: BLE001
                 logger.warning("HITL redelivery of %s failed: %s", request_id[:8], exc)
@@ -94,7 +109,7 @@ class WebHITLHandler(AbstractHITLHandler):
         delivered = 0
         for ws in targets:
             try:
-                await ws.send_json(payload)
+                await self._send_json(ws, payload, session_key)
                 delivered += 1
             except Exception as exc:  # noqa: BLE001
                 logger.warning("HITL delivery failed (%s); pruning socket", exc)
@@ -172,7 +187,6 @@ class WebHITLHandler(AbstractHITLHandler):
                 timeout=self.HITL_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
-            self._pending.pop(request_id, None)
             response_data = {"action": "approve", "approved": True}
             await self._broadcast(
                 {
@@ -183,6 +197,23 @@ class WebHITLHandler(AbstractHITLHandler):
                 },
                 session_key,
             )
+        except asyncio.CancelledError:
+            await self._broadcast(
+                {
+                    "type": "hitl_cancelled",
+                    "request_id": request_id,
+                    "agent_name": request.agent_name,
+                },
+                session_key,
+            )
+            raise
+        finally:
+            # ``shield`` deliberately keeps the response future alive when the
+            # caller is cancelled. Remove and cancel it explicitly so a stopped
+            # run cannot be redelivered as a stale request on reconnect.
+            self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
 
         action = HITLAction(response_data.get("action", "approve"))
         return HITLResponse(

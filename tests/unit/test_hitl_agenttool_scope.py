@@ -80,6 +80,51 @@ def test_hitl_tool_uses_parent_scope_in_agenttool_child_session():
     asyncio.run(scenario())
 
 
+def test_hitl_selection_uses_parent_scope_in_agenttool_child_session():
+    async def scenario():
+        handler = _RecordingHandler()
+        toolset = HITLToolset(handler)
+        child, parent_key, child_session_id = _agenttool_child_context()
+
+        await toolset.request_selection(
+            agent_name="ChildAgent",
+            message="Choose delegated work",
+            options=["first", "second"],
+            tool_context=child,
+        )
+
+        assert _request_scope(handler) == {
+            "user_id": parent_key[0],
+            "session_id": parent_key[1],
+        }
+        assert _request_scope(handler)["session_id"] != child_session_id
+
+    asyncio.run(scenario())
+
+
+def test_hitl_approval_resolves_scope_only_once(monkeypatch):
+    async def scenario():
+        handler = _RecordingHandler()
+        toolset = HITLToolset(handler)
+        child, parent_key, _ = _agenttool_child_context()
+        calls = []
+
+        def resolve_once(context):
+            calls.append(context)
+            return parent_key
+
+        monkeypatch.setattr("CoScientist.hitl.tool.session_key", resolve_once)
+        await toolset.request_approval(
+            agent_name="ChildAgent",
+            message="Approve delegated work",
+            tool_context=child,
+        )
+
+        assert calls == [child]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("callback_kind", ["before", "after"])
 def test_hitl_callback_uses_parent_scope_in_agenttool_child_session(callback_kind):
     async def scenario():

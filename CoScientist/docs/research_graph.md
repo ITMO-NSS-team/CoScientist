@@ -13,7 +13,9 @@ the scientific process). Lives in `CoScientist/graph/research/`.
 > **Not** the execution graph. `CoScientist/graph/*` (see `execution_graph.md`)
 > is an *auto-recorded observational trace* of what agents did. This graph is a
 > *generative blackboard* the agents author on purpose. They coexist; both are
-> visible in the web `/graph` viewer.
+> visible in the web `/graph` viewer. Both are scoped to one `(user_id,
+> session_id)`. The semantic Knowledge Memory is intentionally different: it is
+> global and accumulates reusable facts from every session and local user.
 
 ## Why
 

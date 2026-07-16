@@ -38,4 +38,3 @@ def test_touch_and_rename_update_session_metadata():
     assert renamed["title"] == "New title"
     assert touched["status"] == "processing"
     assert registry.get_user(user["id"])["last_session_id"] == session["id"]
-

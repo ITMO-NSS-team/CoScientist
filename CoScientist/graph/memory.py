@@ -117,9 +117,11 @@ class KnowledgeGraph:
             self._seeded = True
 
     def reset_session(self) -> None:
-        """Clear this session's execution graph and re-seed the root/roster.
-        Called on a fresh start / interrupt so a new run begins with a clean
-        trace. Does NOT touch the cross-run knowledge memory."""
+        """Explicitly clear one session's trace and re-seed its root/roster.
+
+        Normal prompts, browser refresh and Web Stop append/preserve the trace.
+        This maintenance reset never touches global cross-run knowledge.
+        """
         with self._lock:
             self._store.clear(self.run_id)
             self._seeded = False

@@ -20,7 +20,7 @@ NodeKind = Literal[
     "reflection",
     "entity",      # a knowledge-graph entity (its DOMAIN type lives in semantic.type)
 ]
-NodeStatus = Literal["running", "success", "failed", "pruned"]
+NodeStatus = Literal["running", "success", "failed", "interrupted", "pruned"]
 # Edge types are open: control-flow uses the names below; the knowledge layer
 # adds domain relations (has_property, about, supports, generated_by, …). Kept as
 # a free string so new relation types never need a code change.
