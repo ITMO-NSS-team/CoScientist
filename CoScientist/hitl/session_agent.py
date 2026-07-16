@@ -12,6 +12,7 @@ from google.adk.utils.context_utils import Aclosing
 
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.graph.session_scope import session_key
 
 import json
 from CoScientist.tools.task_tracker import task_tracker_instance
@@ -80,6 +81,7 @@ class SessionAgent(LlmAgent):
             if registered_plan:
                 review_output = registered_plan
 
+        user_id, session_id = session_key(ctx)
         request = HITLRequest(
             agent_name=self.name,
             action_type=HITLAction.APPROVE,
@@ -90,8 +92,8 @@ class SessionAgent(LlmAgent):
             context={
                 "output": self._review_output(review_output),
                 "_session": {
-                    "user_id": ctx.session.user_id,
-                    "session_id": ctx.session.id,
+                    "user_id": user_id,
+                    "session_id": session_id,
                 },
             },
             invoked_via="internal_loop",

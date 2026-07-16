@@ -11,17 +11,20 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.web.session_registry import LocalSessionRegistry
 from CoScientist.agents import agent_system
 from CoScientist.hitl.tool import hitl_toolset
+from CoScientist.config import get_settings
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+from google.adk.agents.run_config import RunConfig
 from google.adk.workflow.utils._workflow_hitl_utils import (
     has_request_input_function_call,
     get_request_input_interrupt_ids,
@@ -181,6 +184,12 @@ def create_app() -> FastAPI:
     )
     app.state.runtime = runtime
 
+    # Vendored JS/CSS (e.g. vis-network for the live graph) so the UI works
+    # offline / behind a VPN without any CDN.
+    _static_dir = WEB_DIR / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)
     async def index():
@@ -224,11 +233,19 @@ def create_app() -> FastAPI:
             if len(title) > 120:
                 raise ValueError("Session title must be at most 120 characters.")
             session_id = f"session_{uuid4().hex}"
+            from CoScientist.graph.session_scope import (
+                GRAPH_SCOPE_SESSION_KEY,
+                GRAPH_SCOPE_USER_KEY,
+            )
             await runtime.session_service.create_session(
                 app_name=APP_NAME,
                 user_id=user_id,
                 session_id=session_id,
-                state={"active_tasks": []},
+                state={
+                    "active_tasks": [],
+                    GRAPH_SCOPE_USER_KEY: user_id,
+                    GRAPH_SCOPE_SESSION_KEY: session_id,
+                },
             )
             session = runtime.registry.create_session(
                 user_id,
@@ -279,6 +296,75 @@ def create_app() -> FastAPI:
             "pending_requests": runtime.hitl_handler.pending_summary(),
             "auto_approve_timeout_seconds": runtime.hitl_handler.HITL_TIMEOUT_SECONDS,
         })
+
+    # --- Knowledge graph (live view) ---
+    @app.get("/graph", response_class=HTMLResponse)
+    async def graph_page():
+        return (WEB_DIR / "templates" / "graph.html").read_text(encoding="utf-8")
+
+    def graph_payload(user_id: str, session_id: str, view: str):
+        """Return one session's graphs (semantic memory is shared per user)."""
+        runtime.registry.require_session(user_id, session_id)
+        try:
+            from CoScientist.graph.memory import get_knowledge_graph
+            from CoScientist.graph.memory_store import get_knowledge_memory
+            from CoScientist.graph.research.store import get_research_graph
+
+            if view == "research":
+                return get_research_graph(
+                    user_id=user_id,
+                    session_id=session_id,
+                ).to_view()
+            if view == "memory":
+                return get_knowledge_memory(
+                    user_id=user_id,
+                    session_id=session_id,
+                ).full()
+
+            execution = get_knowledge_graph(
+                user_id=user_id,
+                session_id=session_id,
+            ).full()
+            if view == "knowledge":
+                from CoScientist.graph.knowledge import to_knowledge_graph
+                return to_knowledge_graph(
+                    execution,
+                    memory=get_knowledge_memory(
+                        user_id=user_id,
+                        session_id=session_id,
+                    ),
+                )
+            return execution
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never break the UI
+            return {"nodes": [], "edges": [], "error": str(exc)}
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/graph")
+    async def api_session_graph(
+        user_id: str,
+        session_id: str,
+        view: str = "execution",
+    ):
+        try:
+            payload = graph_payload(user_id, session_id, view)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload)
+
+    @app.get("/api/graph")
+    async def api_graph(
+        user_id: str = "",
+        session_id: str = "",
+        view: str = "execution",
+    ):
+        """Compatibility endpoint; an explicit session scope is mandatory."""
+        if not user_id or not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="user_id and session_id are required",
+            )
+        return await api_session_graph(user_id, session_id, view)
 
     # --- Roadmap endpoints ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/roadmap")
@@ -592,6 +678,11 @@ async def _run_chat_invocation(
                 user_id=manager.user_id,
                 session_id=manager.session_id,
                 new_message=current_message,
+                # Lift ADK's 500-LLM-call default so a long autonomous run driven
+                # by a single prompt isn't cut off mid-work.
+                run_config=RunConfig(
+                    max_llm_calls=get_settings().orchestrator.max_llm_calls
+                ),
             ):
                 # Stream each event to frontend
                 event_data = {

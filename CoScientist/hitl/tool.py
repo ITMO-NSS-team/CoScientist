@@ -10,6 +10,7 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLRequest, HITLAction
 from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
+from CoScientist.graph.session_scope import session_key
 
 settings = get_settings()
 
@@ -62,10 +63,12 @@ class HITLToolset(BaseToolset):
             Dictionary with 'approved' (bool) and optional 'feedback' (str).
         """
         request_context = dict(context or {})
+        user_id, session_id = session_key(tool_context)
         request_context["_session"] = {
-            "user_id": tool_context.session.user_id,
-            "session_id": tool_context.session.id,
+            "user_id": user_id,
+            "session_id": session_id,
         }
+        user_id, session_id = session_key(tool_context)
         request = HITLRequest(
             agent_name=agent_name,
             action_type=HITLAction.APPROVE,
@@ -106,8 +109,8 @@ class HITLToolset(BaseToolset):
             options=options,
             context={
                 "_session": {
-                    "user_id": tool_context.session.user_id,
-                    "session_id": tool_context.session.id,
+                    "user_id": user_id,
+                    "session_id": session_id,
                 }
             },
             invoked_via="tool"

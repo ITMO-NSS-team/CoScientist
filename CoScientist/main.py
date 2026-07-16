@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
+import os
 from typing import Optional
 import logging
 from uuid import uuid4
@@ -18,6 +19,7 @@ from uuid import uuid4
 from google.adk.sessions import InMemorySessionService
 from google.adk.sessions.base_session_service import BaseSessionService
 from google.adk.runners import Runner
+from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings
@@ -34,6 +36,59 @@ settings = get_settings()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _compaction_config():
+    """Build the events-compaction config: when an agent's prompt grows past the
+    token threshold, ADK summarizes older events (with the agent's own model),
+    keeping the last N raw events. Disable with AGENT_CONTEXT_TOKEN_THRESHOLD=0.
+    """
+    try:
+        from google.adk.apps.app import EventsCompactionConfig
+        threshold = int(os.getenv("AGENT_CONTEXT_TOKEN_THRESHOLD", "150000"))
+        if threshold <= 0:
+            return None
+        return EventsCompactionConfig(
+            compaction_interval=int(os.getenv("AGENT_COMPACTION_INTERVAL", "15")),
+            overlap_size=int(os.getenv("AGENT_COMPACTION_OVERLAP", "2")),
+            token_threshold=threshold,
+            event_retention_size=int(os.getenv("AGENT_CONTEXT_RETENTION", "12")),
+        )
+    except Exception:  # noqa: BLE001 — compaction is best-effort, never block startup
+        return None
+
+
+def reset_session_state(
+    user_id: str,
+    session_id: str,
+    *,
+    reset_research: Optional[bool] = None,
+) -> None:
+    """Explicitly reset graph state for one session only.
+
+    TaskTracker state belongs to ADK session state and semantic memory belongs
+    to the user, so neither is touched here.
+    """
+    try:
+        from CoScientist.graph.memory import reset_knowledge_graph
+        reset_knowledge_graph(user_id=user_id, session_id=session_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        should_reset = (
+            get_settings().research_graph.reset_on_session
+            if reset_research is None
+            else reset_research
+        )
+        if should_reset:
+            from CoScientist.graph.research.store import get_research_graph
+            get_research_graph(
+                user_id=user_id,
+                session_id=session_id,
+            ).reset(archive=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> str:
@@ -111,19 +166,39 @@ class CoScientistManager:
                 session_id=self.session_id,
             )
             if session is None:
+                from CoScientist.graph.session_scope import (
+                    GRAPH_SCOPE_SESSION_KEY,
+                    GRAPH_SCOPE_USER_KEY,
+                )
                 await self.session_service.create_session(
                     app_name=self.app_name,
                     user_id=self.user_id,
                     session_id=self.session_id,
-                    state={"active_tasks": []},
+                    state={
+                        "active_tasks": [],
+                        GRAPH_SCOPE_USER_KEY: self.user_id,
+                        GRAPH_SCOPE_SESSION_KEY: self.session_id,
+                    },
                 )
+            from google.adk.apps.app import App
+            from CoScientist.logging.event_logger import EventLoggerPlugin
+            from CoScientist.graph.plugin import GraphMemoryPlugin
+            from CoScientist.graph.research.validator import BackgroundValidatorPlugin
+            from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
 
-            # Runner
-            self.runner = Runner(
-                agent=root_agent,
-                app_name=self.app_name,
-                session_service=self.session_service,
+            app = App(
+                name=self.app_name,
+                root_agent=root_agent,
+                plugins=[
+                    EventLoggerPlugin(),
+                    GraphMemoryPlugin(),
+                    BackgroundValidatorPlugin(),
+                    # Keep truncation last so observers receive full results.
+                    ToolResultTruncationPlugin(),
+                ],
+                events_compaction_config=_compaction_config(),
             )
+            self.runner = Runner(app=app, session_service=self.session_service)
 
             if self._hitl_handler:
                 hitl_toolset._handler = self._hitl_handler
@@ -161,6 +236,12 @@ class CoScientistManager:
                 user_id=self.user_id,
                 session_id=self.session_id,
                 new_message=content,
+                # ADK caps a run at 500 LLM calls by default, which a long
+                # autonomous research run overruns mid-work; lift the ceiling so
+                # one prompt can drive the whole job (finite, as a cost backstop).
+                run_config=RunConfig(
+                    max_llm_calls=get_settings().orchestrator.max_llm_calls
+                ),
             ):
                 if verbose:
                     print(
@@ -234,6 +315,18 @@ class CoScientistManager:
 
     async def close(self):
         """Cleanup session-related resources and uploaded paper artifacts."""
+        if self.runner is not None:
+            try:
+                await self.runner.close()
+            except Exception as exc:  # noqa: BLE001 - continue local cleanup
+                logger.error(
+                    "Warning: failed to close runner for session %s: %s",
+                    self.session_id,
+                    exc,
+                )
+            finally:
+                self.runner = None
+                self._initialized = False
         try:
             await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
         except Exception as exc:
@@ -256,37 +349,8 @@ __all__ = [
     "create_manager"
 ]
 
-# CLI entrypoint
+# CLI entrypoint — thin shim. Prefer: python -m CoScientist cli
 if __name__ == "__main__":
-    async def main():
+    from CoScientist.cli import run_repl
 
-        manager = await create_manager()
-
-        print("CoScientist (ADK) initialized\n")
-
-        try:
-            while True:
-                print(
-                    "\n"
-                    "==============================\n"
-                    "🚀  WEB INTERFACE NOT RUNNING\n"
-                    "==============================\n"
-                    "Do not run main.py directly, run web/server.py instead.\n"
-                    "Start it with:\n\n"
-                    "    uv run CoScientist/web/server.py\n\n"
-                )
-                query = input("Enter query (or 'exit'): ")
-
-                if query.lower() in {"exit", "quit"}:
-                    break
-
-                result = await manager.run(query)
-
-                print("\n=== Final Response ===")
-                print(result)
-                print()
-
-        finally:
-            await manager.close()
-
-    asyncio.run(main())
+    run_repl()

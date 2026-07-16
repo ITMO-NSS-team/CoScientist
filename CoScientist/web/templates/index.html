@@ -165,6 +165,10 @@
       </div>
     </div>
     <div class="flex items-center gap-4 text-[#424656]">
+      <a id="graph-link" href="/graph" target="_blank" title="Knowledge graph (live)">
+        <span
+          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">hub</span>
+      </a>
       <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
           class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
@@ -809,6 +813,8 @@
       localStorage.setItem(SESSION_STORAGE_KEY, session.id);
       localStorage.setItem(NICK_STORAGE_KEY, user.nickname);
       document.getElementById('active-nickname').textContent = user.nickname;
+      document.getElementById('graph-link').href =
+        `/graph?user_id=${encodeURIComponent(user.id)}&session_id=${encodeURIComponent(session.id)}`;
       populateUserSelectors();
       populateSessionSelector();
       clearChat();

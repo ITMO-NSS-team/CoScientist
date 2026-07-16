@@ -28,6 +28,7 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from CoScientist.config import get_settings
+from CoScientist.graph.session_scope import DEFAULT_SESSION_KEY, session_key
 
 settings = get_settings()
 _CFG = settings.code_exec
@@ -142,8 +143,13 @@ class CoderToolset(BaseToolset):
         """Best-effort session id, robust across ADK versions."""
         if tool_context is None:
             return None
-        inv = (getattr(tool_context, "_invocation_context", None)
-               or getattr(tool_context, "invocation_context", None))
+        scope = session_key(tool_context)
+        if scope != DEFAULT_SESSION_KEY:
+            return scope[1]
+        inv = (
+            getattr(tool_context, "_invocation_context", None)
+            or getattr(tool_context, "invocation_context", None)
+        )
         session = getattr(inv, "session", None) if inv is not None else None
         sid = getattr(session, "id", None)
         return str(sid) if sid else None
@@ -222,6 +228,7 @@ class CoderToolset(BaseToolset):
         # Imported lazily to keep the toolset usable without the HITL package.
         from CoScientist.hitl.models import HITLRequest, HITLAction
 
+        user_id, session_id = session_key(tool_context)
         request = HITLRequest(
             agent_name="CoderAgent",
             action_type=HITLAction.APPROVE,
@@ -233,8 +240,8 @@ class CoderToolset(BaseToolset):
                 "command": command,
                 "matched_rule": matched,
                 "_session": {
-                    "user_id": tool_context.session.user_id,
-                    "session_id": tool_context.session.id,
+                    "user_id": user_id,
+                    "session_id": session_id,
                 },
             },
             invoked_via="callback",
@@ -748,10 +755,15 @@ def seed_coder_workspace(callback_context, llm_request=None):
     state = callback_context.state
     if state.get(_WORKSPACE_STATE_KEY):
         return None
-    inv = (getattr(callback_context, "_invocation_context", None)
-           or getattr(callback_context, "invocation_context", None))
-    session = getattr(inv, "session", None) if inv is not None else None
-    sid = getattr(session, "id", None)
+    scope = session_key(callback_context)
+    sid = scope[1] if scope != DEFAULT_SESSION_KEY else None
+    if sid is None:
+        inv = (
+            getattr(callback_context, "_invocation_context", None)
+            or getattr(callback_context, "invocation_context", None)
+        )
+        session = getattr(inv, "session", None) if inv is not None else None
+        sid = getattr(session, "id", None)
     if sid:
         safe = re.sub(r"[^A-Za-z0-9_-]", "", str(sid))[:48] or "session"
         state[_WORKSPACE_STATE_KEY] = f"ws_{safe}"

@@ -11,6 +11,7 @@ from google.adk.models import LlmResponse, LlmRequest
 from google.genai.types import Part
 
 from CoScientist.paper_parser.s3_connection import s3_service
+from CoScientist.graph.session_scope import session_key
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +67,11 @@ async def papers_agent_before_model(
 
 async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> None:
     """Upload local papers to S3 and register their keys in session state."""
-    user_id = callback_context.session.user_id
-    session_id = callback_context.session.id
-    session_key = f"{user_id}:{session_id}"
-    _upload_locks.setdefault(session_key, asyncio.Lock())
+    user_id, session_id = session_key(callback_context)
+    scope_key = f"{user_id}:{session_id}"
+    _upload_locks.setdefault(scope_key, asyncio.Lock())
 
-    async with _upload_locks[session_key]:
+    async with _upload_locks[scope_key]:
         if callback_context.state.get(_PAPER_STATE_KEY):
             return
 

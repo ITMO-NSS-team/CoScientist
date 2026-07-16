@@ -32,7 +32,7 @@ def system(config):
 # ── config validation ────────────────────────────────────────────────────────
 
 def test_config_loads_and_has_one_root(config):
-    assert config.root.name == "InitAgent"
+    assert config.root.name == "OrchestratorAgent"
     order = config.build_order()
     assert order.index("ToolRetrieverAgent") < order.index("LocalToolsExtractorAgent")
     assert set(order) == set(config.agents)
@@ -210,6 +210,27 @@ def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(config, sy
     # Built and attached as an AgentTool on the coder.
     attached = [t.agent.name for t in system.agent("CoderAgent").tools if hasattr(t, "agent")]
     assert attached == ["DatasetCollectorAgent"]
+
+
+def test_research_graph_tools_match_prompt(config, system):
+    """Agents wired with a research_graph* tool document its write/read tools in
+    their prompt (and agents without it don't) — the same consistency the
+    assembler enforces for every tool, asserted explicitly for this feature."""
+    for name, cfg in config.agents.items():
+        if cfg.cls != "llm" or not cfg.prompt:
+            continue
+        instruction = system.agent(name).instruction
+        has_worker = "research_graph" in cfg.tools
+        has_orch = "research_graph_orchestrator" in cfg.tools
+        if has_worker or has_orch:
+            assert "research_commit" in instruction, f"{name}: research_commit missing"
+            assert "research_context_slice" in instruction, f"{name}: slice missing"
+        else:
+            assert "research_commit" not in instruction, f"{name}: research_commit leaked"
+        # init/triggers/set_focus are orchestrator-only
+        for orch_only in ("research_init", "research_triggers", "research_set_focus"):
+            assert (orch_only in instruction) == has_orch, \
+                f"{name}: {orch_only} presence != orchestrator-tool presence"
 
 
 def test_orchestrator_prompt_documents_only_wired_critics(config, system):

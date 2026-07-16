@@ -30,6 +30,7 @@ from google.genai import types
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 from CoScientist.hitl.session_agent import SessionAgent
 from CoScientist.microfluidics.render import render_tz_document
+from CoScientist.graph.session_scope import session_key
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ class TZSessionAgent(SessionAgent):
         silent_in_a_row = 0
         total = len(questions)
         for i, q in enumerate(questions, 1):
+            user_id, session_id = session_key(ctx)
             request = HITLRequest(
                 agent_name=self.name,
                 action_type=HITLAction.PROVIDE_INPUT,
@@ -164,8 +166,8 @@ class TZSessionAgent(SessionAgent):
                 context={
                     "output": render_question_card(q, i, total),
                     "_session": {
-                        "user_id": ctx.session.user_id,
-                        "session_id": ctx.session.id,
+                        "user_id": user_id,
+                        "session_id": session_id,
                     },
                 },
                 invoked_via="internal_loop",
