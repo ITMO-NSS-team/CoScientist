@@ -8,7 +8,9 @@ class PublishStep(ETLStep):
     
     def run(self, ctx: ETLContext) -> None:
         article_id = ctx.article.id
-        article_domain = ctx.article.domain
+        
+        manifest_data = ctx.artifact_store.get_metadata(article_id, "paper_summarisation")
+        summary_data = manifest_data["summary"]
         
         chunks_to_upload = []
         vectors_to_upload = []
@@ -31,8 +33,6 @@ class PublishStep(ETLStep):
             
             pdf_data = ctx.artifact_store.get_file(article_id, "fetching", "source.pdf")
             html = ctx.artifact_store.get_html(article_id, "paper_summarisation")
-            manifest_data = ctx.artifact_store.get_metadata(article_id, "paper_summarisation")
-            summary_data = manifest_data["summary"]["paper_summary"]
             
             image_names = ctx.artifact_store.list_images(article_id, "image_captioning")
             images = {
@@ -41,19 +41,20 @@ class PublishStep(ETLStep):
             }
             
             ctx.public_store.publish_article(
-                domain=article_domain,
+                domain=summary_data["domain"],
                 article_id=article_id,
-                paper_summary=summary_data,
+                paper_summary=summary_data["paper_summary"],
                 html=html,
                 images=images,
                 metadata=manifest_data,
                 pdf_data=pdf_data,
             )
             
+            # Cleaning after successfully publication
             # ctx.artifact_store.delete_article(article_id)
         
         except Exception as e:
             print(f"[{self.name}] Error publishing {article_id}. Rolling back vector store...")
             ctx.vector_store.delete_by_article_id(article_id)
-            ctx.public_store.delete_article(article_domain, article_id)
+            ctx.public_store.delete_article(summary_data["domain"], article_id)
             raise e

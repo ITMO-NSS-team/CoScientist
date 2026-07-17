@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import chromadb
 
@@ -27,6 +27,7 @@ class ChromaVectorStore(VectorStore):
                 "article_id": chunk.article_id,
                 "role": chunk.role,
                 "domain": chunk.domain or "default",
+                "field": chunk.field or "default",
                 "modality": chunk.modality,
             }
             if chunk.metadata:
@@ -42,7 +43,7 @@ class ChromaVectorStore(VectorStore):
             metadatas=metadatas
         )
     
-    def search(self, query_vector: list[float], limit: int = 5, filters: dict = None) -> list[Chunk]:
+    def search(self, query_vector: list[float], limit: int = 5, filters: Optional[dict] = None) -> list[Chunk]:
         results = self.collection.query(
             query_embeddings=[query_vector],
             n_results=limit,
@@ -66,6 +67,7 @@ class ChromaVectorStore(VectorStore):
                     role=meta.pop("role", "body"),
                     modality=meta.pop("modality", "text"),
                     domain=meta.pop("domain", None),
+                    field=meta.pop("field", None),
                     content=docs[i],
                     metadata=meta
                 )

@@ -2,8 +2,8 @@ from langchain_core.messages import HumanMessage
 
 from ..base import ETLStep
 from ..context import ETLContext
-from ...utils.general_utils import ExpandedSummary
-from ...utils.prompts import summarisation_prompt
+from ...utils.general_utils import ExpandedSummary, OpenAlexClassification
+from ...utils.prompts import summarisation_prompt, classification_prompt
 
 
 class PaperSummarisatonStep(ETLStep):
@@ -22,13 +22,22 @@ class PaperSummarisatonStep(ETLStep):
             [HumanMessage(content=summarisation_prompt + html)]
         )
         
+        prompt_content = classification_prompt.format(
+            TITLE=expanded_summary.paper_title, PAPER_SUMMARY=expanded_summary.paper_summary,
+        )
+        classification_llm = ctx.llm.with_structured_output(OpenAlexClassification)
+        classification: OpenAlexClassification = classification_llm.invoke(  # noqa
+            [HumanMessage(content=prompt_content)]
+        )
+        
         manifest_data["summary"] = {
             "paper_summary": expanded_summary.paper_summary,
             "paper_title": expanded_summary.paper_title,
             "publication_year": expanded_summary.publication_year,
             "authors": expanded_summary.authors,
             "source": expanded_summary.source,
-            "research_area": expanded_summary.research_area
+            "domain": classification.primary_domain,
+            "field": classification.primary_field,
         }
         manifest_data["paper_of_file_name"] = ctx.article.name
         manifest_data["article_metadata"] = ctx.article.metadata

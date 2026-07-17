@@ -1,16 +1,15 @@
 import base64
 from io import BytesIO
+from typing import Dict, List
 from urllib.parse import urlparse
 
 from langchain_core.messages import HumanMessage
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ExpandedSummary(BaseModel):
-    """
-    Expanded version of paper's summary.
-    """
+    """Expanded version of paper's summary."""
     paper_summary: str = Field(description="Summary of the paper.")
     paper_title: str = Field(
         description="Title of the paper. If the title is not explicitly specified, use the default value - 'NO TITLE'"
@@ -31,12 +30,6 @@ class ExpandedSummary(BaseModel):
         description=(
             "Source where the paper was published. If the source is not explicitly specified, use the default "
             "value - 'UNDEFINED'"
-        )
-    )
-    research_area: str = Field(
-        description=(
-            "Area or field of science the paper is about. If the area is hard to determine, use the default value "
-            "- 'OTHER'"
         )
     )
 
@@ -93,6 +86,7 @@ def prompt_func(data):
         image_part = {
             "type": "image_url",
             "image_url": f"data:image/jpeg;base64,{img}",
+            # "image_url": {"url": f"data:image/jpeg;base64,{img}"},
         }
         content_parts.append(image_part)
     
@@ -134,3 +128,75 @@ def pil_to_base64(image_object, img_format="JPEG"):
     img_b64bytes = base64.b64encode(img_bytes)
     img_b64string = img_b64bytes.decode('utf-8')
     return img_b64string
+
+
+OPENALEX_TAXONOMY: Dict[str, List[str]] = {
+    "Life Sciences": [
+        "Agricultural and Biological Sciences",
+        "Biochemistry, Genetics and Molecular Biology",
+        "Immunology and Microbiology",
+        "Neuroscience",
+        "Pharmacology, Toxicology and Pharmaceutics"
+    ],
+    "Social Sciences": [
+        "Arts and Humanities",
+        "Business, Management and Accounting",
+        "Decision Sciences",
+        "Economics, Econometrics and Finance",
+        "Psychology",
+        "Social Sciences"
+    ],
+    "Physical Sciences": [
+        "Chemical Engineering",
+        "Chemistry",
+        "Computer Science",
+        "Earth and Planetary Sciences",
+        "Energy",
+        "Engineering",
+        "Environmental Science",
+        "Materials Science",
+        "Mathematics",
+        "Physics and Astronomy"
+    ],
+    "Health Sciences": [
+        "Dentistry",
+        "Health Professions",
+        "Medicine",
+        "Nursing",
+        "Veterinary"
+    ]
+}
+
+
+class OpenAlexClassification(BaseModel):
+    """Domain and field clarification via LLM based on """
+    primary_domain: str = Field(description="The name of the primary domain in English (e.g., 'Physical Sciences').")
+    primary_field: str = Field(description="The name of the primary field in English (e.g., 'Computer Science').")
+    confidence_score: float | int = Field(
+        description="Confidence score of the classification ranging from 0.00 to 1.00.")
+    justification: str = Field(
+        description="A brief justification of the choice in Russian (1-2 sentences), referencing specific terms from the abstract or title."
+    )
+
+    @model_validator(mode='after')
+    def validate_domain_field_mapping(self) -> 'OpenAlexClassification':
+        """Validates that the selected field strictly belongs to the selected domain."""
+        domain = self.primary_domain.strip()
+        field = self.primary_field.strip()
+
+        if domain not in OPENALEX_TAXONOMY:
+            raise ValueError(
+                f"Invalid domain '{domain}'. Must be exactly one of: {list(OPENALEX_TAXONOMY.keys())}."
+            )
+
+        allowed_fields = OPENALEX_TAXONOMY[domain]
+        if field not in allowed_fields:
+            raise ValueError(
+                f"Invalid field '{field}' for domain '{domain}'. "
+                f"The field must strictly belong to the chosen domain. Allowed fields for '{domain}' are: {allowed_fields}."
+            )
+
+        self.primary_domain = domain
+        self.primary_field = field
+        
+        return self

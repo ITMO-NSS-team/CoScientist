@@ -11,7 +11,6 @@ class ChunkingStep(ETLStep):
     def run(self, ctx: ETLContext) -> None:
         
         article_id = ctx.article.id
-        article_domain = ctx.article.domain
         
         html = ctx.artifact_store.get_html(article_id, "paper_summarisation")
         manifest_data = ctx.artifact_store.get_metadata(article_id, "paper_summarisation")
@@ -21,7 +20,9 @@ class ChunkingStep(ETLStep):
         if not html:
             raise RuntimeError("ChunkingStep requires cleaned HTML")
 
-        body_chunks = chunk_html_to_chunks(html, article_id, article_domain)
+        body_chunks = chunk_html_to_chunks(
+            html, article_id, summary_data["domain"], summary_data["field"]
+        )
 
         image_caption_chunks = []
         for idx, img in enumerate(images_data):
@@ -43,7 +44,8 @@ class ChunkingStep(ETLStep):
                 Chunk(
                     id=chunk_id,
                     article_id=article_id,
-                    domain=ctx.article.domain or "default",
+                    domain=summary_data["domain"] or "default",
+                    field=summary_data["field"] or "default",
                     role=ChunkRole.IMAGE_CAPTION.value,
                     modality="text",
                     content=text,
@@ -56,7 +58,8 @@ class ChunkingStep(ETLStep):
         summary_chunk = Chunk(
             id=make_chunk_id(article_id, ChunkRole.SUMMARY, 1, summary_data["paper_summary"]),
             article_id=article_id,
-            domain=ctx.article.domain or "default",
+            domain=summary_data["domain"] or "default",
+            field=summary_data["field"] or "default",
             role=ChunkRole.SUMMARY.value,
             modality="text",
             content=summary_data["paper_summary"],
@@ -65,7 +68,6 @@ class ChunkingStep(ETLStep):
                 "publication_year": summary_data["publication_year"],
                 "authors": summary_data["authors"],
                 "source": summary_data["source"],
-                "research_area": summary_data["research_area"]
             }
         )
 

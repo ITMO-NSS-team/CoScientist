@@ -14,7 +14,8 @@ def _custom_table_extractor(table_tag):
 def chunk_html_to_chunks(
     html_string: str,
     article_id: str,
-    article_domain: Optional[str|None]
+    article_domain: Optional[str|None],
+    article_field: Optional[str|None],
 ) -> List[Chunk]:
 
     headers_to_split_on = [
@@ -55,6 +56,7 @@ def chunk_html_to_chunks(
                 id=chunk_id,
                 article_id=article_id,
                 domain=article_domain or "default",
+                field=article_field or "default",
                 role=ChunkRole.BODY.value,
                 modality="text",
                 content=text,

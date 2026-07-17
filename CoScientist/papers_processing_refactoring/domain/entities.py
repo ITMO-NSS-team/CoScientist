@@ -29,6 +29,7 @@ class Chunk(BaseModel):
     id: str
     article_id: str
     domain: Optional[str] = None
+    field: Optional[str] = None
     modality: Literal["text", "image"]
     content: str
     metadata: Optional[Mapping[str, Any]] = None
