@@ -19,7 +19,7 @@ from google.adk.runners import Runner
 from google.genai import types
 
 from CoScientist.config import get_settings
-from CoScientist.agents import orchestrator_agent, root_agent
+from CoScientist.agents import orchestrator_agent, root_agent, build_for_mode
 from CoScientist.tools.coder_tools import coder_toolset
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset
@@ -103,9 +103,12 @@ class CoScientistManager:
             session_id=self.session_id,
         )
 
+        # Build the agent system (reads start_mode + tunable params from settings).
+        system = build_for_mode()
+
         # Runner
         self.runner = Runner(
-            agent=root_agent,
+            agent=system.root,
             app_name=self.app_name,
             session_service=self.session_service,
         )

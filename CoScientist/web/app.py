@@ -15,6 +15,7 @@ from CoScientist.web.handler import WebHITLHandler
 from CoScientist.agents import planner_agent
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.tools.coder_tools import coder_toolset
+from CoScientist.tools.task_tracker import task_tracker_instance
 
 from google.genai import types
 from google.adk.workflow.utils._workflow_hitl_utils import (
@@ -44,18 +45,79 @@ _pending_hitl: dict[str, dict] = {}
 _web_hitl_handler = WebHITLHandler()
 
 
+def _apply_frontend_settings(frontend: dict) -> None:
+    """Map the frontend JS ``appSettings`` object to ``settings.web``.
+
+    Called before every ``_get_manager()`` invocation so the config singleton
+    is always up-to-date when the system is (re)built.
+    """
+    from CoScientist.config import get_settings
+    web = get_settings().web
+
+    general = frontend.get("general", {})
+    if "startMode" in general:
+        web.start_mode = general["startMode"]
+    if "maxRetries" in general:
+        web.max_retries = int(general["maxRetries"])
+    if "hitlEnabled" in general:
+        web.hitl_enabled = bool(general["hitlEnabled"])
+    if "usePlanner" in general:
+        web.use_planner = bool(general["usePlanner"])
+
+    research = frontend.get("researchAgent", {})
+    if "maxSearches" in research:
+        val = int(research["maxSearches"])
+        if val >= 0:
+            web.max_searches = val
+
+    task_exec = frontend.get("taskExecutorAgent", {})
+    if "keepScore" in task_exec:
+        web.executor_tool_keep_score = float(task_exec["keepScore"])
+    if "abstainScore" in task_exec:
+        web.executor_tool_abstain_score = float(task_exec["abstainScore"])
+
+    coder = frontend.get("coderAgent", {})
+    if "sandboxUrl" in coder:
+        web.sandbox_url = coder["sandboxUrl"]
+    if "workspaceId" in coder:
+        val = coder["workspaceId"]
+        web.coder_workspace_id = val if val else None
+
+
+# Track which start_mode the current manager was built with so we can
+# detect changes and rebuild (the source of truth is settings.web but we
+# need to compare to the value at build time).
+_built_start_mode: Optional[str] = None
+
+
 async def _get_manager():
-    """Lazy-init CoScientistManager."""
-    global _manager
-    if _manager is not None:
+    """Lazy-init CoScientistManager for the current settings.
+
+    If ``settings.web.start_mode`` changed since the last init, tear down
+    the old manager first and rebuild.
+    """
+    from CoScientist.config import get_settings
+    global _manager, _built_start_mode
+
+    current_mode = get_settings().web.start_mode
+
+    if _manager is not None and _built_start_mode == current_mode:
         return _manager
 
     async with _manager_lock:
-        if _manager is not None:
+        current_mode = get_settings().web.start_mode
+        # Double-check inside the lock.
+        if _manager is not None and _built_start_mode == current_mode:
             return _manager
+
+        # Tear down a stale manager whose mode no longer matches.
+        if _manager is not None:
+            await _manager.close()
+            _manager = None
 
         _manager = CoScientistManager()
         await _manager.initialize()
+        _built_start_mode = current_mode
 
         # Wire WebHITLHandler into PlannerAgent (SessionAgent) and HITL toolset
         # We use set_delegate because the workflow deepcopies references at init
@@ -109,15 +171,8 @@ def create_app() -> FastAPI:
     # --- Roadmap endpoints ---
     @app.get("/api/roadmap")
     async def get_roadmap():
-        path = Path("task_tracker_data.json")
-        if not path.exists():
-            path = Path(__file__).parent.parent.parent / "task_tracker_data.json"
-        
-        if not path.exists():
-            return JSONResponse({"content": "", "error": "task_tracker_data.json not found"}, status_code=404)
-        
         try:
-            content = path.read_text(encoding="utf-8")
+            content = json.dumps(task_tracker_instance.tasks, indent=2, ensure_ascii=False)
             return JSONResponse({"content": content})
         except Exception as e:
             return JSONResponse({"content": "", "error": str(e)}, status_code=500)
@@ -125,15 +180,66 @@ def create_app() -> FastAPI:
     @app.post("/api/roadmap")
     async def save_roadmap(data: dict):
         content = data.get("content", "")
-        path = Path("task_tracker_data.json")
-        if not path.exists():
-            path = Path(__file__).parent.parent.parent / "task_tracker_data.json"
-            
         try:
-            path.write_text(content, encoding="utf-8")
+            parsed = json.loads(content)
+            if not isinstance(parsed, list):
+                return JSONResponse({"status": "error", "error": "Content must be a JSON array"}, status_code=400)
+            task_tracker_instance.tasks = parsed
             return JSONResponse({"status": "success"})
+        except json.JSONDecodeError as e:
+            return JSONResponse({"status": "error", "error": f"Invalid JSON: {e}"}, status_code=400)
         except Exception as e:
             return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+
+    # --- Settings endpoints ---
+    @app.get("/api/settings")
+    async def get_settings_api():
+        """Return current WebSettings."""
+        from CoScientist.config import get_settings
+        web = get_settings().web
+        return JSONResponse({
+            "general": {
+                "startMode": web.start_mode,
+                "maxRetries": web.max_retries,
+                "hitlEnabled": web.hitl_enabled,
+                "usePlanner": web.use_planner,
+            },
+            "researchAgent": {"maxSearches": web.max_searches},
+            "taskExecutorAgent": {
+                "keepScore": web.executor_tool_keep_score,
+                "abstainScore": web.executor_tool_abstain_score,
+            },
+            "coderAgent": {
+                "sandboxUrl": web.sandbox_url,
+                "workspaceId": web.coder_workspace_id or "",
+            },
+        })
+
+    @app.post("/api/settings")
+    async def save_settings_api(data: dict):
+        """Update WebSettings from the frontend."""
+        from CoScientist.config import get_settings
+        _apply_frontend_settings(data)
+        web = get_settings().web
+        return JSONResponse({
+            "status": "success",
+            "general": {
+                "startMode": web.start_mode,
+                "maxRetries": web.max_retries,
+                "hitlEnabled": web.hitl_enabled,
+                "usePlanner": web.use_planner,
+            },
+            "researchAgent": {"maxSearches": web.max_searches},
+            "taskExecutorAgent": {
+                "keepScore": web.executor_tool_keep_score,
+                "abstainScore": web.executor_tool_abstain_score,
+            },
+            "coderAgent": {
+                "sandboxUrl": web.sandbox_url,
+                "workspaceId": web.coder_workspace_id or "",
+            },
+        })
 
 
     # --- Agent info ---
@@ -205,11 +311,12 @@ def create_app() -> FastAPI:
                     _web_hitl_handler.reset()
 
                     # Erase manager memory
-                    global _manager
+                    global _manager, _built_start_mode
                     async with _manager_lock:
                         if _manager:
                             await _manager.close()
                             _manager = None
+                            _built_start_mode = None
                     
                     # Clear events log
                     _agent_events.clear()

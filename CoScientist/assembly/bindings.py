@@ -387,7 +387,8 @@ def _before_get_task():
 
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
-    return SearchLimiter(max_searches=2).limit_searches
+    from CoScientist.config import get_settings
+    return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
 
 
 def _guard_unknown_tools(ctx):

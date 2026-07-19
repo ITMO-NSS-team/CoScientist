@@ -76,12 +76,13 @@ class RetryingLiteLlm(LiteLlm):
                 return
             except Exception as err:  # noqa: BLE001 — classify then re-raise
                 attempt += 1
-                if yielded or attempt > _LLM_MAX_RETRIES or not _is_transient(err):
+                max_r = settings.web.max_retries
+                if yielded or attempt > max_r or not _is_transient(err):
                     raise
                 delay = min(1.5 ** attempt, 8.0)
                 _logger.warning(
                     "Transient LLM error (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt, _LLM_MAX_RETRIES, delay, err,
+                    attempt, max_r, delay, err,
                 )
                 await asyncio.sleep(delay)
 

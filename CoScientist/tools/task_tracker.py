@@ -3,7 +3,6 @@ from google.adk.tools.tool_context import ToolContext
 from fastapi import status
 from typing import Any, Dict, List, Optional
 import json
-import os
 from datetime import datetime
 
 from google.adk.tools import BaseTool, FunctionTool
@@ -13,25 +12,9 @@ from google.adk.agents.readonly_context import ReadonlyContext
 class TaskTrackerToolset(BaseToolset):
     """Toolset for tracking tasks across the MAS."""
 
-    def __init__(self, prefix: str = None, storage_path: str = "task_tracker_data.json"):
+    def __init__(self, prefix: str = None):
         super().__init__(tool_name_prefix=prefix)
-        self.storage_path = storage_path
         self.tasks: List[Dict[str, Any]] = []
-        self._load()
-
-    def _load(self):
-        """Load tasks from disk."""
-        if os.path.exists(self.storage_path):
-            try:
-                with open(self.storage_path, "r", encoding="utf-8") as f:
-                    self.tasks = json.load(f)
-            except json.JSONDecodeError:
-                self.tasks = []
-
-    def _save(self):
-        """Save tasks to disk."""
-        with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump(self.tasks, f, indent=2, ensure_ascii=False)
 
     async def get_tools(self, readonly_context: Optional[ReadonlyContext] = None) -> List[BaseTool]:
         return [
@@ -128,7 +111,6 @@ class TaskTrackerToolset(BaseToolset):
         tool_context.state["active_tasks"] = new_tasks  
 
         self.tasks = new_tasks
-        self._save()
         return {
             "result": "success",
             "message": f"Plan created with {len(self.tasks)} tasks."
@@ -159,7 +141,6 @@ class TaskTrackerToolset(BaseToolset):
             "parent_id": None
         }
         self.tasks.append(task)
-        self._save()
         return {"result": "success", "task": task}
 
     def update_task_status(self, task_id: str, status: str, notes: Optional[str] = None) -> Dict[str, Any]:
@@ -179,7 +160,7 @@ class TaskTrackerToolset(BaseToolset):
                 task["updated_at"] = datetime.now().isoformat()
                 if notes:
                     task["notes"] += f"\n[{datetime.now().isoformat()}] {notes}"
-                self._save()
+
                 return {"result": "success", "task": task}
         return {"result": "error", "message": f"Task {task_id} not found."}
 
@@ -188,7 +169,7 @@ class TaskTrackerToolset(BaseToolset):
             Returns:
                 A dictionary containing the matching tasks.
         """
-        self._load()
+
         readonly_context: Optional[ReadonlyContext] = kwargs.get("readonly_context")
 
         current_agent = None

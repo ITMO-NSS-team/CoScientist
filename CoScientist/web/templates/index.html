@@ -121,6 +121,10 @@
       <!-- Populated by JS -->
     </nav>
     <div class="px-4 mt-auto space-y-4">
+      <div onclick="openSettings()" class="flex items-center gap-3 py-3 px-4 cursor-pointer hover:bg-surface-variant/20 transition-all duration-200 rounded-lg">
+        <span class="material-symbols-outlined text-outline-variant text-lg">settings</span>
+        <span class="text-sm text-outline-variant font-medium">Settings</span>
+      </div>
       <div class="flex items-center gap-3 pt-4 border-t border-outline-variant/10">
         <div class="w-8 h-8 rounded bg-surface-container-high flex items-center justify-center">
           <span class="material-symbols-outlined text-primary text-sm">science</span>
@@ -229,6 +233,31 @@
     let ws = null;
     let eventCount = 0;
     let reconnectTimer = null;
+
+    const appSettings = {
+      general: {
+        startMode: 'init',   // 'init' | 'orchestrator'
+        maxRetries: 3,
+        hitlEnabled: true,
+        usePlanner: true,
+      },
+      researchAgent: {
+        maxSearches: 2,
+      },
+      taskExecutorAgent: {
+        keepScore: 0.3,
+        abstainScore: 0.2,
+      },
+      coderAgent: {
+        sandboxUrl: 'http://localhost:8884',
+        workspaceId: '',
+      },
+      orchestratorAgent: {},
+      plannerAgent: {},
+      hypothesesAgent: {},
+      medicalAgent: {},
+      experimentAgent: {},
+    };
 
     const AGENTS = [
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
@@ -654,6 +683,7 @@
     // =========================================================================
     initAgentNav();
     connect();
+    loadSettings();  // hydrate appSettings from server config
 
     // Keep-alive ping
     setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
@@ -976,6 +1006,101 @@
 
       feed.scrollTop = feed.scrollHeight;
     }
+
+    // =========================================================================
+    // Settings Modal
+    // =========================================================================
+    async function loadSettings() {
+      try {
+        const resp = await fetch('/api/settings');
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.general) {
+            appSettings.general.startMode = data.general.startMode || 'init';
+            appSettings.general.maxRetries = data.general.maxRetries ?? 3;
+            appSettings.general.hitlEnabled = data.general.hitlEnabled ?? true;
+            appSettings.general.usePlanner = data.general.usePlanner ?? true;
+          }
+          if (data.researchAgent) {
+            appSettings.researchAgent.maxSearches = data.researchAgent.maxSearches ?? 2;
+          }
+          if (data.taskExecutorAgent) {
+            appSettings.taskExecutorAgent.keepScore = data.taskExecutorAgent.keepScore ?? 0.3;
+            appSettings.taskExecutorAgent.abstainScore = data.taskExecutorAgent.abstainScore ?? 0.2;
+          }
+          if (data.coderAgent) {
+            appSettings.coderAgent.sandboxUrl = data.coderAgent.sandboxUrl || 'http://localhost:8884';
+            appSettings.coderAgent.workspaceId = data.coderAgent.workspaceId || '';
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load settings from server:', e);
+      }
+    }
+
+    async function openSettings() {
+      const modal = document.getElementById('settings-modal');
+      modal.classList.remove('hidden');
+      // Load latest from server
+      await loadSettings();
+      // Sync UI with current state
+      document.getElementById('start-mode-select').value = appSettings.general.startMode;
+      document.getElementById('max-retries-input').value = appSettings.general.maxRetries;
+      document.getElementById('hitl-enabled-checkbox').checked = appSettings.general.hitlEnabled;
+      document.getElementById('use-planner-checkbox').checked = appSettings.general.usePlanner;
+      document.getElementById('research-max-searches').value = appSettings.researchAgent.maxSearches;
+      document.getElementById('task-exec-keep-score').value = appSettings.taskExecutorAgent.keepScore;
+      document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
+      document.getElementById('coder-sandbox-url').value = appSettings.coderAgent.sandboxUrl;
+      document.getElementById('coder-workspace-id').value = appSettings.coderAgent.workspaceId;
+    }
+
+    function closeSettings() {
+      document.getElementById('settings-modal').classList.add('hidden');
+    }
+
+    async function saveSettings() {
+      // Read from UI
+      appSettings.general.startMode = document.getElementById('start-mode-select').value;
+      appSettings.general.maxRetries = parseInt(document.getElementById('max-retries-input').value, 10) || 3;
+      appSettings.general.hitlEnabled = document.getElementById('hitl-enabled-checkbox').checked;
+      appSettings.general.usePlanner = document.getElementById('use-planner-checkbox').checked;
+
+      const maxSearches = parseInt(document.getElementById('research-max-searches').value, 10);
+      if (!isNaN(maxSearches) && maxSearches >= 0) {
+        appSettings.researchAgent.maxSearches = maxSearches;
+      }
+
+      appSettings.taskExecutorAgent.keepScore = parseFloat(document.getElementById('task-exec-keep-score').value) || 0.3;
+      appSettings.taskExecutorAgent.abstainScore = parseFloat(document.getElementById('task-exec-abstain-score').value) || 0.2;
+
+      appSettings.coderAgent.sandboxUrl = document.getElementById('coder-sandbox-url').value.trim() || 'http://localhost:8884';
+      appSettings.coderAgent.workspaceId = document.getElementById('coder-workspace-id').value.trim();
+
+      const status = document.getElementById('settings-status');
+      status.textContent = 'Saving...';
+      status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
+      status.classList.remove('hidden');
+
+      try {
+        const resp = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(appSettings),
+        });
+        if (resp.ok) {
+          addTelemetry('SETTINGS :: saved dynamically');
+          status.textContent = 'Settings saved.';
+          status.className = 'text-[10px] font-mono text-secondary';
+          setTimeout(() => { status.classList.add('hidden'); closeSettings(); }, 800);
+        } else {
+          throw new Error('HTTP ' + resp.status);
+        }
+      } catch (e) {
+        status.textContent = 'Error saving settings: ' + e.message;
+        status.className = 'text-[10px] font-mono text-error';
+      }
+    }
   </script>
 
   <!-- Roadmap Editor Modal -->
@@ -1101,6 +1226,234 @@
       </div>
     </div>
   </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal"
+    class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] mx-4">
+      <!-- Modal Header -->
+      <div
+        class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">settings</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Settings</h3>
+            <p class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">System Configuration</p>
+          </div>
+        </div>
+        <button onclick="closeSettings()"
+          class="text-outline-variant hover:text-on-surface transition-colors flex items-center">
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar">
+
+        <!-- ── General ────────────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">tune</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">General</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- Start Mode -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Session Start Mode</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Choose which agent starts the session. <strong>InitAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator.</p>
+              </div>
+              <select id="start-mode-select"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
+                <option value="init">InitAgent</option>
+                <option value="orchestrator">OrchestratorAgent</option>
+              </select>
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Max Retries -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Max LLM Retries</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Number of LLM call retry attempts on transient network or upstream API errors.</p>
+              </div>
+              <input id="max-retries-input" type="number" min="0" max="10" value="3"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-20 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- HITL Enabled -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Human-in-the-Loop (HITL)</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Enable human review prompts and agent interaction/approvals globally.</p>
+              </div>
+              <input id="hitl-enabled-checkbox" type="checkbox"
+                class="bg-surface-container-high border border-outline-variant/20 text-primary rounded focus:ring-primary focus:ring-opacity-25" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Use Planner -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Use Planner Agent</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Whether the orchestrator should utilize the PlannerAgent (creates structured roadmaps beforehand).</p>
+              </div>
+              <input id="use-planner-checkbox" type="checkbox"
+                class="bg-surface-container-high border border-outline-variant/20 text-primary rounded focus:ring-primary focus:ring-opacity-25" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── OrchestratorAgent ──────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">hub</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">OrchestratorAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
+            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+          </div>
+        </div>
+
+        <!-- ── PlannerAgent ───────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">map</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">PlannerAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
+            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+          </div>
+        </div>
+
+        <!-- ── ResearchAgent ──────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">search</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">ResearchAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- WebSearchLimiter -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">WebSearchLimiter — max searches</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Maximum number of web search tool calls per agent turn. After this limit, the agent must synthesize from existing results.</p>
+              </div>
+              <input id="research-max-searches" type="number" min="1" max="20" value="2"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-20 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── HypothesesAgent ─────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">psychology</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">HypothesesAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
+            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+          </div>
+        </div>
+
+        <!-- ── CoderAgent ──────────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">code</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">CoderAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- Sandbox URL -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Sandbox Remote URL</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The endpoint URL of the isolated code-execution sandbox server.</p>
+              </div>
+              <input id="coder-sandbox-url" type="text"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[240px]" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Workspace ID -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Coder Workspace ID</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Pin a custom persistent workspace folder name to save code state across delegations. Leave empty to auto-generate.</p>
+              </div>
+              <input id="coder-workspace-id" type="text" placeholder="e.g. workspace_1"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[240px]" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── MedicalAgent ─────────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">medical_information</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">MedicalAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
+            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+          </div>
+        </div>
+
+        <!-- ── TaskExecutorAgent ─────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">precision_manufacturing</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">TaskExecutorAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- Keep score -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Tool Keep Threshold</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Minimum relevance score (0.0 to 1.0) for a retrieved MCP tool to be loaded into context.</p>
+              </div>
+              <input id="task-exec-keep-score" type="number" min="0" max="1" step="0.05" value="0.3"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Abstain score -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Tool Abstain Threshold</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Threshold below which the executor completely abstains and redirects to the CoderAgent.</p>
+              </div>
+              <input id="task-exec-abstain-score" type="number" min="0" max="1" step="0.05" value="0.2"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── ExperimentAgent ─────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">science</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">ExperimentAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
+            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+          </div>
+        </div>
+
+        <div id="settings-status" class="hidden text-[10px] font-mono text-outline-variant"></div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 bg-surface-container-low/50">
+        <button onclick="closeSettings()"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Cancel
+        </button>
+        <button onclick="saveSettings()"
+          class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+          <span class="material-symbols-outlined text-sm">save</span> Save Settings
+        </button>
+      </div>
+    </div>
+  </div>
+
 </body>
 
 </html>

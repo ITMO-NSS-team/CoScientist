@@ -186,6 +186,31 @@ class CodeExecSettings(BaseModel):
     workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
 
 # =========================
+# WEB / RUNTIME SETTINGS
+# =========================
+import os
+from typing import Optional
+
+class WebSettings(BaseModel):
+    """Runtime-tunable parameters configurable from the web UI.
+
+    Unlike the rest of Settings (loaded once from .env), these can be
+    mutated at runtime via ``/api/settings``.  The global ``settings``
+    singleton is the single source of truth — all components read from it
+    directly.
+    """
+    start_mode: str = "orchestrator"        # "init" | "orchestrator"
+    max_searches: int = 2           # WebSearchLimiter per-turn cap
+    max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
+    hitl_enabled: bool = os.getenv("HITL__ENABLED", "true").lower() in ("true", "1", "yes")
+    use_planner: bool = os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
+    executor_tool_keep_score: float = float(os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
+    executor_tool_abstain_score: float = float(os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+    sandbox_url: str = os.getenv("SANDBOX_URL")
+    coder_workspace_id: Optional[str] = os.getenv("CODER_WORKSPACE_ID")
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -204,6 +229,7 @@ class Settings(BaseSettings):
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()
+    web: WebSettings = WebSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          
