@@ -244,6 +244,7 @@
         maxRetries: 3,
         hitlEnabled: true,
         usePlanner: true,
+        opikEnabled: false,
       },
       researchAgent: {
         maxSearches: 2,
@@ -1140,6 +1141,7 @@
             appSettings.general.maxRetries = data.general.maxRetries ?? 3;
             appSettings.general.hitlEnabled = data.general.hitlEnabled ?? true;
             appSettings.general.usePlanner = data.general.usePlanner ?? true;
+            appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
           }
           if (data.researchAgent) {
             appSettings.researchAgent.maxSearches = data.researchAgent.maxSearches ?? 2;
@@ -1173,6 +1175,7 @@
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
       document.getElementById('coder-sandbox-url').value = appSettings.coderAgent.sandboxUrl;
       document.getElementById('coder-workspace-id').value = appSettings.coderAgent.workspaceId;
+      document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
     }
 
     function closeSettings() {
@@ -1196,6 +1199,7 @@
 
       appSettings.coderAgent.sandboxUrl = document.getElementById('coder-sandbox-url').value.trim() || 'http://localhost:8884';
       appSettings.coderAgent.workspaceId = document.getElementById('coder-workspace-id').value.trim();
+      appSettings.general.opikEnabled = document.getElementById('opik-enabled-checkbox').checked;
 
       const status = document.getElementById('settings-status');
       status.textContent = 'Saving...';
@@ -1421,6 +1425,16 @@
               </div>
               <input id="use-planner-checkbox" type="checkbox"
                 class="bg-surface-container-high border border-outline-variant/20 text-primary rounded focus:ring-primary focus:ring-opacity-25" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Opik Enabled -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Enable Opik Tracing</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Send execution logs and agent traces to your Opik dashboard.</p>
+              </div>
+              <input id="opik-enabled-checkbox" type="checkbox"
+                class="bg-surface-container-high border border-outline-variant/20 text-primary rounded focus:ring-primary focus:ring-opacity-25 cursor-pointer" />
             </div>
           </div>
         </div>

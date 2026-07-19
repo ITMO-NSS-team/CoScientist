@@ -237,6 +237,7 @@ class WebSettings(BaseModel):
     executor_tool_abstain_score: float = float(os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
     sandbox_url: str = os.getenv("SANDBOX_URL")
     coder_workspace_id: Optional[str] = os.getenv("CODER_WORKSPACE_ID")
+    opik_enabled: bool = os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
 
 
 # =========================

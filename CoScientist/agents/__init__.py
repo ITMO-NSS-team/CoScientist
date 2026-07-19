@@ -9,8 +9,9 @@ import copy
 
 from CoScientist.assembly import build_system
 from CoScientist.assembly.schema import load_config
-from CoScientist.logging import multi_agent_tracer
+from CoScientist.logging import get_multi_agent_tracer
 from CoScientist.agents.llm_repair import install_json_repair
+from opik.integrations.adk import track_adk_agent_recursive
 
 # Guard the LiteLlm tool-call JSON boundary process-wide BEFORE any runner executes:
 # a malformed tool-call payload (qwen truncation / missing comma) must not kill the run.
@@ -43,10 +44,11 @@ fedot_agent = _system.agents.get("ExperimentAgent")
 tz_agent = _system.agents.get("TZAgent")
 
 # Attach the Opik tracer only when tracing is enabled (see OPIK__ENABLED).
-if multi_agent_tracer is not None:
+_tracer = get_multi_agent_tracer()
+if _tracer is not None:
     from opik.integrations.adk import track_adk_agent_recursive
 
-    track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
+    track_adk_agent_recursive(orchestrator_agent, _tracer)
 
 
 def build_for_mode():
@@ -68,7 +70,18 @@ def build_for_mode():
     start_mode = get_settings().web.start_mode
 
     if start_mode == "init":
-        return build_system()
+        raw_config = load_config()
+        patched = copy.deepcopy(raw_config)
+        if "InitAgent" in patched.agents:
+            patched.agents["InitAgent"].root = True
+            patched.agents["OrchestratorAgent"].root = False
+            system = build_system(config=patched)
+        else:
+            system = build_system()
+        _tracer = get_multi_agent_tracer()
+        if _tracer is not None:
+            track_adk_agent_recursive(system.root, _tracer)
+        return system
 
     if start_mode != "orchestrator":
         raise ValueError(f"Unknown start_mode {start_mode!r}; expected 'init' or 'orchestrator'")
@@ -88,7 +101,9 @@ def build_for_mode():
 
     # Re-validate the patched config and build.
     system = build_system(config=patched)
-    track_adk_agent_recursive(system.root, multi_agent_tracer)
+    _tracer = get_multi_agent_tracer()
+    if _tracer is not None:
+        track_adk_agent_recursive(system.root, _tracer)
     return system
 
 

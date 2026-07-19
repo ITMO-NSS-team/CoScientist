@@ -83,6 +83,23 @@ agents:
         description: Coordinate scientific research agents to solve complex tasks
         tags: [orchestration, science, multi-agent]
 
+  InitAgent:
+    class: sequential
+    root: false
+    children:
+      - PlannerAgent
+      - OrchestratorAgent
+    enabled: true
+    hitl: true
+    description: Initialize the CoScientist system
+    a2a:
+      key: init
+      port: 8008
+      skill:
+        id: init
+        name: Init
+        description: Initialize the CoScientist system
+        tags: [init, science, multi-agent]
 
   # ── Direct subordinates ────────────────────────────────────────────────────
   PlannerAgent:
