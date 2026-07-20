@@ -8,7 +8,7 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from fedotmas import MAS, HttpMCPServer
-from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
+from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
 from rag_tools import MCPServer
@@ -16,6 +16,7 @@ from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
 
 settings = get_settings()
+
 
 class FedotMASToolset(BaseToolset):
     """Toolset for fedotmas usage"""
@@ -82,9 +83,15 @@ class FedotMASToolset(BaseToolset):
         result = None
         status, err = "success", None
         try:
+            #mas = MAS(
             mas = MAS(
                 mcp_servers=servers_payload,
-                plugins=[LoggingPlugin(), WebSearchLimitPlugin(max_calls_per_agent=4), cap],
+                plugins=[
+                    LoggingPlugin(),
+                    WebSearchLimitPlugin(max_calls_per_agent=4),
+                    LangfusePlugin(trace_name="coscientist:fedot"),
+                    cap,
+                ],
             )
             result = await mas.run(task_description, timeout=FEDOT_TIMEOUT_S)
         except (asyncio.TimeoutError, TimeoutError):
