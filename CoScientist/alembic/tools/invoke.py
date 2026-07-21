@@ -216,6 +216,37 @@ def check_repo_imports(modules: list[str]) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 _TEST_LINE = re.compile(r"::(test_\w+)(?:\[[^\]]*\])?\s+(PASSED|FAILED|ERROR|XPASS|XFAIL|SKIPPED)")
 
+# Symbols whose presence in a test function marks it as MOCKED — it does not
+# exercise the real repo, so it must NOT count as invocation-correctness evidence
+# (else a hollow test would satisfy the `perfect` gate). See _mocked_test_functions.
+_MOCK_NAMES = {"patch", "MagicMock", "Mock", "AsyncMock", "NonCallableMock",
+               "PropertyMock", "mock_open", "monkeypatch", "mocker", "seal"}
+
+
+def _mocked_test_functions(source: str) -> set[str]:
+    """Names of top-level test_* functions that use mocking (unittest.mock,
+    monkeypatch, or pytest-mock). A ``test_invoc_*`` that mocks the repo is NOT
+    proof the tool really ran, so run_tool_tests reclassifies it as a smoke test:
+    it still runs, but cannot make a tool ``perfect`` (hollow-validation guard)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    mocked: set[str] = set()
+    for node in tree.body:
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")):
+            continue
+        if {a.arg for a in node.args.args} & {"monkeypatch", "mocker"}:
+            mocked.add(node.name)          # fixture-injected mocking
+            continue
+        for n in ast.walk(node):           # body + decorators (@patch, @mock.patch)
+            if (isinstance(n, ast.Name) and n.id in _MOCK_NAMES) or \
+               (isinstance(n, ast.Attribute) and n.attr in _MOCK_NAMES):
+                mocked.add(node.name)
+                break
+    return mocked
+
 
 async def run_tool_tests(tool_name: str) -> dict:
     """Run tests/test_<tool_name>.py and return the smoke/invocation split.
@@ -236,6 +267,7 @@ def _run_tool_tests_sync(tool_name: str) -> dict:
     python = tools_python(out_dir)
     if not f.exists():
         return {"error": f"{f} not found"}
+    mocked = _mocked_test_functions(f.read_text(encoding="utf-8", errors="replace"))
     proc = subprocess.Popen(
         [python, "-m", "pytest", str(f), "-v", "--tb=short", "--no-header",
          "-p", "no:cacheprovider"],
@@ -250,11 +282,17 @@ def _run_tool_tests_sync(tool_name: str) -> dict:
                 "failures": f"test run exceeded {TEST_TIMEOUT}s"}
 
     counts = {"smoke": [0, 0], "invoc": [0, 0]}   # [passed, total]
+    mocked_invoc = 0
     for m in _TEST_LINE.finditer(out):
         name, status = m.group(1), m.group(2)
         if status in ("SKIPPED", "XFAIL"):
             continue
-        kind = "invoc" if name.startswith("test_invoc") else "smoke"
+        # A mocked test_invoc_* is not real evidence — reclassify it as smoke so
+        # it still runs but cannot make the tool `perfect` (hollow-validation guard).
+        if name.startswith("test_invoc") and name in mocked:
+            mocked_invoc += 1
+        is_real_invoc = name.startswith("test_invoc") and name not in mocked
+        kind = "invoc" if is_real_invoc else "smoke"
         counts[kind][1] += 1
         if status in ("PASSED", "XPASS"):
             counts[kind][0] += 1
@@ -264,6 +302,7 @@ def _run_tool_tests_sync(tool_name: str) -> dict:
         failed_tail = out[-3000:]
     return {"smoke_passed": counts["smoke"][0], "smoke_total": counts["smoke"][1],
             "invoc_passed": counts["invoc"][0], "invoc_total": counts["invoc"][1],
+            "invoc_mocked": mocked_invoc,
             "timeout": False, "failures": failed_tail}
 
 

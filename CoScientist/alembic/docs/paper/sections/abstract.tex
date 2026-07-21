@@ -1,2 +1,15 @@
-% TODO(authors): tighten to the final ~150 words once numbers are in.
-Making a scientific codebase usable by an LLM agent today requires a person to read the repository, resolve its dependencies, and hand-write a tool wrapper around it — a slow step that limits how many of the thousands of published research repositories ever become agent-usable tools. We present \textbf{Alembic}, a system that automates this conversion end to end: given only a GitHub URL, a four-agent pipeline (Explorer, Environment, Coder, Validator, with a Debugger invoked on failure) clones the repository, builds an isolated Python environment, writes a FastMCP server together with a pytest suite, validates every generated tool by actually invoking it, and packages the result as a versioned Docker image exposing a Model Context Protocol (MCP) server over HTTP. No human intervention is required between the URL and a running, tool-tested MCP endpoint. We demonstrate Alembic on repositories spanning cheminformatics, bioinformatics, and signal processing, and compare its design against the two closest systems, ToolMaker and ToolRosella (code2mcp), on environment setup, dependency and external-asset handling, end-to-end validation, and containerized delivery.
+Making a scientific codebase usable by an LLM agent today means reading the
+repository, resolving its dependencies, and hand-writing a tool wrapper: a
+slow, per-repository step that keeps most of the thousands of published research
+repositories from ever becoming agent-usable tools. We present \textbf{Alembic},
+which automates this conversion end to end. Given only a GitHub URL, five agents
+(Explorer, Environment, Coder, Validator, and a deterministic Wrapper)
+interleave with four code-enforced gates that build isolated environments, write
+and test each tool as a plain function, and validate it by actually invoking it,
+then package the result as a versioned Docker image serving a Model Context
+Protocol (MCP) endpoint over HTTP. Moving every mechanical decision from the
+prompt into a gate keeps the pipeline model-agnostic and eliminates whole classes
+of failure by construction. On TM-Bench, Alembic delivers a working served MCP
+for all fourteen repositories and matches or exceeds the ToolMaker baseline on
+the shared held-out tests. Code, benchmark runs, and artefacts:
+\url{\repourl}; screencast: \url{\demourl}; interactive web demo: \url{\weburl}.

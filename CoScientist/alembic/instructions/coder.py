@@ -53,8 +53,16 @@ Rules:
 - Resolve path-shaped args against the repo root (see template). NO defensive
   existence guards — let a real error surface.
 - If the target is a CLI script (`script:...`), run it via
-  `subprocess.run([sys.executable, str(REPO / "path/script.py"), ...])`
-  inside the function and parse its output/produced file into a dict.
+  `subprocess.run([sys.executable, str(REPO / "path/script.py"), ...],
+  check=True)` inside the function and parse its output/produced file into a
+  dict. ALWAYS gate success on the exit code (`check=True`, or assert
+  `returncode == 0`) and RAISE on failure — NEVER report a "success" result from
+  a printed banner / param-count / stdout when the process exited non-zero.
+- The function MUST do its work THROUGH the repo's own code: the verified target
+  symbol has to be CALLED, not merely imported. Do not re-implement the repo's
+  logic by hand, and do not route the computation around the repo (e.g. running a
+  released pretrained checkpoint via a generic library instead of the repo's own
+  model). A repo import that is never used does NOT count as wrapping the repo.
 
 ## Test files — `write_file("tests/test_<name>.py", ...)`, one per tool
 Import the function EXACTLY as `from tools.<name> import <name>` (tests run
@@ -73,6 +81,11 @@ with cwd=output). Two kinds of tests, split by NAME:
   inputs / different asserted properties) — varied invocations are stronger
   evidence than one. NO evidence => NO test_invoc_ tests for that tool — do not
   invent reference values.
+  test_invoc_* tests MUST invoke the REAL repo — NEVER mock/patch the repo's
+  functions, the tool's target symbol, or its subprocess. A test_invoc_* that
+  uses `unittest.mock`/`patch`/`MagicMock`/`monkeypatch` is not evidence and is
+  automatically reclassified as a smoke test, so it CANNOT satisfy the
+  correctness gate. Mocking belongs only in test_smoke_*, for peripheral I/O.
 
 ## Workflow
 1. Confirm real signatures if unsure: `bash("grep -n 'def <name>' ...")` or

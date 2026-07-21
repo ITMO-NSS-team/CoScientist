@@ -1,2 +1,9 @@
 \section*{Limitations}
-Alembic's Coder stage wraps a repository's existing entry points rather than reasoning about undocumented internal APIs, so repositories with no clear callable surface (e.g., research code only runnable as an end-to-end script with hard-coded paths) yield fewer or coarser-grained tools. The Environment stage's fallback chain (\texttt{uv} $\to$ pip $\to$ conda $\to$ \texttt{apt-get}) is not guaranteed to resolve every dependency conflict, and repositories requiring GPU-specific builds or proprietary system libraries may fail environment setup outright. Validation invokes each tool with a small set of sample inputs derived from the Explorer's report rather than held-out test cases, so it can catch execution failures but does not verify semantic correctness of tool outputs the way a held-out unit-test suite would.
+Alembic wraps a repository's callable surface, not its undocumented internals, so
+script-only repositories with hard-coded paths yield fewer, coarser tools.
+Environment construction leans on \texttt{uv} and \texttt{apt-get} (conda as a
+last resort) and cannot resolve every conflict, so repositories needing
+GPU-specific builds or proprietary system libraries may fail setup. And
+correctness testing is only as strong as the Explorer's evidence: with documented
+values or shapes Alembic writes held-out tests, but ungrounded tools receive
+execution-status checks only, so their correctness is asserted, not verified.

@@ -214,3 +214,4 @@ CoScientist/tests/unit/test_llm_repair.py
 .test
 benchmarks/alembic/runs/
 benchmarks/alembic/tmbench_salvage/
+benchmarks/alembic/pre_comparison
