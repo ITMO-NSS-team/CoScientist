@@ -93,8 +93,7 @@ litellm.api_key = settings.llm.openai_api_key
 # provider during cost/token bookkeeping — harmless, but it floods the console.
 litellm.suppress_debug_info = True
 
-hitl_enabled = settings.hitl.enabled
-hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler()) if hitl_enabled else None
+hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 
 # The CoderAgent runs on a dedicated (stronger) model — its multi-step tool-use
 # benefits from more capability. Falls back to the main model when unset.

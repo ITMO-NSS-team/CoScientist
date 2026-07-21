@@ -231,7 +231,7 @@ class WebSettings(BaseModel):
     start_mode: str = "orchestrator"        # "init" | "orchestrator"
     max_searches: int = 2           # WebSearchLimiter per-turn cap
     max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
-    hitl_enabled: bool = os.getenv("HITL__ENABLED", "true").lower() in ("true", "1", "yes")
+    hitl_enabled: bool = os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
     use_planner: bool = os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))

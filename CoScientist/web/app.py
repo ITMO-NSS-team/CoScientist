@@ -82,7 +82,9 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "maxRetries" in general:
         web.max_retries = int(general["maxRetries"])
     if "hitlEnabled" in general:
-        web.hitl_enabled = bool(general["hitlEnabled"])
+        val = bool(general["hitlEnabled"])
+        web.hitl_enabled = val
+        get_settings().hitl.enabled = val
     if "usePlanner" in general:
         web.use_planner = bool(general["usePlanner"])
     if "opikEnabled" in general:
@@ -225,7 +227,7 @@ def create_app() -> FastAPI:
             if hasattr(agent, "hitl_handler")
         }
         return JSONResponse({
-            "hitl_enabled": get_settings().hitl.enabled,
+            "hitl_enabled": get_settings().web.hitl_enabled,
             "websocket_connections": len(_web_hitl_handler._sockets),
             "session_agents_with_handler": agents,
             "pending_requests": _web_hitl_handler.pending_summary(),
@@ -359,7 +361,6 @@ def create_app() -> FastAPI:
             candidate.read_text(encoding="utf-8"),
             media_type="text/markdown; charset=utf-8",
         )
->>>>>>> c997fd3 (Профиль «микрофлюидика» + устойчивость HITL-ревью (#294))
 
     # --- Agent info ---
     @app.get("/api/agents")

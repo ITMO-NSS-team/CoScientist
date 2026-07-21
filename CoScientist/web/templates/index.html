@@ -242,7 +242,7 @@
       general: {
         startMode: 'init',   // 'init' | 'orchestrator'
         maxRetries: 3,
-        hitlEnabled: true,
+        hitlEnabled: false,
         usePlanner: true,
         opikEnabled: false,
       },
@@ -1139,7 +1139,7 @@
           if (data.general) {
             appSettings.general.startMode = data.general.startMode || 'init';
             appSettings.general.maxRetries = data.general.maxRetries ?? 3;
-            appSettings.general.hitlEnabled = data.general.hitlEnabled ?? true;
+            appSettings.general.hitlEnabled = data.general.hitlEnabled ?? false;
             appSettings.general.usePlanner = data.general.usePlanner ?? true;
             appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
           }
@@ -1388,11 +1388,11 @@
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <label class="text-xs font-bold text-on-surface">Session Start Mode</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Choose which agent starts the session. <strong>InitAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator.</p>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Choose which agent starts the session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator.</p>
               </div>
               <select id="start-mode-select"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
-                <option value="init">InitAgent</option>
+                <option value="init">PlannerAgent</option>
                 <option value="orchestrator">OrchestratorAgent</option>
               </select>
             </div>
