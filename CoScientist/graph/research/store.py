@@ -1,11 +1,11 @@
 """Persistent, schema-validated store for the Research Context Graph.
 
-One active research per process (spec: one graph = one root question), held in
-a NetworkX MultiDiGraph (parallel typed edges like E1-supports→H1 plus
+One active research per user/session scope (one graph = one root question), held
+in a NetworkX MultiDiGraph (parallel typed edges like E1-supports→H1 plus
 E1-relates_to→H1 must coexist) and snapshotted atomically to JSON after every
-write — the blackboard survives restarts and session resets. Re-initializing a
-research archives the previous graph file; nothing is ever deleted from a
-graph (refuted branches stay as negative results).
+write — the blackboard survives restarts, browser refresh and Web Stop. An
+explicit reset or re-initialization archives the previous active graph first;
+refuted branches remain available as negative results in that archive.
 
 Writes go through ``commit`` — the transactional API from spec §5.3: ALL nodes,
 edges and status changes of one agent step are validated together against the
@@ -23,11 +23,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 import networkx as nx
 
 from CoScientist.graph.research import schema
 from CoScientist.graph.research.models import CommitResult, ResearchEdge, ResearchNode
+from CoScientist.graph.session_scope import (
+    DEFAULT_SESSION_KEY,
+    SessionKey,
+    session_key,
+    storage_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +146,12 @@ class ResearchGraphStore:
             old_graph, old_meta = self._g, (self._research_id, self._created_at, self._root_id)
             old_data = self._serialize() if old_graph.number_of_nodes() else None
             self._g = nx.MultiDiGraph()
-            self._research_id = "research-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+            self._research_id = (
+                "research-"
+                + datetime.now().strftime("%Y%m%d-%H%M%S")
+                + "-"
+                + uuid4().hex[:8]
+            )
             self._created_at = time.time()
             self._root_id = None
             # Privileged seeding: the context star (Question/Tool/Resource/
@@ -767,7 +779,9 @@ class ResearchGraphStore:
             self._dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             root = data.get("root_id") or "graph"
-            path = self._dir / f"research_{root}_{stamp}.json"
+            path = self._dir / (
+                f"research_{root}_{stamp}_{uuid4().hex[:8]}.json"
+            )
             with path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, default=str)
             return str(path)
@@ -797,5 +811,29 @@ class ResearchGraphStore:
             self._g = nx.MultiDiGraph()
 
 
-# Process-wide shared instance (mirrors knowledge_graph / task_tracker_instance).
+# Legacy/default graph for standalone utilities and unit tests.
 research_graph = ResearchGraphStore()
+_research_graphs: Dict[SessionKey, ResearchGraphStore] = {
+    DEFAULT_SESSION_KEY: research_graph,
+}
+_registry_lock = threading.RLock()
+
+
+def get_research_graph(
+    context: Any = None,
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> ResearchGraphStore:
+    """Return the typed research blackboard for one ADK user/session."""
+    key = session_key(context, user_id=user_id, session_id=session_id)
+    with _registry_lock:
+        graph = _research_graphs.get(key)
+        if graph is None:
+            directory = storage_dir(_default_dir(), key)
+            graph = ResearchGraphStore(
+                directory=str(directory),
+                active_file=_default_file(),
+            )
+            _research_graphs[key] = graph
+        return graph

@@ -9,9 +9,9 @@ New entity/relation types therefore need zero code changes.
     Relation : src key + dst key + type
     Extraction = {entities, relations}  ← exactly the LLM's JSON output schema
 
-Extraction runs a small LLM over a result/tool-output text. It is OFF by default
-(KG_SEMANTIC_ENABLED=1 to turn on) and fully best-effort — any failure yields an
-empty extraction and never breaks a run.
+Extraction runs a small LLM over a final result. It is ON by default
+(``KG_SEMANTIC_ENABLED=0`` turns it off) and fully best-effort — any failure
+yields no new facts and never breaks a run.
 """
 from __future__ import annotations
 

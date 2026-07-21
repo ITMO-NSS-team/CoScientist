@@ -14,8 +14,10 @@ import asyncio
 import os
 from typing import Optional
 import logging
+from uuid import uuid4
 
 from google.adk.sessions import InMemorySessionService
+from google.adk.sessions.base_session_service import BaseSessionService
 from google.adk.runners import Runner
 from google.adk.agents.run_config import RunConfig
 from google.genai import types
@@ -56,28 +58,35 @@ def _compaction_config():
         return None
 
 
-def reset_session_state() -> None:
-    """Clear PER-SESSION state on a fresh start / interrupt: the planner's task
-    tracker (persisted to disk, so it would otherwise leak across runs) and the
-    in-process execution graph. The cross-run knowledge MEMORY is preserved."""
+def reset_session_state(
+    user_id: str,
+    session_id: str,
+    *,
+    reset_research: Optional[bool] = None,
+) -> None:
+    """Explicitly reset graph state for one session only.
+
+    TaskTracker state belongs to ADK session state and semantic memory is global
+    across the installation, so neither is touched here.
+    """
     try:
-        from CoScientist.tools import task_tracker_instance
-        task_tracker_instance.reset()
+        from CoScientist.graph.memory import reset_knowledge_graph
+        reset_knowledge_graph(user_id=user_id, session_id=session_id)
     except Exception:  # noqa: BLE001
         pass
+
     try:
-        from CoScientist.graph.memory import knowledge_graph
-        knowledge_graph.reset_session()
-    except Exception:  # noqa: BLE001
-        pass
-    # The research context graph outlives a single chat session by default (a
-    # research spans many prompts), so it is NOT reset here unless explicitly
-    # configured. When RESEARCH_GRAPH__RESET_ON_SESSION=true, archive + clear it.
-    try:
-        from CoScientist.config import get_settings
-        if get_settings().research_graph.reset_on_session:
-            from CoScientist.graph.research.store import research_graph
-            research_graph.reset(archive=True)
+        should_reset = (
+            get_settings().research_graph.reset_on_session
+            if reset_research is None
+            else reset_research
+        )
+        if should_reset:
+            from CoScientist.graph.research.store import get_research_graph
+            get_research_graph(
+                user_id=user_id,
+                session_id=session_id,
+            ).reset(archive=True)
     except Exception:  # noqa: BLE001
         pass
 
@@ -120,17 +129,21 @@ class CoScientistManager:
     def __init__(
         self,
         app_name: str = "coscientist_app",
-        user_id: str = "user_1",
-        session_id: str = "session_001",
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         hitl_handler: Optional[AbstractHITLHandler] = None,
+        session_service: Optional[BaseSessionService] = None,
     ):
         self.app_name = app_name
-        self.user_id = user_id
-        self.session_id = session_id
+        self.user_id = user_id or f"user_{uuid4().hex}"
+        self.session_id = session_id or f"session_{uuid4().hex}"
 
-        self.session_service: Optional[InMemorySessionService] = None
+        # Web mode injects one shared service so managers can reopen existing
+        # sessions. CLI mode falls back to a private in-memory service.
+        self.session_service: Optional[BaseSessionService] = session_service
         self.runner: Optional[Runner] = None
         self._initialized = False
+        self._initialize_lock = asyncio.Lock()
 
         # HITL setup
         self._hitl_handler = hitl_handler
@@ -140,54 +153,57 @@ class CoScientistManager:
         """Initialize session + runner."""
         if self._initialized:
             return
+        async with self._initialize_lock:
+            if self._initialized:
+                return
 
-        # Fresh session: clear stale PER-SESSION state (planner tasks + the
-        # execution graph) so a previous run's context never leaks in. The
-        # cross-run knowledge MEMORY is intentionally kept.
-        reset_session_state()
+            if self.session_service is None:
+                self.session_service = InMemorySessionService()
 
-        # Session service
-        self.session_service = InMemorySessionService()
+            session = await self.session_service.get_session(
+                app_name=self.app_name,
+                user_id=self.user_id,
+                session_id=self.session_id,
+            )
+            if session is None:
+                from CoScientist.graph.session_scope import (
+                    GRAPH_SCOPE_SESSION_KEY,
+                    GRAPH_SCOPE_USER_KEY,
+                )
+                await self.session_service.create_session(
+                    app_name=self.app_name,
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    state={
+                        "active_tasks": [],
+                        GRAPH_SCOPE_USER_KEY: self.user_id,
+                        GRAPH_SCOPE_SESSION_KEY: self.session_id,
+                    },
+                )
+            from google.adk.apps.app import App
+            from CoScientist.logging.event_logger import EventLoggerPlugin
+            from CoScientist.graph.plugin import GraphMemoryPlugin
+            from CoScientist.graph.research.validator import BackgroundValidatorPlugin
+            from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
 
-        await self.session_service.create_session(
-            app_name=self.app_name,
-            user_id=self.user_id,
-            session_id=self.session_id,
-        )
+            app = App(
+                name=self.app_name,
+                root_agent=root_agent,
+                plugins=[
+                    EventLoggerPlugin(),
+                    GraphMemoryPlugin(),
+                    BackgroundValidatorPlugin(),
+                    # Keep truncation last so observers receive full results.
+                    ToolResultTruncationPlugin(),
+                ],
+                events_compaction_config=_compaction_config(),
+            )
+            self.runner = Runner(app=app, session_service=self.session_service)
 
-        # Runner plugins:
-        # - EventLoggerPlugin: same local-file + console trace as the A2A
-        #   servers (a2a/server.py) and `adk web` (agent.py);
-        # - GraphMemoryPlugin: grows the shared in-process knowledge graph so any
-        #   agent can read the history/roster via the graph tools.
-        # Toggle both with LOG_AGENT_EVENTS / AGENT_LOG_FILE.
-        from google.adk.apps.app import App
-        from CoScientist.logging.event_logger import EventLoggerPlugin
-        from CoScientist.graph.plugin import GraphMemoryPlugin
-        from CoScientist.graph.research.validator import background_validator_plugin
-        from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+            if self._hitl_handler:
+                hitl_toolset._handler = self._hitl_handler
 
-        # An App carries the plugins + the events-compaction config (summarize the
-        # context once it crosses the token threshold). ToolResultTruncationPlugin
-        # MUST be last: ADK stops at the first non-None after_tool return, so the
-        # logger/graph observe the full result first, then truncation bounds what
-        # reaches the LLM context.
-        # background_validator_plugin judges hypotheses asynchronously (fire-and-
-        # forget) as evidence lands — before the truncation plugin so it sees the
-        # full research_commit result. It never blocks the run loop.
-        app = App(
-            name=self.app_name,
-            root_agent=root_agent,
-            plugins=[EventLoggerPlugin(), GraphMemoryPlugin(),
-                     background_validator_plugin, ToolResultTruncationPlugin()],
-            events_compaction_config=_compaction_config(),
-        )
-        self.runner = Runner(app=app, session_service=self.session_service)
-
-        if self._hitl_handler:
-            hitl_toolset._handler = self._hitl_handler
-
-        self._initialized = True
+            self._initialized = True
 
     async def run(self, query: str, verbose: bool = True) -> str:
         """
@@ -299,6 +315,18 @@ class CoScientistManager:
 
     async def close(self):
         """Cleanup session-related resources and uploaded paper artifacts."""
+        if self.runner is not None:
+            try:
+                await self.runner.close()
+            except Exception as exc:  # noqa: BLE001 - continue local cleanup
+                logger.error(
+                    "Warning: failed to close runner for session %s: %s",
+                    self.session_id,
+                    exc,
+                )
+            finally:
+                self.runner = None
+                self._initialized = False
         try:
             await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
         except Exception as exc:

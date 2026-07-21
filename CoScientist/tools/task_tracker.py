@@ -1,9 +1,6 @@
 """Task Tracker infrastructure and tools for managing and tracking tasks."""
-from google.adk.tools.tool_context import ToolContext  
-from fastapi import status
+from google.adk.tools.tool_context import ToolContext
 from typing import Any, Dict, List, Optional
-import json
-import os
 from datetime import datetime
 
 from google.adk.tools import BaseTool, FunctionTool
@@ -11,27 +8,15 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 class TaskTrackerToolset(BaseToolset):
-    """Toolset for tracking tasks across the MAS."""
+    """Stateless task tools backed by the current ADK session state.
 
-    def __init__(self, prefix: str = None, storage_path: str = "task_tracker_data.json"):
+    The toolset itself is shared by all agents, but task data is not.  Keeping
+    ``active_tasks`` in ``ToolContext.state`` makes the ADK session the single
+    source of truth and prevents plans from leaking between users/sessions.
+    """
+
+    def __init__(self, prefix: str = None):
         super().__init__(tool_name_prefix=prefix)
-        self.storage_path = storage_path
-        self.tasks: List[Dict[str, Any]] = []
-        self._load()
-
-    def _load(self):
-        """Load tasks from disk."""
-        if os.path.exists(self.storage_path):
-            try:
-                with open(self.storage_path, "r", encoding="utf-8") as f:
-                    self.tasks = json.load(f)
-            except json.JSONDecodeError:
-                self.tasks = []
-
-    def _save(self):
-        """Save tasks to disk."""
-        with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump(self.tasks, f, indent=2, ensure_ascii=False)
 
     async def get_tools(self, readonly_context: Optional[ReadonlyContext] = None) -> List[BaseTool]:
         return [
@@ -42,12 +27,6 @@ class TaskTrackerToolset(BaseToolset):
 
     async def close(self) -> None:
         pass
-
-    def reset(self) -> None:
-        """Clear all tracked tasks (in memory and on disk). Called on a fresh
-        session / interrupt so stale tasks from a previous run never leak in."""
-        self.tasks = []
-        self._save()
 
     def create_plan(self, tasks: List[Dict[str, Any]], tool_context: ToolContext) -> Dict[str, Any]:  
 
@@ -133,15 +112,19 @@ class TaskTrackerToolset(BaseToolset):
 
         tool_context.state["active_tasks"] = new_tasks  
 
-        self.tasks = new_tasks
-        self._save()
         return {
             "result": "success",
-            "message": f"Plan created with {len(self.tasks)} tasks."
+            "message": f"Plan created with {len(new_tasks)} tasks."
         }
 
 
-    def create_task(self, title: str, description: str, assignee: Optional[str] = None) -> Dict[str, Any]:
+    def create_task(
+        self,
+        title: str,
+        description: str,
+        tool_context: ToolContext,
+        assignee: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Create a new task in the task tracker.
         
         Args:
@@ -152,7 +135,8 @@ class TaskTrackerToolset(BaseToolset):
         Returns:
             A dictionary with the task ID and current state.
         """
-        task_id = f"TASK-{len(self.tasks) + 1}"
+        tasks = list(tool_context.state.get("active_tasks", []))
+        task_id = f"TASK-{len(tasks) + 1}"
         task = {
             "id": task_id,
             "title": title,
@@ -164,11 +148,17 @@ class TaskTrackerToolset(BaseToolset):
             "notes": "",
             "parent_id": None
         }
-        self.tasks.append(task)
-        self._save()
+        tasks.append(task)
+        tool_context.state["active_tasks"] = tasks
         return {"result": "success", "task": task}
 
-    def update_task_status(self, task_id: str, status: str, notes: Optional[str] = None) -> Dict[str, Any]:
+    def update_task_status(
+        self,
+        task_id: str,
+        status: str,
+        tool_context: ToolContext,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Use this tool REGULARLY to provide clear progress updates. Never forget to update the task status. 
         
         Args:
@@ -179,30 +169,31 @@ class TaskTrackerToolset(BaseToolset):
         Returns:
             A dictionary indicating success or failure.
         """
-        for task in self.tasks:
+        tasks = list(tool_context.state.get("active_tasks", []))
+        for task in tasks:
             if task["id"] == task_id:
                 task["status"] = status
                 task["updated_at"] = datetime.now().isoformat()
                 if notes:
-                    task["notes"] += f"\n[{datetime.now().isoformat()}] {notes}"
-                self._save()
+                    task["notes"] = task.get("notes", "") + (
+                        f"\n[{datetime.now().isoformat()}] {notes}"
+                    )
+                # Re-assign so ADK records a state delta for persistent and
+                # in-memory session services alike.
+                tool_context.state["active_tasks"] = tasks
                 return {"result": "success", "task": task}
         return {"result": "error", "message": f"Task {task_id} not found."}
 
-    def get_active_tasks(self, **kwargs: Any) -> Dict[str, Any]:
+    def get_active_tasks(self, tool_context: ToolContext) -> Dict[str, Any]:
         """Get a list of all tracked tasks.
             Returns:
                 A dictionary containing the matching tasks.
         """
-        self._load()
-        readonly_context: Optional[ReadonlyContext] = kwargs.get("readonly_context")
-
-        current_agent = None
-        if readonly_context:
-            current_agent = getattr(readonly_context, "agent_name", None)
+        tasks = tool_context.state.get("active_tasks", [])
+        current_agent = getattr(tool_context, "agent_name", None)
 
         cleaned_tasks = []
-        for task in self.tasks:
+        for task in tasks:
             cleaned_task = {k: v for k, v in task.items() if k not in ("created_at", "updated_at")}
             if task.get("assignee") != current_agent:
                 cleaned_task.pop("description", None)
@@ -214,7 +205,7 @@ class TaskTrackerToolset(BaseToolset):
             
         return {"tasks": cleaned_tasks}
 
-# Global instance to share state across tools
+# A global tool definition is safe: all mutable data lives in ToolContext.state.
 task_tracker_instance = TaskTrackerToolset()
 
 def get_task_tracker_tools() -> list:

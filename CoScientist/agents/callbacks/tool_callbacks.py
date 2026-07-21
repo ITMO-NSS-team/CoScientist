@@ -1,4 +1,3 @@
-from CoScientist.tools.task_tracker import task_tracker_instance
 import os
 import re
 
@@ -114,33 +113,39 @@ def after_fullset_reranker_agent(
     return
 
 def before_get_task(callback_context: CallbackContext):
-    """Get task before agent is called"""
-    active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)
-    callback_context.state['active_tasks'] = active_tasks
+    """Ensure the current session has a task list before the agent runs.
+
+    Task data already lives in ADK session state.  In particular, do not reload
+    it from process-global storage here: that used to resurrect stale plans and
+    mix concurrent users.
+    """
+    if callback_context.state.get("active_tasks") is None:
+        callback_context.state["active_tasks"] = []
     return None
 
 
 def inject_graph_root(callback_context: CallbackContext):
-    """Give the agent the knowledge-graph root AND relevant prior-run memory.
+    """Give the agent the session graph root and relevant global memory.
 
     state['graph_root'] (rendered via the {graph_root?} placeholder) gets:
       1. the system root — every agent + its capabilities + this session's trace;
-      2. relevant facts the cross-run knowledge MEMORY established in earlier runs
-         (graph memory), retrieved for the current query — so agents build on
-         prior findings instead of redoing them.
+      2. relevant facts accumulated by all completed local research sessions,
+         retrieved for the current query so agents build on prior findings.
     Best-effort — the graph must never break a run.
     """
     parts = []
     query = ""
     try:
-        from CoScientist.graph.memory import knowledge_graph
+        from CoScientist.graph.memory import get_knowledge_graph
+        knowledge_graph = get_knowledge_graph(callback_context)
         parts.append(knowledge_graph.root_summary())
         goals = [h for h in knowledge_graph.history(limit=50) if h.get("kind") == "goal"]
         query = goals[-1]["label"] if goals else ""
     except Exception:  # noqa: BLE001
         pass
     try:
-        from CoScientist.graph.memory_store import knowledge_memory
+        from CoScientist.graph.memory_store import get_knowledge_memory
+        knowledge_memory = get_knowledge_memory(callback_context)
         mem = knowledge_memory.relevant_summary(query)
         if mem:
             parts.append(mem)

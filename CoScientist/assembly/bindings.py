@@ -191,12 +191,12 @@ REGISTRY.register_tool(ToolEntry(
     docs=(
         ToolDoc(
             name="get_active_tasks",
-            signature="get_active_tasks(query)",
-            purpose="Get tasks from TaskTracker",
+            signature="get_active_tasks()",
+            purpose="Get tasks from the current ADK session",
         ),
         ToolDoc(
             name="update_task_status",
-            signature="update_task_status(task_id)",
+            signature="update_task_status(task_id, status, notes=None)",
             purpose="Set task status to DONE/FAILED/IN_PROGRESS",
         ),
     ),
@@ -225,7 +225,7 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="search_knowledge_memory",
             signature="search_knowledge_memory(query)",
-            purpose="Search facts learned in PRIOR runs (cross-run memory) relevant to a query.",
+            purpose="Search globally accumulated facts relevant to a query.",
         ),
         ToolDoc(
             name="get_entity_neighbors",
@@ -235,7 +235,7 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="get_knowledge_memory",
             signature="get_knowledge_memory()",
-            purpose="Full cross-run knowledge memory (entities + relations).",
+            purpose="Global knowledge memory shared across users and sessions.",
         ),
     ),
 ))
