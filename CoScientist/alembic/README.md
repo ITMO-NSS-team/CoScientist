@@ -2,7 +2,9 @@
 
 ## Overview
 
-Alembic is a multi-agent pipeline that automatically generates a deployable [FastMCP](https://github.com/jlowin/fastmcp) server from any scientific GitHub repository. Given a repo URL, it clones the code, sets up a reproducible Python environment, writes a working MCP server with pytest tests, validates every tool, and packages the result as a Docker image — all without human intervention.
+Alembic is a multi-agent pipeline that automatically generates a deployable [FastMCP](https://github.com/jlowin/fastmcp) server from any scientific GitHub repository. Given a repo URL, it clones the code, sets up a reproducible Python environment, writes tool functions with pytest tests, validates every tool against the repo's own code, renders a FastMCP server, and packages the result as a Docker image — all without human intervention.
+
+The LLM proposes; **code disposes.** Each stage ends at a deterministic *gate* — a plan check, an env check, an artefact check, a validation loop — that the model cannot talk its way past. A failed gate rolls the stage's files back to a checkpoint and reruns it with a note.
 
 ---
 
@@ -19,14 +21,19 @@ Alembic is a multi-agent pipeline that automatically generates a deployable [Fas
 
 ## How It Works
 
-The pipeline runs four sequential stages inside a Docker container:
+The pipeline runs five stages inside a Docker container, each followed by a code-enforced gate:
 
-| Stage | Agent | What it does |
-|---|---|---|
-| 1 | **Explorer** | Clones the repo, reads the code, writes `reports/exploration.md` |
-| 2 | **Environment** | Creates an isolated `.venv`, installs all dependencies, writes `reports/environment.md` |
-| 3 | **Coder** | Generates `output/server.py` (FastMCP) and `output/tests/test_server.py` |
-| 4 | **Validator** | Runs syntax checks, pytest, and live tool invocations; calls a **Debugger** sub-agent on failures; writes `reports/validation.md` |
+| Stage | Driver | What it does | Gate |
+|---|---|---|---|
+| 1 | **Explorer** (agent) | Clones the repo, reads the code, writes a `plan.json` of tools to build | plan is well-formed & non-empty |
+| 2 | **Environment** (agent) | Builds the main `.venv` (repo + deps), writes `reports/environment.md` | repo imports cleanly under `.venv` |
+| 3 | **Coder** (agent) | Writes one `output/tools/<tool>.py` per tool plus `test_smoke_*` / `test_invoc_*` tests | files exist & compile |
+| 4 | **Validator** (code, not an agent) | Runs pytest + a live invocation per tool through the tools venv; calls a **Debugger** agent on failures | every tool green |
+| 5 | **Wrapper** (code + fallback agent) | Renders `output/server.py` deterministically and builds the separate `.venv-server` (fastmcp) | server compiles & imports |
+
+**Two venvs, never mixed:** `.venv` holds the repo and its dependencies (where tools and tests run); `.venv-server` holds only fastmcp. Every tool shells through `helpers/run_function.py` in the tools venv, printing a `<<<ALEMBIC_RESULT>>>` sentinel + JSON — so `server.py` is a subprocess router, not an in-process shim, and a dependency clash between the repo and fastmcp is impossible.
+
+**Validation is evidence-based.** Tests split by name: `test_smoke_*` (does it run?) vs `test_invoc_*` (is the output correct?). A tool is `perfect` only if it passes **and** has ≥1 green invocation test. A `test_invoc_*` that mocks or patches the repo instead of calling it is automatically reclassified as a smoke test — so a tool can't reach `perfect` on hollow, self-referential validation.
 
 On success the build container is committed to `alembic-tool:<repo-name>` and launched with the MCP server listening on a random host port.
 
@@ -147,14 +154,15 @@ to override.
 
 ```
 CoScientist/alembic/
-├── agents.py          # Agent definitions (explorer, environment, coder, debugger, validator)
-├── main.py            # Pipeline orchestrator (run_pipeline)
+├── agents.py          # The 5 LLM agents (explorer, environment, coder, debugger, wrapper)
+├── main.py            # Pipeline orchestrator + gates + the deterministic validator loop
+├── contract.py        # ToolReport / passed / perfect — what counts as a validated tool
+├── config.py          # Stages, timeouts, model string (all env-overridable)
 ├── start_chain.py     # CLI: build base image → run pipeline → commit → serve
-├── run_benchmark.py   # Parallel benchmark runner
 ├── common.py          # Shared Docker helpers (ensure_base_image, get_repo_name)
 ├── events.py          # Optional live-event bus (no-op for CLI; feeds the web UI)
 ├── instructions/      # System prompts for each agent
-├── tools/             # Tool implementations (fs, shell, venv, invoke, codegen, paths)
+├── tools/             # Agent tools (fs, shell, venv, invoke, codegen) + scripts/run_function.py
 └── web/               # Live dashboard: FastAPI + WebSocket (app.py, server.py, templates/)
 
 docker/alembic/
@@ -162,6 +170,9 @@ docker/alembic/
 ├── entrypoint.py      # Container entrypoint (build / serve / help)
 ├── serve.py           # FastMCP server launcher inside container
 └── requirements.txt   # Pipeline dependencies
+
+benchmarks/alembic/
+└── run_benchmark.py   # Parallel multi-repo runner (git ls-remote pre-check → summary.md)
 ```
 
 ---
