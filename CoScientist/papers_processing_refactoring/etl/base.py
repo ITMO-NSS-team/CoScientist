@@ -1,6 +1,10 @@
+import logging
 from abc import ABC, abstractmethod
 
 from .context import ETLContext
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class ETLStep(ABC):
@@ -28,24 +32,24 @@ class ETLStep(ABC):
         current_status = state_db.get_status(article_id, self.name)
         
         if current_status == "done":
-            print(f"Skipping step '{self.name}' for {article_id} (already done).")
+            logger.info(f"Skipping step '{self.name}' for {article_id} (already done).")
             return
         
-        print(f"Starting step '{self.name}' for {article_id}...")
+        logger.info(f"Starting step '{self.name}' for {article_id}...")
         state_db.set_status(article_id, self.name, "running")
         
         try:
             if self.name in always_failed_steps:
                 self.run(ctx)
                 state_db.set_status(article_id, self.name, "failed")
-                print(f"Step '{self.name}' completed for {article_id}.")
+                logger.info(f"Step '{self.name}' completed for {article_id}.")
             else:
                 self.run(ctx)
                 state_db.set_status(article_id, self.name, "done")
-                print(f"Step '{self.name}' completed for {article_id}.")
+                logger.info(f"Step '{self.name}' completed for {article_id}.")
         
         except Exception as e:
-            print(f"Step '{self.name}' failed for article {article_id}: {e}")
+            logger.error(f"Step '{self.name}' failed for article {article_id}: {e}")
             state_db.set_status(article_id, self.name, "failed", error=str(e))
             artifacts_db.delete_step(article_id, self.name)
             raise e

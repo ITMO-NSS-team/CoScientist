@@ -85,8 +85,8 @@ def prompt_func(data):
     for img in imgs:
         image_part = {
             "type": "image_url",
-            "image_url": f"data:image/jpeg;base64,{img}",
-            # "image_url": {"url": f"data:image/jpeg;base64,{img}"},
+            # "image_url": f"data:image/jpeg;base64,{img}",
+            "image_url": {"url": f"data:image/jpeg;base64,{img}"},
         }
         content_parts.append(image_part)
     

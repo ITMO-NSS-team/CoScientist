@@ -57,9 +57,11 @@ class ChromaVectorStore(VectorStore):
         ids = results["ids"][0]
         docs = results["documents"][0]
         metas = results["metadatas"][0]
+        distances = results["distances"][0]
         
         for i in range(len(ids)):
             meta = metas[i] or {}
+            meta["chroma_score"] = distances[i]
             chunks.append(
                 Chunk(
                     id=ids[i],

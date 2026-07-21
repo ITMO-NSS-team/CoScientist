@@ -51,7 +51,7 @@ class PublishStep(ETLStep):
             )
             
             # Cleaning after successfully publication
-            # ctx.artifact_store.delete_article(article_id)
+            ctx.artifact_store.delete_article(article_id)
         
         except Exception as e:
             print(f"[{self.name}] Error publishing {article_id}. Rolling back vector store...")

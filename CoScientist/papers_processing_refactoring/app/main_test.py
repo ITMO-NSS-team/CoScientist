@@ -1,9 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
+import logging
 import time
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 from CoScientist.papers_processing_refactoring.app.config_loader import get_settings
 from CoScientist.papers_processing_refactoring.etl import *
@@ -70,7 +74,7 @@ def build_state_store(etl_settings):
 
 
 def process_single_article(article, app_settings):
-    print(f"[{article.name}] Thread started...")
+    logger.info(f"[{article.name}] Thread started...")
     
     state_manager = build_state_store(app_settings)
     
@@ -127,7 +131,7 @@ def process_single_article(article, app_settings):
 
 
 def handle_articles_batch(articles):
-    print(f"Scheduler found {len(articles)} articles. Starting parallel processing...")
+    logger.info(f"Scheduler found {len(articles)} articles. Starting parallel processing...")
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_article = {
@@ -137,14 +141,14 @@ def handle_articles_batch(articles):
         
         for future in as_completed(future_to_article):
             result_msg = future.result()
-            print(result_msg)
+            logger.info(result_msg)
 
 
 def main():
-    print("Starting Papers ETL Daemon...")
+    logger.info("Starting Papers ETL Daemon...")
     
     with build_state_store(settings) as state_manager:
-        print("Cleaning up hanging tasks...")
+        logger.info("Cleaning up hanging tasks...")
         state_manager.reset_running_states()
     
     local_source = LocalSource(settings.files.directory)
@@ -159,7 +163,7 @@ def main():
             scheduler.poll()
             time.sleep(10)
     except KeyboardInterrupt:
-        print("Shutting down daemon...")
+        logger.info("Shutting down daemon...")
 
 
 if __name__ == "__main__":
