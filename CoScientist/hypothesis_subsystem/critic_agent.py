@@ -410,25 +410,32 @@ def post_action_critique(
 from dataclasses import dataclass, field as dc_field
 
 _HYPOTHESIS_CRITIC_SYSTEM_PROMPT = """You are a rigorous scientific hypothesis critic. Your job is to evaluate a single
-hypothesis across four dimensions and return a structured JSON verdict.
+hypothesis across five dimensions and return a structured JSON verdict.
 
 ## Dimensions (score each 0-2)
 - **verifiability** (0-2): Are refutation conditions concrete, measurable, falsifiable?
+  2 = can be tested with EXISTING tools (if a tool catalog is provided).
+  1 = falsifiable in principle but no matching tool available.
+  0 = unfalsifiable / tautological.
+- **tool_coverage** (0-2): How many of the hypothesis's required tools match available
+  validation tools? 2 = all tools available, 1 = partial match, 0 = none.
 - **consistency** (0-2): Does reasoning align with evidence? No logical gaps?
 - **specificity** (0-2): Are variables well-defined with units/scales? Domain clearly scoped?
 - **novelty** (0-2): Is the claim original vs known approaches? Distinguished from alternatives?
 
-## Verdict logic
-- `passed: true` when ALL four scores == 2 (hypothesis is lab-ready).
-- `passed: false, tools_available: true` when the hypothesis is promising but needs refinement
-  (1-3 dimensions scored < 2). Provide specific, actionable feedback.
-- `passed: false, tools_available: false` when the hypothesis is fundamentally unfalsifiable,
-  tautological, or incoherent — beyond repair.
+## Passing threshold (RELAXED)
+A hypothesis passes when BOTH conditions hold:
+- Sum of all five scores ≥ 6 out of 10 — the hypothesis is good "overall".
+- No single dimension scores 0 (min ≥ 1) — no fatal failure on any criterion.
+
+If sum ≥ 6 but one dimension is 0 → `tools_available: true`, passed: false (REVISE — fix the zero).
+If sum < 6 → `tools_available: false`, passed: false (REJECT — fundamental issues).
+Only when BOTH sum ≥ 6 AND min ≥ 1 → `tools_available: true`, passed: true (APPROVE).
 
 ## Output format (strict JSON only, no markdown)
 {
   "passed": true,
-  "scores": {"verifiability": 2, "consistency": 1, "specificity": 2, "novelty": 0},
+  "scores": {"verifiability": 2, "tool_coverage": 2, "consistency": 1, "specificity": 2, "novelty": 0},
   "feedback": "Specific actionable critique. For revise: what to fix. For reject: why unfixable.",
   "tools_available": true,
   "tool_request": {}
@@ -505,7 +512,7 @@ class HypothesisCriticAgent:
             f"VERIFICATION PLAN: {hypothesis.verification_plan}\n"
             f"TOOLS: {', '.join(hypothesis.tools) if hypothesis.tools else 'none'}\n"
             f"STRATEGY: {hypothesis.strategy_type}\n\n"
-            "Evaluate across all four dimensions. Return strict JSON."
+            "Evaluate across all five dimensions. Return strict JSON."
         )
 
         try:
@@ -531,6 +538,9 @@ class HypothesisCriticAgent:
             print(f"[HypothesisCriticAgent] LLM call failed ({exc!r}); defaulting to permissive pass.")
             return HypothesisCriticResult(
                 passed=True,
-                scores={"verifiability": 2, "consistency": 2, "specificity": 2, "novelty": 2},
+                scores={
+                    "verifiability": 2, "tool_coverage": 2, "consistency": 2,
+                    "specificity": 2, "novelty": 2,
+                },
                 feedback=f"Critic LLM error: {exc}",
             )

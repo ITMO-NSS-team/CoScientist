@@ -38,13 +38,20 @@ Given:
 1. The ORIGINAL hypothesis (full JSON)
 2. The CRITIC SCORES: verifiability, consistency, specificity, novelty (0-2 each)
 3. The CRITIC FEEDBACK with specific failing dimensions
+4. AVAILABLE VALIDATION TOOLS (if provided) and their input constraints
 
 You MUST:
 - Keep the hypothesis structurally identical, only modifying failing dimensions.
 - If verifiability < 2: make refutation_conditions measurable and concrete.
+  Prefer refutation conditions that match available tool inputs (e.g., "docking score
+  < -8.0 kcal/mol in AutoDock Vina" rather than "should bind strongly").
 - If specificity < 2: sharpen the claim and add distinguishing observations.
+  When tools have input constraints (e.g., max 500 Da), reformulate the hypothesis
+  to stay within those constraints while preserving the core scientific claim.
 - If consistency < 2: align reasoning with evidence.
 - If novelty < 2: differentiate from known approaches.
+- WHEN TOOLS ARE AVAILABLE: prefer verifiable over novel — a testable hypothesis
+  with moderate novelty beats an untestable one with high novelty.
 - Return the COMPLETE revised hypothesis as JSON (all fields filled)."""
 
 
@@ -114,6 +121,22 @@ class HypothesisLoopCoordinator:
     def _map_verdict(self, result: HypothesisCriticResult) -> CriticVerdict:
         if result.passed:
             return CriticVerdict.APPROVE
+
+        scores = result.scores
+        if not scores:
+            return CriticVerdict.REVISE if result.tools_available else CriticVerdict.REJECT
+
+        # Relaxed threshold: sum ≥ 6/10 AND min ≥ 1 → pass
+        score_sum = sum(scores.values())
+        score_min = min(scores.values()) if scores else 0
+
+        if score_sum >= 6 and score_min >= 1:
+            return CriticVerdict.APPROVE
+
+        # Sum OK but has a zero → revise to fix the fatal dimension
+        if score_sum >= 6 and score_min == 0:
+            return CriticVerdict.REVISE
+
         if result.tools_available:
             return CriticVerdict.REVISE
         return CriticVerdict.REJECT

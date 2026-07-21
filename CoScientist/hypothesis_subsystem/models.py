@@ -207,6 +207,51 @@ class Hypothesis(BaseModel):
         ...,
         description="Origin information: creator, timestamp, generation context.",
     )
+    validation_tool_matching: List[ValidationToolInfo] = Field(
+        default_factory=list,
+        description="Validation tools that could test this hypothesis, "
+                    "matched during generation. Empty = no tool found yet "
+                    "— the hypothesis may need future tool development.",
+    )
+
+
+# ============================================================================
+# Validation tool models
+# ============================================================================
+
+class ValidationToolInfo(BaseModel):
+    """Metadata about a single MCP validation tool available in the system."""
+    name: str = Field(..., description="Tool name (e.g. 'docking_simulation').")
+    description: str = Field(
+        ..., description="What the tool does and what inputs it expects."
+    )
+    server_id: Optional[str] = Field(
+        None, description="MCP server identifier (for future A2A routing)."
+    )
+    input_schema: Optional[Dict[str, Any]] = Field(
+        None, description="JSON Schema of the tool's input parameters."
+    )
+    limitations: Optional[str] = Field(
+        None, description="Known limitations: max molecule size, required SMILES, etc."
+    )
+    retrieval_score: Optional[float] = Field(
+        None, description="RAG relevance score for this tool vs the research question."
+    )
+
+
+class ToolCatalog(BaseModel):
+    """Discovered validation tools for a research question."""
+    tools: List[ValidationToolInfo] = Field(
+        default_factory=list,
+        description="Available MCP validation tools with metadata."
+    )
+    retrieval_query: Optional[str] = Field(
+        None, description="The query used to discover these tools."
+    )
+    source: str = Field(
+        default="rag",
+        description="Discovery source: 'rag' (MCP DB) or 'static_fallback'."
+    )
 
 
 # ============================================================================
@@ -229,6 +274,9 @@ class HypothesisQuery(BaseModel):
     )
     temperature: Optional[float] = Field(
         None, description="LLM temperature for generation.", ge=0.0, le=2.0
+    )
+    tool_catalog: Optional[ToolCatalog] = Field(
+        None, description="Discovered validation tools available for hypothesis testing."
     )
 
 

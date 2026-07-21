@@ -31,6 +31,55 @@ from CoScientist.hypothesis_subsystem.models import (
 )
 from CoScientist.hypothesis_subsystem.prompts import GENERATOR_INSTRUCTION
 from CoScientist.hypothesis_subsystem.tool_registry import HypothesisToolRegistry
+from CoScientist.hypothesis_subsystem.models import ToolCatalog
+
+
+# ============================================================================
+# Function tool: retrieve_validation_tools
+# ============================================================================
+
+@track(name="retrieve_validation_tools")
+async def _retrieve_validation_tools(
+    research_question: str,
+    tool_context: Optional[ToolContext] = None,
+) -> Dict[str, Any]:
+    """Discover MCP validation tools relevant to the research question.
+
+    Queries the FedotMAS RAG database for tools that can test/validate
+    hypotheses for this question. Falls back to a static list (chemical-mcp-server)
+    when the RAG DB is unreachable. Stores the result in state['tool_catalog']
+    for downstream use by generate_via_moosechem and run_critic_loop.
+
+    Args:
+        research_question: The research question to find validation tools for.
+
+    Returns:
+        Dict with 'tool_catalog' (serialized ToolCatalog) and 'source'.
+    """
+    registry: Optional[HypothesisToolRegistry] = None
+    if tool_context:
+        registry = tool_context.state.get("hypothesis_registry")
+
+    if registry is None:
+        from CoScientist.hypothesis_subsystem.tool_registry import HypothesisToolRegistry
+        registry = HypothesisToolRegistry()
+
+    catalog = await registry.discover_validation_tools(research_question)
+
+    # Stash in state so generate_via_moosechem picks it up
+    if tool_context:
+        tool_context.state["tool_catalog"] = catalog
+
+    return {
+        "tool_catalog": [t.model_dump(mode="json") for t in catalog.tools],
+        "source": catalog.source,
+        "tool_count": len(catalog.tools),
+        "message": (
+            f"Discovered {len(catalog.tools)} validation tools "
+            f"(source: {catalog.source}). Use these to prioritize "
+            f"testable hypotheses in generate_via_moosechem."
+        ),
+    }
 
 
 # ============================================================================
@@ -62,9 +111,11 @@ async def _generate_via_moosechem(
     # Retrieve registry from tool_context state
     registry: Optional[HypothesisToolRegistry] = None
     audit: Optional[HypothesisAuditLogger] = None
+    tool_catalog: Optional[ToolCatalog] = None
     if tool_context:
         registry = tool_context.state.get("hypothesis_registry")
         audit = tool_context.state.get("hypothesis_audit")
+        tool_catalog = tool_context.state.get("tool_catalog")
 
     # Fallback: create a default tool if registry unavailable
     from CoScientist.hypothesis_subsystem.moosechem_tool import MooseChemTool
@@ -82,6 +133,7 @@ async def _generate_via_moosechem(
         domain_constraints=domain_constraints,
         max_hypotheses=max_hypotheses,
         temperature=temperature,
+        tool_catalog=tool_catalog,
     )
 
     start_ts = audit.log_generation_start(research_question, "MooseChem") if audit else 0
@@ -241,8 +293,10 @@ def build_hypothesis_generator(
     Returns:
         A configured LlmAgent ready for use in the ADK runtime.
     """
-    # Register tools
+    # Register tools — retrieve_validation_tools FIRST so the LLM calls it
+    # before generate_via_moosechem (Step 0 → Step 1 of GENERATOR_INSTRUCTION).
     generator_tools: List[FunctionTool] = [
+        FunctionTool(_retrieve_validation_tools),
         FunctionTool(_generate_via_moosechem),
     ]
     # run_critic_loop is added later by build_hypothesis_subsystem

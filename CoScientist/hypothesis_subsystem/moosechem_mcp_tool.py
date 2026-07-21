@@ -37,6 +37,7 @@ from CoScientist.hypothesis_subsystem.models import (
     Reference,
     ScaleType,
     ToolResult,
+    ValidationToolInfo,
     Variable,
     Variables,
 )
@@ -176,7 +177,11 @@ class MooseChemMCPTool(BaseHypothesisTool):
                 # Step 3: fetch hypotheses with LLM-extracted tools and inspiration
                 raw_hypotheses = await self._get_hypotheses(session, query.max_hypotheses)
 
-            hypotheses = [self._to_hypothesis(h) for h in raw_hypotheses]
+            # ---- Tool catalog: match hypotheses to available validation tools ----
+            tool_catalog = query.tool_catalog
+            hypotheses = [
+                self._to_hypothesis(h, tool_catalog) for h in raw_hypotheses
+            ]
             duration_ms = (time.monotonic() - start_time) * 1000
 
             return ToolResult(
@@ -358,7 +363,25 @@ class MooseChemMCPTool(BaseHypothesisTool):
     # Conversion to Hypothesis Pydantic model                             #
     # ------------------------------------------------------------------ #
 
-    def _to_hypothesis(self, raw: Dict[str, Any]) -> Hypothesis:
+    def _match_tools(self, hypothesis_tools: List[str], catalog) -> List[dict]:
+        """Match hypothesis tools against the available validation tool catalog.
+
+        Returns a list of matching ValidationToolInfo dicts (serialisable).
+        """
+        if catalog is None or not catalog.tools:
+            return []
+        matches = []
+        for ht in hypothesis_tools:
+            ht_lower = ht.lower()
+            for vt in catalog.tools:
+                if ht_lower in vt.name.lower() or ht_lower in vt.description.lower():
+                    matches.append(vt.model_dump(mode="json"))
+                    break
+        return matches
+
+    def _to_hypothesis(
+        self, raw: Dict[str, Any], tool_catalog: "ToolCatalog | None" = None
+    ) -> Hypothesis:
         """
         Convert a raw dict from MCP get_hypotheses into a rich Hypothesis object.
 
@@ -401,6 +424,9 @@ class MooseChemMCPTool(BaseHypothesisTool):
         # Variables extracted by LLM inside MCP server (validated format)
         variables = _build_variables(raw.get("variables", {}))
 
+        # Match hypothesis tools against available validation tools
+        validation_matches = self._match_tools(tools, tool_catalog)
+
         return Hypothesis(
             claim=claim or full_text[:300],
             domain="chemistry",
@@ -416,6 +442,9 @@ class MooseChemMCPTool(BaseHypothesisTool):
             evidence_basis=evidence_basis,
             status=HypothesisStatus.PROPOSED,
             provenance=Provenance(creator="MooseChemMCPTool"),
+            validation_tool_matching=[
+                ValidationToolInfo(**m) for m in validation_matches
+            ],
         )
 
     # ------------------------------------------------------------------ #

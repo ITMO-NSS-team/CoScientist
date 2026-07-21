@@ -386,21 +386,43 @@ class MooseChemTool(BaseHypothesisTool):
             entries.append(entry)
         return "\n\n".join(entries)
 
+    def _format_tool_catalog(self, catalog) -> str:
+        """Render a ToolCatalog into a compact prompt section."""
+        if catalog is None or not catalog.tools:
+            return "No validation tools available — generate hypotheses freely."
+        lines = ["AVAILABLE VALIDATION TOOLS (we CAN test hypotheses requiring):"]
+        for i, t in enumerate(catalog.tools, 1):
+            lines.append(f"  {i}. {t.name}: {t.description[:200]}")
+            if t.limitations:
+                lines.append(f"     Limitations: {t.limitations[:200]}")
+        lines.append(
+            "\nPRIORITIZE hypotheses that can be tested with the above tools. "
+            "For each hypothesis, list which tools apply in the 'tools' field. "
+            "If a hypothesis CANNOT be tested with available tools, note what "
+            "tools WOULD be needed in the verification_plan."
+        )
+        return "\n".join(lines)
+
     async def _generate_hypotheses(
         self,
         query: HypothesisQuery,
         corpus: List[List[str]],
         max_hypotheses: int,
     ) -> List[Dict[str, Any]]:
-        """Generate hypotheses via LLM with corpus context."""
+        """Generate hypotheses via LLM with corpus context and tool catalog."""
         corpus_text = self._build_corpus_context(corpus)
         temp = query.temperature if query.temperature is not None else self._temperature
+
+        # Build tool catalog section for the prompt
+        tool_catalog_section = self._format_tool_catalog(query.tool_catalog)
 
         user_prompt = f"""Research question: {query.research_question}
 
 Domain constraints: {query.domain_constraints or 'None specified'}
 
 Background: {query.background_survey or 'None provided'}
+
+{tool_catalog_section}
 
 Literature corpus ({len(corpus)} papers):
 {corpus_text}
