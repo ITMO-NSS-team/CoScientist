@@ -209,6 +209,9 @@ trace_manifest.jsonl
 # Auxiliary test scaffolding for ported features (not architecture)
 CoScientist/tests/unit/test_llm_repair.py
 
+tz_documents/
+TZ_*.md
+
 # Alembic output & testing
 .alembic
 .test
