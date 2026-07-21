@@ -41,16 +41,19 @@ agents:
   # ── Root ───────────────────────────────────────────────────────────────────
   OrchestratorAgent:
     class: llm
-    root: false
+    root: true
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
     # retrieval lets the orchestrator check which ready-made MCP tools exist
     # BEFORE routing a step — prefer TaskExecutorAgent over research when a
     # relevant tool is already available.
-    tools: [retrieval, task_tracker]
+    # No task_tracker: with the PlannerAgent disabled nothing calls create_plan,
+    # so the tracker is always empty and the orchestrator only ever hallucinated
+    # update_task_status on phantom task ids. Dropped so it coordinates directly.
+    tools: [retrieval, graph, research_graph_orchestrator]
     subordinates:
-      # - PlannerAgent
+      - PlannerAgent
       - HypothesesAgent
       - ResearchAgent
       - TaskExecutorAgent
@@ -58,12 +61,19 @@ agents:
       - MedicalAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
-      before_agent: [before_get_task]
+      before_agent: [before_get_task, inject_graph_root, inject_research_context]
+      # Catch hallucinated tool calls (e.g. the orchestrator inventing a
+      # sub-agent's `execute_bash`) and correct them, instead of ADK raising
+      # ValueError('Tool not found') and crashing the whole run.
+      after_model: [guard_unknown_tools]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
       # `after_tool: [post_action_critique]` to enable it — the orchestrator
       # prompt's critic-protocol section follows automatically.
-    hitl: false
+    # Enables the human approval loop for research-graph decisions (approving a
+    # research profile, a Conclusion draft→approved). Inert until HITL__ENABLED
+    # is on globally, so this is safe to leave true.
+    hitl: true
     a2a:
       key: orchestrator
       port: 8000
@@ -74,29 +84,11 @@ agents:
         tags: [orchestration, science, multi-agent]
 
 
-  InitAgent:
-    class: sequential
-    root: true
-    children:
-      - PlannerAgent
-      - OrchestratorAgent
-    enabled: true
-    hitl: true
-    description: Initialize the CoScientist system
-    a2a:
-      key: init
-      port: 8008
-      skill:
-        id: init
-        name: Init
-        description: Initialize the CoScientist system
-        tags: [init, science, multi-agent]
-
   # ── Direct subordinates ────────────────────────────────────────────────────
   PlannerAgent:
     class: custom:session
     root: false
-    enabled: true #${orchestrator.use_planner}
+    enabled: false #${orchestrator.use_planner}
     description: >-
       produces a step-by-step roadmap for a complex, multi-step task;
       call it first, then execute the roadmap by delegating each step.
@@ -107,8 +99,11 @@ agents:
     # retrieval lets the planner inspect which ready-made MCP tools exist (and
     # what they accept/return) BEFORE writing the roadmap, so the plan reflects
     # real tool capabilities instead of guessing from priors.
-    tools: [retrieval, create_plan_tool]
+    tools: [retrieval, create_plan_tool, graph]
     output_key: planner_roadmap
+    callbacks:
+      before_agent: [inject_graph_root]
+      after_model: [guard_unknown_tools]
     hitl: true
     a2a:
       key: planner
@@ -127,9 +122,10 @@ agents:
       Use this to generate and test hypotheses.
     prompt: hypotheses
     output_key: hypotheses
-    tools: [task_tracker]
+    tools: [task_tracker, graph, research_graph]
     callbacks:
-      before_agent: [before_get_task]
+      before_agent: [before_get_task, inject_research_context]
+      after_model: [guard_unknown_tools]
     a2a:
       key: hypotheses
       port: 8002
@@ -139,6 +135,11 @@ agents:
         description: Generate novel scientific hypotheses for a research question
         tags: [hypothesis, science, ideation]
 
+  # NOTE: hypothesis validation (verdict + Conclusion, spec Module 4) is NOT an
+  # agent here — it runs as a fully-async BACKGROUND plugin
+  # (graph/research/validator.py, source "ValidatorAgent"): when evidence lands on
+  # a hypothesis it judges it off the main loop, so it neither depends on the
+  # orchestrator delegating nor consumes the run's turn budget.
   ResearchAgent:
     class: llm
     description: >-
@@ -155,13 +156,14 @@ agents:
       Use this ONLY when information cannot be computed or retrieved via tools, and specifically 
       requires searching information from the web or literature.  
     prompt: research
-    tools: [websearch, paper_analysis, papers_search, task_tracker]
+    tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
     output_key: search_results
     callbacks:
-      before_agent: [before_get_task]
+      before_agent: [before_get_task, inject_research_context]
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
       after_tool: [log_research_tool_calls]
+      after_model: [guard_unknown_tools]
     hitl: true
     a2a:
       key: research
@@ -223,10 +225,11 @@ agents:
           → Use whenever no existing tool covers the objective and the step requires
             doing software/data engineering rather than calling a ready service
     prompt: coder
-    tools: [coder]
+    tools: [coder, research_graph]
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
+      before_agent: [inject_research_context]
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
       # corrective message instead of letting ADK crash the whole run.
       after_model: [guard_unknown_tools]
@@ -263,9 +266,10 @@ agents:
       building or training on it (e.g. "collect a dataset of BTK inhibitors with
       IC50"). It downloads into the shared workspace and writes a MANIFEST.
     prompt: dataset_collector
-    tools: [coder, websearch]
+    tools: [coder, websearch, research_graph]
     output_key: dataset_results
     callbacks:
+      before_agent: [inject_research_context]
       after_model: [guard_unknown_tools]
 
   MedicalAgent:
@@ -282,11 +286,12 @@ agents:
           - medical literature evidence (PubMed, PICO, study taxonomy) is required
           - an uploaded medical image (DICOM/scan) must be analyzed
     prompt: medical
-    tools: [medical, task_tracker]
+    tools: [medical, task_tracker, graph, research_graph]
     output_key: medical_results
     callbacks:
-      before_agent: [before_get_task]
+      before_agent: [before_get_task, inject_research_context]
       before_model: [inject_medical_artifacts]
+      after_model: [guard_unknown_tools]
     a2a:
       key: medical
       port: 8005
@@ -327,6 +332,9 @@ agents:
     output_schema: tool_ranking
     callbacks:
       before_model: [skip_retriever_context]
+      # Not every provider honours response_format: strip prose/```json fences
+      # around the JSON before ADK's strict output_schema validation.
+      after_model: [sanitize_json_output]
       after_agent: [collect_reranked_tools]
 
   ToolWebSearcherAgent:
@@ -343,6 +351,9 @@ agents:
     output_key: reranked_web_servers
     output_schema: mcp_ranking
     callbacks:
+      # Not every provider honours response_format: strip prose/```json fences
+      # around the JSON before ADK's strict output_schema validation.
+      after_model: [sanitize_json_output]
       after_agent: [collect_reranked_mcps]
 
   WebToolsDeployerAgent:
@@ -351,11 +362,29 @@ agents:
 
   ExperimentAgent:
     class: llm
-    description: Agent to invoke MAS for solving given task. Uses MCP tools
-    prompt: fedot
-    tools: [fedot, task_tracker]
+    description: >-
+      Runs computational/experimental sub-tasks by directly using the
+      dynamically-provisioned MCP tools (ReAct: think → call tool → observe).
+    prompt: experiment_react
+    # dynamic_tools surfaces the task's selected MCP servers (filtered_tools /
+    # deployed_mcps) as native tools, resolved per turn — the same servers
+    # FEDOT.MAS used to receive, but the agent calls them itself.
+    tools: [dynamic_tools, task_tracker, graph, research_graph]
     output_key: fedot_results
     callbacks:
       # Abstain → recommend CoderAgent when the tool-prep pipeline found no tool
       # that actually matches the task (instead of running a nearest-but-wrong one).
+      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
+
+  # Disabled for now — FEDOT.MAS isn't reliable yet. Kept (built, not attached)
+  # so the agent, its prompt and the `fedot` tool stay available; re-enable by
+  # setting enabled: true and making it (instead of ExperimentAgent) the child.
+  FedotAgent:
+    class: llm
+    enabled: false
+    description: Agent to invoke FEDOT.MAS for solving given task. Uses MCP tools
+    prompt: fedot
+    tools: [fedot, task_tracker, graph]
+    output_key: fedot_results
+    callbacks:
       before_agent: [redirect_when_no_tools, before_get_task]

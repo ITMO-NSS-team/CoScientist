@@ -120,13 +120,15 @@ def make_a2a_app(
     _attach_opik_tracer(agent, app_name)
     from CoScientist.logging.event_logger import EventLoggerPlugin
     from CoScientist.graph.emitter import GraphEmitterPlugin
+    from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
 
     runner = Runner(
         agent=agent,
         app_name=app_name,
         session_service=session_service or InMemorySessionService(),
         artifact_service=InMemoryArtifactService(),
-        plugins=[EventLoggerPlugin(), GraphEmitterPlugin()],
+        # truncation MUST be last (ADK early-exits on first non-None after_tool).
+        plugins=[EventLoggerPlugin(), GraphEmitterPlugin(), ToolResultTruncationPlugin()],
     )
     executor = A2aAgentExecutor(runner=runner)
     handler = DefaultRequestHandler(
