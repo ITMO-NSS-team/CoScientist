@@ -12,6 +12,8 @@ import os
 from google.adk.apps import App
 
 from CoScientist.logging.event_logger import EventLoggerPlugin
+from CoScientist.graph.plugin import GraphMemoryPlugin
+from CoScientist.graph.research.validator import BackgroundValidatorPlugin
 from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
 from CoScientist.main import _compaction_config
 
@@ -24,6 +26,14 @@ else:
 # the directory name ("CoScientist"). Truncation is last so the logger sees the
 # full tool result before the model gets a context-bounded copy; compaction
 # summarizes the context once it crosses the token threshold.
-app = App(name="CoScientist", root_agent=root_agent,
-          plugins=[EventLoggerPlugin(), ToolResultTruncationPlugin()],
-          events_compaction_config=_compaction_config())
+app = App(
+    name="CoScientist",
+    root_agent=root_agent,
+    plugins=[
+        EventLoggerPlugin(),
+        GraphMemoryPlugin(),
+        BackgroundValidatorPlugin(),
+        ToolResultTruncationPlugin(),
+    ],
+    events_compaction_config=_compaction_config(),
+)

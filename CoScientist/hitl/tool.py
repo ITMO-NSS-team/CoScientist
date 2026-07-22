@@ -3,12 +3,14 @@
 from typing import Any, Dict, List, Optional
 
 from google.adk.tools import BaseTool, FunctionTool
+from google.adk.tools.tool_context import ToolContext
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLRequest, HITLAction
 from CoScientist.hitl.handler import AbstractHITLHandler, ConsoleHITLHandler
+from CoScientist.graph.session_scope import session_key
 
 settings = get_settings()
 
@@ -44,6 +46,7 @@ class HITLToolset(BaseToolset):
         self,
         agent_name: str,
         message: str,
+        tool_context: ToolContext,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Request human approval for an action.
@@ -59,11 +62,17 @@ class HITLToolset(BaseToolset):
         Returns:
             Dictionary with 'approved' (bool) and optional 'feedback' (str).
         """
+        request_context = dict(context or {})
+        user_id, session_id = session_key(tool_context)
+        request_context["_session"] = {
+            "user_id": user_id,
+            "session_id": session_id,
+        }
         request = HITLRequest(
             agent_name=agent_name,
             action_type=HITLAction.APPROVE,
             message=f"Agent '{agent_name}' requests approval for the following action: {message}",
-            context=context or {},
+            context=request_context,
             invoked_via="tool"
         )
         response = await self._handler.handle_request(request)
@@ -77,6 +86,7 @@ class HITLToolset(BaseToolset):
         agent_name: str,
         message: str,
         options: List[str],
+        tool_context: ToolContext,
     ) -> Dict[str, Any]:
         """Ask the human to select from a list of options.
 
@@ -91,11 +101,18 @@ class HITLToolset(BaseToolset):
         Returns:
             Dictionary with 'selected' (str) and 'approved' (bool).
         """
+        user_id, session_id = session_key(tool_context)
         request = HITLRequest(
             agent_name=agent_name,
             action_type=HITLAction.SELECT,
             message=message,
             options=options,
+            context={
+                "_session": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                }
+            },
             invoked_via="tool"
         )
         response = await self._handler.handle_request(request)
