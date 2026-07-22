@@ -6,9 +6,6 @@ import time
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
 from CoScientist.papers_processing_refactoring.app.config_loader import get_settings
 from CoScientist.papers_processing_refactoring.etl import *
 from CoScientist.papers_processing_refactoring.embeddings import *
@@ -18,6 +15,9 @@ from CoScientist.papers_processing_refactoring.storage.state import *
 from CoScientist.papers_processing_refactoring.storage.artifacts import *
 from CoScientist.papers_processing_refactoring.storage.vector import *
 from CoScientist.papers_processing_refactoring.definitions import CONFIG_PATH
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 MAX_WORKERS = 3
 

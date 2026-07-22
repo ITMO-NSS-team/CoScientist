@@ -1,10 +1,10 @@
 import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 from ..base import ETLStep
 from ..context import ETLContext
-from ...utils.marker_client import MarkerClient
+from ...utils.marker_client import MarkerClient, convert_pdf_with_splitting
 
 
 class ParseStep(ETLStep):
@@ -26,7 +26,9 @@ class ParseStep(ETLStep):
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         pdf_path.write_bytes(pdf_data)
 
-        res = self.marker_client.convert(str(pdf_path))
+        res = convert_pdf_with_splitting(client=self.marker_client, pdf_uri=str(pdf_path))
+        
+        pdf_path.unlink()
 
         ctx.artifact_store.put_html(article_id, self.name, res.text)
         ctx.artifact_store.put_images(article_id, self.name, res.images)

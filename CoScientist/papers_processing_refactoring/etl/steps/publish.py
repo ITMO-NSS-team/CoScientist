@@ -1,5 +1,12 @@
+import logging
+import shutil
+from pathlib import Path
+
 from ..base import ETLStep
 from ..context import ETLContext
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class PublishStep(ETLStep):
@@ -50,11 +57,31 @@ class PublishStep(ETLStep):
                 pdf_data=pdf_data,
             )
             
-            # Cleaning after successfully publication
+            # Clean up artifacts and source file after successful publication
             ctx.artifact_store.delete_article(article_id)
+            if ctx.article.source_type == "local":
+                # source_path = Path(ctx.article.source_ref)
+                # if source_path.exists():
+                #     try:
+                #         source_path.unlink()
+                #     except Exception as e:
+                #         logger.info(
+                #             f"[{self.name}] Warning: Failed to delete processed source file {source_path}: {e}"
+                #         )
+
+                source_path = Path(ctx.article.source_ref)
+                if source_path.exists():
+                    try:
+                        new_name = f"{article_id}_{source_path.name}"
+                        destination = ctx.processed_papers_path / new_name
+                        shutil.move(str(source_path), str(destination))
+                        logger.info(f"[{self.name}] Moved processed source file to {destination}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Warning: Failed to move source file {source_path}: {e}")
+                        raise e
         
         except Exception as e:
-            print(f"[{self.name}] Error publishing {article_id}. Rolling back vector store...")
+            logger.error(f"[{self.name}] Error publishing {article_id}. Rolling back vector and artifact stores...")
             ctx.vector_store.delete_by_article_id(article_id)
             ctx.public_store.delete_article(summary_data["domain"], article_id)
             raise e

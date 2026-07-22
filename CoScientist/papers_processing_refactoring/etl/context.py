@@ -1,7 +1,8 @@
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, computed_field
 
 from ..domain.entities import Article, Chunk
 from ..embeddings import *
@@ -30,3 +31,15 @@ class ETLContext(BaseModel):
     
     llm: ChatOpenAI
     embedding_model: EmbeddingModel
+    
+    @computed_field
+    @property
+    def processed_papers_path(self) -> Path:
+        source = Path(self.article.source_ref)
+        if source.is_file():
+            articles_dir = source.parent
+        else:
+            articles_dir = source
+        processed_dir = articles_dir.parent / "processed"
+        processed_dir.mkdir(exist_ok=True)
+        return processed_dir
