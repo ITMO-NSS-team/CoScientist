@@ -930,10 +930,16 @@ A full build takes TENS OF MINUTES. You never wait for it inline:
   (status "error") — no job is started; do not retry the same bad URL.
 
 ## Reporting
-- While running: job_id, current stage (if known), and an estimate that this
-  takes tens of minutes — invite the caller to check back rather than wait.
-- On done: mcp_url, image, container.
-- On failed: the error, and what was being built when it failed.
+- Every build result carries progress_url (absolute, e.g.
+  http://localhost:8000/builds/<job_id>) and progress_page (relative) — a live
+  web page that streams the pipeline stages, tool validation and log straight
+  from the isolated build container. ALWAYS surface this as a CLICKABLE markdown
+  link, using progress_url.
+- While running: job_id, the clickable build-page link, current stage (if
+  known), and an estimate that this takes tens of minutes — invite the caller to
+  open the page or check back rather than wait.
+- On done: mcp_url, image, container, and the clickable build-page link.
+- On failed: the error, what was being built when it failed, and the link.
 
 <<HITL>>
 ''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())

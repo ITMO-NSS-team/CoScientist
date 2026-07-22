@@ -13,6 +13,8 @@ find and continue an earlier build via ``list_mcp_builds``.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import secrets
 import subprocess
@@ -33,6 +35,8 @@ LOG_DIR = PROJECT_ROOT / ".alembic" / "a2a_builds"
 
 _LOG_TAIL_LINES = 15
 _MAX_JOBS = 200  # cap registry size; evict oldest finished jobs past this
+# Base for the absolute, clickable build-page link handed back to the agent.
+_WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "http://localhost:8000").rstrip("/")
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
@@ -114,6 +118,12 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
         "repo_url": rec["repo_url"],
         "status": rec["status"],
         "elapsed_seconds": round((rec.get("finished_at") or time.time()) - rec["started_at"]),
+        # Live build page in the CoScientist web UI (tails this build's log and
+        # renders the streamed pipeline events). ``progress_page`` is relative;
+        # ``progress_url`` is the absolute, clickable link (base from
+        # COSCIENTIST_WEB_BASE_URL, default http://localhost:8000).
+        "progress_page": f"/builds/{rec['job_id']}",
+        "progress_url": f"{_WEB_BASE_URL}/builds/{rec['job_id']}",
     }
     text = _read_log(rec) if (with_log_tail or rec["status"] != "running") else ""
     stages = _STAGE_RE.findall(text)
@@ -242,4 +252,103 @@ async def list_mcp_builds(tool_context: Optional[ToolContext] = None) -> Dict[st
 
 ALEMBIC_TOOLS = [build_mcp_server, check_mcp_build, list_mcp_builds]
 
-__all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds"]
+
+# ── Web dashboard support ─────────────────────────────────────────────────────
+# The CoScientist web UI (CoScientist/web/app.py) renders a live build page that
+# tails a build's log and forwards the ``ALEMBIC_EVENT`` lines the container
+# streams. These helpers are plain (non-ADK) functions the web layer calls.
+#
+# A build's log lives on disk at LOG_DIR/<job_id>.log regardless of which
+# process started it, so the web helpers work even when the McpBuilderAgent runs
+# in a separate A2A process: the in-memory _JOBS record is authoritative when
+# present, and disk is the fallback (status re-derived from the log).
+_EVENT_PREFIX = "ALEMBIC_EVENT "
+
+
+def _status_from_log(text: str) -> str:
+    """Best-effort status for a build we only know from its on-disk log (started
+    by another process, so not in this process's _JOBS)."""
+    if _URL_RE.search(text) or '"status": "complete"' in text:
+        return "done"
+    for marker in ("pipeline failed", "Traceback (most recent call last)",
+                   "failed to connect to the docker API", '"status": "failed"'):
+        if marker in text:
+            return "failed"
+    return "running"
+
+
+def web_build_log_file(job_id: str) -> Optional[Path]:
+    """Path to a build's log, or None if there is no such build."""
+    with _LOCK:
+        rec = _JOBS.get(job_id)
+    if rec is not None:
+        return Path(rec["log_file"])
+    p = LOG_DIR / f"{job_id}.log"
+    return p if p.exists() else None
+
+
+def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
+    """Status/result view of one build for the web page. In-memory record wins;
+    otherwise reconstruct a minimal snapshot from the on-disk log."""
+    with _LOCK:
+        rec = _JOBS.get(job_id)
+        if rec is not None:
+            return _snapshot(rec)
+    log = LOG_DIR / f"{job_id}.log"
+    if not log.exists():
+        return None
+    text = log.read_text(encoding="utf-8", errors="replace")
+    status = _status_from_log(text)
+    out: Dict[str, Any] = {"job_id": job_id, "status": status,
+                           "progress_page": f"/builds/{job_id}",
+                           "progress_url": f"{_WEB_BASE_URL}/builds/{job_id}"}
+    if status == "done":
+        url = _URL_RE.search(text)
+        image = _IMAGE_RE.search(text)
+        container = _CONTAINER_RE.search(text)
+        out["mcp_url"] = url.group(1) if url else None
+        out["image"] = image.group(1) if image else None
+        out["container"] = container.group(1) if container else None
+    elif status == "failed":
+        out["error"] = "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
+    stages = _STAGE_RE.findall(text)
+    if stages:
+        out["stage"] = f"{stages[-1][0]}/5 {stages[-1][1]}"
+    return out
+
+
+def web_list_builds() -> list:
+    """Every build the web UI can show: in-memory records merged with any
+    on-disk logs from other processes/sessions, newest first."""
+    seen: Dict[str, Dict[str, Any]] = {}
+    with _LOCK:
+        for rec in _JOBS.values():
+            seen[rec["job_id"]] = _snapshot(rec, with_log_tail=False)
+    if LOG_DIR.exists():
+        for log in LOG_DIR.glob("*.log"):
+            jid = log.stem
+            if jid in seen:
+                continue
+            snap = web_build_snapshot(jid)
+            if snap is not None:
+                snap["mtime"] = log.stat().st_mtime
+                seen[jid] = snap
+    return sorted(seen.values(),
+                  key=lambda s: s.get("mtime", s.get("elapsed_seconds", 0)),
+                  reverse=True)
+
+
+def parse_event_line(line: str) -> Optional[Dict[str, Any]]:
+    """Parse one ``ALEMBIC_EVENT <json>`` log line into its event dict, or None
+    if the line is not a structured event."""
+    if not line.startswith(_EVENT_PREFIX):
+        return None
+    try:
+        return json.loads(line[len(_EVENT_PREFIX):])
+    except (ValueError, TypeError):
+        return None
+
+
+__all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
+           "web_build_log_file", "web_build_snapshot", "web_list_builds",
+           "parse_event_line"]

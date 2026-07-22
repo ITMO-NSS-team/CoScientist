@@ -38,6 +38,10 @@ def _run_build(args: list[str]) -> None:
         _usage()
     os.chdir("/work")
     os.environ["PYTHONPATH"] = "/app:" + os.environ.get("PYTHONPATH", "")
+    # Stream live pipeline events on stdout (one ``ALEMBIC_EVENT <json>`` line per
+    # event) so the host — which captures this container's stdout into the build
+    # log — can forward a live view to the CoScientist web build page.
+    os.environ["ALEMBIC_EMIT_STDOUT"] = "1"
     os.execvp("python", ["python", "-m", "alembic.main", *args])
 
 
