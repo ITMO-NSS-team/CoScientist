@@ -51,6 +51,12 @@ def _fedot():
     return fedot_toolset_instance
 
 
+def _result_formatter():
+    from CoScientist.tools import result_formatter_tool
+    return result_formatter_tool
+
+
+
 def _medical():
     from CoScientist.tools import med_toolset_instance
     return med_toolset_instance
@@ -205,6 +211,23 @@ REGISTRY.register_tool(ToolEntry(
         ),
     ),
 ))
+
+REGISTRY.register_tool(ToolEntry(
+    key="result_formatter",
+    factory=_result_formatter,
+    docs=(
+        ToolDoc(
+            name="format_results",
+            signature="format_results()",
+            purpose=(
+                "Collect every figure and data table this run produced (from session "
+                "artifacts and the sandbox workspace) into the per-run report folder and "
+                "return ready-to-embed Markdown blocks (image embeds + tables). Call FIRST."
+            ),
+        ),
+    ),
+))
+
 
 REGISTRY.register_tool(ToolEntry(
     key="medical",

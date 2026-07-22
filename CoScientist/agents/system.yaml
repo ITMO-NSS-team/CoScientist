@@ -37,11 +37,26 @@
 defaults:
   model: main
 
+# ─────────────────────────────────────────────────────────────────────────────
+# System lifecycle flow (separate from the delegation tree).
+#
+# `pre`  stages run, in order, BEFORE the root orchestrator.
+# `post` stages run, in order, AFTER it.
+# Each stage runs as its own pass over the SAME session, so state (output_keys,
+# fedot_artifacts, …) flows between them. Stage agents are declared in `agents`
+# below like any other; they do NOT need to be attached to a parent.
+#
+# The manager driver (CoScientist.main) executes: pre… → root → post…
+# ─────────────────────────────────────────────────────────────────────────────
+pipeline:
+  pre: []                         # e.g. [PlannerAgent] to A/B-test the planner
+  post: [ResultAggregatorAgent]
+
 agents:
-  # ── Root ───────────────────────────────────────────────────────────────────
+  # ── Root orchestrator ───────────────────────────────────────────────────────
   OrchestratorAgent:
     class: llm
-    root: false
+    root: true
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
@@ -74,24 +89,6 @@ agents:
         tags: [orchestration, science, multi-agent]
 
 
-  InitAgent:
-    class: sequential
-    root: true
-    children:
-      - PlannerAgent
-      - OrchestratorAgent
-    enabled: true
-    hitl: true
-    description: Initialize the CoScientist system
-    a2a:
-      key: init
-      port: 8008
-      skill:
-        id: init
-        name: Init
-        description: Initialize the CoScientist system
-        tags: [init, science, multi-agent]
-
   # ── Direct subordinates ────────────────────────────────────────────────────
   PlannerAgent:
     class: custom:session
@@ -118,6 +115,17 @@ agents:
         name: Plan
         description: Produce a research roadmap for a scientific task
         tags: [planning, roadmap, science]
+
+  ResultAggregatorAgent:
+    class: llm
+    description: >-
+      Aggregates all findings, data tables, metrics, and generated figures/images
+      from the session's run history and state. Synthesizes a single, complete,
+      visually-rich reproduction report in Markdown format containing embedded
+      images, graphs, tables, and references.
+    prompt: result_aggregator
+    tools: [result_formatter]
+    output_key: final_report
 
   HypothesesAgent:
     class: llm

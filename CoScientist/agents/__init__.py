@@ -17,8 +17,15 @@ install_json_repair()
 
 _system = build_system()
 
+# root == the delegation-tree orchestrator (OrchestratorAgent). Lifecycle flow
+# (pre/post stages) lives in system.yaml `pipeline` and is driven by the manager
+# — it is deliberately NOT the root, so this stays the real LLM orchestrator.
 orchestrator_agent = _system.root
 root_agent = orchestrator_agent
+
+# Agents that run as pipeline stages (pre/post) around the orchestrator.
+pipeline_pre_agents = [_system.agent(n) for n in _system.config.pipeline.pre]
+pipeline_post_agents = [_system.agent(n) for n in _system.config.pipeline.post]
 planner_agent = _system.agent("PlannerAgent")
 hypotheses_agent = _system.agent("HypothesesAgent")
 research_agent = _system.agent("ResearchAgent")
@@ -30,8 +37,11 @@ tool_retriever_agent = _system.agent("ToolRetrieverAgent")
 tool_reranker_agent = _system.agent("ToolReranker")
 tool_websearcher_agent = _system.agent("ToolWebSearcherAgent")
 fedot_agent = _system.agent("ExperimentAgent")
+result_aggregator_agent = _system.agent("ResultAggregatorAgent")
 
 track_adk_agent_recursive(orchestrator_agent, multi_agent_tracer)
+for _stage in pipeline_pre_agents + pipeline_post_agents:
+    track_adk_agent_recursive(_stage, multi_agent_tracer)
 
 __all__ = [
     "orchestrator_agent",
@@ -46,5 +56,8 @@ __all__ = [
     "tool_reranker_agent",
     "tool_websearcher_agent",
     "task_execution_agent",
-    "tool_agent"
+    "tool_agent",
+    "result_aggregator_agent",
+    "pipeline_pre_agents",
+    "pipeline_post_agents",
 ]

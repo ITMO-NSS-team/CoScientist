@@ -47,15 +47,22 @@ class FedotMASToolset(BaseToolset):
         """
         state = tool_context.state if tool_context is not None else {}
 
+        servers = []
         postgres = PostgresClient(settings.postgres)
-        await postgres.initialize()
         try:
-            filtered_tools = state.get('filtered_tools', [])
-            server_ids = set([t['server_id'] for t in filtered_tools])
-            servers: List[MCPServer] = [await postgres.get_server(server_id) for server_id in server_ids]
-        finally:
-            # Always release the DB connection, even if a lookup raised.
-            await postgres.close()
+            await postgres.initialize()
+            try:
+                filtered_tools = state.get('filtered_tools', [])
+                server_ids = set([t['server_id'] for t in filtered_tools])
+                servers = [await postgres.get_server(server_id) for server_id in server_ids]
+            finally:
+                # Always release the DB connection, even if a lookup raised.
+                await postgres.close()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "fedot_tool: database lookup failed (%s); proceeding with empty servers list", exc
+            )
 
         servers = [server for server in servers if (server is not None and server.protocol == 'http')]
         servers_payload = {server.name: HttpMCPServer(url=server.url, description=server.description)

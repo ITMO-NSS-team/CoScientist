@@ -32,10 +32,20 @@ def system(config):
 # ── config validation ────────────────────────────────────────────────────────
 
 def test_config_loads_and_has_one_root(config):
-    assert config.root.name == "InitAgent"
+    # The root is the delegation-tree orchestrator; lifecycle flow (plan/aggregate)
+    # lives in the `pipeline` section, not in a SequentialAgent root.
+    assert config.root.name == "OrchestratorAgent"
     order = config.build_order()
     assert order.index("ToolRetrieverAgent") < order.index("LocalToolsExtractorAgent")
     assert set(order) == set(config.agents)
+
+
+def test_pipeline_stages_are_declared_agents_and_not_root(config):
+    for stage in config.pipeline.stage_names():
+        assert stage in config.agents, f"pipeline stage {stage!r} is not a declared agent"
+        assert stage != config.root.name, "the root must not also be a pipeline stage"
+    # The Result Aggregator is wired as a post stage (the report deliverable).
+    assert "ResultAggregatorAgent" in config.pipeline.post
 
 
 def test_every_referenced_name_is_registered(config):

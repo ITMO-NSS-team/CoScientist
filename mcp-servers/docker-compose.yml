@@ -43,3 +43,14 @@ services:
     env_file:
       - ./paper-analysis-mcp-server/.env
     restart: unless-stopped
+
+  result-aggregator-mcp-server:
+    build:
+      context: ..
+      dockerfile: mcp-servers/result-aggregator-mcp-server/Dockerfile
+    ports:
+      - "7337:7331"
+    volumes:
+      - ../logs:/app/logs
+      - ../workspace:/app/workspace
+    restart: unless-stopped

@@ -10,9 +10,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from CoScientist.main import CoScientistManager
+from CoScientist.main import CoScientistManager, _POST_STAGE_DIRECTIVE
 from CoScientist.web.handler import WebHITLHandler
-from CoScientist.agents import planner_agent
+from CoScientist.agents import planner_agent, pipeline_post_agents
+from CoScientist.config import ReportConfig
+from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 
 from google.genai import types
@@ -434,11 +436,58 @@ async def _handle_chat(ws: WebSocket, data: dict):
                 # No interrupt, we're done
                 break
 
-        await ws.send_json({
+        # ── Post pipeline: run the report stage(s), then package the deliverable ──
+        report_config = ReportConfig.from_mapping(data.get("report_config"))
+        await manager._set_state("report_config", report_config.to_state())
+
+        report_markdown = ""
+        for agent in pipeline_post_agents:
+            await ws.send_json({
+                "type": "status",
+                "status": "processing",
+                "message": f"Compiling report ({agent.name})…",
+            })
+            directive = types.Content(
+                role="user", parts=[types.Part(text=_POST_STAGE_DIRECTIVE)]
+            )
+            async for event in manager._runner_for(agent).run_async(
+                user_id=manager.user_id,
+                session_id=manager.session_id,
+                new_message=directive,
+            ):
+                stage_event = {
+                    "type": "agent_event",
+                    "author": event.author or agent.name,
+                    "is_final": event.is_final_response(),
+                    "timestamp": datetime.now().isoformat(),
+                }
+                if event.content and event.content.parts:
+                    text_parts = [p.text for p in event.content.parts if p.text]
+                    if text_parts:
+                        stage_event["content"] = "\n".join(text_parts)
+                _agent_events.append(stage_event)
+                await ws.send_json(stage_event)
+                text = CoScientistManager._final_text(event)
+                if text is not None:
+                    report_markdown = text
+
+        # The report (aggregator) is the deliverable; fall back to the
+        # orchestrator's own answer if no post stage produced text.
+        report_markdown = report_markdown or final_response
+
+        result = await asyncio.to_thread(
+            finalize_report, manager.session_id, report_markdown, report_config, None,
+        )
+
+        payload = {
             "type": "final_response",
-            "content": final_response,
+            "content": result.markdown,
             "timestamp": datetime.now().isoformat(),
-        })
+        }
+        if result.report_dir:
+            payload["report_dir"] = str(result.report_dir)
+            payload["manifest"] = result.manifest
+        await ws.send_json(payload)
 
     except asyncio.CancelledError:
         # Propagate task cancellation cleanly

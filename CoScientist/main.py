@@ -18,8 +18,14 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
-from CoScientist.config import get_settings
-from CoScientist.agents import orchestrator_agent, root_agent
+from CoScientist.config import get_settings, ReportConfig
+from CoScientist.agents import (
+    orchestrator_agent,
+    root_agent,
+    pipeline_pre_agents,
+    pipeline_post_agents,
+)
+from CoScientist.reporting import finalize_report, RunResult
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
@@ -32,6 +38,15 @@ settings = get_settings()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Directive handed to post-pipeline stages (e.g. the Result Aggregator). They run
+# over the SAME session as the orchestrator, so all results are already in state
+# and history — they just need the cue to compile the deliverable.
+_POST_STAGE_DIRECTIVE = (
+    "The run is complete. Using the results already in session state and the sandbox "
+    "workspace, produce the final report now. Call format_results first, then write the "
+    "full Markdown report as your response."
+)
 
 
 def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> str:
@@ -82,6 +97,8 @@ class CoScientistManager:
 
         self.session_service: Optional[InMemorySessionService] = None
         self.runner: Optional[Runner] = None
+        self._runners: dict = {}  # agent name -> Runner (shared session_service)
+        self._run_error: Optional[Exception] = None
         self._initialized = False
 
         # HITL setup
@@ -102,119 +119,180 @@ class CoScientistManager:
             session_id=self.session_id,
         )
 
-        # Runner
+        # Runner over the root orchestrator. Pipeline-stage agents get their own
+        # runners (see _runner_for), all sharing this session_service so state
+        # flows between stages.
         self.runner = Runner(
             agent=root_agent,
             app_name=self.app_name,
             session_service=self.session_service,
         )
+        self._runners[root_agent.name] = self.runner
 
         if self._hitl_handler:
             hitl_toolset._handler = self._hitl_handler
 
         self._initialized = True
 
-    async def run(self, query: str, verbose: bool = True) -> str:
-        """
-        Execute a query through the orchestrator agent.
-
-        Args:
-            query: user query
-            verbose: whether to print events
-
-        Returns:
-            Final agent response
-        """
-        await self.initialize()
-
-        content = types.Content(
-            role="user",
-            parts=[types.Part(text=query)]
-        )
-
-        final_response = "No response"
-        run_error = None
-
-        # Partial delivery (F015a.A4 #2): a mid-run failure — notably an MCP 300s
-        # timeout / McpError on a slow tool — must NOT discard results already
-        # captured at the tool boundary (state['fedot_artifacts']). Swallow it here
-        # and fall through to the deterministic finalizer below, which surfaces those
-        # artifacts so the user still gets the molecules produced before the stall.
-        try:
-            async for event in self.runner.run_async(
-                user_id=self.user_id,
-                session_id=self.session_id,
-                new_message=content,
-            ):
-                if verbose:
-                    print(
-                        f"[Event] {event.author} | {type(event).__name__} | Final={event.is_final_response()}"
-                    )
-
-                if event.is_final_response():
-                    if event.content and event.content.parts:
-                        parts = event.content.parts
-                        # Thinking models emit a separate `thought` part before the
-                        # answer; parts[0] is often that reasoning. Prefer the
-                        # non-thought answer text, falling back to any text so we
-                        # never drop the response entirely.
-                        answer = "\n".join(
-                            p.text for p in parts
-                            if getattr(p, "text", None) and not getattr(p, "thought", False)
-                        )
-                        final_response = answer or "\n".join(
-                            p.text for p in parts if getattr(p, "text", None)
-                        ) or ""
-                    elif event.actions and event.actions.escalate:
-                        final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
-        except Exception as exc:
-            run_error = exc
-            logger.error(
-                f"run loop raised ({type(exc).__name__}: {str(exc)[:200]}); "
-                "attempting partial delivery from captured S3 artifacts."
+    def _runner_for(self, agent) -> Runner:
+        """A Runner for a pipeline-stage agent, sharing the root's session."""
+        runner = self._runners.get(agent.name)
+        if runner is None:
+            runner = Runner(
+                agent=agent,
+                app_name=self.app_name,
+                session_service=self.session_service,
             )
+            self._runners[agent.name] = runner
+        return runner
 
-        # Deterministic finalizer (F010.A5/A6): the orchestrator LLM sometimes drops a
-        # successfully-generated result. The real molecules live behind a presigned S3 URL
-        # that fedot_tool captured into state['fedot_artifacts']. If that result is not
-        # already in the answer, DOWNLOAD the file and append a preview of its contents (read
-        # from S3, not fabricated) plus the link, so generated molecules always reach the user.
+    async def _set_state(self, key: str, value) -> None:
+        """Best-effort write into the live session state (in-memory)."""
         try:
             session = await self.session_service.get_session(
                 app_name=self.app_name, user_id=self.user_id, session_id=self.session_id,
             )
-            arts = (getattr(session, "state", None) or {}).get("fedot_artifacts") if session else None
+            if session is not None:
+                session.state[key] = value
+        except Exception as exc:
+            logger.warning("could not set session state %r: %s", key, exc)
+
+    async def run_pipeline(self, query: str, report_config: ReportConfig, verbose: bool = False):
+        """Drive pre → root → post stages over one shared session.
+
+        Yields ``(stage_name, event)`` for every event. A stage that raises does
+        not abort the pipeline: the error is recorded on ``self._run_error`` and
+        remaining stages (notably the post/report stage) still run, so a partial
+        failure still yields a report.
+        """
+        await self.initialize()
+        await self._set_state("report_config", report_config.to_state())
+        self._run_error = None
+
+        stages = (
+            [(a, query) for a in pipeline_pre_agents]
+            + [(root_agent, query)]
+            + [(a, _POST_STAGE_DIRECTIVE) for a in pipeline_post_agents]
+        )
+        for agent, message in stages:
+            content = types.Content(role="user", parts=[types.Part(text=message)])
+            try:
+                async for event in self._runner_for(agent).run_async(
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    new_message=content,
+                ):
+                    if verbose:
+                        print(
+                            f"[Event] {agent.name} | {event.author} | "
+                            f"{type(event).__name__} | Final={event.is_final_response()}"
+                        )
+                    yield agent.name, event
+            except Exception as exc:
+                self._run_error = exc
+                logger.error(
+                    "pipeline stage %s raised (%s: %s); continuing to next stage.",
+                    agent.name, type(exc).__name__, str(exc)[:200],
+                )
+
+    @staticmethod
+    def _final_text(event) -> Optional[str]:
+        """Answer text of a final-response event, skipping thinking parts."""
+        if not (event.is_final_response() and event.content and event.content.parts):
+            if event.actions and event.actions.escalate:
+                return f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
+            return None
+        parts = event.content.parts
+        # Thinking models emit a separate `thought` part before the answer; prefer
+        # the non-thought text, falling back to any text so we never drop it.
+        answer = "\n".join(
+            p.text for p in parts
+            if getattr(p, "text", None) and not getattr(p, "thought", False)
+        )
+        return answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
+
+    async def run(
+        self,
+        query: str,
+        verbose: bool = True,
+        report_config: Optional[ReportConfig] = None,
+    ) -> RunResult:
+        """Run the full pipeline (pre → orchestrator → post) and package the report.
+
+        Returns a :class:`RunResult` (``markdown``, ``report_dir``, ``manifest``).
+        ``str(result)`` is the markdown, so legacy callers that treated the return
+        value as a string keep working.
+        """
+        report_config = report_config or ReportConfig()
+        await self.initialize()
+
+        # Track the last final-response text per stage. The report is the last
+        # post-stage's output (the aggregator); if no post stage produced text we
+        # fall back to the orchestrator's own final answer.
+        stage_final: dict = {}
+        post_names = [a.name for a in pipeline_post_agents]
+
+        async for stage_name, event in self.run_pipeline(query, report_config, verbose=verbose):
+            text = self._final_text(event)
+            if text is not None:
+                stage_final[stage_name] = text
+
+        report_markdown = ""
+        for name in reversed(post_names):
+            if stage_final.get(name):
+                report_markdown = stage_final[name]
+                break
+        if not report_markdown:
+            report_markdown = stage_final.get(root_agent.name, "")
+
+        # Read session state once, for the S3 fallback and reference extraction.
+        try:
+            session = await self.session_service.get_session(
+                app_name=self.app_name, user_id=self.user_id, session_id=self.session_id,
+            )
+            state = dict(getattr(session, "state", None) or {}) if session else {}
         except Exception:
-            arts = None
-        if arts:
-            missing = [a for a in arts if a.get("url") and a["url"] not in (final_response or "")]
-            if missing:
+            state = {}
+
+        # Safety net: if the aggregator produced nothing (e.g. the run stopped
+        # early), surface any captured S3 artifacts so results still reach the
+        # user. In the normal path the aggregator already embeds these, so we
+        # only fall back when there is no report text.
+        if not report_markdown.strip():
+            arts = state.get("fedot_artifacts")
+            if arts:
                 blocks = []
-                for a in missing:
-                    url = a["url"]
+                for a in arts:
+                    url = a.get("url")
+                    if not url:
+                        continue
                     cnt = a.get("generated_count")
                     tag = f" ({cnt} molecules)" if cnt else ""
                     preview = await asyncio.to_thread(_s3_csv_preview, url)
-                    block = f"**Generated molecules{tag}** — [download full CSV]({url})"
+                    block = f"**Generated result{tag}** — [download full CSV]({url})"
                     if preview:
                         block += f"\n```\n{preview}\n```"
                     blocks.append(block)
-                final_response = (final_response or "").rstrip() + "\n\n---\n" + "\n\n".join(blocks)
+                if blocks:
+                    report_markdown = "## Captured results\n\n" + "\n\n".join(blocks)
 
-        if not (final_response or "").strip():
-            if run_error is not None:
-                final_response = (
-                    f"The run stopped early ({type(run_error).__name__}) before producing a result, "
-                    "and no partial artifacts were captured. This is usually a slow MCP tool hitting "
-                    "its timeout or a transient model/network error — please retry."
+        if not report_markdown.strip():
+            if self._run_error is not None:
+                report_markdown = (
+                    f"The run stopped early ({type(self._run_error).__name__}) before producing a "
+                    "result, and no partial artifacts were captured. This is usually a slow MCP "
+                    "tool hitting its timeout or a transient model/network error — please retry."
                 )
             else:
-                final_response = (
+                report_markdown = (
                     "I couldn't complete this request within the available steps — the orchestrator "
                     "did not reach a tool that produced a result. Please retry or narrow the request."
                 )
 
-        return final_response
+        # Package the deliverable: report.md + LaTeX (per config) + MANIFEST.json.
+        return await asyncio.to_thread(
+            finalize_report, self.session_id, report_markdown, report_config, state,
+        )
 
     async def close(self):
         """Cleanup session-related resources and uploaded paper artifacts."""
@@ -235,14 +313,25 @@ async def create_manager() -> CoScientistManager:
 __all__ = [
     # Main classes
     "CoScientistManager",
-    # Models
+    "ReportConfig",
+    "RunResult",
     # Functions
-    "create_manager"
+    "create_manager",
 ]
 
 # CLI entrypoint
 if __name__ == "__main__":
+    import argparse
+    from CoScientist.config import LATEX_MODES
+
     async def main():
+        parser = argparse.ArgumentParser(description="CoScientist interactive CLI")
+        parser.add_argument(
+            "--latex", choices=LATEX_MODES, default="skip",
+            help="LaTeX output mode for the final report (default: skip).",
+        )
+        args = parser.parse_args()
+        report_config = ReportConfig.from_cli(args)
 
         manager = await create_manager()
 
@@ -250,24 +339,17 @@ if __name__ == "__main__":
 
         try:
             while True:
-                print(
-                    "\n"
-                    "==============================\n"
-                    "🚀  WEB INTERFACE NOT RUNNING\n"
-                    "==============================\n"
-                    "Do not run main.py directly, run web/server.py instead.\n"
-                    "Start it with:\n\n"
-                    "    uv run CoScientist/web/server.py\n\n"
-                )
                 query = input("Enter query (or 'exit'): ")
 
                 if query.lower() in {"exit", "quit"}:
                     break
 
-                result = await manager.run(query)
+                result = await manager.run(query, report_config=report_config)
 
                 print("\n=== Final Response ===")
-                print(result)
+                print(result.markdown)
+                if result.report_dir:
+                    print(f"\n📁 Report deliverable: {result.report_dir}")
                 print()
 
         finally:
