@@ -11,11 +11,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
+import os
 from typing import Optional
 import logging
+from uuid import uuid4
 
 from google.adk.sessions import InMemorySessionService
+from google.adk.sessions.base_session_service import BaseSessionService
 from google.adk.runners import Runner
+from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings, ReportConfig
@@ -47,6 +51,59 @@ _POST_STAGE_DIRECTIVE = (
     "workspace, produce the final report now. Call format_results first, then write the "
     "full Markdown report as your response."
 )
+
+
+def _compaction_config():
+    """Build the events-compaction config: when an agent's prompt grows past the
+    token threshold, ADK summarizes older events (with the agent's own model),
+    keeping the last N raw events. Disable with AGENT_CONTEXT_TOKEN_THRESHOLD=0.
+    """
+    try:
+        from google.adk.apps.app import EventsCompactionConfig
+        threshold = int(os.getenv("AGENT_CONTEXT_TOKEN_THRESHOLD", "150000"))
+        if threshold <= 0:
+            return None
+        return EventsCompactionConfig(
+            compaction_interval=int(os.getenv("AGENT_COMPACTION_INTERVAL", "15")),
+            overlap_size=int(os.getenv("AGENT_COMPACTION_OVERLAP", "2")),
+            token_threshold=threshold,
+            event_retention_size=int(os.getenv("AGENT_CONTEXT_RETENTION", "12")),
+        )
+    except Exception:  # noqa: BLE001 — compaction is best-effort, never block startup
+        return None
+
+
+def reset_session_state(
+    user_id: str,
+    session_id: str,
+    *,
+    reset_research: Optional[bool] = None,
+) -> None:
+    """Explicitly reset graph state for one session only.
+
+    TaskTracker state belongs to ADK session state and semantic memory is global
+    across the installation, so neither is touched here.
+    """
+    try:
+        from CoScientist.graph.memory import reset_knowledge_graph
+        reset_knowledge_graph(user_id=user_id, session_id=session_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        should_reset = (
+            get_settings().research_graph.reset_on_session
+            if reset_research is None
+            else reset_research
+        )
+        if should_reset:
+            from CoScientist.graph.research.store import get_research_graph
+            get_research_graph(
+                user_id=user_id,
+                session_id=session_id,
+            ).reset(archive=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> str:
@@ -87,19 +144,23 @@ class CoScientistManager:
     def __init__(
         self,
         app_name: str = "coscientist_app",
-        user_id: str = "user_1",
-        session_id: str = "session_001",
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         hitl_handler: Optional[AbstractHITLHandler] = None,
+        session_service: Optional[BaseSessionService] = None,
     ):
         self.app_name = app_name
-        self.user_id = user_id
-        self.session_id = session_id
+        self.user_id = user_id or f"user_{uuid4().hex}"
+        self.session_id = session_id or f"session_{uuid4().hex}"
 
-        self.session_service: Optional[InMemorySessionService] = None
+        # Web mode injects one shared service so managers can reopen existing
+        # sessions. CLI mode falls back to a private in-memory service.
+        self.session_service: Optional[BaseSessionService] = session_service
         self.runner: Optional[Runner] = None
         self._runners: dict = {}  # agent name -> Runner (shared session_service)
         self._run_error: Optional[Exception] = None
         self._initialized = False
+        self._initialize_lock = asyncio.Lock()
 
         # HITL setup
         self._hitl_handler = hitl_handler
@@ -109,30 +170,61 @@ class CoScientistManager:
         """Initialize session + runner."""
         if self._initialized:
             return
-    
-        # Session service
-        self.session_service = InMemorySessionService()
+        async with self._initialize_lock:
+            if self._initialized:
+                return
 
-        await self.session_service.create_session(
-            app_name=self.app_name,
-            user_id=self.user_id,
-            session_id=self.session_id,
-        )
+            if self.session_service is None:
+                self.session_service = InMemorySessionService()
 
-        # Runner over the root orchestrator. Pipeline-stage agents get their own
-        # runners (see _runner_for), all sharing this session_service so state
-        # flows between stages.
-        self.runner = Runner(
-            agent=root_agent,
-            app_name=self.app_name,
-            session_service=self.session_service,
-        )
-        self._runners[root_agent.name] = self.runner
+            session = await self.session_service.get_session(
+                app_name=self.app_name,
+                user_id=self.user_id,
+                session_id=self.session_id,
+            )
+            if session is None:
+                from CoScientist.graph.session_scope import (
+                    GRAPH_SCOPE_SESSION_KEY,
+                    GRAPH_SCOPE_USER_KEY,
+                )
+                await self.session_service.create_session(
+                    app_name=self.app_name,
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    state={
+                        "active_tasks": [],
+                        GRAPH_SCOPE_USER_KEY: self.user_id,
+                        GRAPH_SCOPE_SESSION_KEY: self.session_id,
+                    },
+                )
+            from google.adk.apps.app import App
+            from CoScientist.logging.event_logger import EventLoggerPlugin
+            from CoScientist.graph.plugin import GraphMemoryPlugin
+            from CoScientist.graph.research.validator import BackgroundValidatorPlugin
+            from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
 
-        if self._hitl_handler:
-            hitl_toolset._handler = self._hitl_handler
+            app = App(
+                name=self.app_name,
+                root_agent=root_agent,
+                plugins=[
+                    EventLoggerPlugin(),
+                    GraphMemoryPlugin(),
+                    BackgroundValidatorPlugin(),
+                    # Keep truncation last so observers receive full results.
+                    ToolResultTruncationPlugin(),
+                ],
+                events_compaction_config=_compaction_config(),
+            )
+            self.runner = Runner(app=app, session_service=self.session_service)
+            # Register the root runner so the pipeline driver (_runner_for) reuses
+            # this App-wrapped runner for the orchestrator stage; pipeline stages
+            # get their own runners over the SAME session_service.
+            self._runners[root_agent.name] = self.runner
 
-        self._initialized = True
+            if self._hitl_handler:
+                hitl_toolset._handler = self._hitl_handler
+
+            self._initialized = True
 
     def _runner_for(self, agent) -> Runner:
         """A Runner for a pipeline-stage agent, sharing the root's session."""
@@ -296,6 +388,18 @@ class CoScientistManager:
 
     async def close(self):
         """Cleanup session-related resources and uploaded paper artifacts."""
+        if self.runner is not None:
+            try:
+                await self.runner.close()
+            except Exception as exc:  # noqa: BLE001 - continue local cleanup
+                logger.error(
+                    "Warning: failed to close runner for session %s: %s",
+                    self.session_id,
+                    exc,
+                )
+            finally:
+                self.runner = None
+                self._initialized = False
         try:
             await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
         except Exception as exc:
@@ -319,40 +423,8 @@ __all__ = [
     "create_manager",
 ]
 
-# CLI entrypoint
+# CLI entrypoint — thin shim. Prefer: python -m CoScientist cli
 if __name__ == "__main__":
-    import argparse
-    from CoScientist.config import LATEX_MODES
+    from CoScientist.cli import run_repl
 
-    async def main():
-        parser = argparse.ArgumentParser(description="CoScientist interactive CLI")
-        parser.add_argument(
-            "--latex", choices=LATEX_MODES, default="skip",
-            help="LaTeX output mode for the final report (default: skip).",
-        )
-        args = parser.parse_args()
-        report_config = ReportConfig.from_cli(args)
-
-        manager = await create_manager()
-
-        print("CoScientist (ADK) initialized\n")
-
-        try:
-            while True:
-                query = input("Enter query (or 'exit'): ")
-
-                if query.lower() in {"exit", "quit"}:
-                    break
-
-                result = await manager.run(query, report_config=report_config)
-
-                print("\n=== Final Response ===")
-                print(result.markdown)
-                if result.report_dir:
-                    print(f"\n📁 Report deliverable: {result.report_dir}")
-                print()
-
-        finally:
-            await manager.close()
-
-    asyncio.run(main())
+    run_repl()

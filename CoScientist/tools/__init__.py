@@ -15,10 +15,13 @@ from CoScientist.tools.result_formatter_tool import (
     result_formatter_tool,
     result_formatter_toolset_instance,
 )
+from CoScientist.tools.dynamic_tools import DynamicMCPToolset, dynamic_mcp_toolset_instance
 
 __all__ = [
     "FedotMASToolset",
     "fedot_toolset_instance",
+    "DynamicMCPToolset",
+    "dynamic_mcp_toolset_instance",
     "websearch_toolset_instance",
     "paper_analysis_toolset_instance",
     "papers_search_toolset_instance",

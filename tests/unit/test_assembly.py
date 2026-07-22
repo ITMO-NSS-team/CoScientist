@@ -156,6 +156,19 @@ def test_planner_roster_uses_real_agent_names(config, system):
     assert "Hypothesis Agent" not in instruction
 
 
+def test_planner_optimizes_for_capability_coverage_not_step_count(system):
+    """MCP metadata compresses delegation units instead of expanding them."""
+    instruction = system.agent("PlannerAgent").instruction
+    assert "SHORTEST executable roadmap" in instruction
+    assert "FULL description and `input_schema`" in instruction
+    assert "one task per independent user deliverable" in instruction
+    assert "run a compression pass" in instruction
+    assert "Do not add an OrchestratorAgent task" in instruction
+    assert "Prefer a ready direct generation/inference tool" in instruction
+    assert "Never assume that TaskExecutorAgent can" in instruction
+    assert "make ONE task" in instruction
+
+
 def test_orchestrator_tool_discovery_gate(config, system):
     """Structural invariant: the retrieval tool is documented iff attached, and
     when attached the retrieve_tools gate is positioned BEFORE the routing roster
@@ -207,6 +220,27 @@ def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(config, sy
     # Built and attached as an AgentTool on the coder.
     attached = [t.agent.name for t in system.agent("CoderAgent").tools if hasattr(t, "agent")]
     assert attached == ["DatasetCollectorAgent"]
+
+
+def test_research_graph_tools_match_prompt(config, system):
+    """Agents wired with a research_graph* tool document its write/read tools in
+    their prompt (and agents without it don't) — the same consistency the
+    assembler enforces for every tool, asserted explicitly for this feature."""
+    for name, cfg in config.agents.items():
+        if cfg.cls != "llm" or not cfg.prompt:
+            continue
+        instruction = system.agent(name).instruction
+        has_worker = "research_graph" in cfg.tools
+        has_orch = "research_graph_orchestrator" in cfg.tools
+        if has_worker or has_orch:
+            assert "research_commit" in instruction, f"{name}: research_commit missing"
+            assert "research_context_slice" in instruction, f"{name}: slice missing"
+        else:
+            assert "research_commit" not in instruction, f"{name}: research_commit leaked"
+        # init/triggers/set_focus are orchestrator-only
+        for orch_only in ("research_init", "research_triggers", "research_set_focus"):
+            assert (orch_only in instruction) == has_orch, \
+                f"{name}: {orch_only} presence != orchestrator-tool presence"
 
 
 def test_orchestrator_prompt_documents_only_wired_critics(config, system):

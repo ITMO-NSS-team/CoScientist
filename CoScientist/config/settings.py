@@ -131,6 +131,10 @@ class S3Settings(BaseModel):
 # OPIK
 # =========================
 class OpikSettings(BaseModel):
+    # Master switch for Opik tracing (env: OPIK__ENABLED). Off by default so the
+    # app never ships spans to a (possibly rate-limited) Opik backend unless
+    # explicitly opted in. When False, tracing is fully disabled process-wide.
+    enabled: bool = False
     api_key: Optional[str] = None
     url_override: Optional[str] = None
     opik_project_name: Optional[str] = None
@@ -149,7 +153,13 @@ class MCPSettings(BaseModel):
 # HITL (Human-in-the-Loop)
 # =========================
 class HITLSettings(BaseModel):
-    enabled: bool = True
+    # Human-in-the-loop approval for outward-facing / hard-to-reverse actions.
+    # OFF by default: a one-prompt autonomous run cannot pause for console
+    # approval (ConsoleHITLHandler blocks on input(), which would hang a web/
+    # headless run). The hard safety blocklist in coder_tools (_BLOCKED: rm -rf /,
+    # mkfs, fork bombs, …) still refuses genuinely dangerous commands regardless.
+    # Re-enable for interactive/supervised runs via HITL__ENABLED=true.
+    enabled: bool = False
 
 # =========================
 # ORCHESTRATOR
@@ -159,7 +169,20 @@ class OrchestratorSettings(BaseModel):
     # system.yaml as ${orchestrator.use_planner}). When False, the planner is
     # not attached and the orchestrator prompt's planning step adapts — the
     # assembler keeps prompt and tools consistent automatically.
-    use_planner: bool = True
+    #
+    # Kept in sync with PlannerAgent.enabled in system.yaml: the planner agent
+    # is disabled (it planned worse than the orchestrator coordinating inline),
+    # so this is False too. With True while the agent is disabled, the
+    # orchestrator prompt stays in TASK_MANAGEMENT mode expecting a plan nobody
+    # creates -> it hammers update_task_status on phantom task ids and gives up.
+    use_planner: bool = False
+
+    # Upper bound on LLM calls for one top-level run, passed to ADK's RunConfig.
+    # ADK defaults to 500, which a long autonomous research run (many CoderAgent
+    # debug/poll iterations) hits and gets cut off mid-work. Raised so a single
+    # prompt can drive a long job to completion; still finite as a runaway-cost
+    # backstop. Override via ORCHESTRATOR__MAX_LLM_CALLS.
+    max_llm_calls: int = 3000
 
 # =========================
 # CODE EXECUTION
@@ -176,15 +199,45 @@ class CodeExecSettings(BaseModel):
     submit_path: str = "/submit"
     result_path: str = "/result"
     poll_interval: int = 5                # seconds between status polls
-    default_timeout: int = 1800           # per-command timeout (s) for long jobs
-    exec_wait: int = 180                  # how long execute_bash waits inline for
+    default_timeout: int = 7200           # per-command timeout (s) — big enough for
+                                          # training/optimization (server may cap it;
+                                          # checkpoint long work to disk regardless)
+    exec_wait: int = 300                  # how long execute_bash waits inline for
                                           # the command to finish before handing
                                           # back a job_id — so the model gets the
                                           # result in ONE call instead of polling
-    check_wait: int = 15                  # how long check_job waits inline for a
-                                          # running job before returning (saves
-                                          # repeated LLM-driven polls)
+    check_wait: int = 600                 # how long check_job blocks inline for a
+                                          # running job before returning. This is an
+                                          # async poll loop (no LLM round-trips), so a
+                                          # single check_job waits up to 10 min for a
+                                          # long job — the key to letting a long
+                                          # autonomous run wait patiently instead of
+                                          # burning dozens of polling turns.
     workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
+
+# =========================
+# RESEARCH CONTEXT GRAPH
+# =========================
+class ResearchGraphSettings(BaseModel):
+    """The typed research blackboard agents write to (graph/research/).
+
+    Distinct from the auto-recorded execution graph (graph/*). When enabled=False
+    the research tools and prompt sections drop out entirely (the assembler makes
+    the whole feature vanish, prompts stay consistent). Override via
+    RESEARCH_GRAPH__ENABLED etc.
+    """
+    enabled: bool = True
+    dir: str = "./graph_runs"              # snapshot directory (shared with graph_runs)
+    active_file: str = "research_active.json"
+    slice_depth_max: int = 2               # cap on get_context_slice depth
+    slice_char_budget: int = 4000          # cap on a rendered context slice
+    context_char_budget: int = 4000        # cap on the orchestrator trigger digest
+    # A research spans many prompts, so browser refresh and Web Stop never wipe
+    # it. ``reset_session_state(..., reset_research=None)`` consults this flag
+    # when an explicit maintenance reset is requested. A new session id already
+    # resolves to a separate empty graph.
+    reset_on_session: bool = False
+
 
 # =========================
 # MAIN SETTINGS
@@ -205,6 +258,7 @@ class Settings(BaseSettings):
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()
+    research_graph: ResearchGraphSettings = ResearchGraphSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          
