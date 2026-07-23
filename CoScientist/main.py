@@ -23,12 +23,7 @@ from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings, ReportConfig
-from CoScientist.agents import (
-    orchestrator_agent,
-    root_agent,
-    pipeline_pre_agents,
-    pipeline_post_agents,
-)
+from CoScientist.agents import run_root
 from CoScientist.reporting import finalize_report, RunResult
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset
@@ -42,15 +37,6 @@ settings = get_settings()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Directive handed to post-pipeline stages (e.g. the Result Aggregator). They run
-# over the SAME session as the orchestrator, so all results are already in state
-# and history — they just need the cue to compile the deliverable.
-_POST_STAGE_DIRECTIVE = (
-    "The run is complete. Using the results already in session state and the sandbox "
-    "workspace, produce the final report now. Call format_results first, then write the "
-    "full Markdown report as your response."
-)
 
 
 def _compaction_config():
@@ -157,7 +143,6 @@ class CoScientistManager:
         # sessions. CLI mode falls back to a private in-memory service.
         self.session_service: Optional[BaseSessionService] = session_service
         self.runner: Optional[Runner] = None
-        self._runners: dict = {}  # agent name -> Runner (shared session_service)
         self._run_error: Optional[Exception] = None
         self._initialized = False
         self._initialize_lock = asyncio.Lock()
@@ -202,41 +187,32 @@ class CoScientistManager:
             from CoScientist.graph.plugin import GraphMemoryPlugin
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+            from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
 
+            # `run_root` is the whole lifecycle as ONE SequentialAgent
+            # (orchestrator → Result Aggregator). A single run_async over it is one
+            # ADK invocation = one trace, with the aggregator as the terminal child.
             app = App(
                 name=self.app_name,
-                root_agent=root_agent,
+                root_agent=run_root,
                 plugins=[
                     EventLoggerPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
+                    # Capture artifact (figure/table) URLs from tool results BEFORE
+                    # truncation can drop them, so the report collector downloads them.
+                    McpArtifactCapturePlugin(),
                     # Keep truncation last so observers receive full results.
                     ToolResultTruncationPlugin(),
                 ],
                 events_compaction_config=_compaction_config(),
             )
             self.runner = Runner(app=app, session_service=self.session_service)
-            # Register the root runner so the pipeline driver (_runner_for) reuses
-            # this App-wrapped runner for the orchestrator stage; pipeline stages
-            # get their own runners over the SAME session_service.
-            self._runners[root_agent.name] = self.runner
 
             if self._hitl_handler:
                 hitl_toolset._handler = self._hitl_handler
 
             self._initialized = True
-
-    def _runner_for(self, agent) -> Runner:
-        """A Runner for a pipeline-stage agent, sharing the root's session."""
-        runner = self._runners.get(agent.name)
-        if runner is None:
-            runner = Runner(
-                agent=agent,
-                app_name=self.app_name,
-                session_service=self.session_service,
-            )
-            self._runners[agent.name] = runner
-        return runner
 
     async def _set_state(self, key: str, value) -> None:
         """Best-effort write into the live session state (in-memory)."""
@@ -248,44 +224,6 @@ class CoScientistManager:
                 session.state[key] = value
         except Exception as exc:
             logger.warning("could not set session state %r: %s", key, exc)
-
-    async def run_pipeline(self, query: str, report_config: ReportConfig, verbose: bool = False):
-        """Drive pre → root → post stages over one shared session.
-
-        Yields ``(stage_name, event)`` for every event. A stage that raises does
-        not abort the pipeline: the error is recorded on ``self._run_error`` and
-        remaining stages (notably the post/report stage) still run, so a partial
-        failure still yields a report.
-        """
-        await self.initialize()
-        await self._set_state("report_config", report_config.to_state())
-        self._run_error = None
-
-        stages = (
-            [(a, query) for a in pipeline_pre_agents]
-            + [(root_agent, query)]
-            + [(a, _POST_STAGE_DIRECTIVE) for a in pipeline_post_agents]
-        )
-        for agent, message in stages:
-            content = types.Content(role="user", parts=[types.Part(text=message)])
-            try:
-                async for event in self._runner_for(agent).run_async(
-                    user_id=self.user_id,
-                    session_id=self.session_id,
-                    new_message=content,
-                ):
-                    if verbose:
-                        print(
-                            f"[Event] {agent.name} | {event.author} | "
-                            f"{type(event).__name__} | Final={event.is_final_response()}"
-                        )
-                    yield agent.name, event
-            except Exception as exc:
-                self._run_error = exc
-                logger.error(
-                    "pipeline stage %s raised (%s: %s); continuing to next stage.",
-                    agent.name, type(exc).__name__, str(exc)[:200],
-                )
 
     @staticmethod
     def _final_text(event) -> Optional[str]:
@@ -309,33 +247,54 @@ class CoScientistManager:
         verbose: bool = True,
         report_config: Optional[ReportConfig] = None,
     ) -> RunResult:
-        """Run the full pipeline (pre → orchestrator → post) and package the report.
+        """Run the full pipeline and package the report.
 
-        Returns a :class:`RunResult` (``markdown``, ``report_dir``, ``manifest``).
-        ``str(result)`` is the markdown, so legacy callers that treated the return
-        value as a string keep working.
+        The whole lifecycle (orchestrator → Result Aggregator) is ONE ADK
+        invocation over ``run_root``, so it is a single trace with the aggregator
+        as the terminal stage. Returns a :class:`RunResult` (``markdown``,
+        ``report_dir``, ``manifest``); ``str(result)`` is the markdown, so legacy
+        callers that treated the return value as a string keep working.
         """
         report_config = report_config or ReportConfig()
         await self.initialize()
 
-        # Track the last final-response text per stage. The report is the last
-        # post-stage's output (the aggregator); if no post stage produced text we
-        # fall back to the orchestrator's own final answer.
-        stage_final: dict = {}
-        post_names = [a.name for a in pipeline_post_agents]
+        # The aggregator's format_results reads report_config mid-invocation, so it
+        # must be in state BEFORE the run starts.
+        await self._set_state("report_config", report_config.to_state())
+        self._run_error = None
 
-        async for stage_name, event in self.run_pipeline(query, report_config, verbose=verbose):
-            text = self._final_text(event)
-            if text is not None:
-                stage_final[stage_name] = text
+        content = types.Content(role="user", parts=[types.Part(text=query)])
 
+        # The report is the LAST final-response text of the run — i.e. the terminal
+        # aggregator stage. If a mid-run failure (e.g. a slow MCP tool's 300s
+        # timeout) aborts the invocation, we swallow it and fall through to the
+        # deterministic finalizer below so captured artifacts still reach the user.
         report_markdown = ""
-        for name in reversed(post_names):
-            if stage_final.get(name):
-                report_markdown = stage_final[name]
-                break
-        if not report_markdown:
-            report_markdown = stage_final.get(root_agent.name, "")
+        try:
+            async for event in self.runner.run_async(
+                user_id=self.user_id,
+                session_id=self.session_id,
+                new_message=content,
+                # Lift ADK's 500-LLM-call default so a long autonomous run driven by
+                # a single prompt isn't cut off mid-work (finite cost backstop).
+                run_config=RunConfig(
+                    max_llm_calls=get_settings().orchestrator.max_llm_calls
+                ),
+            ):
+                if verbose:
+                    print(
+                        f"[Event] {event.author} | {type(event).__name__} | "
+                        f"Final={event.is_final_response()}"
+                    )
+                text = self._final_text(event)
+                if text is not None:
+                    report_markdown = text
+        except Exception as exc:
+            self._run_error = exc
+            logger.error(
+                "run loop raised (%s: %s); attempting partial delivery from captured "
+                "S3 artifacts.", type(exc).__name__, str(exc)[:200],
+            )
 
         # Read session state once, for the S3 fallback and reference extraction.
         try:

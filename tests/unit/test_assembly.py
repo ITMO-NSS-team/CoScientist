@@ -48,6 +48,29 @@ def test_pipeline_stages_are_declared_agents_and_not_root(config):
     assert "ResultAggregatorAgent" in config.pipeline.post
 
 
+def test_run_root_is_one_sequential_run_ending_in_the_aggregator():
+    """The whole lifecycle is ONE ADK SequentialAgent (orchestrator → aggregator)
+    driven by a single run_async — so it is one invocation / one Opik trace with the
+    Result Aggregator as the terminal stage (no separate static-directive run)."""
+    from google.adk.agents.sequential_agent import SequentialAgent
+    from CoScientist.agents import run_root, orchestrator_agent
+
+    assert isinstance(run_root, SequentialAgent)
+    names = [a.name for a in run_root.sub_agents]
+    assert names[0] == orchestrator_agent.name == "OrchestratorAgent"
+    assert names[-1] == "ResultAggregatorAgent", "aggregator must be the terminal stage"
+
+
+def test_aggregator_is_graph_primary_and_read_only(config):
+    """The aggregator reads the research graph (read-only surface, no commit) with
+    no conversation history — it is grounded in the typed graph, not the transcript."""
+    agg = config.agent("ResultAggregatorAgent")
+    assert agg.include_contents == "none"
+    assert "research_graph_readonly" in agg.tools
+    assert "research_graph" not in agg.tools, "must use the read-only surface, not the worker one"
+    assert "inject_research_context" in agg.callbacks.before_agent
+
+
 def test_every_referenced_name_is_registered(config):
     for agent in config.agents.values():
         for tool in agent.tools:

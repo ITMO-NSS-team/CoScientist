@@ -104,6 +104,13 @@ def _research_graph_orchestrator():
     from CoScientist.graph.research.agent_tools import research_orchestrator_toolset
     return research_orchestrator_toolset
 
+
+def _research_graph_readonly():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_reporter_toolset
+    return research_reporter_toolset
+
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
     factory=_websearch,
@@ -316,6 +323,16 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,
     runtime_resolved=True,
     docs=_RESEARCH_ORCH_DOCS,
+))
+
+# Read-only surface for the Result Aggregator: overview / slice / provenance,
+# no research_commit (the reporter reads the finished graph, never mutates it).
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph_readonly",
+    factory=_research_graph_readonly,
+    optional=True,
+    runtime_resolved=True,
+    docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
 ))
 
 REGISTRY.register_tool(ToolEntry(
@@ -543,6 +560,11 @@ def _log_research_tool_calls():
     return print_research_agent_tool_call
 
 
+def _capture_mcp_artifacts():
+    from CoScientist.agents.callbacks import capture_mcp_artifacts
+    return capture_mcp_artifacts
+
+
 def _skip_retriever_context():
     from CoScientist.agents.callbacks import before_tool_reranker_model
     return before_tool_reranker_model
@@ -647,6 +669,7 @@ _cb("seed_coder_workspace", "before_model", factory=lambda ctx: _seed_coder_work
 _cb("inject_medical_artifacts", "before_model", factory=lambda ctx: _inject_medical_artifacts())
 _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_uploaded_papers())
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
+_cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())

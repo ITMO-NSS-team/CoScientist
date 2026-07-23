@@ -27,6 +27,20 @@ def _session_id(tool_context: ToolContext) -> str:
     return sid or "default_session"
 
 
+def _graph_nodes(tool_context: ToolContext) -> list:
+    """Research-graph nodes (with full, untruncated attrs) for the current
+    session, so artifact URLs an agent committed to Evidence nodes can be
+    downloaded. Best-effort — never break report generation if the graph is
+    disabled/empty."""
+    try:
+        from CoScientist.graph.research.agent_tools import get_research_graph
+        graph = get_research_graph(tool_context)
+        return graph.full().get("nodes", []) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.info("format_results: no research graph nodes (%s)", exc)
+        return []
+
+
 def _state_to_dict(state: Any) -> Dict[str, Any]:
     """ADK ``tool_context.state`` is a ``State`` wrapper (merged session + delta),
     not a plain dict — ``dict(state)`` mis-reads it as a sequence. Convert safely."""
@@ -58,6 +72,7 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
         session_id=session_id,
         state=state,
         reports_root=cfg.reports_root,
+        graph_nodes=_graph_nodes(tool_context),
     )
     logger.info(
         "format_results: session=%s figures=%d tables=%d",

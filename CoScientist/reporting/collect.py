@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import urllib.parse
 import uuid
@@ -20,6 +21,24 @@ logger = logging.getLogger(__name__)
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp")
 _TABLE_EXTS = (".csv", ".tsv")
 _MAX_TABLE_ROWS = 15
+
+# Workspace scan guards: dependency/VCS/cache dirs that carry bundled example
+# assets (never run outputs), and a cap so a stray clone can't flood the report.
+_WORKSPACE_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", "node_modules", "site-packages", "__pycache__",
+    ".venv", "venv", "env", ".tox", ".mypy_cache", ".pytest_cache", ".cache",
+    ".ipynb_checkpoints", "build", "dist",
+})
+_MAX_WORKSPACE_FILES = 40
+
+# Any http(s) URL whose path ends in a known media extension (the presigned query
+# string is optional). Bulletproof fallback: matches an artifact link embedded in
+# ANY stringified payload — a Pydantic tool-result object, a Python-repr blob an
+# agent stored on a graph node, or prose — regardless of structure.
+_MEDIA_URL_RE = re.compile(
+    r"""https?://[^\s"'<>]+?\.(?:png|jpe?g|svg|gif|webp|csv|tsv|pdf)(?:\?[^\s"'<>]*)?""",
+    re.IGNORECASE,
+)
 
 
 def report_dir_for(session_id: str, reports_root: Path | str = "logs/reports") -> Path:
@@ -38,6 +57,60 @@ def _url_filename(url: str, default_ext: str) -> str:
 def _looks_like(url_or_name: str, exts: tuple) -> bool:
     low = url_or_name.lower()
     return any(low.endswith(e) or f"{e}?" in low or f"{e}&" in low for e in exts)
+
+
+_ARTIFACT_KEY_SUFFIXES = ("artifact", "presigned_url")
+
+
+def _is_artifact_url(key: str, value: str) -> bool:
+    """A tool/graph attr value is a downloadable artifact when it is an http(s)
+    URL that either sits under an artifact-ish key (``artifact`` /
+    ``*presigned_url``) or whose path ends in a known media extension. This keeps
+    figure/table links (e.g. MinIO/S3 presigned PNGs) while ignoring plain
+    reference links (PubChem pages, DOIs)."""
+    if not (isinstance(value, str) and value.startswith(("http://", "https://"))):
+        return False
+    if isinstance(key, str) and key.lower().endswith(_ARTIFACT_KEY_SUFFIXES):
+        return True
+    path = value.split("?", 1)[0].lower()  # drop presigned query string
+    return path.endswith(_IMAGE_EXTS + _TABLE_EXTS)
+
+
+def find_artifact_urls(obj: Any, _out: Optional[List[str]] = None) -> List[str]:
+    """Recursively collect artifact URLs from a nested structure (a tool result
+    envelope or a graph node's ``attrs``). Parses JSON-looking strings on the way
+    down so a URL nested inside a ``content[].text`` blob is still found."""
+    out = [] if _out is None else _out
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if _is_artifact_url(k, v):
+                out.append(v)
+            else:
+                find_artifact_urls(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            find_artifact_urls(v, out)
+    elif isinstance(obj, str):
+        if "http" in obj:
+            # Structured JSON-looking payloads: parse and recurse (keeps keyed
+            # `artifact` links even without a media extension).
+            if obj.lstrip()[:1] in "{[":
+                try:
+                    import json
+                    find_artifact_urls(json.loads(obj), out)
+                except Exception:
+                    pass
+            # Regex fallback: media URLs embedded in any string (Python-repr
+            # blobs, prose, non-JSON) that the parse above would miss.
+            out.extend(_MEDIA_URL_RE.findall(obj))
+    elif obj is not None and not isinstance(obj, (int, float, bool)):
+        # Non-JSON object (e.g. a Pydantic CallToolResult): scan its repr.
+        out.extend(_MEDIA_URL_RE.findall(str(obj)))
+    # De-dup while preserving order.
+    if _out is None:
+        seen: set = set()
+        return [u for u in out if not (u in seen or seen.add(u))]
+    return out
 
 
 def _table_to_markdown(path: Path) -> Optional[str]:
@@ -77,8 +150,13 @@ def _table_to_markdown(path: Path) -> Optional[str]:
 
 def _download(url: str, dest: Path, timeout: int = 30) -> bool:
     try:
+        import html
         import requests
 
+        # MCP servers often HTML-escape the presigned URL (``&amp;`` for ``&``);
+        # downloading that literal string corrupts the AWS SigV4 query params and
+        # MinIO answers 403. Unescape before the request.
+        url = html.unescape(url)
         resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
         dest.write_bytes(resp.content)
@@ -93,6 +171,7 @@ def collect_artifacts(
     state: Optional[Dict[str, Any]] = None,
     reports_root: Path | str = "logs/reports",
     workspace_root: Path | str = "workspace",
+    graph_nodes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Copy/download run artifacts into the report folder; return markdown blocks.
 
@@ -103,6 +182,10 @@ def collect_artifacts(
                        downloaded.
         reports_root:  base dir for per-run report folders.
         workspace_root: base dir for sandbox workspaces (``<root>/ws_<session>``).
+        graph_nodes:   research-graph nodes (``{"id","type","attrs"}``); any
+                       artifact URL recorded on a node's ``attrs`` (e.g. a MinIO
+                       presigned figure URL an agent committed to an Evidence node)
+                       is downloaded too.
 
     Returns a dict with ``report_dir``, ``figures``, ``tables``, and
     ``blocks_markdown`` (the concatenation the agent should embed).
@@ -121,12 +204,20 @@ def collect_artifacts(
     tables: List[str] = []
 
     # 1) Captured artifacts in session state (remote URLs). Accept fedot_artifacts
-    #    plus any other list state key ending in "_artifacts".
+    #    plus any other list state key ending in "_artifacts" (e.g. mcp_artifacts
+    #    captured at the tool boundary), then any artifact URL an agent recorded on
+    #    a research-graph node.
     artifact_lists: List[Dict[str, Any]] = []
     for key, val in state.items():
         if key == "fedot_artifacts" or (isinstance(key, str) and key.endswith("_artifacts")):
             if isinstance(val, list):
                 artifact_lists.extend(a for a in val if isinstance(a, dict))
+    for node in (graph_nodes or []):
+        if not isinstance(node, dict):
+            continue
+        label = " ".join(str(node.get(k)) for k in ("id", "type") if node.get(k)).strip()
+        for url in find_artifact_urls(node.get("attrs") or {}):
+            artifact_lists.append({"url": url, "tool": label or "graph"})
     seen_urls = set()
     for art in artifact_lists:
         url = art.get("url")
@@ -149,25 +240,45 @@ def collect_artifacts(
                 head = f"### {label} — [download]({_rel(dest, report_dir)})"
                 table_blocks.append(f"{head}\n\n{md}" if md else head)
 
-    # 2) Files left in the sandbox workspace.
+    # 2) Files the run itself LEFT in the sandbox workspace. Prune vendored trees
+    #    aggressively: a coder step may `git clone` a whole library (e.g. the RDKit
+    #    repo) or create a venv into the sandbox, and its bundled example
+    #    images/CSVs are NOT run outputs — collecting them buries the real figures.
     workspace_dir = Path(workspace_root) / f"ws_{session_id}"
+    ws_figures = ws_tables = 0
     if workspace_dir.exists():
-        for root, _, files in os.walk(workspace_dir):
+        for root, dirs, files in os.walk(workspace_dir):
+            # Skip a cloned-repo subtree (a dir that contains .git) and any known
+            # dependency/VCS/cache dir — modifying `dirs` in place prunes descent.
+            if ".git" in dirs:
+                dirs[:] = []
+                continue
+            dirs[:] = [
+                d for d in dirs
+                if d not in _WORKSPACE_SKIP_DIRS
+                and not d.endswith((".dist-info", ".egg-info"))
+            ]
             for fname in sorted(files):
                 src = Path(root) / fname
                 stem = src.stem
                 if _looks_like(fname, _IMAGE_EXTS):
+                    if ws_figures >= _MAX_WORKSPACE_FILES:
+                        continue
                     dest = figures_dir / fname
                     _safe_copy(src, dest)
                     figures.append(str(dest))
                     figure_blocks.append(f"### {stem}\n\n![{stem}](figures/{fname})")
+                    ws_figures += 1
                 elif _looks_like(fname, _TABLE_EXTS):
+                    if ws_tables >= _MAX_WORKSPACE_FILES:
+                        continue
                     dest = tables_dir / fname
                     _safe_copy(src, dest)
                     tables.append(str(dest))
                     md = _table_to_markdown(dest)
                     head = f"### {stem} — [download](tables/{fname})"
                     table_blocks.append(f"{head}\n\n{md}" if md else head)
+                    ws_tables += 1
 
     # 3) Persist the building blocks as section files (for reference / LaTeX tree).
     if figure_blocks:

@@ -14,10 +14,10 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from CoScientist.main import CoScientistManager, _POST_STAGE_DIRECTIVE
+from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.web.session_registry import LocalSessionRegistry
-from CoScientist.agents import agent_system, planner_agent, pipeline_post_agents
+from CoScientist.agents import agent_system, planner_agent
 from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
@@ -892,7 +892,16 @@ async def _run_chat_invocation(
         parts=[types.Part(text=query)],
     )
 
+    # The Result Aggregator runs as the terminal stage of the SAME run_async, so its
+    # format_results reads report_config mid-invocation — set it before the run.
+    # TODO(planning): thread a real ReportConfig (e.g. --latex mode) from the web layer.
+    report_config = ReportConfig()
+    await manager._set_state("report_config", report_config.to_state())
+
     final_response = "No response"
+    # The report is the LAST final-response text of the run — the terminal aggregator
+    # stage's Markdown (the orchestrator's own answer is superseded by it).
+    report_markdown = ""
 
     try:
         # Loop: run -> check for HITL interrupt -> wait for response -> resume
@@ -996,11 +1005,13 @@ async def _run_chat_invocation(
                 runtime.agent_events[key].append(event_data)
                 await runtime.send(key, event_data)
 
-                if event.is_final_response() and not hitl_interrupt_event:
-                    if event.content and event.content.parts:
-                        final_response = event.content.parts[0].text or ""
-                    elif event.actions and event.actions.escalate:
-                        final_response = f"Escalation: {event.error_message or 'Unknown error'}"
+                if not hitl_interrupt_event:
+                    # Skip thinking parts; keep the LAST final-response text (the
+                    # terminal aggregator stage produces the report).
+                    text = CoScientistManager._final_text(event)
+                    if text is not None:
+                        final_response = text
+                        report_markdown = text
 
             # If there was a HITL interrupt, wait for the browser response
             if hitl_interrupt_event:
@@ -1060,48 +1071,14 @@ async def _run_chat_invocation(
                 # No interrupt, we're done
                 break
 
-        # ── Post pipeline: run the report stage(s), then package the deliverable ──
-        # TODO(planning): thread a real ReportConfig (e.g. --latex mode) from the
-        # web layer instead of the default (skip).
-        report_config = ReportConfig()
-        await manager._set_state("report_config", report_config.to_state())
-
-        report_markdown = ""
-        for agent in pipeline_post_agents:
-            await runtime.send(key, runtime.status_payload(
-                key, "processing", f"Compiling report ({agent.name})…",
-                version=run_status_version,
-            ))
-            directive = types.Content(
-                role="user", parts=[types.Part(text=_POST_STAGE_DIRECTIVE)]
-            )
-            async for event in manager._runner_for(agent).run_async(
-                user_id=manager.user_id,
-                session_id=manager.session_id,
-                new_message=directive,
-            ):
-                stage_event = {
-                    "type": "agent_event",
-                    "author": event.author or agent.name,
-                    "is_final": event.is_final_response(),
-                    "timestamp": datetime.now().isoformat(),
-                }
-                if event.content and event.content.parts:
-                    text_parts = [p.text for p in event.content.parts if p.text]
-                    if text_parts:
-                        stage_event["content"] = "\n".join(text_parts)
-                runtime.agent_events[key].append(stage_event)
-                await runtime.send(key, stage_event)
-                text = CoScientistManager._final_text(event)
-                if text is not None:
-                    report_markdown = text
-
-        # The report (aggregator) is the deliverable; fall back to the
-        # orchestrator's own answer if no post stage produced text.
-        report_markdown = report_markdown or final_response
-
+        # ── Package the deliverable ──────────────────────────────────────────────
+        # The Result Aggregator already ran as the terminal stage of the single
+        # run_async above (its events streamed like any other agent), so its report
+        # is in `report_markdown`. Fall back to the orchestrator's own answer only if
+        # the aggregator produced nothing.
         result = await asyncio.to_thread(
-            finalize_report, manager.session_id, report_markdown, report_config, None,
+            finalize_report, manager.session_id,
+            report_markdown or final_response, report_config, None,
         )
 
         runtime.registry.touch_session(user_id, session_id, status="idle")
