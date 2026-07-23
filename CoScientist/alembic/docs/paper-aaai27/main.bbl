@@ -1,0 +1,191 @@
+\begin{thebibliography}{27}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Anonymous(2025)}]{mcpquality2025}
+Anonymous. 2025.
+\newblock {MCP} at First Glance: Studying the Security and Maintainability of
+  {MCP} Servers.
+\newblock \emph{arXiv preprint arXiv:2506.13538}.
+
+\bibitem[{Bogin et~al.(2024)Bogin, Yang, Gupta, Richardson, Bransom, Clark,
+  Sabharwal, and Khot}]{super2024}
+Bogin, B.; Yang, K.; Gupta, S.; Richardson, K.; Bransom, E.; Clark, P.;
+  Sabharwal, A.; and Khot, T. 2024.
+\newblock {SUPER}: Evaluating Agents on Setting Up and Executing Tasks from
+  Research Repositories.
+\newblock \emph{arXiv preprint arXiv:2409.07440}.
+
+\bibitem[{Boiko et~al.(2023)Boiko, MacKnight, Kline, and
+  Gomes}]{boiko2023coscientist}
+Boiko, D.~A.; MacKnight, R.; Kline, B.; and Gomes, G. 2023.
+\newblock Autonomous chemical research with large language models.
+\newblock \emph{Nature}, 624(7992): 570--578.
+
+\bibitem[{Cai et~al.(2023)Cai, Wang, Ma, Chen, and Zhou}]{cai2024latm}
+Cai, T.; Wang, X.; Ma, T.; Chen, X.; and Zhou, D. 2023.
+\newblock Large Language Models as Tool Makers.
+\newblock \emph{arXiv preprint arXiv:2305.17126}.
+
+\bibitem[{Chen et~al.(2025)Chen, Chen, Ning et~al.}]{chen2025scienceagentbench}
+Chen, Z.; Chen, S.; Ning, Y.; et~al. 2025.
+\newblock {ScienceAgentBench}: Toward Rigorous Assessment of Language Agents
+  for Data-Driven Scientific Discovery.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}.
+\newblock ArXiv:2410.05080.
+
+\bibitem[{Di et~al.(2026)Di, Yuan, Guo, Ouyang, Liu, Yue, Chen, Zheng, Zhu,
+  Pan, Yin, Rui, and Zhang}]{toolrosella2026}
+Di, S.; Yuan, X.; Guo, H.; Ouyang, C.; Liu, Y.; Yue, L.; Chen, Z.; Zheng, L.;
+  Zhu, J.; Pan, S.; Yin, J.; Rui, Y.; and Zhang, M.-L. 2026.
+\newblock ToolRosella: Translating Code Repositories into Standardized Tools
+  for Scientific Agents.
+\newblock \emph{arXiv preprint arXiv:2603.09290}.
+
+\bibitem[{Gao et~al.(2025)}]{gao2025tooluniverse}
+Gao, S.; et~al. 2025.
+\newblock Democratizing {AI} Scientists using {ToolUniverse}.
+\newblock \emph{arXiv preprint arXiv:2509.23426}.
+
+\bibitem[{Gottweis et~al.(2025)Gottweis, Weng, Daryin
+  et~al.}]{google2025coscientist}
+Gottweis, J.; Weng, W.-H.; Daryin, A.; et~al. 2025.
+\newblock Towards an {AI} Co-Scientist.
+\newblock \emph{arXiv preprint arXiv:2502.18864}.
+
+\bibitem[{He and {Thinking Machines Lab}(2025)}]{he2025nondeterminism}
+He, H.; and {Thinking Machines Lab}. 2025.
+\newblock Defeating Nondeterminism in {LLM} Inference.
+\newblock Technical report, Thinking Machines Lab.
+\newblock
+  Https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/.
+
+\bibitem[{Hou et~al.(2025)Hou, Zhao, Wang, and Wang}]{hou2025mcpsurvey}
+Hou, X.; Zhao, Y.; Wang, S.; and Wang, H. 2025.
+\newblock Model Context Protocol ({MCP}): Landscape, Security Threats, and
+  Future Research Directions.
+\newblock \emph{arXiv preprint arXiv:2503.23278}.
+
+\bibitem[{Lu et~al.(2024)Lu, Lu, Lange, Foerster, Clune, and
+  Ha}]{lu2024aiscientist}
+Lu, C.; Lu, C.; Lange, R.~T.; Foerster, J.; Clune, J.; and Ha, D. 2024.
+\newblock The {AI} Scientist: Towards Fully Automated Open-Ended Scientific
+  Discovery.
+\newblock \emph{arXiv preprint arXiv:2408.06292}.
+
+\bibitem[{M.~Bran et~al.(2024)M.~Bran, Cox, Schilter, Baldassari, White, and
+  Schwaller}]{bran2024chemcrow}
+M.~Bran, A.; Cox, S.; Schilter, O.; Baldassari, C.; White, A.~D.; and
+  Schwaller, P. 2024.
+\newblock Augmenting large language models with chemistry tools.
+\newblock \emph{Nature Machine Intelligence}, 6: 525--535.
+\newblock ArXiv:2304.05376.
+
+\bibitem[{Miao and Zou(2025)}]{miao2025paper2agent}
+Miao, J.; and Zou, J. 2025.
+\newblock Paper2Agent: Reimagining Research Papers as Interactive and Reliable
+  {AI} Agents.
+\newblock \emph{arXiv preprint arXiv:2509.06917}.
+
+\bibitem[{Ouyang et~al.(2025)Ouyang, Yue, Di, Zheng, Yue, Pan, Yin, and
+  Zhang}]{code2mcp2025}
+Ouyang, C.; Yue, L.; Di, S.; Zheng, L.; Yue, L.; Pan, S.; Yin, J.; and Zhang,
+  M.-L. 2025.
+\newblock Code2MCP: Transforming Code Repositories into MCP Services.
+\newblock \emph{arXiv preprint arXiv:2509.05941}.
+
+\bibitem[{Samuel and Mietchen(2024)}]{pimentel2024notebooks}
+Samuel, S.; and Mietchen, D. 2024.
+\newblock Understanding and improving the reproducibility of {Jupyter}
+  notebooks from biomedical publications.
+\newblock \emph{GigaScience}, 13.
+\newblock ArXiv:2308.07333.
+
+\bibitem[{Schick et~al.(2023)Schick, Dwivedi-Yu, Dess{\`i}
+  et~al.}]{schick2023toolformer}
+Schick, T.; Dwivedi-Yu, J.; Dess{\`i}, R.; et~al. 2023.
+\newblock Toolformer: Language Models Can Teach Themselves to Use Tools.
+\newblock \emph{arXiv preprint arXiv:2302.04761}.
+
+\bibitem[{Schmidgall et~al.(2025)Schmidgall, Su, Wang
+  et~al.}]{schmidgall2025agentlab}
+Schmidgall, S.; Su, Y.; Wang, Z.; et~al. 2025.
+\newblock Agent Laboratory: Using {LLM} Agents as Research Assistants.
+\newblock \emph{arXiv preprint arXiv:2501.04227}.
+
+\bibitem[{Siegel et~al.(2024)Siegel, Kapoor, Nagdir, Stroebl, and
+  Narayanan}]{corebench2024}
+Siegel, Z.~S.; Kapoor, S.; Nagdir, N.; Stroebl, B.; and Narayanan, A. 2024.
+\newblock {CORE-Bench}: Fostering the Credibility of Published Research Through
+  a Computational Reproducibility Agent Benchmark.
+\newblock \emph{arXiv preprint arXiv:2409.11363}.
+
+\bibitem[{Starace et~al.(2025)Starace, Jaffe, Sherburn
+  et~al.}]{starace2025paperbench}
+Starace, G.; Jaffe, O.; Sherburn, D.; et~al. 2025.
+\newblock {PaperBench}: Evaluating {AI}'s Ability to Replicate {AI} Research.
+\newblock In \emph{International Conference on Machine Learning (ICML)}.
+\newblock ArXiv:2504.01848.
+
+\bibitem[{Swanson et~al.(2025)Swanson, Wu, Bulaong, Pak, and
+  Zou}]{swanson2025virtuallab}
+Swanson, K.; Wu, W.; Bulaong, N.~L.; Pak, J.~E.; and Zou, J. 2025.
+\newblock The Virtual Lab: {AI} Agents Design New {SARS-CoV-2} Nanobodies with
+  Experimental Validation.
+\newblock \emph{Nature}.
+\newblock BioRxiv 2024.11.11.623004.
+
+\bibitem[{Tang et~al.(2024{\natexlab{a}})Tang, Liu, Cai
+  et~al.}]{tang2024mlbench}
+Tang, X.; Liu, Y.; Cai, Z.; et~al. 2024{\natexlab{a}}.
+\newblock {ML-Bench}: Evaluating Large Language Models and Agents for Machine
+  Learning Tasks on Repository-Level Code.
+\newblock \emph{arXiv preprint arXiv:2311.09835}.
+
+\bibitem[{Tang et~al.(2024{\natexlab{b}})Tang, Qian, Gao
+  et~al.}]{tang2024biocoder}
+Tang, X.; Qian, B.; Gao, R.; et~al. 2024{\natexlab{b}}.
+\newblock {BioCoder}: A Benchmark for Bioinformatics Code Generation with Large
+  Language Models.
+\newblock \emph{Bioinformatics}, 40.
+\newblock ArXiv:2308.16458.
+
+\bibitem[{Tian et~al.(2024)Tian, Gao, Zhang et~al.}]{tian2024scicode}
+Tian, M.; Gao, L.; Zhang, S.~D.; et~al. 2024.
+\newblock {SciCode}: A Research Coding Benchmark Curated by Scientists.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)
+  Datasets and Benchmarks}.
+\newblock ArXiv:2407.13168.
+
+\bibitem[{Wang et~al.(2023)Wang, Xie, Jiang, Mandlekar, Xiao, Zhu, Fan, and
+  Anandkumar}]{wang2023voyager}
+Wang, G.; Xie, Y.; Jiang, Y.; Mandlekar, A.; Xiao, C.; Zhu, Y.; Fan, L.; and
+  Anandkumar, A. 2023.
+\newblock Voyager: An Open-Ended Embodied Agent with Large Language Models.
+\newblock \emph{arXiv preprint arXiv:2305.16291}.
+
+\bibitem[{W{\"o}lflein et~al.(2025)W{\"o}lflein, Ferber, Truhn,
+  Arandjelovi{\'c}, and Kather}]{wolflein2025toolmaker_acl}
+W{\"o}lflein, G.; Ferber, D.; Truhn, D.; Arandjelovi{\'c}, O.; and Kather,
+  J.~N. 2025.
+\newblock {LLM} Agents Making Agent Tools.
+\newblock In \emph{Proceedings of the 63rd Annual Meeting of the Association
+  for Computational Linguistics (ACL)}.
+\newblock ArXiv:2502.11705.
+
+\bibitem[{Yao et~al.(2024)Yao, Shinn, Razavi, and Narasimhan}]{yao2024taubench}
+Yao, S.; Shinn, N.; Razavi, P.; and Narasimhan, K. 2024.
+\newblock {$\tau$-bench}: A Benchmark for Tool-Agent-User Interaction in
+  Real-World Domains.
+\newblock \emph{arXiv preprint arXiv:2406.12045}.
+
+\bibitem[{Yuan et~al.(2024)Yuan, Chen, Wang, Fung, Peng, and
+  Ji}]{yuan2024craft}
+Yuan, L.; Chen, Y.; Wang, X.; Fung, Y.~R.; Peng, H.; and Ji, H. 2024.
+\newblock {CRAFT}: Customizing {LLMs} by Creating and Retrieving from
+  Specialized Toolsets.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}.
+\newblock ArXiv:2309.17428.
+
+\end{thebibliography}

@@ -1,49 +1,37 @@
-/home/stas/Documents/GitHub/CoScientist/CoScientist/alembic/docs/paper/emnlp2026_demo.pdf - Here's demo paper that we've submitted for our project Alembic CoScientist/alembic. These are pretty much all the results and finding we have with it now, and we want to extend it to a full main track AAAI27 paper. With this research we want to get the answers to some of our questions and define the development vector before starting the development.
+Now that we've defined the broad direction, here are more practical tasks I'd like to focus on for the paper research progress
 
-Don't answer all at once. This includes research, assessment, planning and asking me questions when necessary.
+0. For the llm calls, we are going to need proxy. here's the example for simple openai
+from openai import OpenAI
+from httpx import Client
 
+client = OpenAI(
+    api_key= OPENAI_KEY,
+    http_client=Client(proxy=HTTP_PROXY)
+)
+We are going to need such an option within coscientist and alembic. Also, right now the LLM setup in coScientist and alembic module are split apart, we need a way to set them up in a unified way. Also make sure there are safety mechanisms in place for everython not to break if api suddenly does not respond. I know we have that in alembic, coscientist not so sure.  
 
-What we compared to in the demo:
-C1. [ToolMaker's](/home/stas/Documents/GitHub/ToolMaker/2502.11705v2.pdf) bench is concise and robust with tests and invocations but is actually terrible to run and constantly breaks, as well as requiring adaptation to certain structure to test just an individual function script (single tool to complete target task was their initial architecture) - far away from a benchmark for MCP's specifically.
+1. We want to launch this cluster part of coscientist for experiment: CoScientist gets a task along with needed repo(s), and provided data (if applicable), returns result.
 
-C2. [ToolRosella's](/home/stas/Documents/GitHub/ToolRosella-main/2603.09290v5.pdf) 122-repo set is interesting but
-has no option to assess MCP CONVERSION quality, as those do not ship with expert-made gold set mcp's or premade tests - basically they test MCP conversion with "three endpoints revealed" criterion, we want to do better.  Their solution consisted of processing user requests, converting repos from pool to mcp, and searching and using tools to solve concrete tasks. 
+2. This i am not acutally sure about, the workflow is more of a rough idea now: orchestrator/planner develop the plan, then the flow is passed on to some kind of experiment control that checks whether the alembic has already converted the required module and the executor agent actually calls the required mcp's tools, may code intermediate steps if needed and submits the results. Coder's functionality must also include tool calling for that.
 
+3. We want to use only the modules we need, so similar to CoScientist/agents/microfluidics.yaml and CoScientist/agents/system.yaml we need a config for our experimental setup
 
-Ideas that are in my head now:
+4. We want to adapt our system to the available benchmarks. TMBench was very sloppy in terms of tasks (1000-iteration CPU training in task nnunet_train_model) and the inner testing phase structure (alembic required a lot of adaptation to fit into the changed environment, run script that called http server etc) however had good gold definition - this might pose a potential compatability gap with CORE-Bench's capsules with the dockerfile, in all such cases we just compare our results to the heldout gold, taking as much of the evaluation code a spossible from the bench. Basically we want to supply our system with all the data and verify against well-defined gold, not struggle to adapt our soultion to setup within the bench if that is the case. If not - of course use what is already provided.
 
-I1. We want focus on SPECIFIC scienctific repos. we want to be able to convert any repo, but the initial concept is making the often poorly documented or hard to setup and actually valuable (maybe in in relation to some concrete paper). It is not intersting to convert RDKit for example because it is already represented in pre-training data of most large LLM's and the conversion is kind of useless there. ToolRosella's bench is not fully relevant in this way, ToolMaker has an interesting repo selections but again terrible to launch and goes not focus on MCP.
+5. When the setup of CoScientist is ready for the experiments - we want to first test on a few tasks to check the system works and is stable before moving on to further system 
 
-I2. Because LLM's have probably seen all of the GitHub in their pre-train phase, we need to somehow proof that our soultion is actually needed for something. The lesser know scientific repos are probably still present there, but at least not as much as RDKit.
+6. Our benchmark run setup must check whether the system is capable of GPU usage, using all of the resources if available. We are expecting our servers to be either very ram-capable or have a good GPU. that's why we'd also ideally want to split our tasks between the ones that are definitely going to require GPU, and the ones that are perfectly fiine with cpu only - and do those in parallel.
 
-I3. One argument could be made is that Run-to-run consistency of calling a coder agent on a niche scientific repo may not be consistent - it may solve the same wording of a problem in slightly different ways, followed by stochastically varying exploration paths may yield different results - while MCP approach allows to reuse the same code between runs and between points of access (people, autonomous AI systems etc.), and token economy.
+7. The benchmarks we are looking forward to: TMBench -> ToolArena (big overlap with TMBench) -> ScienceAgentBench -> CORE-Bench. These are in the order of increasing amount of tasks - as we have limited time to do those. Perform all research requirted for those to be ran with our system in advance.
 
-I4. ToolRosella task part is kinda good, as the converted MCP's get actually used to complete the task, we may want to extend our experiment scope to actually use our MCP's to complete some sort of task set, while still not compromising in assessing the quality and robustness of MCP itself.
+8. We want to baseline against an open coder agent - openhands + our main model that just performs the task straight away in an isolated environment (within a docker container)
 
-I5. We see our direct competition not much the existing repos, but the open sandbox coding agents (coder agent v mcp approach) - does our soultion really have a meaning or arguments I2-I3 don't stand and frontier model on a good harness completes any task on niche repoitories.
+9. We want all of the required alembic mcp converions to be performed in advance and for them to be available in CoScientist's MCP/tool registry - Retrieve_tools tool that searches from base, right now it is available to orchestrator and retriever -so that the task executions themselves are more streamlined. So, for a bench we define a set of tools we need to convert beforehand + a rough sketch of what they are going to be used for, for the alembic to have tools that would most closely 
 
-I want you to research:
+10. Early stage task: test that coscientist actually sees and is able to call the servers that alembic serves - and the tool call resaults are retrieved accurately, check on a simple task from tmbench
 
-Field state
+11. Coscientist should prioritize alembic available MCP's over plain coder, that is a fallback - using the execution graph (it should be available in coscientist) we want to track that
 
-F1. Relevant fresh soultion related to code -> mcp, better peer reviewed (toolrosella still isn't and
-their success criteria shows)
+12. We want to track token usage, amount of steps etc. All that is already available for alembic's bench runs, ensure parity with CoScientist
 
-F2. Relevant benchmarks - maybe there is something that we have not considered
-
-If there are none - review the options of us making our own, what criteria should it match, how would it make the tools verifiable and success evidence-based without implying to tight of a constraint (we don't want to pre-define all that the system could find and wrap into tools, as "in the wild case" would never have that) 
-
-Maybe we can find a set of heavy scientific repos that are not trivial (not RDKit) but already have an expert-written MCP.
-Or maybe we could tighten and build on the existing ToolRosella repo set.
-Or we could use synthetic genertion and human assessment as steps in creation of the benchmark
-
-Methodology questions
-
-M1. If we do decide to build our bench that would allow us to both test Alembic and provide a way to test such systems in a thorough and stable, predictable manner - can we base our AAAI Main track submission on that, or it goes against paper themes/guidelines?
-
-M2. How do we formulate the final problematic behind the bench we present 
-
-M3. How we conduct our experiments.
-
-M4. What are our RQ's
- 
+13. Our main model - glm 5.2
