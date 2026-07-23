@@ -34,6 +34,7 @@ class Chunk(BaseModel):
     content: str
     metadata: Optional[Mapping[str, Any]] = None
     role: str
+    images_in_chunk: Optional[list[str]] = None
     
 
 class KnowledgeDomain(BaseModel):

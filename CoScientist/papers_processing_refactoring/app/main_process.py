@@ -1,10 +1,38 @@
+from __future__ import annotations
+
+import logging
+import sys
+import time
+import types
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
-import logging
-import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+
+
+def _bootstrap_coscientist_package() -> None:
+    """Регистрирует облегчённую заглушку пакета CoScientist, чтобы импорт подпакетов не исполнял
+    CoScientist/__init__.py в окружении обработки.
+
+    Не трогает sys.path (отсутствуют коллизии имён со stdlib) и срабатывает
+    исключительно тогда, когда CoScientist ещё не был импортирован.
+    """
+    if "CoScientist" in sys.modules:
+        return
+
+    # main_process.py -> app -> papers_processing_refactoring -> CoScientist
+    coscientist_dir = Path(__file__).resolve().parents[2]
+
+    package = types.ModuleType("CoScientist")
+    package.__path__ = [str(coscientist_dir)]
+    package.__package__ = "CoScientist"
+    package.__file__ = str(coscientist_dir / "__init__.py")
+    sys.modules["CoScientist"] = package
+
+
+_bootstrap_coscientist_package()
 
 from CoScientist.papers_processing_refactoring.app.config_loader import get_settings
 from CoScientist.papers_processing_refactoring.etl import *

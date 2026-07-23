@@ -61,6 +61,9 @@ class ChromaVectorStore(VectorStore):
         
         for i in range(len(ids)):
             meta = metas[i] or {}
+            imgs_in_chunk = meta.pop("imgs_in_chunk", None)
+            if imgs_in_chunk:
+                imgs_in_chunk = eval(imgs_in_chunk)
             meta["chroma_score"] = distances[i]
             chunks.append(
                 Chunk(
@@ -71,7 +74,8 @@ class ChromaVectorStore(VectorStore):
                     domain=meta.pop("domain", None),
                     field=meta.pop("field", None),
                     content=docs[i],
-                    metadata=meta
+                    metadata=meta,
+                    images_in_chunk=imgs_in_chunk
                 )
             )
         return chunks
