@@ -478,14 +478,17 @@ def create_app() -> FastAPI:
             return sink
 
         async def run(repo_url: str, resume_from: Optional[str],
-                      target: Optional[str], my_run: int) -> None:
+                      target: Optional[str], hints: Optional[str], my_run: int) -> None:
             token = events.set_sink(make_sink(my_run))
             try:
                 # `target` (optional) is forwarded verbatim as the task spec —
                 # run_pipeline._load_tasks accepts a JSON/YAML task object, a
                 # path, or comma-separated paths (empty => native mode).
+                # `hints` (optional) is a soft, free-text nudge for the explorer
+                # only — no forced name/signature, no plan-gate enforcement.
                 await run_pipeline(repo_url, resume_from=resume_from,
-                                   tasks_cli=(target or None))
+                                   tasks_cli=(target or None),
+                                   hints_cli=(hints or None))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — surface to the UI
@@ -568,7 +571,8 @@ def create_app() -> FastAPI:
                         old.cancel()               # do NOT await — may be in a subprocess
                     active["task"] = asyncio.create_task(
                         run(repo_url, data.get("resume_from"),
-                            (data.get("target") or "").strip() or None, my_run))
+                            (data.get("target") or "").strip() or None,
+                            (data.get("hints") or "").strip() or None, my_run))
 
                 elif mt == "serve":
                     repo_url = (data.get("repo_url") or active.get("repo_url") or "").strip()

@@ -149,6 +149,12 @@
           placeholder="optional target task — JSON spec or path (forces a tool for a specific experiment)"
           class="flex-1 bg-transparent border-0 focus:ring-0 p-0 text-[11px] font-mono text-on-surface placeholder:text-outline/55" />
       </div>
+      <div class="flex items-center gap-2 bg-surface/60 rounded-control border border-outline-variant/20 px-3 h-7 focus-within:border-primary/40 transition-colors">
+        <span class="material-symbols-outlined text-outline text-[15px]">lightbulb</span>
+        <input id="hints-input" type="text" spellcheck="false"
+          placeholder="optional soft hint — plain-text idea of a tool you'd like mined among the others (no forced signature)"
+          class="flex-1 bg-transparent border-0 focus:ring-0 p-0 text-[11px] font-mono text-on-surface placeholder:text-outline/55" />
+      </div>
     </div>
   </header>
 
@@ -729,7 +735,8 @@
       if (!url || !ws || ws.readyState !== 1) return;
       lastRepo = url;
       const target = document.getElementById("target-input").value.trim();
-      ws.send(JSON.stringify({ type: "run", repo_url: url, target: target || undefined }));
+      const hints = document.getElementById("hints-input").value.trim();
+      ws.send(JSON.stringify({ type: "run", repo_url: url, target: target || undefined, hints: hints || undefined }));
     };
     document.getElementById("stop-btn").onclick = () => {
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" }));
