@@ -176,6 +176,8 @@ PaperAnalysis/
 
 .DS_Store
 
+# Project-local agent skills and configuration
+.agents/
 
 tools/models
 

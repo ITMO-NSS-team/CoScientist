@@ -81,16 +81,70 @@ id) are applied automatically.
 ### Docker Compose
 
 ```bash
-docker compose -f docker/docker-compose.a2a.yml up --build
+docker compose --env-file .env -f docker/docker-compose.a2a.yml up --build -d
 ```
 
-This starts every agent with an `a2a:` section as a separate service:
-`init`, `orchestrator`, `planner`, `hypotheses`, `research`,
-`task_execution`, `medical`, and `coder`. The compose file reads the existing
-repo-level `.env` via `env_file: ../.env`, publishes ports `8000-8008`, and
-sets per-agent internal hosts (`RESEARCH_HOST=a2a-research`, etc.) so the
-orchestrator can resolve peer AgentCards over the compose network. Public
-AgentCard URLs still use `A2A_PUBLIC_HOST` when set, or `A2A_HOST` otherwise.
+This builds one shared `coscientist-a2a:latest` image and starts every agent
+with an `a2a:` section as an independent service:
+
+| A2A key | Compose service | Default port |
+|---------|-----------------|-------------:|
+| `orchestrator` | `a2a-orchestrator` | 8000 |
+| `planner` | `a2a-planner` | 8001 |
+| `hypotheses` | `a2a-hypotheses` | 8002 |
+| `research` | `a2a-research` | 8003 |
+| `task_execution` | `a2a-task-execution` | 8004 |
+| `medical` | `a2a-medical` | 8005 |
+| `coder` | `a2a-coder` | 8006 |
+| `init` | `a2a-init` | 8008 |
+
+The services have no startup dependencies on one another. Each becomes
+`healthy` after its `/.well-known/agent-card.json` endpoint responds, and a
+failure in one container does not stop the others. Console-based HITL is
+disabled in this non-interactive deployment so `planner` and `research` cannot
+block waiting for stdin. Opik tracing is also disabled by default to avoid its
+interactive first-run workspace prompt. To use an already configured Opik
+workspace, pass an explicitly empty value:
+
+```bash
+A2A_DISABLE_OPIK= \
+  docker compose --env-file .env -f docker/docker-compose.a2a.yml up -d
+```
+
+The stack creates a stable Docker network named `coscientist-a2a`. A delegator
+running in another Compose project can join it as an external network:
+
+```yaml
+networks:
+  coscientist-a2a:
+    external: true
+```
+
+By default, each AgentCard advertises its Compose DNS name, such as
+`http://a2a-research:8003/`; this is the recommended mode for a delegator on
+the `coscientist-a2a` network. For a delegator running on the Docker host or
+another machine, set `A2A_PUBLIC_HOST` to a hostname or IP address that the
+delegator can resolve:
+
+```bash
+A2A_PUBLIC_HOST=localhost \
+  docker compose --env-file .env -f docker/docker-compose.a2a.yml up -d
+```
+
+All ports are published. A `<KEY>_PORT` override changes the server listener,
+published port, healthcheck, and advertised AgentCard port together:
+
+```bash
+RESEARCH_PORT=9003 \
+  docker compose --env-file .env -f docker/docker-compose.a2a.yml up -d
+```
+
+Inspect readiness and retrieve cards:
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.a2a.yml ps
+curl http://localhost:8003/.well-known/agent-card.json
+```
 
 ### The orchestrator with a web UI
 
@@ -110,7 +164,7 @@ HYPOTHESES_PORT=9002 A2A_HOST=0.0.0.0 python -m CoScientist.a2a.run_all
 
 Env vars: `ORCHESTRATOR_PORT`, `PLANNER_PORT`, `HYPOTHESES_PORT`,
 `RESEARCH_PORT`, `TASK_EXECUTION_PORT`, `MEDICAL_PORT`, `CODER_PORT`,
-`A2A_HOST`, `A2A_PUBLIC_HOST`, per-agent internal hosts such as
+`INIT_PORT`, `A2A_HOST`, `A2A_PUBLIC_HOST`, per-agent internal hosts such as
 `RESEARCH_HOST`/`CODER_HOST`, and `A2A_DISABLE_OPIK` (set to `1` to turn off
 tracing).
 
