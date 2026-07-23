@@ -1,0 +1,188 @@
+version: "3.3"
+
+services:
+  a2a-init:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "init"]
+    ports:
+      - "8008:8008"
+    depends_on:
+      - a2a-planner
+      - a2a-orchestrator
+
+  a2a-orchestrator:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "orchestrator"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      - a2a-planner
+      - a2a-hypotheses
+      - a2a-research
+      - a2a-task-execution
+      - a2a-medical
+      - a2a-coder
+
+  a2a-planner:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "planner"]
+    ports:
+      - "8001:8001"
+
+  a2a-hypotheses:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "hypotheses"]
+    ports:
+      - "8002:8002"
+
+  a2a-research:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "research"]
+    ports:
+      - "8003:8003"
+
+  a2a-task-execution:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "task_execution"]
+    ports:
+      - "8004:8004"
+
+  a2a-medical:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "medical"]
+    ports:
+      - "8005:8005"
+
+  a2a-coder:
+    image: coscientist-a2a:latest
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      INIT_HOST: a2a-init
+      ORCHESTRATOR_HOST: a2a-orchestrator
+      PLANNER_HOST: a2a-planner
+      HYPOTHESES_HOST: a2a-hypotheses
+      RESEARCH_HOST: a2a-research
+      TASK_EXECUTION_HOST: a2a-task-execution
+      MEDICAL_HOST: a2a-medical
+      CODER_HOST: a2a-coder
+    restart: unless-stopped
+    networks:
+      - a2a
+    command: ["python", "-m", "CoScientist.a2a.serve", "coder"]
+    ports:
+      - "8006:8006"
+    volumes:
+      - a2a-coder-workspace:/app/workspace
+
+networks:
+  a2a: {}
+
+volumes:
+  a2a-coder-workspace: {}

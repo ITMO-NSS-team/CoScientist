@@ -78,6 +78,20 @@ The argument is the agent's `a2a.key` from `system.yaml`. Pre-import env
 defaults from the agent's `a2a.env` section (e.g. the coder's shared workspace
 id) are applied automatically.
 
+### Docker Compose
+
+```bash
+docker compose -f docker/docker-compose.a2a.yml up --build
+```
+
+This starts every agent with an `a2a:` section as a separate service:
+`init`, `orchestrator`, `planner`, `hypotheses`, `research`,
+`task_execution`, `medical`, and `coder`. The compose file reads the existing
+repo-level `.env` via `env_file: ../.env`, publishes ports `8000-8008`, and
+sets per-agent internal hosts (`RESEARCH_HOST=a2a-research`, etc.) so the
+orchestrator can resolve peer AgentCards over the compose network. Public
+AgentCard URLs still use `A2A_PUBLIC_HOST` when set, or `A2A_HOST` otherwise.
+
 ### The orchestrator with a web UI
 
 ```bash
@@ -96,7 +110,9 @@ HYPOTHESES_PORT=9002 A2A_HOST=0.0.0.0 python -m CoScientist.a2a.run_all
 
 Env vars: `ORCHESTRATOR_PORT`, `PLANNER_PORT`, `HYPOTHESES_PORT`,
 `RESEARCH_PORT`, `TASK_EXECUTION_PORT`, `MEDICAL_PORT`, `CODER_PORT`,
-`A2A_HOST`, `A2A_DISABLE_OPIK` (set to `1` to turn off tracing).
+`A2A_HOST`, `A2A_PUBLIC_HOST`, per-agent internal hosts such as
+`RESEARCH_HOST`/`CODER_HOST`, and `A2A_DISABLE_OPIK` (set to `1` to turn off
+tracing).
 
 > **Restart after edits.** A running `run_all` holds the old code (and the old
 > YAML) in memory. After changing `system.yaml`, an agent, or a prompt

@@ -26,8 +26,6 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from CoScientist.config import get_settings
-
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "agents" / "system.yaml"
 
 
@@ -40,6 +38,8 @@ def _resolve_setting_ref(value: Union[bool, str]) -> bool:
         raise ValueError(
             f"enabled must be a bool or '${{settings.path}}', got {value!r}"
         )
+    from CoScientist.config import get_settings
+
     obj: Any = get_settings()
     for part in text[2:-1].split("."):
         obj = getattr(obj, part)
