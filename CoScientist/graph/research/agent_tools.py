@@ -30,7 +30,7 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.tool_context import ToolContext
 
 from CoScientist.graph.research import queries
-from CoScientist.graph.research.store import research_graph
+from CoScientist.graph.research.store import get_research_graph
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _context_budget() -> int:
         return 4000
 
 
-def _orchestrator_digest() -> str:
+def _orchestrator_digest(research_graph) -> str:
     """Overview index + active-trigger digest — what the orchestrator sees."""
     if research_graph.is_empty():
         return ("Research graph is EMPTY. If this is a research task, call "
@@ -67,7 +67,7 @@ def _orchestrator_digest() -> str:
     return text[:budget] + ("\n…[truncated]" if len(text) > budget else "")
 
 
-def _worker_context(state: Any) -> str:
+def _worker_context(research_graph, state: Any) -> str:
     """A worker's slice of the graph: the focus node's neighborhood if the
     orchestrator set one, else the compact overview so the worker can find ids."""
     if research_graph.is_empty():
@@ -89,10 +89,14 @@ def _refresh_context_state(tool_context: Optional[ToolContext], is_root: bool) -
     if tool_context is None:
         return
     try:
+        research_graph = get_research_graph(tool_context)
         if is_root:
-            tool_context.state[CONTEXT_STATE_KEY] = _orchestrator_digest()
+            tool_context.state[CONTEXT_STATE_KEY] = _orchestrator_digest(research_graph)
         else:
-            tool_context.state[CONTEXT_STATE_KEY] = _worker_context(tool_context.state)
+            tool_context.state[CONTEXT_STATE_KEY] = _worker_context(
+                research_graph,
+                tool_context.state,
+            )
     except Exception:  # noqa: BLE001 — refreshing context must never break a write
         pass
 
@@ -165,6 +169,7 @@ class ResearchGraphToolset(BaseToolset):
             focus = (tool_context.state or {}).get(FOCUS_STATE_KEY)
         except Exception:  # noqa: BLE001
             focus = None
+        research_graph = get_research_graph(tool_context)
         result = research_graph.commit(
             source=_agent(tool_context), nodes=nodes, edges=edges,
             status_updates=status_updates, autolink_focus=focus,
@@ -198,6 +203,7 @@ class ResearchGraphToolset(BaseToolset):
             empirical_bases: data [{"base_type": "dataset", "volume": "...",
                 "source_ref": "..."}].
         """
+        research_graph = get_research_graph(tool_context)
         out = research_graph.init_research(
             source=_agent(tool_context), question=question, attrs=attrs,
             constraints=constraints, tools=tools, resources=resources,
@@ -215,7 +221,7 @@ class ResearchGraphToolset(BaseToolset):
         Args:
             node_id: e.g. "H2".
         """
-        sl = research_graph.get_context_slice(node_id)
+        sl = get_research_graph(tool_context).get_context_slice(node_id)
         if "error" in sl:
             return {"ok": False, "error": sl["error"]}
         try:
@@ -235,17 +241,17 @@ class ResearchGraphToolset(BaseToolset):
             node_id: e.g. "H2".
             depth: 1 (immediate neighbors) or 2. Capped by settings.
         """
-        return research_graph.get_context_slice(node_id, depth=depth)
+        return get_research_graph(tool_context).get_context_slice(node_id, depth=depth)
 
     def research_overview(self, tool_context: ToolContext) -> Dict[str, Any]:
         """Compact index of the whole research graph: every node's id, type,
         status and label (no attribute detail). Use it to find node ids."""
-        return research_graph.overview()
+        return get_research_graph(tool_context).overview()
 
     def research_provenance(self, tool_context: ToolContext, node_id: str) -> Dict[str, Any]:
         """Trace a node back to the root research question: the chain of nodes,
         edges and their sources (who produced each step)."""
-        return research_graph.get_provenance(node_id)
+        return get_research_graph(tool_context).get_provenance(node_id)
 
     def research_triggers(self, tool_context: ToolContext) -> Dict[str, Any]:
         """Evaluate the decision triggers over the current graph: which
@@ -253,7 +259,10 @@ class ResearchGraphToolset(BaseToolset):
         REFUTE signals, CLOSABLE hypotheses (write a Conclusion), PENDING
         conclusions, TOOLS not ready, RESOURCES low, open QUESTIONS and PROGRESS.
         Consult this before deciding the next step."""
-        return queries.trigger_report(research_graph, char_budget=_context_budget())
+        return queries.trigger_report(
+            get_research_graph(tool_context),
+            char_budget=_context_budget(),
+        )
 
 
 # ── before_agent injection callback ────────────────────────────────────────────
@@ -272,10 +281,16 @@ def make_inject_research_context(is_root: bool):
         except Exception:  # noqa: BLE001
             pass
         try:
+            research_graph = get_research_graph(callback_context)
             if is_root:
-                callback_context.state[CONTEXT_STATE_KEY] = _orchestrator_digest()
+                callback_context.state[CONTEXT_STATE_KEY] = _orchestrator_digest(
+                    research_graph
+                )
             else:
-                callback_context.state[CONTEXT_STATE_KEY] = _worker_context(callback_context.state)
+                callback_context.state[CONTEXT_STATE_KEY] = _worker_context(
+                    research_graph,
+                    callback_context.state,
+                )
         except Exception:  # noqa: BLE001
             callback_context.state[CONTEXT_STATE_KEY] = ""
         return None

@@ -231,9 +231,10 @@ class ResearchGraphSettings(BaseModel):
     slice_depth_max: int = 2               # cap on get_context_slice depth
     slice_char_budget: int = 4000          # cap on a rendered context slice
     context_char_budget: int = 4000        # cap on the orchestrator trigger digest
-    # The research outlives one chat session by default (a research spans many
-    # prompts), so a fresh session / the web Stop button does NOT wipe it. Set
-    # true to archive+clear the graph on every new session instead.
+    # A research spans many prompts, so browser refresh and Web Stop never wipe
+    # it. ``reset_session_state(..., reset_research=None)`` consults this flag
+    # when an explicit maintenance reset is requested. A new session id already
+    # resolves to a separate empty graph.
     reset_on_session: bool = False
 
 

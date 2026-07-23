@@ -304,6 +304,32 @@ def test_persistence_roundtrip_and_archive(tmp_path):
     assert list(tmp_path.glob("research_Q1_*.json")), "old graph not archived"
 
 
+def test_research_generation_ids_are_unique_within_same_second(store, monkeypatch):
+    import CoScientist.graph.research.store as store_module
+
+    original_datetime = store_module.datetime
+
+    class FixedDatetime:
+        @staticmethod
+        def now():
+            return original_datetime(2024, 1, 1, 12, 0, 0)
+
+    monkeypatch.setattr(store_module, "datetime", FixedDatetime)
+    first = store.init_research(
+        source="OrchestratorAgent",
+        question="First question?",
+    )
+    first_id = store.full()["research_id"]
+    second = store.init_research(
+        source="OrchestratorAgent",
+        question="Second question?",
+    )
+    second_id = store.full()["research_id"]
+
+    assert first["ok"] and second["ok"]
+    assert first_id != second_id
+
+
 def test_no_delete_api():
     for attr in ("delete_node", "delete_edge", "remove_node", "remove_edge"):
         assert not hasattr(ResearchGraphStore, attr)
@@ -523,3 +549,185 @@ def test_validator_assigns_polarity_to_autolinked_evidence(store):
     nodes = {n["id"]: n for n in full["nodes"]}
     assert nodes["H1"]["status"] == "confirmed" and nodes["CC1"]["status"] == "met"
     assert any(n["type"] == "Conclusion" for n in full["nodes"])
+
+
+def test_background_validator_retries_after_failed_judgment(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import CoScientist.graph.research.validator as V
+
+    class FakeGraph:
+        def full(self):
+            return {"research_id": "research-1"}
+
+    graph = FakeGraph()
+    item = {
+        "hypothesis": "H1",
+        "supporting": ["E1"],
+        "refuting": [],
+        "related": [],
+    }
+    outcomes = [None, {"ok": True}]
+    calls = []
+
+    async def fake_judge(hypothesis, *, graph, expected_research_id):
+        calls.append((hypothesis, expected_research_id))
+        return outcomes.pop(0)
+
+    monkeypatch.setattr(V, "_enabled", lambda: True)
+    monkeypatch.setattr(V, "get_research_graph", lambda context: graph)
+    monkeypatch.setattr(
+        V.queries,
+        "unresolved_hypotheses",
+        lambda selected_graph: {"items": [item]},
+    )
+    monkeypatch.setattr(V, "judge_hypothesis", fake_judge)
+    plugin = V.BackgroundValidatorPlugin()
+    tool = SimpleNamespace(name="research_commit")
+
+    async def trigger():
+        before = set(V._TASKS)
+        await plugin.after_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=object(),
+            result={},
+        )
+        scheduled = set(V._TASKS) - before
+        if scheduled:
+            await asyncio.gather(*scheduled)
+        return len(scheduled)
+
+    async def scenario():
+        # The duplicate callback while the first task is still in flight must
+        # not schedule another LLM call.
+        before = set(V._TASKS)
+        await plugin.after_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=object(),
+            result={},
+        )
+        await plugin.after_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=object(),
+            result={},
+        )
+        first_tasks = set(V._TASKS) - before
+        assert len(first_tasks) == 1
+        await asyncio.gather(*first_tasks)
+
+        assert await trigger() == 1  # retry after the failed first result
+        assert await trigger() == 0  # successful signature is now completed
+
+    asyncio.run(scenario())
+    assert calls == [("H1", "research-1"), ("H1", "research-1")]
+
+
+def test_background_validator_dedup_tracks_related_evidence_and_research_id(
+    monkeypatch,
+):
+    import asyncio
+    from types import SimpleNamespace
+    import CoScientist.graph.research.validator as V
+
+    class FakeGraph:
+        research_id = "research-1"
+
+        def full(self):
+            return {"research_id": self.research_id}
+
+    graph = FakeGraph()
+    item = {
+        "hypothesis": "H1",
+        "supporting": ["E1"],
+        "refuting": [],
+        "related": [],
+    }
+    calls = []
+
+    async def fake_judge(hypothesis, *, graph, expected_research_id):
+        calls.append((hypothesis, expected_research_id, tuple(item["related"])))
+        return {"ok": True}
+
+    monkeypatch.setattr(V, "_enabled", lambda: True)
+    monkeypatch.setattr(V, "get_research_graph", lambda context: graph)
+    monkeypatch.setattr(
+        V.queries,
+        "unresolved_hypotheses",
+        lambda selected_graph: {"items": [item]},
+    )
+    monkeypatch.setattr(V, "judge_hypothesis", fake_judge)
+    plugin = V.BackgroundValidatorPlugin()
+    tool = SimpleNamespace(name="research_commit")
+
+    async def trigger():
+        before = set(V._TASKS)
+        await plugin.after_tool_callback(
+            tool=tool,
+            tool_args={},
+            tool_context=object(),
+            result={},
+        )
+        scheduled = set(V._TASKS) - before
+        if scheduled:
+            await asyncio.gather(*scheduled)
+
+    async def scenario():
+        await trigger()
+        await trigger()
+        item["related"] = ["E2"]
+        await trigger()
+        graph.research_id = "research-2"
+        await trigger()
+
+    asyncio.run(scenario())
+    assert calls == [
+        ("H1", "research-1", ()),
+        ("H1", "research-1", ("E2",)),
+        ("H1", "research-2", ("E2",)),
+    ]
+
+
+def test_validator_discards_result_if_research_changes_during_llm_call():
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    class FakeGraph:
+        research_id = "research-1"
+        committed = False
+
+        def full(self):
+            return {"research_id": self.research_id}
+
+        def get_context_slice(self, hypothesis, depth):
+            return {
+                "nodes": [{
+                    "id": "H1",
+                    "type": "Hypothesis",
+                    "status": "under_verification",
+                    "attrs": {"formulation": "x"},
+                }],
+                "edges": [],
+            }
+
+        def commit(self, **kwargs):
+            self.committed = True
+            raise AssertionError("a stale verdict must not be committed")
+
+    graph = FakeGraph()
+
+    async def fake_complete(system, user):
+        graph.research_id = "research-2"
+        return '{"verdict":"postponed","reason":"insufficient evidence"}'
+
+    result = asyncio.run(V.judge_hypothesis(
+        "H1",
+        complete=fake_complete,
+        graph=graph,
+        expected_research_id="research-1",
+    ))
+
+    assert result is None
+    assert not graph.committed

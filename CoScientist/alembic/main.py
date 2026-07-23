@@ -26,6 +26,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -35,6 +36,7 @@ from loguru import logger
 from google.adk.sessions import InMemorySessionService
 
 from alembic import config
+from alembic import events
 from alembic.events import emit
 from alembic.agents import (
     coder_agent, debugger_agent, environment_agent, explorer_agent, wrapper_agent,
@@ -942,6 +944,18 @@ if __name__ == "__main__":
             logger.error(f"{flag} requires a value")
             sys.exit(1)
         return sys.argv[i + 1]
+
+    # Bridge live events out of the (isolated) build container: when
+    # ALEMBIC_EMIT_STDOUT is set (the container entrypoint sets it), stream every
+    # pipeline/stage/validation event as a single ``ALEMBIC_EVENT <json>`` line on
+    # stdout. That stdout is captured by start_chain -> the host build log, which
+    # the CoScientist web UI tails to render a live build page. No sink => no-op,
+    # so the plain CLI and the benchmark runner are unaffected.
+    if os.environ.get("ALEMBIC_EMIT_STDOUT"):
+        async def _stdout_sink(msg: dict) -> None:
+            print("ALEMBIC_EVENT " + json.dumps(events.safe(msg), ensure_ascii=False),
+                  flush=True)
+        events.set_sink(_stdout_sink)
 
     try:
         asyncio.run(run_pipeline(sys.argv[1], resume_from=_arg("--resume"),

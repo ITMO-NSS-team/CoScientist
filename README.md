@@ -358,6 +358,18 @@ my_agent = LlmAgent(
 - `openchemie` - Chemical structure recognition
 - `boto3` - AWS S3 integration
 
+## TODO
+
+- Add SQLite-backed persistence for registered web users and their sessions.
+  Persist ADK session state, chat history, roadmaps, and the last active session
+  so work can be restored after a service restart. During local testing,
+  CoScientist intentionally keeps users and sessions in memory; they survive a
+  browser refresh while the service is running, but are cleared on restart.
+  The same persistence layer should eventually provide transactional storage
+  for global knowledge and scoped execution/research graphs when multi-worker
+  or distributed A2A deployment is required; the current JSON graph backend is
+  intentionally single-process/single-writer.
+
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](./LICENSE) for details.
