@@ -8,6 +8,22 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "a2a-sdk"
+version = "0.3.26"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "protobuf" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/97/a6840e01795b182ce751ca165430d46459927cde9bfab838087cbb24aef7/a2a_sdk-0.3.26.tar.gz", hash = "sha256:44068e2d037afbb07ab899267439e9bc7eaa7ac2af94f1e8b239933c993ad52d", size = 274598, upload-time = "2026-04-09T15:21:13.902Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/d5/51f4ee1bf3b736add42a542d3c8a3fd3fa85f3d36c17972127defc46c26f/a2a_sdk-0.3.26-py3-none-any.whl", hash = "sha256:754e0573f6d33b225c1d8d51f640efa69cbbed7bdfb06ce9c3540ea9f58d4a91", size = 151016, upload-time = "2026-04-09T15:21:12.35Z" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.2"
 source = { registry = "https://pypi.org/simple" }
@@ -517,6 +533,7 @@ name = "coscientist"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "a2a-sdk" },
     { name = "beautifulsoup4" },
     { name = "boto3" },
     { name = "fedotmas" },
@@ -531,6 +548,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "a2a-sdk", specifier = "==0.3.26" },
     { name = "beautifulsoup4", specifier = ">=4.15.0" },
     { name = "boto3", specifier = ">=1.43.32" },
     { name = "fedotmas", git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git?subdirectory=packages%2Ffedotmas" },
@@ -832,6 +850,22 @@ wheels = [
 ]
 
 [[package]]
+name = "google-api-core"
+version = "2.32.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-auth" },
+    { name = "googleapis-common-protos" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/03/33/00277be1305fd68355d08197f05e22db259c0cff49a10c8590a1869ade9b/google_api_core-2.32.0.tar.gz", hash = "sha256:2b33aad226b19272458c46abfe5c5a38d9531ece0c44502129a1463ce83674ac", size = 177659, upload-time = "2026-07-16T20:36:07.717Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/44/5018c5ac1526c98169db98d87a6ff7d5508f5246621c3ee1a046fdd5e0a6/google_api_core-2.32.0-py3-none-any.whl", hash = "sha256:ae1f0d58a6c8869350bf469f8eb3092e7f8c494a942d9525494afb6c162b0904", size = 174198, upload-time = "2026-07-16T20:35:41.865Z" },
+]
+
+[[package]]
 name = "google-auth"
 version = "2.55.0"
 source = { registry = "https://pypi.org/simple" }
@@ -871,6 +905,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5b/52/0244e310812f3063d09d60b30ae29ab7df9343bd005744cd5eeaa6ba39b4/google_genai-2.8.0.tar.gz", hash = "sha256:37a9b3cb127d763e7f4ca47452ae3562c87728773bd1b149f7b559c239da2bc1", size = 564955, upload-time = "2026-06-03T22:55:38.397Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/de/747ad1aa49e902da9a4699081c282a1ed8ceed3b4d295fd99a6d286e09e4/google_genai-2.8.0-py3-none-any.whl", hash = "sha256:4da0a223a100f4b37f609a68b835e3326ab0fa313314dc0fd9d34e76ee293844", size = 832497, upload-time = "2026-06-03T22:55:36.598Z" },
+]
+
+[[package]]
+name = "googleapis-common-protos"
+version = "1.75.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googleapis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035, upload-time = "2026-05-07T08:04:49.423Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631, upload-time = "2026-05-07T08:03:30.345Z" },
 ]
 
 [[package]]
@@ -2195,6 +2241,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/88/fb/46dad6c0ae49ed230ab1b16c890c2b6314e2403e6c412976f4a72d64a527/propcache-0.5.2-cp314-cp314t-win_amd64.whl", hash = "sha256:d447bb0b3054be5818458fbb171208b1d9ff11eba14e18ca18b90cbb45767370", size = 47764, upload-time = "2026-05-08T21:02:07.353Z" },
     { url = "https://files.pythonhosted.org/packages/e7/c4/a47d0a63aa309d10d59ede6e9d4cff03a344a79d1f0f4cd0cd74997b53e0/propcache-0.5.2-cp314-cp314t-win_arm64.whl", hash = "sha256:fe67a3d11cd9b4efabfa45c3d00ffba2b26811442a73a581a94b67c2b5faccf6", size = 41140, upload-time = "2026-05-08T21:02:09.065Z" },
     { url = "https://files.pythonhosted.org/packages/3a/ed/1cdcab6ba3d6ab7feca11fc14f0eeea80755bb53ef4e892079f31b10a25f/propcache-0.5.2-py3-none-any.whl", hash = "sha256:be1ddfcbb376e3de5d2e2db1d58d6d67463e6b4f9f040c000de8e300295465fe", size = 14036, upload-time = "2026-05-08T21:02:10.673Z" },
+]
+
+[[package]]
+name = "proto-plus"
+version = "1.28.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/44/767757fd2cdd4a60d7e4440d9f7b491d6131103d313638d2c03e06c268fb/proto_plus-1.28.1.tar.gz", hash = "sha256:832e68e7fe064cf90ab153b6e5eb935b27891bb89aaeb68b115e9b702f6cb168", size = 57166, upload-time = "2026-07-08T17:04:02.367Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/34/2f2b57dbfd145b995a29847a16b0903fce5ef6ad3c7aad740a609c5d3678/proto_plus-1.28.1-py3-none-any.whl", hash = "sha256:6660f5f1970874bdcfc3088b435188a36a37bd3596668f7d726417c4ae8cfbed", size = 50408, upload-time = "2026-07-08T17:03:34.532Z" },
 ]
 
 [[package]]

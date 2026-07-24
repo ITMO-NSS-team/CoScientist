@@ -238,6 +238,20 @@ class ResearchGraphSettings(BaseModel):
 
 
 # =========================
+# CHECKPOINTS
+# =========================
+class CheckpointSettings(BaseModel):
+    """Run-state snapshots at module boundaries (checkpoints/ package).
+
+    OFF by default: enabling adds the CheckpointPlugin to every runner and a
+    /api/checkpoints router to the A2A/web apps. Override via
+    CHECKPOINTS__ENABLED / CHECKPOINTS__DIR.
+    """
+    enabled: bool = False
+    dir: str = "./checkpoints_data"
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -257,6 +271,7 @@ class Settings(BaseSettings):
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
+    checkpoints: CheckpointSettings = CheckpointSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

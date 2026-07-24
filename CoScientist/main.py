@@ -175,11 +175,18 @@ class CoScientistManager:
         # background_validator_plugin judges hypotheses asynchronously (fire-and-
         # forget) as evidence lands — before the truncation plugin so it sees the
         # full research_commit result. It never blocks the run loop.
+        plugins = [EventLoggerPlugin(), GraphMemoryPlugin(),
+                   background_validator_plugin, ToolResultTruncationPlugin()]
+        if get_settings().checkpoints.enabled:
+            from CoScientist.checkpoints import CheckpointPlugin
+            # first, so it observes untruncated events; returns None everywhere,
+            # so it never interferes with the other plugins.
+            plugins.insert(0, CheckpointPlugin())
+
         app = App(
             name=self.app_name,
             root_agent=root_agent,
-            plugins=[EventLoggerPlugin(), GraphMemoryPlugin(),
-                     background_validator_plugin, ToolResultTruncationPlugin()],
+            plugins=plugins,
             events_compaction_config=_compaction_config(),
         )
         self.runner = Runner(app=app, session_service=self.session_service)

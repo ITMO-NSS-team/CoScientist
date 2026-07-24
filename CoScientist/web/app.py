@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -75,7 +76,12 @@ async def _get_manager():
         if _manager is not None:
             return _manager
 
-        _manager = CoScientistManager()
+        # Unique session id per manager instance (per conversation / restart):
+        # checkpoints are grouped by run_key = app_name__session_id, so a fixed
+        # "session_001" would chain unrelated conversations into one lineage.
+        _manager = CoScientistManager(
+            session_id=f"session_{datetime.now().strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        )
         await _manager.initialize()
 
         # Wire WebHITLHandler into every session agent with a HITL review loop
@@ -130,6 +136,29 @@ def create_app() -> FastAPI:
     _static_dir = WEB_DIR / "static"
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+    # Checkpoint management (list / inspect / restore) — same router the A2A
+    # servers mount. The manager is lazy, so the session service is resolved at
+    # request time; after a restore the manager is repointed at the restored
+    # session so the ongoing chat continues from it.
+    if get_settings().checkpoints.enabled:
+        from CoScientist.checkpoints import make_checkpoint_router
+
+        async def _resolve_session():
+            manager = await _get_manager()
+            return manager.session_service, manager.app_name
+
+        async def _repoint_manager(result: dict) -> None:
+            manager = await _get_manager()
+            manager.session_id = result["session_id"]
+            manager.user_id = result["user_id"]
+            logging.getLogger("CoScientist.web").info(
+                "chat repointed to restored session %s", result["session_id"],
+            )
+
+        app.include_router(make_checkpoint_router(
+            session_resolver=_resolve_session, on_restored=_repoint_manager,
+        ))
 
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)
