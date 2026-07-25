@@ -99,8 +99,8 @@ def _flatten(tool_obj) -> list:
 
 
 def _hitl_enabled() -> bool:
-    from CoScientist.agents.common import hitl_enabled
-    return hitl_enabled
+    from CoScientist.config import get_settings
+    return get_settings().web.hitl_enabled
 
 
 def _resolve_callback(name: str, expected_kind: str, ctx: PromptContext):

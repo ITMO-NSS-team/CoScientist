@@ -653,7 +653,8 @@ def _inject_research_context(ctx):
 
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
-    return SearchLimiter(max_searches=2).limit_searches
+    from CoScientist.config import get_settings
+    return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
 
 
 def _sanitize_json_output():

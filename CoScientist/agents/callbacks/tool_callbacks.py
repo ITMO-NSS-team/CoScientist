@@ -20,8 +20,7 @@ logger = logging.getLogger(__name__)
 #                          so ExperimentAgent redirects to CoderAgent instead of
 #                          "solving" the task with an unrelated tool (e.g. running
 #                          a GAN trainer for a "train a transformer" task).
-_TOOL_KEEP_SCORE = float(os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
-_TOOL_ABSTAIN_SCORE = float(os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+
 
 # State key carrying the executor's tool-match verdict for the redirect guard.
 TOOL_MATCH_STATE_KEY = "executor_tool_match"
@@ -49,6 +48,11 @@ def after_tool_reranker_agent(
     callback_context: CallbackContext
 ) -> None:
     """Adds ToolReranker output to state"""
+    from CoScientist.config import get_settings
+    web_settings = get_settings().web
+    keep_score = web_settings.executor_tool_keep_score
+    abstain_score = web_settings.executor_tool_abstain_score
+
 
     current_state = callback_context.state
     reranked_tools: Dict[str, float] = (current_state.get('reranked_tools') or {}).get('tools', [])
@@ -58,13 +62,13 @@ def after_tool_reranker_agent(
 
     filtered_tools: List[Dict[str, Any]] = [
         tool for tool in acc_tools
-        if rerank_map.get(tool.get('tool_index', -1), 0) >= _TOOL_KEEP_SCORE
+        if rerank_map.get(tool.get('tool_index', -1), 0) >= keep_score
     ]
 
     best_score = max(rerank_map.values(), default=0.0)
     matched = bool(filtered_tools)
 
-    if not filtered_tools and best_score >= _TOOL_ABSTAIN_SCORE:
+    if not filtered_tools and best_score >= abstain_score:
         # Marginal salvage: nothing cleared _KEEP but the best is not hopeless —
         # take top-2 and proceed cautiously (preserves the old behaviour here).
         top_ids = {
