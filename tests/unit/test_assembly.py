@@ -275,3 +275,28 @@ def test_orchestrator_prompt_documents_only_wired_critics(config, system):
     assert ("Post-action critic" in instruction) == (
         "post_action_critique" in cfg.callbacks.after_tool
     )
+
+
+def test_build_for_mode_init(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.agents import build_for_mode
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.web, "start_mode", "init")
+
+    system = build_for_mode()
+    assert system is not None
+    assert system.root.name == "InitAgent"
+
+
+def test_build_for_mode_orchestrator(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.agents import build_for_mode
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.web, "start_mode", "orchestrator")
+
+    system = build_for_mode()
+    assert system is not None
+    assert system.root.name == "OrchestratorAgent"
+

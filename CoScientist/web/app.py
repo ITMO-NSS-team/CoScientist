@@ -22,6 +22,7 @@ from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
+from CoScientist.tools.coder_tools import coder_toolset
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -62,6 +63,50 @@ TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
 APP_NAME = "coscientist_app"
 SessionKey = tuple[str, str]
 SOCKET_SEND_TIMEOUT_SECONDS = 5.0
+
+
+def _apply_frontend_settings(frontend: dict) -> None:
+    """Map the frontend JS ``appSettings`` object to ``settings.web``.
+
+    Called before every ``_get_manager()`` invocation so the config singleton
+    is always up-to-date when the system is (re)built.
+    """
+    from CoScientist.config import get_settings
+    web = get_settings().web
+
+    general = frontend.get("general", {})
+    if "startMode" in general:
+        web.start_mode = general["startMode"]
+    if "maxRetries" in general:
+        web.max_retries = int(general["maxRetries"])
+    if "hitlEnabled" in general:
+        val = bool(general["hitlEnabled"])
+        web.hitl_enabled = val
+        get_settings().hitl.enabled = val
+    if "usePlanner" in general:
+        web.use_planner = bool(general["usePlanner"])
+    if "opikEnabled" in general:
+        web.opik_enabled = bool(general["opikEnabled"])
+
+    research = frontend.get("researchAgent", {})
+    if "maxSearches" in research:
+        val = int(research["maxSearches"])
+        if val >= 0:
+            web.max_searches = val
+
+    task_exec = frontend.get("taskExecutorAgent", {})
+    if "keepScore" in task_exec:
+        web.executor_tool_keep_score = float(task_exec["keepScore"])
+    if "abstainScore" in task_exec:
+        web.executor_tool_abstain_score = float(task_exec["abstainScore"])
+
+    coder = frontend.get("coderAgent", {})
+    if "sandboxUrl" in coder:
+        web.sandbox_url = coder["sandboxUrl"]
+    if "workspaceId" in coder:
+        val = coder["workspaceId"]
+        web.coder_workspace_id = val if val else None
+
 
 
 class WebRuntime:
@@ -494,7 +539,7 @@ def create_app() -> FastAPI:
             if hasattr(agent, "hitl_handler")
         }
         return JSONResponse({
-            "hitl_enabled": get_settings().hitl.enabled,
+            "hitl_enabled": get_settings().web.hitl_enabled,
             "websocket_connections": runtime.hitl_handler.connection_count(),
             "session_agents_with_handler": agents,
             "pending_requests": runtime.hitl_handler.pending_summary(),
@@ -752,6 +797,57 @@ def create_app() -> FastAPI:
             candidate.read_text(encoding="utf-8"),
             media_type="text/markdown; charset=utf-8",
         )
+
+    # --- Settings endpoints ---
+    @app.get("/api/settings")
+    async def get_settings_api():
+        """Return current WebSettings."""
+        from CoScientist.config import get_settings as _get_settings
+        web = _get_settings().web
+        return JSONResponse({
+            "general": {
+                "startMode": web.start_mode,
+                "maxRetries": web.max_retries,
+                "hitlEnabled": web.hitl_enabled,
+                "usePlanner": web.use_planner,
+                "opikEnabled": web.opik_enabled,
+            },
+            "researchAgent": {"maxSearches": web.max_searches},
+            "taskExecutorAgent": {
+                "keepScore": web.executor_tool_keep_score,
+                "abstainScore": web.executor_tool_abstain_score,
+            },
+            "coderAgent": {
+                "sandboxUrl": web.sandbox_url,
+                "workspaceId": web.coder_workspace_id or "",
+            },
+        })
+
+    @app.post("/api/settings")
+    async def save_settings_api(data: dict):
+        """Update WebSettings from the frontend."""
+        from CoScientist.config import get_settings as _get_settings
+        _apply_frontend_settings(data)
+        web = _get_settings().web
+        return JSONResponse({
+            "status": "success",
+            "general": {
+                "startMode": web.start_mode,
+                "maxRetries": web.max_retries,
+                "hitlEnabled": web.hitl_enabled,
+                "usePlanner": web.use_planner,
+                "opikEnabled": web.opik_enabled,
+            },
+            "researchAgent": {"maxSearches": web.max_searches},
+            "taskExecutorAgent": {
+                "keepScore": web.executor_tool_keep_score,
+                "abstainScore": web.executor_tool_abstain_score,
+            },
+            "coderAgent": {
+                "sandboxUrl": web.sandbox_url,
+                "workspaceId": web.coder_workspace_id or "",
+            },
+        })
 
     # --- Agent info ---
     @app.get("/api/agents")

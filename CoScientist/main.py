@@ -23,8 +23,9 @@ from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings, ReportConfig
-from CoScientist.agents import run_root
+from CoScientist.agents import orchestrator_agent, root_agent, run_root, build_for_mode
 from CoScientist.reporting import finalize_report, RunResult
+from CoScientist.tools.coder_tools import coder_toolset
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
@@ -189,12 +190,12 @@ class CoScientistManager:
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
             from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
 
-            # `run_root` is the whole lifecycle as ONE SequentialAgent
-            # (orchestrator → Result Aggregator). A single run_async over it is one
-            # ADK invocation = one trace, with the aggregator as the terminal child.
+            # Build the agent system (reads start_mode + tunable params from settings).
+            system = build_for_mode()
+
             app = App(
                 name=self.app_name,
-                root_agent=run_root,
+                root_agent=system.root,
                 plugins=[
                     EventLoggerPlugin(),
                     GraphMemoryPlugin(),
@@ -211,6 +212,11 @@ class CoScientistManager:
 
             if self._hitl_handler:
                 hitl_toolset._handler = self._hitl_handler
+                if getattr(coder_toolset, "_hitl_handler", None) is not None:
+                    if hasattr(coder_toolset._hitl_handler, 'set_delegate'):
+                        coder_toolset._hitl_handler.set_delegate(self._hitl_handler)
+                    else:
+                        coder_toolset._hitl_handler = self._hitl_handler
 
             self._initialized = True
 

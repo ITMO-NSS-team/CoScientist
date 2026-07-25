@@ -135,11 +135,14 @@ class SessionAgent(LlmAgent):
                     else:
                         yield event
 
-            if not self.hitl_handler or final_event is None:
+            from CoScientist.config import get_settings
+            hitl_on = bool(self.hitl_handler and get_settings().web.hitl_enabled)
+
+            if not hitl_on or final_event is None:
                 # No HITL or not a final event (e.g. tool call): just pass and exit
-                if not self.hitl_handler:
+                if not hitl_on:
                     logger.info(
-                        "%s: no HITL handler wired (HITL__ENABLED off?) — "
+                        "%s: HITL disabled (hitl_enabled=False) — "
                         "output passed through without human review", self.name,
                     )
                 if final_event is not None:

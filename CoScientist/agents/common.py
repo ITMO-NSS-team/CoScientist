@@ -76,12 +76,13 @@ class RetryingLiteLlm(LiteLlm):
                 return
             except Exception as err:  # noqa: BLE001 — classify then re-raise
                 attempt += 1
-                if yielded or attempt > _LLM_MAX_RETRIES or not _is_transient(err):
+                max_r = settings.web.max_retries
+                if yielded or attempt > max_r or not _is_transient(err):
                     raise
                 delay = min(1.5 ** attempt, 8.0)
                 _logger.warning(
                     "Transient LLM error (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt, _LLM_MAX_RETRIES, delay, err,
+                    attempt, max_r, delay, err,
                 )
                 await asyncio.sleep(delay)
 
@@ -92,8 +93,7 @@ litellm.api_key = settings.llm.openai_api_key
 # provider during cost/token bookkeeping — harmless, but it floods the console.
 litellm.suppress_debug_info = True
 
-hitl_enabled = settings.hitl.enabled
-hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler()) if hitl_enabled else None
+hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 
 # The CoderAgent runs on a dedicated (stronger) model — its multi-step tool-use
 # benefits from more capability. Falls back to the main model when unset.

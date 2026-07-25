@@ -5,9 +5,16 @@ callbacks, prompts, HITL, A2A exposure). This module builds the in-process
 system once and re-exports the agent instances under their historical names so
 existing imports keep working.
 """
+import copy
+import logging
+
 from CoScientist.assembly import build_system
-from CoScientist.logging import multi_agent_tracer
+from CoScientist.assembly.schema import load_config
+from CoScientist.logging import get_multi_agent_tracer
 from CoScientist.agents.llm_repair import install_json_repair
+from opik.integrations.adk import track_adk_agent_recursive
+
+logger = logging.getLogger(__name__)
 
 # Guard the LiteLlm tool-call JSON boundary process-wide BEFORE any runner executes:
 # a malformed tool-call payload (qwen truncation / missing comma) must not kill the run.
@@ -66,12 +73,70 @@ result_aggregator_agent = _system.agents.get("ResultAggregatorAgent")
 tz_agent = _system.agents.get("TZAgent")
 
 # Attach the Opik tracer only when tracing is enabled (see OPIK__ENABLED).
-# Tracking the run root covers the whole SequentialAgent (orchestrator + pipeline
-# stages) so the entire lifecycle lands in ONE trace.
-if multi_agent_tracer is not None:
-    from opik.integrations.adk import track_adk_agent_recursive
+_tracer = get_multi_agent_tracer()
+if _tracer is not None:
+    track_adk_agent_recursive(run_root, _tracer)
 
-    track_adk_agent_recursive(run_root, multi_agent_tracer)
+
+def build_for_mode():
+    """Build an AgentSystem configured for the current start mode from settings.
+
+    Reads ``settings.web.start_mode``:
+      * ``"init"`` (default) — InitAgent is root (sequential: PlannerAgent →
+        OrchestratorAgent).
+      * ``"orchestrator"`` — OrchestratorAgent is root, with PlannerAgent
+        added to its subordinates so it can be invoked on demand.
+
+    Other runtime-tunable parameters (e.g. ``max_searches``) are read from
+    ``settings.web`` by individual components at build time.
+
+    Returns:
+        An :class:`~CoScientist.assembly.assembler.AgentSystem`.
+    """
+    from CoScientist.config import get_settings
+    start_mode = get_settings().web.start_mode
+
+    if start_mode == "init":
+        raw_config = load_config()
+        patched = copy.deepcopy(raw_config)
+        if "InitAgent" in patched.agents:
+            patched.agents["InitAgent"].root = True
+            patched.agents["OrchestratorAgent"].root = False
+            system = build_system(config=patched)
+        else:
+            logger.warning(
+                "start_mode is set to 'init' but 'InitAgent' is not present in "
+                "the system config; falling back to default build_system()"
+            )
+            system = build_system()
+        _tracer = get_multi_agent_tracer()
+        if _tracer is not None:
+            track_adk_agent_recursive(system.root, _tracer)
+        return system
+
+    if start_mode != "orchestrator":
+        raise ValueError(f"Unknown start_mode {start_mode!r}; expected 'init' or 'orchestrator'")
+
+    # Load a fresh config and patch it for orchestrator-as-root mode.
+    raw_config = load_config()
+    patched = copy.deepcopy(raw_config)
+
+    # Make OrchestratorAgent the root.
+    patched.agents["OrchestratorAgent"].root = True
+    if "InitAgent" in patched.agents:
+        patched.agents["InitAgent"].root = False
+
+    # Add PlannerAgent to OrchestratorAgent's subordinates (if not already).
+    orch_subs = patched.agents["OrchestratorAgent"].subordinates
+    if "PlannerAgent" not in orch_subs:
+        orch_subs.insert(0, "PlannerAgent")
+
+    # Re-validate the patched config and build.
+    system = build_system(config=patched)
+    _tracer = get_multi_agent_tracer()
+    if _tracer is not None:
+        track_adk_agent_recursive(system.root, _tracer)
+    return system
 
 __all__ = [
     "agent_system",
@@ -93,4 +158,5 @@ __all__ = [
     "pipeline_pre_agents",
     "pipeline_post_agents",
     "tz_agent",
+    "build_for_mode",
 ]
