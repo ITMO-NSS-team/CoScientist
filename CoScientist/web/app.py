@@ -87,6 +87,11 @@ def _apply_frontend_settings(frontend: dict) -> None:
         web.use_planner = bool(general["usePlanner"])
     if "opikEnabled" in general:
         web.opik_enabled = bool(general["opikEnabled"])
+    if "autoNamingEnabled" in general:
+        web.auto_naming_enabled = bool(general["autoNamingEnabled"])
+    if "coscientistUsername" in general:
+        val = str(general["coscientistUsername"]).strip()
+        web.coscientist_username = val if val else None
 
     research = frontend.get("researchAgent", {})
     if "maxSearches" in research:
@@ -452,7 +457,22 @@ def create_app() -> FastAPI:
     # --- Local users and sessions (process lifetime only) ---
     @app.get("/api/users")
     async def list_users():
-        return JSONResponse({"users": runtime.registry.list_users()})
+        from CoScientist.config import get_settings
+        web = get_settings().web
+        default_username = web.coscientist_username.strip() if web.coscientist_username else None
+        if default_username:
+            users = runtime.registry.list_users()
+            existing = [u for u in users if u["nickname"].casefold() == default_username.casefold()]
+            if not existing:
+                try:
+                    user = runtime.registry.create_user(default_username)
+                    runtime.registry.create_session(user["id"], title="New session")
+                except ValueError:
+                    pass
+        return JSONResponse({
+            "users": runtime.registry.list_users(),
+            "defaultUsername": default_username,
+        })
 
     @app.post("/api/users")
     async def create_user(data: dict):
@@ -811,6 +831,8 @@ def create_app() -> FastAPI:
                 "hitlEnabled": web.hitl_enabled,
                 "usePlanner": web.use_planner,
                 "opikEnabled": web.opik_enabled,
+                "autoNamingEnabled": web.auto_naming_enabled,
+                "coscientistUsername": web.coscientist_username or "",
             },
             "researchAgent": {"maxSearches": web.max_searches},
             "taskExecutorAgent": {
@@ -837,6 +859,8 @@ def create_app() -> FastAPI:
                 "hitlEnabled": web.hitl_enabled,
                 "usePlanner": web.use_planner,
                 "opikEnabled": web.opik_enabled,
+                "autoNamingEnabled": web.auto_naming_enabled,
+                "coscientistUsername": web.coscientist_username or "",
             },
             "researchAgent": {"maxSearches": web.max_searches},
             "taskExecutorAgent": {
