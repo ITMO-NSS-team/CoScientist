@@ -173,7 +173,7 @@
         <span
           class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">build</span>
       </a>
-      <button onclick="clearChat()" title="Clear chat">
+      <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
           class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
       </button>
@@ -275,6 +275,7 @@
         hitlEnabled: false,
         usePlanner: true,
         opikEnabled: false,
+        autoNamingEnabled: true,
       },
       researchAgent: {
         maxSearches: 2,
@@ -304,16 +305,21 @@
       { name: "ResearchAgent", icon: "search", desc: "Literature & Web Search" },
       { name: "ToolRetrieverAgent", icon: "build", desc: "MCP Tool Retriever" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
+      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
     ];
+
+    function isAgentHighlightedByDefault(name) {
+      return name === "PlannerAgent" || name === "OrchestratorAgent" || name === "ToolsViewer" || name === "KnowledgeGraph" || name === "__settings__";
+    }
 
     function initAgentNav() {
       const nav = document.getElementById('agent-nav');
       nav.innerHTML = AGENTS.map(a => {
-        const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
-        const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
-        const iconColorClass = isHighlightedByDefault ? "text-primary" : "text-outline-variant";
-        const textColorClass = isHighlightedByDefault ? "text-on-surface font-semibold" : "text-outline-variant font-medium";
+        const highlighted = isAgentHighlightedByDefault(a.name);
+        const opacityClass = highlighted ? "opacity-100" : "opacity-50";
+        const iconColorClass = highlighted ? "text-primary" : "text-outline-variant";
+        const textColorClass = highlighted ? "text-on-surface font-semibold" : "text-outline-variant font-medium";
 
         return `
           <div id="agent-${a.name}" onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
@@ -334,6 +340,15 @@
         openRoadmapEditor();
       } else if (name === "ToolsViewer") {
         openToolsViewer();
+      } else if (name === "KnowledgeGraph") {
+        const link = document.getElementById('graph-link');
+        if (link && link.href) {
+          window.open(link.href, '_blank');
+        } else if (activeUser && activeSession) {
+          window.open(`/graph?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`, '_blank');
+        } else {
+          window.open('/graph', '_blank');
+        }
       }
     }
 
@@ -346,17 +361,16 @@
           el.querySelector('.material-symbols-outlined').className = "material-symbols-outlined text-primary text-lg animate-pulse";
           el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => s.classList.remove('text-outline-variant', 'opacity-50'));
         } else {
-          // Меняем проверку здесь:
-          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
-          const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
+          const highlighted = isAgentHighlightedByDefault(a.name);
+          const opacityClass = highlighted ? "opacity-100" : "opacity-50";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
-          icon.className = `material-symbols-outlined ${isHighlightedByDefault ? 'text-primary' : 'text-outline-variant'} text-lg`;
+          icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
 
           el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
             if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${isHighlightedByDefault ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
+              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
             }
           });
         }
@@ -367,17 +381,16 @@
       AGENTS.forEach(a => {
         const el = document.getElementById('agent-' + a.name);
         if (el) {
-          // Меняем проверку здесь:
-          const isHighlightedByDefault = a.name === "PlannerAgent" || a.name === "OrchestratorAgent" || a.name === "ToolsViewer";
-          const opacityClass = isHighlightedByDefault ? "opacity-100" : "opacity-50";
+          const highlighted = isAgentHighlightedByDefault(a.name);
+          const opacityClass = highlighted ? "opacity-100" : "opacity-50";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
-          icon.className = `material-symbols-outlined ${isHighlightedByDefault ? 'text-primary' : 'text-outline-variant'} text-lg`;
+          icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
 
           el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
             if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${isHighlightedByDefault ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
+              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
             }
           });
         }
@@ -703,6 +716,8 @@
             appSettings.general.hitlEnabled = data.general.hitlEnabled ?? false;
             appSettings.general.usePlanner = data.general.usePlanner ?? true;
             appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
+            appSettings.general.autoNamingEnabled = data.general.autoNamingEnabled ?? true;
+            appSettings.general.coscientistUsername = data.general.coscientistUsername || '';
           }
           if (data.researchAgent) {
             appSettings.researchAgent.maxSearches = data.researchAgent.maxSearches ?? 2;
@@ -732,6 +747,8 @@
       document.getElementById('hitl-enabled-checkbox').checked = appSettings.general.hitlEnabled;
       document.getElementById('use-planner-checkbox').checked = appSettings.general.usePlanner;
       document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
+      document.getElementById('auto-naming-enabled-checkbox').checked = appSettings.general.autoNamingEnabled;
+      document.getElementById('default-username-input').value = appSettings.general.coscientistUsername || '';
       document.getElementById('research-max-searches').value = appSettings.researchAgent.maxSearches;
       document.getElementById('task-exec-keep-score').value = appSettings.taskExecutorAgent.keepScore;
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
@@ -769,6 +786,8 @@
         appSettings.general.usePlanner = document.getElementById('use-planner-checkbox').checked;
       }
       appSettings.general.opikEnabled = document.getElementById('opik-enabled-checkbox').checked;
+      appSettings.general.autoNamingEnabled = document.getElementById('auto-naming-enabled-checkbox').checked;
+      appSettings.general.coscientistUsername = document.getElementById('default-username-input').value.trim();
 
       const maxSearches = parseInt(document.getElementById('research-max-searches').value, 10);
       if (!isNaN(maxSearches) && maxSearches >= 0) {
@@ -932,8 +951,12 @@
 
     async function createNewSession() {
       if (!activeUser) return openIdentityModal();
-      const title = prompt('Session title:', 'New session');
-      if (title === null) return;
+      let title = 'New session';
+      if (!appSettings.general.autoNamingEnabled) {
+        const inputTitle = prompt('Session title:', 'New session');
+        if (inputTitle === null) return;
+        title = inputTitle.trim() || 'New session';
+      }
       try {
         const data = await apiJson(`/api/users/${encodeURIComponent(activeUser.id)}/sessions`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -957,6 +980,42 @@
         knownSessions = knownSessions.map(item => item.id === activeSession.id ? activeSession : item);
         populateSessionSelector();
       } catch (error) { addSystemMsg('Could not rename session: ' + error.message); }
+    }
+
+    /**
+     * Generate session title based on prompt length (fixed max length: 40 chars).
+     * Easily replaceable by an agent/LLM generator in the future.
+     */
+    function generateSessionTitle(messageText, maxLength = 40) {
+      if (!messageText) return 'New session';
+      let clean = messageText.trim().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ');
+      if (clean.length > maxLength) {
+        return clean.slice(0, maxLength).trim() + '...';
+      }
+      return clean || 'New session';
+    }
+
+    async function maybeAutoNameSession(promptText) {
+      if (!appSettings.general.autoNamingEnabled || !activeSession || !activeUser) return;
+      const title = activeSession.title ? activeSession.title.trim() : '';
+      const isDefaultTitle = !title || title === 'New session' || title.startsWith('New session');
+      if (!isDefaultTitle) return;
+
+      const newTitle = generateSessionTitle(promptText, 40);
+      if (newTitle && newTitle !== activeSession.title) {
+        try {
+          const data = await apiJson(sessionApi(), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: newTitle })
+          });
+          activeSession = data.session;
+          knownSessions = knownSessions.map(item => item.id === activeSession.id ? activeSession : item);
+          populateSessionSelector();
+        } catch (err) {
+          console.warn('Auto-rename session failed:', err);
+        }
+      }
     }
 
     function disconnectCurrentSocket() {
@@ -996,7 +1055,14 @@
         knownUsers = data.users || [];
         populateUserSelectors();
         const savedUserId = localStorage.getItem(USER_STORAGE_KEY);
-        const savedUser = knownUsers.find(item => item.id === savedUserId);
+        let savedUser = knownUsers.find(item => item.id === savedUserId);
+        if (data.defaultUsername) {
+          const envNick = data.defaultUsername.trim().toLowerCase();
+          const envUser = knownUsers.find(item => item.nickname.toLowerCase() === envNick);
+          if (envUser) {
+            savedUser = envUser;
+          }
+        }
         if (!savedUser) {
           activeUser = null;
           activeSession = null;
@@ -1226,6 +1292,7 @@
       const input = document.getElementById('chat-input');
       const msg = input.value.trim();
       if (!msg || !ws || ws.readyState !== 1) return;
+      maybeAutoNameSession(msg);
       ws.send(JSON.stringify({ type: 'chat_message', message: msg }));
       addTelemetry('SEND :: user query');
     });
@@ -1605,7 +1672,8 @@
       <div class="border-t border-outline-variant/10 pt-5 space-y-2">
         <label class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Register a new Nick</label>
         <div class="flex gap-2">
-          <input id="nickname-input" maxlength="64" placeholder="Gleb"
+          <input id="nickname-input" maxlength="64" placeholder="User" value="User"
+            onkeydown="if (event.key === 'Enter') registerLocalUser()"
             class="flex-1 bg-surface-container-high border-outline-variant/20 rounded text-xs text-on-surface" />
           <button onclick="registerLocalUser()"
             class="px-4 py-2 bg-primary text-on-primary rounded text-[10px] font-bold uppercase">Register</button>
@@ -1768,8 +1836,8 @@
             <span class="material-symbols-outlined text-primary text-base">tune</span>
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">
               General <span
-                class="normal-case text-[10px] font-normal text-outline-variant/70 font-sans tracking-normal ml-1">(дефолтные
-                параметры задаются в .env или config/settings.py)</span>
+                class="normal-case text-[10px] font-normal text-on-surface-variant font-sans tracking-normal ml-1">(Default
+                values are set in .env or settings.py)</span>
             </h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
@@ -1779,7 +1847,8 @@
                 <label class="text-xs font-bold text-on-surface">Session Start Mode</label>
                 <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Choose which agent starts the
                   session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent.
-                  <strong>OrchestratorAgent</strong> starts directly with the orchestrator.</p>
+                  <strong>OrchestratorAgent</strong> starts directly with the orchestrator.
+                </p>
               </div>
               <select id="start-mode-select" onchange="updateStartModeUI()"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
@@ -1833,6 +1902,25 @@
                   to your Opik dashboard.</p>
               </div>
               <input id="opik-enabled-checkbox" type="checkbox" class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Auto-name Sessions -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Auto-name Sessions</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically generate session titles based on the first prompt.</p>
+              </div>
+              <input id="auto-naming-enabled-checkbox" type="checkbox" checked class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Default Username -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Default Username</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Auto-selects user on startup (can also be set via COSCIENTIST_USERNAME in .env).</p>
+              </div>
+              <input id="default-username-input" type="text" placeholder="e.g. COSCIENTIST_USERNAME in .env"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-48 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
           </div>
         </div>
