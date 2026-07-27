@@ -319,7 +319,56 @@ That's it. `run_all` picks the agent up from the YAML; check it with
 
 ---
 
-## 5. Notes & gotchas
+## 5. Local MCP servers
+
+The local MCP stack is started separately:
+
+```powershell
+.\scripts\start-mcp.ps1
+uv run python scripts\check-local-mcp.py
+```
+
+Because A2A agents run in Docker, configure the two MCP toolsets that are
+directly attached to `ResearchAgent` with `host.docker.internal` in the root
+`.env`:
+
+```dotenv
+MCP__PAPERS_SEARCH_URL=http://host.docker.internal:7331/mcp
+MCP__PAPER_ANALYSIS_URL=http://host.docker.internal:7334/mcp
+```
+
+These values are read when the Python process starts. Recreate the A2A
+containers after changing them:
+
+```powershell
+.\scripts\start-a2a.ps1 -NoBuild
+```
+
+Chemical and Dataset Collection are available to A2A containers at:
+
+```text
+http://host.docker.internal:7332/mcp
+http://host.docker.internal:7333/mcp
+```
+
+They are not statically attached by the current `system.yaml`. A separate
+integration step must register their server metadata and tool descriptions in
+the `rag-tools` Postgres/vector catalog so that `retrieve_tools` and FEDOT.MAS
+can discover them. Do not add tools directly to `TaskExecutorAgent`: it is a
+sequential agent, and the configuration schema forbids tools on composite
+agents.
+
+Validate connectivity from the A2A runtime:
+
+```powershell
+docker compose -f docker\docker-compose.a2a.yml run --rm --no-deps `
+  -v "${PWD}:/workspace:ro" -w /workspace a2a-research `
+  python scripts/check-local-mcp.py --host host.docker.internal
+```
+
+---
+
+## 6. Notes & gotchas
 
 - **AgentCard required fields:** `name`, `description`, `url`, `version`,
   `capabilities`, `defaultInputModes`, `defaultOutputModes`, `skills` —

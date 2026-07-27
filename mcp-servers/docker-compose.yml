@@ -11,21 +11,41 @@ services:
     ports:
       - "7331:7331"
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
   
   chemical-mcp-server:
-    build: 
-      context: ..
-      dockerfile: mcp-servers/chemical-mcp-server/Dockerfile
+    build:
+      context: ./chemical-mcp-server
+      dockerfile: Dockerfile
     ports:
       - "7332:7331"
     volumes:
       - ./data:/tmp/chemical_mcp_annotated
     env_file:
-      - .env
+      - ./chemical-mcp-server/.env
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   dataset-collection-mcp-server:
-    build: 
+    build:
       context: ..
       dockerfile: mcp-servers/dataset-collection-mcp-server/Dockerfile
     ports:
@@ -33,9 +53,19 @@ services:
     env_file:
       - ./dataset-collection-mcp-server/.env
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   paper-analysis-mcp-server:
-    build: 
+    build:
       context: ..
       dockerfile: mcp-servers/paper-analysis-mcp-server/Dockerfile
     ports:
@@ -43,3 +73,13 @@ services:
     env_file:
       - ./paper-analysis-mcp-server/.env
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
