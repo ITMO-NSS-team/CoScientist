@@ -22,7 +22,7 @@ from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
-from CoScientist.tools.coder_tools import coder_toolset
+from CoScientist.tools.coder_tools.coder_tools import coder_toolset
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -413,6 +413,42 @@ def _wire_hitl(runtime: WebRuntime) -> None:
     )
 
 
+def _wire_sandbox_links(runtime: WebRuntime) -> None:
+    """Deliver the sandbox console links while the sandbox is still working.
+
+    ``run_sandbox_task`` waits inline for as long as the job runs (up to
+    ``SANDBOX_RUN_WAIT`` seconds), so the only other carrier of ``watch_url`` /
+    ``vscode_url`` — the tool's function_response — reaches the browser when
+    the run is already over. The sandbox client therefore calls this sink the
+    moment the container answers, and the links land in the tab as an ordinary
+    agent event.
+    """
+    from CoScientist.tools.coder_tools import sandbox_tools
+
+    # sandbox_id per session: a follow-up task reuses the container and would
+    # otherwise repost the same two links on every single call.
+    announced: dict[SessionKey, str] = {}
+
+    async def deliver(key: SessionKey | None, info: dict[str, Any]) -> None:
+        urls = [url for url in (info.get("watch_url"), info.get("vscode_url")) if url]
+        sandbox_id = str(info.get("sandbox_id") or "")
+        if key is None or not urls or announced.get(key) == sandbox_id:
+            return
+        announced[key] = sandbox_id
+
+        event = {
+            "type": "agent_event",
+            "author": "CoderAgent",
+            "is_final": False,
+            "timestamp": datetime.now().isoformat(),
+            "content": "\n".join([f"Sandbox is up:", *urls]),
+        }
+        runtime.agent_events[key].append(event)
+        await runtime.send(key, event)
+
+    sandbox_tools.set_sandbox_start_sink(deliver)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -431,6 +467,7 @@ def create_app() -> FastAPI:
     os.environ["COSCIENTIST_WEB_MODE"] = "true"
     runtime = WebRuntime()
     _wire_hitl(runtime)
+    _wire_sandbox_links(runtime)
     app = FastAPI(
         title="CoScientist Web UI",
         version="1.0.0",
@@ -1153,6 +1190,10 @@ async def _run_chat_invocation(
                     if tool_calls:
                         event_data["tool_calls"] = tool_calls
                     if tool_responses:
+                        # Sandbox links are NOT lifted out of the response here:
+                        # _wire_sandbox_links already delivered them when the
+                        # container came up. The frontend still renders them from
+                        # a response the push never covered, and skips duplicates.
                         event_data["tool_responses"] = tool_responses
 
                 if event.actions and event.actions.escalate:

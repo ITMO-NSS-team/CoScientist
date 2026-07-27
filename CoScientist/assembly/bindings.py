@@ -75,6 +75,11 @@ def _alembic():
     from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
     return ALEMBIC_TOOLS
 
+def _sandbox():
+    """OpenHands sandbox tools — absent when no sandbox URL is configured."""
+    from CoScientist.tools.coder_tools.sandbox_tools import get_sandbox_tools
+    return get_sandbox_tools() or None
+
 def _task_tracker():
     from CoScientist.tools import task_tracker_instance
     return task_tracker_instance
@@ -496,11 +501,7 @@ REGISTRY.register_tool(ToolEntry(
         ),
         ToolDoc(
             name="list_directory",
-            signature="list_directory(path, recursive)",
-            purpose="Inspect the workspace (completes immediately).",
-        ),
-        ToolDoc(
-            name="install_package",
+        name="install_package",
             signature="install_package(package_name, upgrade)",
             purpose=(
                 "Pip-install Python dependencies; like execute_bash it waits "
@@ -552,6 +553,58 @@ REGISTRY.register_tool(ToolEntry(
         ),
     ),
 ))
+
+REGISTRY.register_tool(ToolEntry(
+    key="sandbox",
+    factory=_sandbox,
+    # Dropped silently in deployments where SANDBOX_URL is unset — the prompt
+    # then never advertises a sandbox the agent does not have.
+    optional=True,
+    docs=(
+        ToolDoc(
+            name="run_sandbox_task",
+            signature="run_sandbox_task(task, dataset_url, new_sandbox)",
+            purpose=(
+                "Delegate a HEAVY / long-running / GPU-bound job (training runs, "
+                "large data processing, long experiments) to an autonomous agent "
+                "in the OpenHands sandbox. Waits inline and returns that agent's "
+                "report; hands back status \"running\" only if the job outlives "
+                "the wait."
+            ),
+            usage=(
+                "The sandbox is a SEPARATE machine from your execute_bash "
+                "workspace — files do NOT cross between them. Data goes in via "
+                "`dataset_url`; results come back as the summary.",
+                "It is bound to your session: the first call creates it, later "
+                "calls continue in the SAME sandbox with its files and memory "
+                "intact — so build one experiment up over several calls.",
+                "Pass `new_sandbox=True` ONLY for an independent experiment on a "
+                "clean machine; everything the previous one produced is lost.",
+                "Say exactly what the deliverable is and where to write it — you "
+                "cannot watch it work, you only get its report back.",
+                "For ordinary code, shell and git work keep using execute_bash.",
+            ),
+        ),
+        ToolDoc(
+            name="check_sandbox_task",
+            signature="check_sandbox_task()",
+            purpose=(
+                "Pick up the result of a sandbox task that came back "
+                "\"running\". You normally do NOT need it — run_sandbox_task "
+                "already waits and returns the result."
+            ),
+            usage=(
+                "It waits inline; if the answer is still \"running\", do other "
+                "work and check once later — never poll in a tight loop.",
+            ),
+        ),
+        ToolDoc(
+            name="list_sandbox_files",
+            signature="list_sandbox_files(path)",
+            purpose=(
+                "List files in the sandbox workspace — use it to VERIFY that the "
+                "artifacts the sandbox agent reported really exist before you "
+                "rely on them."
 
 # HITL tools are not a YAML-listed tool entry: the assembler attaches them via
 # the per-agent `hitl: true` flag (when HITL is globally enabled) and appends
