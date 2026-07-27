@@ -301,9 +301,6 @@
     const AGENTS = [
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
-      { name: "HypothesesAgent", icon: "psychology", desc: "Hypothesis Generator" },
-      { name: "ResearchAgent", icon: "search", desc: "Literature & Web Search" },
-      { name: "ToolRetrieverAgent", icon: "build", desc: "MCP Tool Retriever" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
@@ -410,9 +407,23 @@
       return date.toLocaleTimeString('en-GB', { hour12: false });
     }
 
-    function addSystemMsg(text, timestamp = null) {
+    function appendMsgToFeed(html) {
       const feed = document.getElementById('chat-feed');
-      feed.innerHTML += `
+      const placeholder = feed.querySelector('.text-outline-variant.font-medium');
+      if (placeholder) {
+        feed.innerHTML = '';
+      }
+      const typing = document.getElementById('typing-indicator');
+      if (typing) {
+        typing.insertAdjacentHTML('beforebegin', html);
+      } else {
+        feed.insertAdjacentHTML('beforeend', html);
+      }
+      scrollChat();
+    }
+
+    function addSystemMsg(text, timestamp = null) {
+      appendMsgToFeed(`
     <div class="flex flex-col gap-2 max-w-2xl msg-enter">
       <div class="flex items-center gap-2">
         <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">System</span>
@@ -421,8 +432,7 @@
       <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
         <p class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>
       </div>
-    </div>`;
-      scrollChat();
+    </div>`);
     }
 
     function escJs(s) {
@@ -450,9 +460,25 @@
       }).join('');
     }
 
+    function checkAndDisplaySandboxLinks(author, tr, timestamp = null) {
+      if (!tr || !tr.response || typeof tr.response !== 'object') return;
+      const watchUrl = tr.response.watch_url || tr.response.watchUrl;
+      const vscodeUrl = tr.response.vscode_url || tr.response.vscodeUrl;
+      if (watchUrl || vscodeUrl) {
+        const lines = [];
+        if (watchUrl) lines.push(watchUrl);
+        if (vscodeUrl) lines.push(vscodeUrl);
+        const text = lines.join('\n');
+        const feed = document.getElementById('chat-feed');
+        if (feed && ((watchUrl && feed.innerText.includes(watchUrl)) || (vscodeUrl && feed.innerText.includes(vscodeUrl)))) {
+          return;
+        }
+        addAgentMsg(author || 'system', text, timestamp);
+      }
+    }
+
     function addAgentMsg(author, text, timestamp = null) {
-      const feed = document.getElementById('chat-feed');
-      feed.innerHTML += `
+      appendMsgToFeed(`
     <div class="flex items-start gap-4 max-w-3xl msg-enter">
       <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
         <span class="material-symbols-outlined text-sm text-primary">smart_toy</span>
@@ -466,13 +492,11 @@
           <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">${linkify(escHtml(text))}</p>
         </div>
       </div>
-    </div>`;
-      scrollChat();
+    </div>`);
     }
 
     function addUserMsg(text, timestamp = null) {
-      const feed = document.getElementById('chat-feed');
-      feed.innerHTML += `
+      appendMsgToFeed(`
     <div class="flex items-start gap-4 max-w-2xl ml-auto flex-row-reverse msg-enter">
       <div class="w-8 h-8 rounded-lg bg-surface-container-highest flex items-center justify-center shrink-0">
         <span class="material-symbols-outlined text-sm text-on-surface">person</span>
@@ -486,14 +510,22 @@
           <p class="text-sm text-on-surface">${escHtml(text)}</p>
         </div>
       </div>
-    </div>`;
-      scrollChat();
+    </div>`);
     }
 
     function showTyping() {
       const feed = document.getElementById('chat-feed');
-      if (document.getElementById('typing-indicator')) return;
-      feed.innerHTML += `
+      const placeholder = feed.querySelector('.text-outline-variant.font-medium');
+      if (placeholder) {
+        feed.innerHTML = '';
+      }
+      const existing = document.getElementById('typing-indicator');
+      if (existing) {
+        feed.appendChild(existing);
+        scrollChat();
+        return;
+      }
+      feed.insertAdjacentHTML('beforeend', `
     <div id="typing-indicator" class="flex items-center gap-3 msg-enter">
       <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
         <span class="material-symbols-outlined text-sm text-primary animate-pulse">smart_toy</span>
@@ -503,7 +535,7 @@
         <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
         <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
       </div>
-    </div>`;
+    </div>`);
       scrollChat();
     }
 
@@ -574,7 +606,7 @@
           <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">Proposed output</p>
           <pre class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap bg-surface-container-high p-3 rounded-lg border border-outline-variant/10 max-h-96 overflow-auto">${escHtml(proposedOutput)}</pre>
         </div>` : '';
-      feed.innerHTML += `
+      appendMsgToFeed(`
     <div class="my-6 relative msg-enter">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
       <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
@@ -616,8 +648,7 @@
         </div>`}
         ${openRoadmapChatBtn}
       </div>
-    </div>`;
-      scrollChat();
+    </div>`);
     }
 
     function disableHitlControls(requestId) {
@@ -1127,7 +1158,10 @@
         } else if (message.type === 'agent_event') {
           if (message.content) addAgentMsg(message.author || 'system', message.content, message.timestamp);
           (message.tool_calls || []).forEach(call => addExperimentToolCall(message.author, call));
-          (message.tool_responses || []).forEach(response => addExperimentToolResponse(message.author, response));
+          (message.tool_responses || []).forEach(response => {
+            addExperimentToolResponse(message.author, response);
+            checkAndDisplaySandboxLinks(message.author, response, message.timestamp);
+          });
         } else if (message.type === 'error') {
           addSystemMsg('Error: ' + message.message, message.timestamp);
         }
@@ -1225,6 +1259,7 @@
             if (data.tool_responses) {
               data.tool_responses.forEach(tr => {
                 addExperimentToolResponse(data.author, tr);
+                checkAndDisplaySandboxLinks(data.author, tr, data.timestamp);
                 addTelemetry('TOOL_RESULT :: ' + data.author + ' ← ' + tr.name);
               });
             }
