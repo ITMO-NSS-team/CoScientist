@@ -65,6 +65,11 @@ def _coder():
     from CoScientist.tools import coder_toolset_instance
     return coder_toolset_instance
 
+
+def _alembic():
+    from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
+    return ALEMBIC_TOOLS
+
 def _task_tracker():
     from CoScientist.tools import task_tracker_instance
     return task_tracker_instance
@@ -463,6 +468,48 @@ REGISTRY.register_tool(ToolEntry(
                 "Pip-install Python dependencies; like execute_bash it waits "
                 "inline and returns the result (a very slow install may hand "
                 "back a `job_id` for check_job)."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="alembic",
+    factory=_alembic,
+    docs=(
+        ToolDoc(
+            name="build_mcp_server",
+            signature="build_mcp_server(repo_url, force_rebuild)",
+            purpose=(
+                "Start an Alembic build: turn a scientific GitHub repository into "
+                "a served MCP tool server (clone -> env -> generated+validated "
+                "tools -> FastMCP server in Docker)."
+            ),
+            usage=(
+                "Returns immediately with a job_id; the build itself runs in the "
+                "background and takes tens of minutes — report the job_id and "
+                "do NOT poll it in a tight loop, check back later instead.",
+                "Reuses an already running/done build for the same repo_url "
+                "unless force_rebuild=true is passed.",
+            ),
+        ),
+        ToolDoc(
+            name="check_mcp_build",
+            signature="check_mcp_build(job_id)",
+            purpose=(
+                "Check the status of a build started by build_mcp_server: "
+                "\"running\" with the current pipeline stage and a log tail, "
+                "\"done\" with the served mcp_url/image/container, or \"failed\" "
+                "with the error tail of the build log."
+            ),
+        ),
+        ToolDoc(
+            name="list_mcp_builds",
+            signature="list_mcp_builds()",
+            purpose=(
+                "List every Alembic build known to this process (running and "
+                "finished) — use it to find a build from an earlier "
+                "delegation/session (e.g. a lost job_id)."
             ),
         ),
     ),
