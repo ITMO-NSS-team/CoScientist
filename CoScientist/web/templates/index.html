@@ -192,9 +192,30 @@
           <h2 class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
           </h2>
         </div>
-        <div id="active-badge"
-          class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
-          Offline</div>
+        <div class="flex items-center gap-3">
+          <button id="activity-toggle" onclick="toggleActivityRail()" title="Show/hide agent activity"
+            class="text-[#424656] hover:text-primary transition-colors">
+            <span class="material-symbols-outlined text-base">timeline</span>
+          </button>
+          <div id="active-badge"
+            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
+            Offline</div>
+        </div>
+      </div>
+
+      <!-- Activity Rail: who is working right now and with which tools.
+           Lives outside the chat feed on purpose — it must stay glanceable
+           without adding a single message to the conversation. -->
+      <div id="activity-rail"
+        class="hidden px-4 py-2.5 border-b border-outline-variant/10 bg-surface-container-lowest/40 space-y-2">
+        <div class="flex items-center gap-2">
+          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Agents</span>
+          <div id="activity-agents" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Tools</span>
+          <div id="activity-tools" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+        </div>
       </div>
 
       <!-- Chat Feed -->
@@ -477,7 +498,15 @@
       }
     }
 
+    function hasText(value) {
+      return typeof value === 'string' && value.trim().length > 0;
+    }
+
     function addAgentMsg(author, text, timestamp = null) {
+      // Blank-but-present text produces an empty bubble; such events carry a
+      // function call, not an utterance. (Also guards history recorded before
+      // the backend started filtering them.)
+      if (!hasText(text)) return;
       appendMsgToFeed(`
     <div class="flex items-start gap-4 max-w-3xl msg-enter">
       <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
@@ -869,6 +898,315 @@
     }
 
     // =========================================================================
+    // Activity Rail — live view of which agents run and which tools they call
+    //
+    // Fed by the same ``agent_event`` stream the chat uses, but rendered as a
+    // fixed two-row strip: nothing is ever appended, so a long run cannot push
+    // the conversation off screen. Agent chips light up while an agent is
+    // producing events; tool pills show that agent's calls with a live counter.
+    // =========================================================================
+    const ACTIVITY_RAIL_KEY = 'coscientist.activity_rail';
+    const ACTIVITY_IDLE_MS = 20000;  // an agent with no events for this long dims
+
+    let activityAgents = new Map();   // agent name -> { icon, tools: Map, calls, lastSeen, transferred }
+    let activitySelected = null;      // agent whose tools the second row shows
+    let activityPinned = false;       // user clicked a chip -> stop auto-following
+    let activityTicker = null;
+
+    const AGENT_ICONS = {
+      OrchestratorAgent: 'hub',
+      InitAgent: 'flag',
+      PlannerAgent: 'map',
+      HypothesesAgent: 'lightbulb',
+      ResearchAgent: 'travel_explore',
+      TaskExecutorAgent: 'checklist',
+      CoderAgent: 'terminal',
+      DatasetCollectorAgent: 'dataset',
+      MedicalAgent: 'ecg_heart',
+      ExperimentAgent: 'science',
+      FedotAgent: 'network_intelligence',
+    };
+
+    function agentIcon(name) {
+      if (AGENT_ICONS[name]) return AGENT_ICONS[name];
+      if (/tool/i.test(name)) return 'handyman';
+      if (/critic|review/i.test(name)) return 'rate_review';
+      if (name === 'system' || name === 'user') return 'settings_ethernet';
+      return 'smart_toy';
+    }
+
+    function toolIcon(name) {
+      const n = String(name || '').toLowerCase();
+      if (n.includes('transfer')) return 'alt_route';
+      if (n.includes('sandbox') || n.includes('shell') || n.includes('exec') || n.includes('code')) return 'terminal';
+      if (n.includes('arxiv') || n.includes('pubmed') || n.includes('openalex') || n.includes('paper')) return 'menu_book';
+      if (n.includes('search') || n.includes('web') || n.includes('query')) return 'travel_explore';
+      if (n.includes('graph')) return 'bubble_chart';
+      if (n.includes('dataset') || n.includes('data')) return 'dataset';
+      if (n.includes('file') || n.includes('read') || n.includes('write') || n.includes('doc')) return 'description';
+      if (n.includes('plot') || n.includes('chart') || n.includes('metric')) return 'insert_chart';
+      if (n.includes('hitl') || n.includes('ask') || n.includes('input')) return 'forum';
+      if (n.includes('task') || n.includes('track')) return 'checklist';
+      return 'build';
+    }
+
+    function activityRailEnabled() {
+      return localStorage.getItem(ACTIVITY_RAIL_KEY) !== 'off';
+    }
+
+    function toggleActivityRail() {
+      localStorage.setItem(ACTIVITY_RAIL_KEY, activityRailEnabled() ? 'off' : 'on');
+      renderActivityRail();
+    }
+
+    function activityAgent(name) {
+      const key = name || 'system';
+      let entry = activityAgents.get(key);
+      if (!entry) {
+        entry = {
+          name: key, icon: agentIcon(key), tools: new Map(), calls: 0, lastSeen: 0,
+          // Outstanding calls: by ADK call id when available, plus a counter
+          // for any record that arrives without one.
+          pending: new Set(), running: 0,
+        };
+        activityAgents.set(key, entry);
+      }
+      return entry;
+    }
+
+    function activityBusy(entry) {
+      return entry.pending.size + entry.running;
+    }
+
+    // A delegation that returned proves its agent is done, whatever became of
+    // the individual tool records inside it (a call whose result never
+    // surfaced would otherwise keep the chip pulsing for the whole session).
+    function activityCloseAgent(name) {
+      const entry = activityAgents.get(name);
+      if (!entry) return;
+      entry.pending.clear();
+      entry.running = 0;
+      // Its calls did finish — we just never saw the closing record for some.
+      entry.tools.forEach(tool => { tool.done = tool.calls; });
+    }
+
+    function activityTouchAgent(name, timestamp = null) {
+      const entry = activityAgent(name);
+      entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
+      if (!activityPinned) activitySelected = entry.name;
+      renderActivityRail();
+    }
+
+    function activityTool(entry, toolName) {
+      let tool = entry.tools.get(toolName);
+      if (!tool) {
+        tool = { name: toolName, icon: toolIcon(toolName), calls: 0, done: 0, errors: 0, lastArgs: null };
+        entry.tools.set(toolName, tool);
+      }
+      return tool;
+    }
+
+    function activityRecordCall(author, tc, timestamp = null) {
+      const name = tc && tc.name;
+      if (!name) return;
+      const entry = activityAgent(author);
+      entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
+
+      // Delegation, not tool use — show the target agent as soon as it is
+      // picked, before it emits anything of its own. Two shapes reach us:
+      // ``transfer_to_agent`` (built-in routing) and an AgentTool call, whose
+      // tool name IS the subordinate's agent name.
+      const transferred = name === 'transfer_to_agent'
+        ? (tc.args && (tc.args.agent_name || tc.args.agentName))
+        : (/Agent$/.test(name) ? name : null);
+      if (transferred) {
+        const next = activityAgent(String(transferred));
+        next.transferred = true;
+        next.lastSeen = entry.lastSeen;
+        if (!activityPinned) activitySelected = next.name;
+        renderActivityRail();
+        return;
+      }
+
+      const tool = activityTool(entry, name);
+      tool.calls++;
+      tool.lastArgs = tc.args || null;
+      entry.calls++;
+      if (tc.callId) {
+        entry.pending.add(tc.callId);
+      } else {
+        entry.running++;
+      }
+      if (!activityPinned) activitySelected = entry.name;
+      renderActivityRail();
+    }
+
+    function activityRecordResponse(author, tr, timestamp = null) {
+      const name = tr && tr.name;
+      if (!name || name === 'transfer_to_agent') return;
+      // Mirror activityRecordCall: a hand-off was never counted as a tool call
+      // of the caller. Its return instead closes out the agent it delegated to.
+      if (/Agent$/.test(name)) {
+        activityCloseAgent(name);
+        renderActivityRail();
+        return;
+      }
+      const entry = activityAgent(author);
+      entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
+      const tool = activityTool(entry, name);
+      tool.done++;
+      if (activityResponseFailed(tr.response)) tool.errors++;
+      if (tr.callId && entry.pending.delete(tr.callId)) {
+        // paired with its own call
+      } else {
+        entry.running = Math.max(0, entry.running - 1);
+      }
+      renderActivityRail();
+    }
+
+    // Single entry point for the `tool_activity` stream, which reports tool use
+    // at every nesting level (top-level agents and AgentTool sub-agents alike).
+    function applyToolActivity(data, quiet = false) {
+      const author = data.author || 'system';
+      const tool = data.tool;
+      if (!tool) return;
+
+      if (data.phase === 'call') {
+        activityRecordCall(author, { name: tool, args: data.args, callId: data.call_id }, data.timestamp);
+        addExperimentToolCall(author, { name: tool, args: data.args });
+        if (!quiet) addTelemetry('TOOL_CALL :: ' + author + ' → ' + tool);
+        return;
+      }
+
+      const failed = data.phase === 'error';
+      const response = failed ? { error: data.error } : data.result;
+      activityRecordResponse(author, { name: tool, response: response, callId: data.call_id }, data.timestamp);
+      addExperimentToolResponse(author, { name: tool, response: response });
+      if (!quiet) {
+        addTelemetry((failed ? 'TOOL_ERROR :: ' : 'TOOL_RESULT :: ') + author
+          + (failed ? ' ✖ ' : ' ← ') + tool);
+      }
+    }
+
+    function activityResponseFailed(response) {
+      if (!response) return false;
+      if (typeof response === 'string') return /^\s*(error|traceback)/i.test(response);
+      if (typeof response !== 'object') return false;
+      if (response.error) return true;
+      const status = String(response.status || response.result_status || '').toLowerCase();
+      return status === 'error' || status === 'failed';
+    }
+
+    function activitySelectAgent(name) {
+      // Clicking the already-selected chip releases the pin and resumes
+      // auto-following whichever agent is currently talking.
+      if (activityPinned && activitySelected === name) {
+        activityPinned = false;
+      } else {
+        activitySelected = name;
+        activityPinned = true;
+      }
+      renderActivityRail();
+    }
+
+    function activityReset() {
+      activityAgents = new Map();
+      activitySelected = null;
+      activityPinned = false;
+      renderActivityRail();
+    }
+
+    function activityMarkIdle() {
+      activityAgents.forEach(entry => activityCloseAgent(entry.name));
+      renderActivityRail();
+    }
+
+    function renderActivityRail() {
+      const rail = document.getElementById('activity-rail');
+      const toggle = document.getElementById('activity-toggle');
+      if (!rail) return;
+
+      const enabled = activityRailEnabled();
+      if (toggle) {
+        toggle.className = enabled
+          ? 'text-primary hover:brightness-125 transition-colors'
+          : 'text-[#424656] hover:text-primary transition-colors';
+      }
+      rail.classList.toggle('hidden', !enabled || activityAgents.size === 0);
+      if (!enabled || activityAgents.size === 0) return;
+
+      const now = Date.now();
+      const agents = [...activityAgents.values()].sort((a, b) => a.lastSeen - b.lastSeen);
+      if (activitySelected && !activityAgents.has(activitySelected)) activitySelected = null;
+      if (!activitySelected && agents.length) activitySelected = agents[agents.length - 1].name;
+
+      document.getElementById('activity-agents').innerHTML = agents.map(entry => {
+        // Silence alone means "done": an agent that has produced nothing for a
+        // while is not shown as working even if a call went unclosed.
+        const fresh = (now - entry.lastSeen) < ACTIVITY_IDLE_MS;
+        const busy = fresh && activityBusy(entry) > 0;
+        const selected = entry.name === activitySelected;
+        const tone = busy
+          ? 'border-primary/50 bg-primary/10 text-primary'
+          : fresh
+            ? 'border-outline-variant/25 bg-surface-container-high/60 text-on-surface'
+            : 'border-outline-variant/10 bg-transparent text-outline-variant opacity-60';
+        const ring = selected ? ' ring-1 ring-primary/40' : '';
+        const pulse = busy ? ' animate-pulse' : '';
+        const badge = entry.calls
+          ? `<span class="text-[8px] font-mono bg-surface-container-highest/80 px-1 rounded">${entry.calls}</span>`
+          : '';
+        const hint = `${entry.name}${entry.calls ? ` — ${entry.calls} tool call(s)` : ''}${entry.transferred ? ' — delegated' : ''}`;
+        return `
+          <button onclick="activitySelectAgent('${escJs(entry.name)}')" title="${escHtml(hint)}"
+            class="flex items-center gap-1.5 shrink-0 border rounded-full pl-2 pr-2.5 py-1 transition-all ${tone}${ring}">
+            <span class="material-symbols-outlined text-sm${pulse}">${entry.icon}</span>
+            <span class="text-[10px] font-semibold tracking-tight">${escHtml(entry.name.replace(/Agent$/, ''))}</span>
+            ${badge}
+          </button>`;
+      }).join('');
+
+      const selected = activityAgents.get(activitySelected);
+      const tools = selected ? [...selected.tools.values()] : [];
+      const toolsBox = document.getElementById('activity-tools');
+      if (!tools.length) {
+        toolsBox.innerHTML = `<span class="text-[9px] font-mono text-outline-variant/60">${
+          selected ? escHtml(selected.name) + ' — no tool calls yet' : 'no tool calls yet'
+        }</span>`;
+        return;
+      }
+
+      const selectedFresh = (now - selected.lastSeen) < ACTIVITY_IDLE_MS;
+      toolsBox.innerHTML = tools.map(tool => {
+        const running = selectedFresh && tool.calls > tool.done;
+        const tone = tool.errors
+          ? 'border-error/40 bg-error/10 text-error'
+          : running
+            ? 'border-primary/40 bg-primary/10 text-primary'
+            : 'border-secondary/30 bg-secondary/5 text-secondary';
+        const pulse = running ? ' animate-pulse' : '';
+        const count = tool.calls > 1 ? `<span class="text-[8px] font-mono opacity-80">×${tool.calls}</span>` : '';
+        let hint = `${tool.name} — ${tool.done}/${tool.calls} finished`;
+        if (tool.errors) hint += `, ${tool.errors} error(s)`;
+        if (tool.lastArgs && Object.keys(tool.lastArgs).length) {
+          hint += `\n${truncateStr(tool.lastArgs, 200)}`;
+        }
+        return `
+          <button onclick="openToolsViewer()" title="${escHtml(hint)}"
+            class="flex items-center gap-1 shrink-0 border rounded-md px-2 py-0.5 transition-all ${tone}">
+            <span class="material-symbols-outlined text-[13px]${pulse}">${tool.icon}</span>
+            <span class="text-[9px] font-mono tracking-tight">${escHtml(tool.name)}</span>
+            ${count}
+          </button>`;
+      }).join('');
+    }
+
+    // Re-render on a slow tick so chips fade to "idle" without new events.
+    activityTicker = setInterval(() => {
+      if (activityAgents.size) renderActivityRail();
+    }, 5000);
+
+    // =========================================================================
     // Local users and sessions
     // =========================================================================
     async function apiJson(url, options = {}) {
@@ -1128,6 +1466,7 @@
       } else {
         hideTyping();
         resetAgents();
+        activityMarkIdle();
         document.getElementById('hitl-panel').classList.add('hidden');
         currentPlannerHitlRequest = null;
         updateRoadmapModalButtons();
@@ -1148,6 +1487,7 @@
       const feed = document.getElementById('chat-feed');
       const messages = snapshot.messages || [];
       experimentToolEvents = [];
+      activityReset();
       eventCount = 0;
       document.getElementById('event-count').textContent = 'Events: 0';
       feed.innerHTML = '';
@@ -1156,12 +1496,16 @@
         if (message.type === 'user_message') {
           addUserMsg(message.message, message.timestamp);
         } else if (message.type === 'agent_event') {
-          if (message.content) addAgentMsg(message.author || 'system', message.content, message.timestamp);
-          (message.tool_calls || []).forEach(call => addExperimentToolCall(message.author, call));
+          activityTouchAgent(message.author, message.timestamp);
+          if (hasText(message.content)) addAgentMsg(message.author || 'system', message.content, message.timestamp);
+          (message.tool_calls || [])
+            .filter(call => call.name === 'transfer_to_agent')
+            .forEach(call => activityRecordCall(message.author, call, message.timestamp));
           (message.tool_responses || []).forEach(response => {
-            addExperimentToolResponse(message.author, response);
             checkAndDisplaySandboxLinks(message.author, response, message.timestamp);
           });
+        } else if (message.type === 'tool_activity') {
+          applyToolActivity(message, true);
         } else if (message.type === 'error') {
           addSystemMsg('Error: ' + message.message, message.timestamp);
         }
@@ -1240,7 +1584,8 @@
             document.getElementById('event-count').textContent = 'Events: ' + eventCount;
             break;
           case 'agent_event':
-            if (data.content) {
+            activityTouchAgent(data.author, data.timestamp);
+            if (hasText(data.content)) {
               hideTyping();
               highlightAgent(data.author);
               addAgentMsg(data.author, data.content, data.timestamp);
@@ -1249,24 +1594,28 @@
             } else {
               addTelemetry('EVENT :: ' + data.author + ' (no content)');
             }
-            // Capture tool activity for the experiment viewer
+            // Tool call/result rendering is driven by the `tool_activity`
+            // stream instead: it also covers tools used inside AgentTool
+            // sub-agents, which never appear in these top-level parts. Only
+            // agent hand-offs and sandbox links are read from here.
             if (data.tool_calls) {
-              data.tool_calls.forEach(tc => {
-                addExperimentToolCall(data.author, tc);
-                addTelemetry('TOOL_CALL :: ' + data.author + ' → ' + tc.name);
-              });
+              data.tool_calls
+                .filter(tc => tc.name === 'transfer_to_agent')
+                .forEach(tc => activityRecordCall(data.author, tc, data.timestamp));
             }
             if (data.tool_responses) {
               data.tool_responses.forEach(tr => {
-                addExperimentToolResponse(data.author, tr);
                 checkAndDisplaySandboxLinks(data.author, tr, data.timestamp);
-                addTelemetry('TOOL_RESULT :: ' + data.author + ' ← ' + tr.name);
               });
             }
+            break;
+          case 'tool_activity':
+            applyToolActivity(data);
             break;
           case 'final_response':
             hideTyping();
             resetAgents();
+            activityMarkIdle();
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             addTelemetry('COMPLETE :: Final response received');
@@ -1339,6 +1688,7 @@
     }
 
     function clearChat() {
+      activityReset();
       document.getElementById('chat-feed').innerHTML = `
     <div class="flex flex-col items-center justify-center h-full opacity-50">
       <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
@@ -1356,6 +1706,7 @@
     // Init
     // =========================================================================
     initAgentNav();
+    renderActivityRail();
     bootstrap();
 
     // Keep-alive ping
@@ -1597,6 +1948,7 @@
         args: tc.args,
         timestamp: new Date(),
       });
+      trimExperimentLog();
       renderExperimentFeed();
     }
 
@@ -1608,6 +1960,7 @@
         response: tr.response,
         timestamp: new Date(),
       });
+      trimExperimentLog();
       renderExperimentFeed();
     }
 
@@ -1616,7 +1969,19 @@
       return s.length > max ? s.slice(0, max) + '…' : s;
     }
 
+    // Every tool call in the run lands here now, so keep the log bounded and
+    // rebuild the DOM only while the viewer is actually open.
+    const EXPERIMENT_LOG_LIMIT = 800;
+
+    function trimExperimentLog() {
+      if (experimentToolEvents.length > EXPERIMENT_LOG_LIMIT) {
+        experimentToolEvents = experimentToolEvents.slice(-EXPERIMENT_LOG_LIMIT);
+      }
+    }
+
     function renderExperimentFeed() {
+      const modal = document.getElementById('experiment-modal');
+      if (modal && modal.classList.contains('hidden')) return;
       const feed = document.getElementById('experiment-feed');
       if (!feed) return;
 
@@ -1645,9 +2010,13 @@
 
         let body = '';
         if (isCall) {
-          const argsStr = ev.args && Object.keys(ev.args).length > 0
-            ? JSON.stringify(ev.args, null, 2)
-            : '(no arguments)';
+          // Args arrive either as an object or, when the payload was too large
+          // to keep structured, as a pre-truncated string.
+          const argsStr = typeof ev.args === 'string'
+            ? ev.args
+            : (ev.args && Object.keys(ev.args).length > 0
+              ? JSON.stringify(ev.args, null, 2)
+              : '(no arguments)');
           body = `
             <div class="mt-2">
               <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">Arguments</div>

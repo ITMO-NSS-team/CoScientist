@@ -185,6 +185,7 @@ class CoScientistManager:
                 )
             from google.adk.apps.app import App
             from CoScientist.logging.event_logger import EventLoggerPlugin
+            from CoScientist.logging.tool_activity import ToolActivityPlugin
             from CoScientist.graph.plugin import GraphMemoryPlugin
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
@@ -198,6 +199,10 @@ class CoScientistManager:
                 root_agent=system.root,
                 plugins=[
                     EventLoggerPlugin(),
+                    # Observer: reports tool use from nested AgentTool runners
+                    # too, which the top-level event stream cannot see. Inert
+                    # unless a consumer (the Web UI) registered a sink.
+                    ToolActivityPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
                     # Capture artifact (figure/table) URLs from tool results BEFORE

@@ -63,6 +63,10 @@ TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
 APP_NAME = "coscientist_app"
 SessionKey = tuple[str, str]
 SOCKET_SEND_TIMEOUT_SECONDS = 5.0
+# Tool records replayed to a reconnecting tab. Chat messages live in the same
+# log and are never dropped, so only the tool stream is capped.
+MAX_TOOL_ACTIVITY_EVENTS = 600
+TOOL_ACTIVITY_TRIM_SLACK = 200
 
 
 def _apply_frontend_settings(frontend: dict) -> None:
@@ -449,6 +453,46 @@ def _wire_sandbox_links(runtime: WebRuntime) -> None:
     sandbox_tools.set_sandbox_start_sink(deliver)
 
 
+def _wire_tool_activity(runtime: WebRuntime) -> None:
+    """Stream every tool call — including those inside AgentTool sub-agents.
+
+    The top-level ``run_async`` stream only carries a delegation's own
+    function_call/function_response, so a subordinate's inner tools (e.g.
+    ``ResearchAgent`` → ``tavily_search``) are invisible to the browser. The
+    plugin sink below fires at every nesting level and routes each call to the
+    tabs watching the owning session.
+    """
+    from CoScientist.logging.tool_activity import set_tool_activity_sink
+
+    def trim(events: list[dict[str, Any]]) -> None:
+        """Bound replay history: drop the oldest tool records, keep the chat."""
+        if len(events) <= MAX_TOOL_ACTIVITY_EVENTS + TOOL_ACTIVITY_TRIM_SLACK:
+            return
+        indexes = [
+            index for index, event in enumerate(events)
+            if event.get("type") == "tool_activity"
+        ]
+        excess = len(indexes) - MAX_TOOL_ACTIVITY_EVENTS
+        if excess <= 0:
+            return
+        dropped = set(indexes[:excess])
+        events[:] = [
+            event for index, event in enumerate(events) if index not in dropped
+        ]
+
+    async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
+        if key not in runtime.sockets and key not in runtime.active_runs:
+            # A key we never served (e.g. the CLI default scope) has nowhere to go.
+            return
+        event = {"type": "tool_activity", **_json_safe(payload)}
+        events = runtime.agent_events[key]
+        events.append(event)
+        trim(events)
+        await runtime.send(key, event)
+
+    set_tool_activity_sink(deliver)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -468,6 +512,7 @@ def create_app() -> FastAPI:
     runtime = WebRuntime()
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
+    _wire_tool_activity(runtime)
     app = FastAPI(
         title="CoScientist Web UI",
         version="1.0.0",
@@ -1160,7 +1205,13 @@ async def _run_chat_invocation(
                 }
 
                 if event.content and event.content.parts:
-                    text_parts = [p.text for p in event.content.parts if p.text]
+                    # A model turn that only carries a function call often still
+                    # ships a blank text part. Requiring real characters keeps
+                    # it from surfacing as an empty message bubble.
+                    text_parts = [
+                        p.text for p in event.content.parts
+                        if p.text and p.text.strip()
+                    ]
                     if text_parts:
                         event_data["content"] = "\n".join(text_parts)
 
