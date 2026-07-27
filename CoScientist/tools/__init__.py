@@ -16,6 +16,7 @@ from CoScientist.tools.result_formatter_tool import (
     result_formatter_toolset_instance,
 )
 from CoScientist.tools.dynamic_tools import DynamicMCPToolset, dynamic_mcp_toolset_instance
+from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
 
 __all__ = [
     "FedotMASToolset",
@@ -36,4 +37,5 @@ __all__ = [
     "ResultFormatterToolset",
     "result_formatter_tool",
     "result_formatter_toolset_instance",
+    "ALEMBIC_TOOLS",
 ]

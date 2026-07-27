@@ -169,7 +169,11 @@
         <span
           class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">hub</span>
       </a>
-      <button onclick="clearChat()" title="Clear current view (history is preserved)">
+      <a href="/builds" target="_blank" title="MCP builds (live)">
+        <span
+          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">build</span>
+      </a>
+      <button onclick="clearChat()" title="Clear chat">
         <span
           class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
       </button>
@@ -382,10 +386,23 @@
     }
 
     function linkify(escapedText) {
-      // Make http(s) URLs and known API paths clickable (input is already HTML-escaped).
-      return escapedText
-        .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" class="text-primary underline">$1</a>')
-        .replace(/(^|\s)(\/api\/tz-document[^\s<]*)/g, '$1<a href="$2" target="_blank" class="text-primary underline">$2</a>');
+      // Input is already HTML-escaped. Render links in two ordered passes:
+      //   1) markdown links [label](url) — the agent emits these;
+      //   2) bare http(s) URLs and known paths, but ONLY in text that is not
+      //      already inside an <a> from pass 1 (otherwise the http:// inside a
+      //      freshly-built href gets re-linked → the [url](url) double-link bug).
+      const A = ' target="_blank" class="text-primary underline"';
+      let s = escapedText.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g,
+        '<a href="$2"' + A + '>$1</a>');
+      return s.split(/(<a\b[^>]*>.*?<\/a>)/g).map(seg => {
+        if (seg.startsWith('<a')) return seg;   // leave existing anchors alone
+        return seg
+          .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1"' + A + '>$1</a>')
+          .replace(/(^|\s)(\/api\/tz-document[^\s<]*)/g, '$1<a href="$2"' + A + '>$2</a>')
+          // Live MCP build page: /builds/<job_id> (agent surfaces it as progress_page).
+          .replace(/(^|\s)(\/builds\/[A-Za-z0-9._-]+)/g, '$1<a href="$2"' + A + '>$2</a>');
+      }).join('');
     }
 
     function addAgentMsg(author, text, timestamp = null) {

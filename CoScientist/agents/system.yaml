@@ -74,6 +74,7 @@ agents:
       - TaskExecutorAgent
       - CoderAgent
       - MedicalAgent
+      - McpBuilderAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
       before_agent: [before_get_task, inject_graph_root, inject_research_context]
@@ -335,6 +336,40 @@ agents:
         name: Medical Research
         description: PubMed search, PICO extraction, study taxonomy, and DICOM analysis
         tags: [medical, pubmed, dicom, clinical]
+
+  McpBuilderAgent:
+    class: llm
+    description: >-
+      builds a validated MCP tool server from a scientific GitHub repository
+      (the Alembic pipeline): clones the repo, sets up its environment,
+      generates and validates tools from its code, and serves a FastMCP
+      server in Docker.
+    routing: >-
+      when the needed capability exists only as CODE in a repository and must
+      be turned into a reusable MCP tool/service. NOT for a one-off run of
+      that code (that is CoderAgent) and NOT for calling an MCP tool that
+      already exists (that is TaskExecutorAgent). Hallmark: "turn repo X into
+      an MCP server / tool we can call."
+    planning: |-
+      choose when a repository's capability needs to become a callable MCP
+      tool server rather than a one-off run:
+          * building/serving a new MCP tool from a scientific GitHub repo
+          → Use ONLY to produce a reusable tool server; a single run of the
+            code belongs to CoderAgent, and calling an already-built MCP tool
+            belongs to TaskExecutorAgent.
+    prompt: mcp_builder
+    tools: [alembic]
+    output_key: mcp_build_results
+    callbacks:
+      after_model: [guard_unknown_tools]
+    a2a:
+      key: mcp_builder
+      port: 8007
+      skill:
+        id: build_mcp_server
+        name: Build MCP Server
+        description: Turn a scientific GitHub repository into a validated, served MCP tool server
+        tags: [mcp, codegen, docker, tools]
 
   # ── TaskExecutorAgent pipeline ─────────────────────────────────────────────
   ToolPreparerAgent:
