@@ -167,10 +167,32 @@ class DefaultsConfig(BaseModel):
     model: str = "main"
 
 
+class PipelineConfig(BaseModel):
+    """System lifecycle flow around the root orchestrator.
+
+    ``pre`` stages run (in order) BEFORE the root agent, ``post`` stages run
+    AFTER it — each as its own pass over the SAME session, so state flows
+    between them. Stage agents are ordinary agents declared in ``agents``; they
+    need not be attached to any parent (the assembler builds every declared
+    agent regardless). This keeps the delegation tree (root + subordinates)
+    separate from the run lifecycle instead of forcing flow through a
+    ``SequentialAgent`` root.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pre: List[str] = Field(default_factory=list)
+    post: List[str] = Field(default_factory=list)
+
+    def stage_names(self) -> List[str]:
+        return list(self.pre) + list(self.post)
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     agents: Dict[str, AgentConfig]
 
     @model_validator(mode="after")
@@ -183,6 +205,15 @@ class SystemConfig(BaseModel):
         roots = [a.name for a in self.agents.values() if a.root]
         if len(roots) != 1:
             raise ValueError(f"Exactly one agent must have root: true, got {roots}")
+
+        for stage in self.pipeline.stage_names():
+            if stage not in self.agents:
+                raise ValueError(f"pipeline references unknown agent {stage!r}")
+            if stage == roots[0]:
+                raise ValueError(
+                    f"pipeline stage {stage!r} is the root — the root runs on its "
+                    "own, do not list it as a pre/post stage"
+                )
 
         for agent in self.agents.values():
             for ref in agent.subordinates + agent.children:
@@ -283,6 +314,7 @@ __all__ = [
     "CONFIG_ENV_VAR",
     "DEFAULT_CONFIG_PATH",
     "DefaultsConfig",
+    "PipelineConfig",
     "SkillConfig",
     "SystemConfig",
     "get_config",

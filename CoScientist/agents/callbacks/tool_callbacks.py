@@ -273,6 +273,46 @@ def print_research_agent_tool_call(
     except Exception as e:
         logger.error("Failed to persist downloaded paper S3 keys: %s", e)
 
+def capture_mcp_artifacts(
+    tool: BaseTool,
+    args: Dict[str, Any],
+    tool_context: ToolContext,
+    tool_response: Any,
+) -> None:
+    """after_tool: stash figure/table artifact URLs a tool returned into
+    ``state['mcp_artifacts']`` so the graph-first Result Aggregator's
+    ``format_results`` downloads them into the report folder.
+
+    Many MCP tools (e.g. the tox-antitargets suite) render a plot server-side and
+    return a presigned URL to it (commonly ``metadata.figure.artifact``). That link
+    only lives in the tool result; with the aggregator running ``include_contents:
+    none`` it never reaches the report unless captured here — at the AGENT's own
+    tool boundary, which fires for sub-agent (AgentTool) MCP calls where an
+    App-level plugin does not.
+    """
+    try:
+        from CoScientist.reporting.collect import find_artifact_urls
+        urls = find_artifact_urls(tool_response)
+    except Exception:  # noqa: BLE001 — capture must never break a tool call
+        return
+    if not urls:
+        return
+    try:
+        existing = list(tool_context.state.get("mcp_artifacts") or [])
+        seen = {a.get("url") for a in existing if isinstance(a, dict)}
+        name = getattr(tool, "name", None)
+        for u in urls:
+            if u in seen:
+                continue
+            seen.add(u)
+            existing.append({"url": u, "tool": name})
+        tool_context.state["mcp_artifacts"] = existing
+        logger.info("capture_mcp_artifacts: %s → +%d artifact URL(s) (%d total)",
+                    name, len(urls), len(existing))
+    except Exception as e:  # noqa: BLE001
+        logger.error("capture_mcp_artifacts failed: %s", e)
+
+
 class SearchLimiter:
 
     _STATE_KEY = "_search_limiter_count"

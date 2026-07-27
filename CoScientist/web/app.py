@@ -17,7 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.web.session_registry import LocalSessionRegistry
-from CoScientist.agents import agent_system
+from CoScientist.agents import agent_system, planner_agent
+from CoScientist.config import ReportConfig
+from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 
@@ -965,7 +967,16 @@ async def _run_chat_invocation(
         parts=[types.Part(text=query)],
     )
 
+    # The Result Aggregator runs as the terminal stage of the SAME run_async, so its
+    # format_results reads report_config mid-invocation — set it before the run.
+    # TODO(planning): thread a real ReportConfig (e.g. --latex mode) from the web layer.
+    report_config = ReportConfig()
+    await manager._set_state("report_config", report_config.to_state())
+
     final_response = "No response"
+    # The report is the LAST final-response text of the run — the terminal aggregator
+    # stage's Markdown (the orchestrator's own answer is superseded by it).
+    report_markdown = ""
 
     try:
         # Loop: run -> check for HITL interrupt -> wait for response -> resume
@@ -1069,11 +1080,13 @@ async def _run_chat_invocation(
                 runtime.agent_events[key].append(event_data)
                 await runtime.send(key, event_data)
 
-                if event.is_final_response() and not hitl_interrupt_event:
-                    if event.content and event.content.parts:
-                        final_response = event.content.parts[0].text or ""
-                    elif event.actions and event.actions.escalate:
-                        final_response = f"Escalation: {event.error_message or 'Unknown error'}"
+                if not hitl_interrupt_event:
+                    # Skip thinking parts; keep the LAST final-response text (the
+                    # terminal aggregator stage produces the report).
+                    text = CoScientistManager._final_text(event)
+                    if text is not None:
+                        final_response = text
+                        report_markdown = text
 
             # If there was a HITL interrupt, wait for the browser response
             if hitl_interrupt_event:
@@ -1133,12 +1146,26 @@ async def _run_chat_invocation(
                 # No interrupt, we're done
                 break
 
+        # ── Package the deliverable ──────────────────────────────────────────────
+        # The Result Aggregator already ran as the terminal stage of the single
+        # run_async above (its events streamed like any other agent), so its report
+        # is in `report_markdown`. Fall back to the orchestrator's own answer only if
+        # the aggregator produced nothing.
+        result = await asyncio.to_thread(
+            finalize_report, manager.session_id,
+            report_markdown or final_response, report_config, None,
+        )
+
         runtime.registry.touch_session(user_id, session_id, status="idle")
-        await runtime.send(key, {
+        payload = {
             "type": "final_response",
-            "content": final_response,
+            "content": result.markdown,
             "timestamp": datetime.now().isoformat(),
-        })
+        }
+        if result.report_dir:
+            payload["report_dir"] = str(result.report_dir)
+            payload["manifest"] = result.manifest
+        await runtime.send(key, payload)
 
     finally:
         # A cancelled/failed runner must not leave RequestInput records that a

@@ -104,20 +104,25 @@ def _refresh_context_state(tool_context: Optional[ToolContext], is_root: bool) -
 # ── the toolset ───────────────────────────────────────────────────────────────
 
 class ResearchGraphToolset(BaseToolset):
-    """Research-graph tools for one agent surface ("worker" | "orchestrator")."""
+    """Research-graph tools for one agent surface ("worker" | "orchestrator" |
+    "reporter"). The "reporter" surface is READ-ONLY (no research_commit) — it
+    is for the Result Aggregator, which reads the finished graph to write the
+    report but must never mutate it."""
 
     def __init__(self, surface: str = "worker", prefix: Optional[str] = None) -> None:
         super().__init__(tool_name_prefix=prefix)
         self.surface = surface
         self._is_root = surface == "orchestrator"
+        self._read_only = surface == "reporter"
 
     async def get_tools(self, readonly_context: Optional[ReadonlyContext] = None) -> List[BaseTool]:
         tools = [
-            FunctionTool(self.research_commit),
             FunctionTool(self.research_context_slice),
             FunctionTool(self.research_overview),
             FunctionTool(self.research_provenance),
         ]
+        if not self._read_only:
+            tools.insert(0, FunctionTool(self.research_commit))
         if self._is_root:
             tools += [
                 FunctionTool(self.research_init),
@@ -301,3 +306,5 @@ def make_inject_research_context(is_root: bool):
 # Shared instances (mirrors graph_reader_instance / task_tracker_instance).
 research_worker_toolset = ResearchGraphToolset(surface="worker")
 research_orchestrator_toolset = ResearchGraphToolset(surface="orchestrator")
+# Read-only surface for the Result Aggregator (no research_commit).
+research_reporter_toolset = ResearchGraphToolset(surface="reporter")

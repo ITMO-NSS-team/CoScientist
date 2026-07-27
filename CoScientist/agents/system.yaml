@@ -37,8 +37,23 @@
 defaults:
   model: main
 
+# ─────────────────────────────────────────────────────────────────────────────
+# System lifecycle flow (separate from the delegation tree).
+#
+# `pre`  stages run, in order, BEFORE the root orchestrator.
+# `post` stages run, in order, AFTER it.
+# Each stage runs as its own pass over the SAME session, so state (output_keys,
+# fedot_artifacts, …) flows between them. Stage agents are declared in `agents`
+# below like any other; they do NOT need to be attached to a parent.
+#
+# The manager driver (CoScientist.main) executes: pre… → root → post…
+# ─────────────────────────────────────────────────────────────────────────────
+pipeline:
+  pre: []                         # e.g. [PlannerAgent] to A/B-test the planner
+  post: [ResultAggregatorAgent]
+
 agents:
-  # ── Root ───────────────────────────────────────────────────────────────────
+  # ── Root orchestrator ───────────────────────────────────────────────────────
   OrchestratorAgent:
     class: llm
     root: true
@@ -114,6 +129,26 @@ agents:
         name: Plan
         description: Produce a research roadmap for a scientific task
         tags: [planning, roadmap, science]
+
+  ResultAggregatorAgent:
+    class: llm
+    # Terminal stage of the pipeline (see top-level `pipeline.post`). Runs as the
+    # last child of the synthesized SequentialAgent run-root, so it executes inside
+    # the SAME ADK invocation as the orchestrator (one run, one trace) — not a
+    # separate run kicked off by a static directive.
+    description: >-
+      Reads the finished Research Context Graph (conclusions, evidence,
+      hypotheses with their status) and the run's figures/tables, and synthesizes
+      a single, complete, visually-rich Markdown report grounded in the graph.
+    prompt: result_aggregator
+    tools: [result_formatter, research_graph_readonly]
+    # Graph-primary grounding: no conversation history — the report is built from
+    # the typed graph (via research_graph_readonly + injected digest) plus the
+    # figures/tables collected by format_results, not from the raw transcript.
+    include_contents: none
+    callbacks:
+      before_agent: [inject_research_context]
+    output_key: final_report
 
   HypothesesAgent:
     class: llm
@@ -410,6 +445,9 @@ agents:
       # Abstain → recommend CoderAgent when the tool-prep pipeline found no tool
       # that actually matches the task (instead of running a nearest-but-wrong one).
       before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
+      # Capture figure/table artifact URLs the MCP tools return (e.g. presigned
+      # MinIO PNGs) into state['mcp_artifacts'] so the report collector downloads them.
+      after_tool: [capture_mcp_artifacts]
 
   # Disabled for now — FEDOT.MAS isn't reliable yet. Kept (built, not attached)
   # so the agent, its prompt and the `fedot` tool stay available; re-enable by

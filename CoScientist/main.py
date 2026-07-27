@@ -22,8 +22,9 @@ from google.adk.runners import Runner
 from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
-from CoScientist.config import get_settings
-from CoScientist.agents import orchestrator_agent, root_agent
+from CoScientist.config import get_settings, ReportConfig
+from CoScientist.agents import run_root
+from CoScientist.reporting import finalize_report, RunResult
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
@@ -142,6 +143,7 @@ class CoScientistManager:
         # sessions. CLI mode falls back to a private in-memory service.
         self.session_service: Optional[BaseSessionService] = session_service
         self.runner: Optional[Runner] = None
+        self._run_error: Optional[Exception] = None
         self._initialized = False
         self._initialize_lock = asyncio.Lock()
 
@@ -185,14 +187,21 @@ class CoScientistManager:
             from CoScientist.graph.plugin import GraphMemoryPlugin
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+            from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
 
+            # `run_root` is the whole lifecycle as ONE SequentialAgent
+            # (orchestrator → Result Aggregator). A single run_async over it is one
+            # ADK invocation = one trace, with the aggregator as the terminal child.
             app = App(
                 name=self.app_name,
-                root_agent=root_agent,
+                root_agent=run_root,
                 plugins=[
                     EventLoggerPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
+                    # Capture artifact (figure/table) URLs from tool results BEFORE
+                    # truncation can drop them, so the report collector downloads them.
+                    McpArtifactCapturePlugin(),
                     # Keep truncation last so observers receive full results.
                     ToolResultTruncationPlugin(),
                 ],
@@ -205,113 +214,136 @@ class CoScientistManager:
 
             self._initialized = True
 
-    async def run(self, query: str, verbose: bool = True) -> str:
-        """
-        Execute a query through the orchestrator agent.
+    async def _set_state(self, key: str, value) -> None:
+        """Best-effort write into the live session state (in-memory)."""
+        try:
+            session = await self.session_service.get_session(
+                app_name=self.app_name, user_id=self.user_id, session_id=self.session_id,
+            )
+            if session is not None:
+                session.state[key] = value
+        except Exception as exc:
+            logger.warning("could not set session state %r: %s", key, exc)
 
-        Args:
-            query: user query
-            verbose: whether to print events
+    @staticmethod
+    def _final_text(event) -> Optional[str]:
+        """Answer text of a final-response event, skipping thinking parts."""
+        if not (event.is_final_response() and event.content and event.content.parts):
+            if event.actions and event.actions.escalate:
+                return f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
+            return None
+        parts = event.content.parts
+        # Thinking models emit a separate `thought` part before the answer; prefer
+        # the non-thought text, falling back to any text so we never drop it.
+        answer = "\n".join(
+            p.text for p in parts
+            if getattr(p, "text", None) and not getattr(p, "thought", False)
+        )
+        return answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
 
-        Returns:
-            Final agent response
+    async def run(
+        self,
+        query: str,
+        verbose: bool = True,
+        report_config: Optional[ReportConfig] = None,
+    ) -> RunResult:
+        """Run the full pipeline and package the report.
+
+        The whole lifecycle (orchestrator → Result Aggregator) is ONE ADK
+        invocation over ``run_root``, so it is a single trace with the aggregator
+        as the terminal stage. Returns a :class:`RunResult` (``markdown``,
+        ``report_dir``, ``manifest``); ``str(result)`` is the markdown, so legacy
+        callers that treated the return value as a string keep working.
         """
+        report_config = report_config or ReportConfig()
         await self.initialize()
 
-        content = types.Content(
-            role="user",
-            parts=[types.Part(text=query)]
-        )
+        # The aggregator's format_results reads report_config mid-invocation, so it
+        # must be in state BEFORE the run starts.
+        await self._set_state("report_config", report_config.to_state())
+        self._run_error = None
 
-        final_response = "No response"
-        run_error = None
+        content = types.Content(role="user", parts=[types.Part(text=query)])
 
-        # Partial delivery (F015a.A4 #2): a mid-run failure — notably an MCP 300s
-        # timeout / McpError on a slow tool — must NOT discard results already
-        # captured at the tool boundary (state['fedot_artifacts']). Swallow it here
-        # and fall through to the deterministic finalizer below, which surfaces those
-        # artifacts so the user still gets the molecules produced before the stall.
+        # The report is the LAST final-response text of the run — i.e. the terminal
+        # aggregator stage. If a mid-run failure (e.g. a slow MCP tool's 300s
+        # timeout) aborts the invocation, we swallow it and fall through to the
+        # deterministic finalizer below so captured artifacts still reach the user.
+        report_markdown = ""
         try:
             async for event in self.runner.run_async(
                 user_id=self.user_id,
                 session_id=self.session_id,
                 new_message=content,
-                # ADK caps a run at 500 LLM calls by default, which a long
-                # autonomous research run overruns mid-work; lift the ceiling so
-                # one prompt can drive the whole job (finite, as a cost backstop).
+                # Lift ADK's 500-LLM-call default so a long autonomous run driven by
+                # a single prompt isn't cut off mid-work (finite cost backstop).
                 run_config=RunConfig(
                     max_llm_calls=get_settings().orchestrator.max_llm_calls
                 ),
             ):
                 if verbose:
                     print(
-                        f"[Event] {event.author} | {type(event).__name__} | Final={event.is_final_response()}"
+                        f"[Event] {event.author} | {type(event).__name__} | "
+                        f"Final={event.is_final_response()}"
                     )
-
-                if event.is_final_response():
-                    if event.content and event.content.parts:
-                        parts = event.content.parts
-                        # Thinking models emit a separate `thought` part before the
-                        # answer; parts[0] is often that reasoning. Prefer the
-                        # non-thought answer text, falling back to any text so we
-                        # never drop the response entirely.
-                        answer = "\n".join(
-                            p.text for p in parts
-                            if getattr(p, "text", None) and not getattr(p, "thought", False)
-                        )
-                        final_response = answer or "\n".join(
-                            p.text for p in parts if getattr(p, "text", None)
-                        ) or ""
-                    elif event.actions and event.actions.escalate:
-                        final_response = f"Escalation: {getattr(event, 'error_message', None) or 'Unknown error'}"
+                text = self._final_text(event)
+                if text is not None:
+                    report_markdown = text
         except Exception as exc:
-            run_error = exc
+            self._run_error = exc
             logger.error(
-                f"run loop raised ({type(exc).__name__}: {str(exc)[:200]}); "
-                "attempting partial delivery from captured S3 artifacts."
+                "run loop raised (%s: %s); attempting partial delivery from captured "
+                "S3 artifacts.", type(exc).__name__, str(exc)[:200],
             )
 
-        # Deterministic finalizer (F010.A5/A6): the orchestrator LLM sometimes drops a
-        # successfully-generated result. The real molecules live behind a presigned S3 URL
-        # that fedot_tool captured into state['fedot_artifacts']. If that result is not
-        # already in the answer, DOWNLOAD the file and append a preview of its contents (read
-        # from S3, not fabricated) plus the link, so generated molecules always reach the user.
+        # Read session state once, for the S3 fallback and reference extraction.
         try:
             session = await self.session_service.get_session(
                 app_name=self.app_name, user_id=self.user_id, session_id=self.session_id,
             )
-            arts = (getattr(session, "state", None) or {}).get("fedot_artifacts") if session else None
+            state = dict(getattr(session, "state", None) or {}) if session else {}
         except Exception:
-            arts = None
-        if arts:
-            missing = [a for a in arts if a.get("url") and a["url"] not in (final_response or "")]
-            if missing:
+            state = {}
+
+        # Safety net: if the aggregator produced nothing (e.g. the run stopped
+        # early), surface any captured S3 artifacts so results still reach the
+        # user. In the normal path the aggregator already embeds these, so we
+        # only fall back when there is no report text.
+        if not report_markdown.strip():
+            arts = state.get("fedot_artifacts")
+            if arts:
                 blocks = []
-                for a in missing:
-                    url = a["url"]
+                for a in arts:
+                    url = a.get("url")
+                    if not url:
+                        continue
                     cnt = a.get("generated_count")
                     tag = f" ({cnt} molecules)" if cnt else ""
                     preview = await asyncio.to_thread(_s3_csv_preview, url)
-                    block = f"**Generated molecules{tag}** — [download full CSV]({url})"
+                    block = f"**Generated result{tag}** — [download full CSV]({url})"
                     if preview:
                         block += f"\n```\n{preview}\n```"
                     blocks.append(block)
-                final_response = (final_response or "").rstrip() + "\n\n---\n" + "\n\n".join(blocks)
+                if blocks:
+                    report_markdown = "## Captured results\n\n" + "\n\n".join(blocks)
 
-        if not (final_response or "").strip():
-            if run_error is not None:
-                final_response = (
-                    f"The run stopped early ({type(run_error).__name__}) before producing a result, "
-                    "and no partial artifacts were captured. This is usually a slow MCP tool hitting "
-                    "its timeout or a transient model/network error — please retry."
+        if not report_markdown.strip():
+            if self._run_error is not None:
+                report_markdown = (
+                    f"The run stopped early ({type(self._run_error).__name__}) before producing a "
+                    "result, and no partial artifacts were captured. This is usually a slow MCP "
+                    "tool hitting its timeout or a transient model/network error — please retry."
                 )
             else:
-                final_response = (
+                report_markdown = (
                     "I couldn't complete this request within the available steps — the orchestrator "
                     "did not reach a tool that produced a result. Please retry or narrow the request."
                 )
 
-        return final_response
+        # Package the deliverable: report.md + LaTeX (per config) + MANIFEST.json.
+        return await asyncio.to_thread(
+            finalize_report, self.session_id, report_markdown, report_config, state,
+        )
 
     async def close(self):
         """Cleanup session-related resources and uploaded paper artifacts."""
@@ -344,9 +376,10 @@ async def create_manager() -> CoScientistManager:
 __all__ = [
     # Main classes
     "CoScientistManager",
-    # Models
+    "ReportConfig",
+    "RunResult",
     # Functions
-    "create_manager"
+    "create_manager",
 ]
 
 # CLI entrypoint — thin shim. Prefer: python -m CoScientist cli

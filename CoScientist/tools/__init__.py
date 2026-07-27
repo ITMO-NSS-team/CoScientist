@@ -10,6 +10,11 @@ from CoScientist.tools.servers_web_search import search_mcp_servers
 from CoScientist.tools.med_tools import med_toolset_instance
 from CoScientist.tools.coder_tools import CoderToolset, coder_toolset_instance
 from CoScientist.tools.task_tracker import TaskTrackerToolset, task_tracker_instance
+from CoScientist.tools.result_formatter_tool import (
+    ResultFormatterToolset,
+    result_formatter_tool,
+    result_formatter_toolset_instance,
+)
 from CoScientist.tools.dynamic_tools import DynamicMCPToolset, dynamic_mcp_toolset_instance
 from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
 
@@ -29,5 +34,8 @@ __all__ = [
     "coder_toolset_instance",
     "TaskTrackerToolset",
     "task_tracker_instance",
+    "ResultFormatterToolset",
+    "result_formatter_tool",
+    "result_formatter_toolset_instance",
     "ALEMBIC_TOOLS",
 ]
