@@ -20,7 +20,48 @@ class SessionAgent(LlmAgent):
     to itself and generates a new roadmap, looping until approved.
     """
     hitl_handler: Optional[AbstractHITLHandler] = None
+    result_state_key: Optional[str] = None
     correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
+
+    def _apply_state_result(
+        self,
+        ctx: InvocationContext,
+        final_event: Event,
+    ) -> None:
+        """Replace the final response with deterministic JSON from session state."""
+        if not self.result_state_key:
+            return
+
+        state = ctx.session.state
+        if self.result_state_key not in state:
+            raise RuntimeError(
+                f"SessionAgent '{self.name}' cannot return its result: "
+                f"session state key '{self.result_state_key}' is missing."
+            )
+
+        result_text = json.dumps(
+            state[self.result_state_key],
+            ensure_ascii=False,
+            indent=2,
+        )
+
+        if final_event.content is None:
+            final_event.content = types.Content(
+                role="model",
+                parts=[types.Part(text=result_text)],
+            )
+        elif not final_event.content.parts:
+            final_event.content.parts = [types.Part(text=result_text)]
+        else:
+            for part in final_event.content.parts:
+                if part.text is not None:
+                    part.text = result_text
+                    break
+            else:
+                final_event.content.parts.insert(0, types.Part(text=result_text))
+
+        if self.output_key:
+            state[self.output_key] = result_text
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
 
@@ -45,6 +86,7 @@ class SessionAgent(LlmAgent):
             if not self.hitl_handler or final_event is None:
                 # No HITL or not a final event (e.g. tool call): just pass and exit
                 if final_event is not None:
+                    self._apply_state_result(ctx, final_event)
                     yield final_event
                 break
 
@@ -85,6 +127,7 @@ class SessionAgent(LlmAgent):
                 if not response.free_input and response.action != HITLAction.EDIT:
                     # HITL approved — now emit the (possibly updated) final event and exit
                     if final_event is not None:
+                        self._apply_state_result(ctx, final_event)
                         yield final_event
                     break
 

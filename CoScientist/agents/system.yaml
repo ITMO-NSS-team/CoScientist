@@ -50,7 +50,7 @@ agents:
     # relevant tool is already available.
     tools: [retrieval, task_tracker]
     subordinates:
-      # - PlannerAgent
+      - PlannerAgent
       - HypothesesAgent
       - ResearchAgent
       - TaskExecutorAgent
@@ -106,6 +106,8 @@ agents:
     prompt: planner
     tools: [create_plan_tool]
     output_key: planner_roadmap
+    options:
+      result_state_key: active_tasks
     hitl: true
     a2a:
       key: planner

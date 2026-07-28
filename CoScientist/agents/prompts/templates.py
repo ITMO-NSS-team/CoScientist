@@ -646,7 +646,9 @@ You only define procedural steps and references agents.
 - Chemistry-specific rule MUST ALWAYS use TaskExecutorAgent
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
 - You MUST use the `create_plan` tool to register ALL steps of your plan in one go.
-- Once you have successfully registered all tasks using `create_plan`, you can finish your turn.
+- After `create_plan` succeeds, finish the turn without summarizing, rewriting,
+  or formatting the plan. The registered plan is returned deterministically
+  from session state.
 ''', ROSTER=ctx.render_sibling_roster())
 
 

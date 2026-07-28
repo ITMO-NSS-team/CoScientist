@@ -131,7 +131,8 @@ class TaskTrackerToolset(BaseToolset):
         self._save()
         return {
             "result": "success",
-            "message": f"Plan created with {len(self.tasks)} tasks."
+            "message": f"Plan created with {len(self.tasks)} tasks.",
+            "tasks": new_tasks,
         }
 
 
