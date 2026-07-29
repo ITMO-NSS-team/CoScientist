@@ -186,6 +186,7 @@ class CoScientistManager:
             from google.adk.apps.app import App
             from CoScientist.logging.event_logger import EventLoggerPlugin
             from CoScientist.logging.tool_activity import ToolActivityPlugin
+            from CoScientist.logging.metrics import UsageMetricsPlugin
             from CoScientist.graph.plugin import GraphMemoryPlugin
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
@@ -203,6 +204,9 @@ class CoScientistManager:
                     # too, which the top-level event stream cannot see. Inert
                     # unless a consumer (the Web UI) registered a sink.
                     ToolActivityPlugin(),
+                    # Prices every model call, in nested AgentTool runners too,
+                    # so one session total covers the whole agent tree.
+                    UsageMetricsPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
                     # Capture artifact (figure/table) URLs from tool results BEFORE
@@ -338,6 +342,16 @@ class CoScientistManager:
                 if blocks:
                     report_markdown = "## Captured results\n\n" + "\n\n".join(blocks)
 
+        # What this run cost, per agent. Logged rather than returned: the caller
+        # hands `final_response` to a user (or to another model), and a bill is
+        # not part of the answer. Disable with LOG_USAGE_METRICS=0.
+        if os.getenv("LOG_USAGE_METRICS", "1") != "0":
+            try:
+                from CoScientist.logging.metrics import log_report
+                log_report((self.user_id, self.session_id))
+            except Exception as exc:  # noqa: BLE001 - reporting never fails a run
+                logger.debug("Usage report unavailable: %s", exc)
+
         if not report_markdown.strip():
             if self._run_error is not None:
                 report_markdown = (
@@ -374,6 +388,13 @@ class CoScientistManager:
             await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
         except Exception as exc:
             logger.error(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
+        # The ledger is process memory that grows with the number of sessions a
+        # long-lived host serves, so a closed session gives its entry back.
+        try:
+            from CoScientist.logging.metrics import reset_session
+            reset_session(key=(self.user_id, self.session_id))
+        except Exception:  # noqa: BLE001 - nothing here is worth a failed close
+            pass
 
 # Convenience functions
 async def create_manager() -> CoScientistManager:

@@ -32,6 +32,15 @@ Server-side contract used here (see ``api/routes.py``):
 * Terminal statuses are ``cooldown``/``completed`` (success), ``error`` and
   ``cancelled``.  ``cooldown`` means "finished, container still alive" — that
   is the state a follow-up can be sent into.
+* ``GET /api/v1/metrics?task_id=<id>`` returns what the run cost: wall clock,
+  CPU/GPU work, energy, LLM tokens and money.
+
+Metrics travel on their own channel — the journal behind
+:func:`get_sandbox_metrics` and the optional ``metrics_sink`` callback — and are
+deliberately kept OUT of the dict every run function returns.  That dict becomes
+a tool result, i.e. prompt text; a model that can see its own bill starts
+optimising the bill instead of the task (cutting steps short, abandoning
+experiments).  What cannot be interpolated by accident will not be.
 """
 
 from __future__ import annotations
@@ -43,7 +52,7 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Callable, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional
 
 import httpx
 
@@ -56,6 +65,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL = 10.0
 DEFAULT_SUBMIT_TIMEOUT = 60.0
 DEFAULT_STATUS_TIMEOUT = 15.0
+DEFAULT_METRICS_TIMEOUT = 15.0
 
 #: Statuses at which a task stops progressing.
 TERMINAL_STATUSES = frozenset({"completed", "cooldown", "error", "cancelled"})
@@ -64,6 +74,12 @@ SUCCESS_STATUSES = frozenset({"completed", "cooldown"})
 
 #: Key under which the sandbox id is pinned in ADK session state.
 SESSION_STATE_KEY = "sandbox_session_id"
+
+#: Key under which the metrics journal is mirrored into ADK session state.
+#: NEVER interpolate this key into an agent instruction template — that would
+#: put the run's own price in front of the model (see the module docstring of
+#: ``CoScientist.logging.metrics`` for why that is harmful).
+METRICS_STATE_KEY = "sandbox_metrics"
 
 #: Session key used when the caller provides no session identity at all.
 PROCESS_SESSION_KEY = "__process_default__"
@@ -248,6 +264,17 @@ def write_binding(session: str, sandbox_id: str, tool_context: Any = None) -> No
             logger.debug("Could not pin sandbox id in session state.", exc_info=True)
 
 
+def _write_state(tool_context: Any, key: str, value: Any) -> None:
+    """Best-effort write into framework session state (read-only state is fine)."""
+    state = _state_of(tool_context)
+    if state is None:
+        return
+    try:
+        state[key] = value
+    except Exception:  # noqa: BLE001 - read-only state still works via the registry
+        logger.debug("Could not write %s into session state.", key, exc_info=True)
+
+
 def clear_binding(session: str, tool_context: Any = None) -> Optional[str]:
     """Forget the binding for ``session``; the next call provisions a new sandbox."""
     previous = read_binding(session, tool_context)
@@ -303,6 +330,293 @@ async def _afetch_task(api_url: str, sandbox_id: str) -> Optional[Dict[str, Any]
         return _parse_task(await client.get(
             f"{api_url}/status", params={"task_id": sandbox_id},
         ))
+
+
+# ---------------------------------------------------------------------------
+# Metrics: what a run cost (a channel of its own, never the tool result)
+# ---------------------------------------------------------------------------
+
+#: Session totals, summed over every sandbox of the session.
+_TOTAL_FIELDS = (
+    "runs", "wall_seconds", "agent_seconds", "queue_seconds",
+    "cpu_core_seconds", "gpu_seconds", "energy_wh",
+    "llm_calls", "total_tokens",
+    "api_cost_usd", "energy_cost_usd", "total_cost_usd",
+)
+
+
+def _section(record: Dict[str, Any], name: str) -> Dict[str, Any]:
+    value = record.get(name)
+    return value if isinstance(value, dict) else {}
+
+
+def _number(source: Dict[str, Any], key: str) -> float:
+    value = source.get(key)
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def sandbox_run_digest(record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Reduce one metrics record to the flat numbers worth carrying around.
+
+    The full record is a nested document with seven sections; everything that
+    reporting and "why was this so slow / so expensive" actually need is these
+    twelve numbers, in the same vocabulary the session totals use. Missing
+    sections read as zero, so a partial record still digests.
+    """
+    record = record or {}
+    wall = _section(record, "wall_clock")
+    compute = _section(record, "compute")
+    energy = _section(compute, "energy")
+    api = _section(record, "api")
+    cost = _section(record, "cost")
+
+    api_cost = _number(cost, "api_cost_usd") or _number(api, "cost_usd")
+    energy_cost = _number(cost, "energy_cost_usd")
+    return {
+        "runs": 1,
+        "wall_seconds": _number(wall, "total_seconds"),
+        "agent_seconds": _number(wall, "agent_seconds"),
+        "queue_seconds": _number(wall, "queue_seconds"),
+        "cpu_core_seconds": _number(compute, "cpu_seconds"),
+        "gpu_seconds": _number(compute, "gpu_seconds"),
+        "energy_wh": _number(energy, "total_energy_wh"),
+        "llm_calls": _number(api, "llm_calls"),
+        "total_tokens": _number(api, "total_tokens"),
+        "api_cost_usd": api_cost,
+        "energy_cost_usd": energy_cost,
+        "total_cost_usd": _number(cost, "total_cost_usd") or (api_cost + energy_cost),
+    }
+
+
+def _sum_digests(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """Session totals over per-sandbox records (``runs`` counts sandboxes)."""
+    totals = {field: 0.0 for field in _TOTAL_FIELDS}
+    for record in records:
+        digest = sandbox_run_digest(record)
+        for field in _TOTAL_FIELDS:
+            totals[field] += digest[field]
+    totals["runs"] = int(totals["runs"])
+    totals["llm_calls"] = int(totals["llm_calls"])
+    totals["total_tokens"] = int(totals["total_tokens"])
+    return totals
+
+
+class _MetricsJournal:
+    """``session -> {sandbox id: last record}``, process-local and thread-safe.
+
+    Keyed by sandbox rather than by call on purpose: the server reports
+    *cumulative* figures per container, so a follow-up into the same sandbox
+    replaces its entry instead of adding a second one — otherwise every
+    follow-up would count the whole run again.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._records: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    def put(self, session: str, sandbox_id: str, record: Dict[str, Any]) -> None:
+        with self._lock:
+            runs = self._records.setdefault(session, {})
+            runs.pop(sandbox_id, None)  # re-insert so ordering stays chronological
+            runs[sandbox_id] = record
+
+    def get(self, session: str, sandbox_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            runs = self._records.get(session) or {}
+            if sandbox_id:
+                return runs.get(sandbox_id)
+            return next(reversed(runs.values()), None) if runs else None
+
+    def runs(self, session: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            return list((self._records.get(session) or {}).values())
+
+    def totals(self, session: str) -> Dict[str, Any]:
+        return _sum_digests(self.runs(session))
+
+    def clear(self, session: str) -> Dict[str, Any]:
+        with self._lock:
+            runs = list((self._records.pop(session, None) or {}).values())
+        return _sum_digests(runs)
+
+
+_METRICS = _MetricsJournal()
+
+
+def _parse_metrics(response: httpx.Response) -> Optional[Dict[str, Any]]:
+    """Return the metrics record from a ``/metrics`` reply, or ``None``.
+
+    404 (no such task / metrics disabled) and 409 (no task id and nothing
+    running) are ordinary answers here, not failures.
+    """
+    if response.status_code in (404, 409):
+        return None
+    response.raise_for_status()
+    payload = response.json() or {}
+    record = payload.get("metrics")
+    if not isinstance(record, dict):
+        return None
+    # The envelope carries the identity/finality of the record; older servers
+    # only put them there, so fold them in rather than lose them.
+    for key in ("task_id", "status", "final"):
+        if key in payload:
+            record.setdefault(key, payload[key])
+    return record
+
+
+def _fetch_metrics(api_url: str, sandbox_id: str) -> Optional[Dict[str, Any]]:
+    return _parse_metrics(httpx.get(
+        f"{api_url}/metrics",
+        params={"task_id": sandbox_id},
+        timeout=DEFAULT_METRICS_TIMEOUT,
+    ))
+
+
+async def _afetch_metrics(api_url: str, sandbox_id: str) -> Optional[Dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=DEFAULT_METRICS_TIMEOUT) as client:
+        return _parse_metrics(await client.get(
+            f"{api_url}/metrics", params={"task_id": sandbox_id},
+        ))
+
+
+def _publish_metrics(
+    session: str,
+    sandbox_id: str,
+    record: Optional[Dict[str, Any]],
+    tool_context: Any,
+    sink: Optional[Callable[[Dict[str, Any]], Any]],
+) -> None:
+    """File a fetched record: journal, session state, subscriber."""
+    if not record:
+        return
+    _METRICS.put(session, sandbox_id, record)
+    _write_state(tool_context, METRICS_STATE_KEY, {
+        "runs": _METRICS.runs(session),
+        "totals": _METRICS.totals(session),
+    })
+    if sink is None:
+        return
+    try:
+        sink(dict(record))
+    except Exception:  # noqa: BLE001 - broken telemetry must not fail a run
+        logger.warning("Sandbox metrics sink failed.", exc_info=True)
+
+
+def _should_collect(collect: bool, status: Optional[str], sandbox_id: Optional[str]) -> bool:
+    """Only ask for metrics once the run is over and there is a run to ask about.
+
+    A non-terminal status means the task is still going, so the server would
+    answer with a live snapshot — useful for a progress bar, wrong for a
+    journal of what runs cost. ``error``/``cancelled`` ARE collected: a task
+    that burned an hour and then failed is exactly what one wants to see.
+    """
+    return bool(collect and sandbox_id and status in TERMINAL_STATUSES)
+
+
+def _collect_metrics(
+    *,
+    api_url: str,
+    session: str,
+    sandbox_id: Optional[str],
+    status: Optional[str],
+    tool_context: Any,
+    sink: Optional[Callable[[Dict[str, Any]], Any]],
+    collect: bool,
+) -> None:
+    """Fetch and file the metrics of a finished run (never raises)."""
+    if not _should_collect(collect, status, sandbox_id):
+        return
+    try:
+        record = _fetch_metrics(api_url, str(sandbox_id))
+    except Exception as exc:  # noqa: BLE001 - metrics are never worth a failure
+        logger.debug("Sandbox metrics unavailable for %s: %s", sandbox_id, exc)
+        return
+    _publish_metrics(session, str(sandbox_id), record, tool_context, sink)
+
+
+async def _acollect_metrics(
+    *,
+    api_url: str,
+    session: str,
+    sandbox_id: Optional[str],
+    status: Optional[str],
+    tool_context: Any,
+    sink: Optional[Callable[[Dict[str, Any]], Any]],
+    collect: bool,
+) -> None:
+    """Async twin of :func:`_collect_metrics`."""
+    if not _should_collect(collect, status, sandbox_id):
+        return
+    try:
+        record = await _afetch_metrics(api_url, str(sandbox_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Sandbox metrics unavailable for %s: %s", sandbox_id, exc)
+        return
+    _publish_metrics(session, str(sandbox_id), record, tool_context, sink)
+
+
+def get_sandbox_metrics(
+    *,
+    session_id: Optional[str] = None,
+    sandbox_id: Optional[str] = None,
+    tool_context: Any = None,
+    sandbox_url: Optional[str] = None,
+    live: bool = False,
+) -> Dict[str, Any]:
+    """What the session's sandbox runs cost.
+
+    Args:
+        session_id / tool_context: the caller's session, resolved exactly as in
+            :func:`run_sandbox_task` — pass whichever the framework gives you.
+        sandbox_id: read one specific run instead of the session's latest.
+        live: ask the server instead of reading the journal. Use it *while* a
+            task runs to get a non-final snapshot; a finished run is already in
+            the journal and needs no request.
+
+    Returns:
+        ``{"session", "metrics", "runs", "totals"}``. ``metrics`` is the full
+        record of one run and may be ``None`` — the server did not answer,
+        collection was off, or the journal was cleared. The key always exists.
+    """
+    session = resolve_session_key(session_id, tool_context)
+    target = sandbox_id or read_binding(session, tool_context)
+
+    record: Optional[Dict[str, Any]] = None
+    if live and target:
+        try:
+            record = _fetch_metrics(_api(resolve_sandbox_url(sandbox_url)), str(target))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Live metrics request failed for %s: %s", target, exc)
+    if record is None:
+        record = _METRICS.get(session, sandbox_id)
+
+    return {
+        "session": session,
+        "metrics": record,
+        "runs": _METRICS.runs(session),
+        "totals": _METRICS.totals(session),
+    }
+
+
+def clear_sandbox_metrics(
+    *,
+    session_id: Optional[str] = None,
+    tool_context: Any = None,
+) -> Dict[str, Any]:
+    """Drop the journal of one session, returning its totals one last time.
+
+    The journal lives in process memory and grows with the number of sessions,
+    so a long-lived host should call this when a user session ends — after
+    taking the totals it hands back.
+    """
+    session = resolve_session_key(session_id, tool_context)
+    totals = _METRICS.clear(session)
+    _write_state(tool_context, METRICS_STATE_KEY, {"runs": [], "totals": {}})
+    return {
+        "session": session,
+        "discarded_runs": int(totals.get("runs", 0)),
+        "discarded_totals": totals,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +816,8 @@ def run_sandbox_task(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     timeout: Optional[float] = None,
     on_start: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    collect_metrics: bool = True,
+    metrics_sink: Optional[Callable[[Dict[str, Any]], Any]] = None,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """Run ``task`` in the sandbox bound to the caller's session.
@@ -530,6 +846,11 @@ def run_sandbox_task(
         on_start: Called with ``sandbox_id``/``watch_url``/``vscode_url``/
             ``reused`` as soon as the sandbox is up — i.e. while the task is
             still running, which is the only time the live URLs are useful.
+        collect_metrics: Fetch what the run cost once it finishes. ``False``
+            skips the request entirely.
+        metrics_sink: Called with the metrics record right after the run ends,
+            for hosts that route it into their own telemetry. The record is
+            journalled either way — see :func:`get_sandbox_metrics`.
         verbose: Print the live-monitoring URL and progress to stdout.
 
     Returns:
@@ -537,6 +858,8 @@ def run_sandbox_task(
         ``summary``, ``watch_url``, ``vscode_url`` and ``error``.
         ``status`` is one of the server statuses plus ``submitted`` (when
         ``wait_for_result=False``), ``busy``, ``timeout`` or ``error``.
+        Metrics are deliberately NOT among these keys; they are metadata for
+        the host, not context for the model that reads this result.
     """
     try:
         sub = _prepare(
@@ -571,6 +894,15 @@ def run_sandbox_task(
         timeout=timeout,
         verbose=verbose,
     )
+    _collect_metrics(
+        api_url=sub.api_url,
+        session=sub.session,
+        sandbox_id=base_result["sandbox_id"],
+        status=comp.get("status"),
+        tool_context=tool_context,
+        sink=metrics_sink,
+        collect=collect_metrics,
+    )
     merged = {**base_result, **comp}
     if not merged.get("watch_url") and base_result.get("watch_url"):
         merged["watch_url"] = base_result["watch_url"]
@@ -593,6 +925,8 @@ async def arun_sandbox_task(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     timeout: Optional[float] = None,
     on_start: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    collect_metrics: bool = True,
+    metrics_sink: Optional[Callable[[Dict[str, Any]], Any]] = None,
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """Async twin of :func:`run_sandbox_task` — never blocks the event loop.
@@ -635,6 +969,15 @@ async def arun_sandbox_task(
         poll_interval=poll_interval,
         timeout=timeout,
     )
+    await _acollect_metrics(
+        api_url=sub.api_url,
+        session=sub.session,
+        sandbox_id=base_result["sandbox_id"],
+        status=comp.get("status"),
+        tool_context=tool_context,
+        sink=metrics_sink,
+        collect=collect_metrics,
+    )
     merged = {**base_result, **comp}
     if not merged.get("watch_url") and base_result.get("watch_url"):
         merged["watch_url"] = base_result["watch_url"]
@@ -651,6 +994,8 @@ async def await_sandbox_task(
     sandbox_url: Optional[str] = None,
     timeout: Optional[float] = None,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
+    collect_metrics: bool = True,
+    metrics_sink: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Dict[str, Any]:
     """Wait (without blocking the event loop) for the session's sandbox task.
 
@@ -676,6 +1021,15 @@ async def await_sandbox_task(
     result = await _await_completion(
         api_url=api_url, sandbox_id=target,
         poll_interval=poll_interval, timeout=timeout,
+    )
+    await _acollect_metrics(
+        api_url=api_url,
+        session=session,
+        sandbox_id=target,
+        status=result.get("status"),
+        tool_context=tool_context,
+        sink=metrics_sink,
+        collect=collect_metrics,
     )
     return _normalize({**result, "session": session, "sandbox_id": target})
 
@@ -1124,6 +1478,9 @@ __all__ = [
     "run_sandbox_task_tool",
     "make_sandbox_tool",
     "get_sandbox_status",
+    "get_sandbox_metrics",
+    "clear_sandbox_metrics",
+    "sandbox_run_digest",
     "reset_sandbox_session",
     "stop_sandbox_session",
     "list_sandbox_files",

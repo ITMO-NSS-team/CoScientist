@@ -264,6 +264,17 @@
         </div>
       </div>
 
+      <!-- Usage & Cost — what this session has spent, by agent -->
+      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
+        <div class="flex items-baseline justify-between mb-3">
+          <h4 class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Usage &amp; Cost</h4>
+          <span id="metrics-total" class="text-sm font-mono font-bold text-primary">$0.0000</span>
+        </div>
+        <div id="metrics-summary" class="text-[9px] font-mono text-outline-variant mb-2">no model calls yet</div>
+        <div id="metrics-agents" class="space-y-1 font-mono text-[9px] max-h-64 overflow-y-auto no-scrollbar"></div>
+        <div id="metrics-note" class="hidden text-[8px] font-mono text-error/70 mt-2 leading-relaxed"></div>
+      </div>
+
       <!-- HITL Pending -->
       <div id="hitl-panel" class="hidden">
         <!-- Filled dynamically -->
@@ -310,7 +321,10 @@
         workspaceId: '',
       },
       orchestratorAgent: {},
-      plannerAgent: {},
+      plannerAgent: {
+        retrievalEnabled: true,
+        graphEnabled: true,
+      },
       hypothesesAgent: {},
       medicalAgent: {},
       experimentAgent: {},
@@ -779,6 +793,10 @@
             appSettings.general.autoNamingEnabled = data.general.autoNamingEnabled ?? true;
             appSettings.general.coscientistUsername = data.general.coscientistUsername || '';
           }
+          if (data.plannerAgent) {
+            appSettings.plannerAgent.retrievalEnabled = data.plannerAgent.retrievalEnabled ?? true;
+            appSettings.plannerAgent.graphEnabled = data.plannerAgent.graphEnabled ?? true;
+          }
           if (data.researchAgent) {
             appSettings.researchAgent.maxSearches = data.researchAgent.maxSearches ?? 2;
           }
@@ -809,6 +827,8 @@
       document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
       document.getElementById('auto-naming-enabled-checkbox').checked = appSettings.general.autoNamingEnabled;
       document.getElementById('default-username-input').value = appSettings.general.coscientistUsername || '';
+      document.getElementById('planner-retrieval-checkbox').checked = appSettings.plannerAgent.retrievalEnabled;
+      document.getElementById('planner-graph-checkbox').checked = appSettings.plannerAgent.graphEnabled;
       document.getElementById('research-max-searches').value = appSettings.researchAgent.maxSearches;
       document.getElementById('task-exec-keep-score').value = appSettings.taskExecutorAgent.keepScore;
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
@@ -848,6 +868,9 @@
       appSettings.general.opikEnabled = document.getElementById('opik-enabled-checkbox').checked;
       appSettings.general.autoNamingEnabled = document.getElementById('auto-naming-enabled-checkbox').checked;
       appSettings.general.coscientistUsername = document.getElementById('default-username-input').value.trim();
+
+      appSettings.plannerAgent.retrievalEnabled = document.getElementById('planner-retrieval-checkbox').checked;
+      appSettings.plannerAgent.graphEnabled = document.getElementById('planner-graph-checkbox').checked;
 
       const maxSearches = parseInt(document.getElementById('research-max-searches').value, 10);
       if (!isNaN(maxSearches) && maxSearches >= 0) {
@@ -895,6 +918,81 @@
       log.scrollTop = log.scrollHeight;
       eventCount++;
       document.getElementById('event-count').textContent = 'Events: ' + eventCount;
+    }
+
+    // =========================================================================
+    // Usage & Cost
+    //
+    // Cumulative per session and pushed from the server's ledger, so a
+    // reconnecting tab gets the whole picture in one snapshot instead of having
+    // to add up a stream. Rows are agents; a sandbox run shows as the child of
+    // the agent that started it, because that is who spent the money.
+    // =========================================================================
+    function fmtUsd(value) {
+      const n = Number(value) || 0;
+      if (n && n < 0.0001) return '<$0.0001';
+      return '$' + n.toFixed(4);
+    }
+
+    function fmtTokens(value) {
+      const n = Number(value) || 0;
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+      return String(n);
+    }
+
+    function renderMetrics(data) {
+      if (!data) return;
+      const totals = data.totals || {};
+      const llm = data.llm || {};
+      const sandbox = data.sandbox || {};
+
+      document.getElementById('metrics-total').textContent = fmtUsd(totals.cost_usd);
+
+      const summary = [`${llm.calls || 0} calls`, `${fmtTokens(totals.total_tokens)} tok`];
+      if (sandbox.runs) {
+        summary.push(`${sandbox.runs} sandbox`, `${Math.round(sandbox.gpu_seconds || 0)}s GPU`);
+        if (sandbox.energy_wh) summary.push(`${(sandbox.energy_wh).toFixed(1)} Wh`);
+      }
+      document.getElementById('metrics-summary').textContent = summary.join(' · ');
+
+      const rows = (data.agents || []).map(agent => {
+        const box = agent.sandbox;
+        const child = box ? `
+          <div class="flex justify-between text-outline-variant/60 pl-3">
+            <span class="truncate">└ sandbox · ${Math.round(box.agent_seconds || 0)}s</span>
+            <span>${fmtUsd(box.total_cost_usd)}</span>
+          </div>` : '';
+        return `
+          <div>
+            <div class="flex justify-between gap-2">
+              <span class="truncate text-on-surface/80" title="${escHtml(agent.agent)}">${escHtml(agent.agent)}</span>
+              <span class="text-outline-variant whitespace-nowrap">${fmtTokens(agent.llm.total_tokens)} · ${fmtUsd(agent.cost_usd)}</span>
+            </div>${child}
+          </div>`;
+      });
+      document.getElementById('metrics-agents').innerHTML =
+        rows.join('') || '<div class="text-outline-variant">—</div>';
+
+      // A model litellm has no price for is counted in tokens but not in money:
+      // say so, rather than let the total read as the whole bill.
+      const note = document.getElementById('metrics-note');
+      if (totals.complete === false) {
+        const models = (llm.unpriced_models || []).join(', ');
+        note.textContent =
+          `${llm.unpriced_calls} call(s) on a model with no known price — total is a floor` +
+          (models ? `: ${models}` : '.');
+        note.classList.remove('hidden');
+      } else {
+        note.classList.add('hidden');
+      }
+    }
+
+    function resetMetrics() {
+      document.getElementById('metrics-total').textContent = '$0.0000';
+      document.getElementById('metrics-summary').textContent = 'no model calls yet';
+      document.getElementById('metrics-agents').innerHTML = '';
+      document.getElementById('metrics-note').classList.add('hidden');
     }
 
     // =========================================================================
@@ -1492,6 +1590,12 @@
       document.getElementById('event-count').textContent = 'Events: 0';
       feed.innerHTML = '';
 
+      // Cost is cumulative per session, so the snapshot carries the current
+      // figure directly — clear first, or a session switch would show the
+      // previous session's spend until the next push.
+      resetMetrics();
+      renderMetrics(snapshot.metrics);
+
       for (const message of messages) {
         if (message.type === 'user_message') {
           addUserMsg(message.message, message.timestamp);
@@ -1611,6 +1715,9 @@
             break;
           case 'tool_activity':
             applyToolActivity(data);
+            break;
+          case 'metrics':
+            renderMetrics(data);
             break;
           case 'final_response':
             hideTyping();
@@ -2326,6 +2433,41 @@
               <input id="default-username-input" type="text" placeholder="e.g. COSCIENTIST_USERNAME in .env"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-48 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
+          </div>
+        </div>
+
+        <!-- ── PlannerAgent ─────────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">map</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">PlannerAgent</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- Retrieval tools -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Retrieval Tools</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner search the MCP
+                  registry (<span class="font-mono">retrieve_tools</span>, <span
+                    class="font-mono">get_server_info</span>) before writing the roadmap. When off, it plans by outcome
+                  and never names concrete tools or server ids.</p>
+              </div>
+              <input id="planner-retrieval-checkbox" type="checkbox" checked
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Graph tools -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Graph Tools</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner read the shared
+                  knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.</p>
+              </div>
+              <input id="planner-graph-checkbox" type="checkbox" checked
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
+              once per session.</p>
           </div>
         </div>
 

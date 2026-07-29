@@ -225,6 +225,10 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
             response_format={"type": "json_object"},
             temperature=0.0,
         )
+        # The critic bypasses the agent tree, so no model callback prices it —
+        # but it runs on every orchestrator turn and is not free.
+        from CoScientist.logging.metrics import record_completion
+        record_completion(resp, model=_CRITIC_MODEL, agent="Critic")
         raw = resp["choices"][0]["message"]["content"]
         return json.loads(raw)
     except Exception as e:

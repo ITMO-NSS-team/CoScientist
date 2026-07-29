@@ -229,11 +229,16 @@ class WebSettings(BaseModel):
     singleton is the single source of truth — all components read from it
     directly.
     """
-    start_mode: str = "orchestrator"        # "init" | "orchestrator"
-    max_searches: int = 2           # WebSearchLimiter per-turn cap
+    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "init" | "orchestrator"
+    max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
     use_planner: bool = _os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
+    # PlannerAgent tool surface. When off, the tool entry drops out of the agent
+    # AND out of its prompt (assembler + prompt render from the same entries),
+    # so the planner writes the roadmap without MCP discovery / graph reads.
+    planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
+    planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
     sandbox_url: str = _os.getenv("SANDBOX_URL", "")
