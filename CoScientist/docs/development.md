@@ -261,6 +261,27 @@ Flipping the setting re-shapes every prompt that mentions the agent on the next
 build — e.g. the orchestrator's planning step switches between "call the
 PlannerAgent first" and "there is NO planner tool" automatically.
 
+To toggle a *single tool on a single agent*, register a gated alias of the tool
+whose factory returns `None` when the setting is off, and mark it `optional`:
+
+```python
+def _planner_retrieval():
+    if not get_settings().web.planner_retrieval_enabled:
+        return None
+    return _retrieval()
+
+REGISTRY.register_tool(ToolEntry(
+    key="planner_retrieval", factory=_planner_retrieval,
+    optional=True, docs=_RETRIEVAL_DOCS,
+))
+```
+
+The agent lists the alias (`tools: [planner_retrieval, ...]`) and the prompt
+template branches on `ctx.has_tool("planner_retrieval")`, so a disabled tool
+disappears from the agent AND from its prompt in one step. `planner_retrieval`
+and `planner_graph` (Settings → PlannerAgent in the web UI) work exactly this
+way; every other agent keeps the ungated `retrieval` / `graph` entries.
+
 ### 4.5 HITL
 
 `hitl: true` means "this agent uses human-in-the-loop *when HITL is globally

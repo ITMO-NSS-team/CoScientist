@@ -209,7 +209,8 @@ agents:
       "find and download papers about <expanded topic>". Do NOT use it to read a
       specific repository or URL the user named — that goes to CoderAgent.
     planning: |-
-      Use this ONLY when information cannot be computed or retrieved via tools, and specifically 
+      Use it to gather extra information about the scientific field and literature.
+      Use it when information cannot be computed or retrieved via tools, and specifically 
       requires searching information from the web or literature.  
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
@@ -244,7 +245,7 @@ agents:
       Use this as your primary choice for ANY task that can be calculated. 
       This agent has comprehensive capabilities and must be prioritized over searching whenever possible: 
         - Any computational task requiring tools
-        - Solves all tasks involving chemistry
+        - It CANNOT write or run code
     children: [ToolPreparerAgent, ExperimentAgent]
     a2a:
       key: task_execution

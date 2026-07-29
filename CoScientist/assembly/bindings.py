@@ -395,7 +395,11 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="create_plan",
             signature="create_plan(tasks)",
-            purpose="Replace all tasks with a new plan. Each task needs title, description, and assignee.",
+            purpose=(
+                "Replace all tasks with a new plan. Each task needs title, "
+                "description and assignee, plus `id` and `parent_id` to state "
+                "which task must run first. Tasks are stored in execution order."
+            ),
         ),
     ),
 ))
