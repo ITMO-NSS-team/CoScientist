@@ -308,7 +308,7 @@ class ResearchGraphStore:
                     "status": d.get("status", ""),
                     "executor_agent": d.get("source", ""),
                     "input": display_attrs,
-                    "output": self._label(d, 300),
+                    "output": self._label(d, 450),
                     "provenance": provenance,
                     "t_start": d.get("created_at"),
                     "t_end": d.get("updated_at"),
