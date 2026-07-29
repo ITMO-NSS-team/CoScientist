@@ -247,7 +247,8 @@ async def capture_checkpoint(
         external = _external_refs(raw_state)
         state = _redact(raw_state)
 
-        rid = run_key(session)
+        from CoScientist.checkpoints import synapse
+        rid = synapse.run_id_for(session.id) or run_key(session)
         manifest = CheckpointManifest(
             checkpoint_id=new_checkpoint_id(label),
             label=label,
@@ -267,6 +268,7 @@ async def capture_checkpoint(
             validator_pending=_validator_pending() if validator_pending is None else validator_pending,
             pins=collect_pins(),
         )
+        manifest.snapshot_ref = synapse.snapshot_ref_for(manifest.checkpoint_id)
 
         parts = {
             "session_events": _json_bytes(events),

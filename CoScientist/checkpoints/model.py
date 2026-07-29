@@ -53,3 +53,4 @@ class CheckpointManifest(BaseModel):
     validator_pending: bool = False
     pins: Dict[str, Any] = Field(default_factory=dict)
     warnings: List[str] = Field(default_factory=list)
+    snapshot_ref: Optional[str] = None   # Synapse v1: platform-held reference to the bundle

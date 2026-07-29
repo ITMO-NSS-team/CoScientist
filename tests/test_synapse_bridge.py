@@ -46,3 +46,38 @@ def test_snapshot_ref_none_when_unconfigured(monkeypatch):
     from CoScientist.checkpoints import synapse
     monkeypatch.setattr(synapse, "_bundle_base_url", lambda: None)
     assert synapse.snapshot_ref_for("ckpt_X") is None
+
+
+# ── Task 3: platform run_id + snapshot_ref on the manifest ────────────────────
+
+class _FakeSession:
+    def __init__(self, sid):
+        self.app_name = "orchestrator"
+        self.user_id = "u"
+        self.id = sid
+        self.events = []
+        self.state = {}
+
+
+def test_capture_uses_platform_run_id(monkeypatch):
+    from CoScientist.checkpoints import synapse, capture
+    from CoScientist.checkpoints.store import LocalZipStore
+    synapse.clear_runs()
+    synapse.register_run("ctx-9", "run-PLATFORM", None)
+    monkeypatch.setattr(synapse, "_bundle_base_url", lambda: "http://host:8100")
+    store = LocalZipStore(tempfile.mkdtemp())
+    m = asyncio.run(capture.capture_checkpoint(
+        session=_FakeSession("ctx-9"), label="T1_after_literature_review", store=store))
+    assert m is not None
+    assert m.run_id == "run-PLATFORM"
+    assert m.snapshot_ref == f"http://host:8100/api/checkpoints/{m.checkpoint_id}/bundle"
+
+
+def test_capture_falls_back_to_run_key(monkeypatch):
+    from CoScientist.checkpoints import synapse, capture
+    from CoScientist.checkpoints.store import LocalZipStore
+    synapse.clear_runs()  # nothing registered
+    store = LocalZipStore(tempfile.mkdtemp())
+    m = asyncio.run(capture.capture_checkpoint(
+        session=_FakeSession("ctx-none"), label="T5_invocation_end", store=store))
+    assert m.run_id == "orchestrator__ctx-none"
