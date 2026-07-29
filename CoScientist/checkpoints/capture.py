@@ -276,7 +276,9 @@ async def capture_checkpoint(
         }
         parts.update(_collect_store_parts())
 
-        return store.save(manifest, parts)
+        saved = store.save(manifest, parts)
+        synapse.notify_snapshot_saved(saved)
+        return saved
     except Exception:  # noqa: BLE001 — never break the run because of a snapshot
         logger.exception("checkpoint capture failed (label=%s); run continues", label)
         return None

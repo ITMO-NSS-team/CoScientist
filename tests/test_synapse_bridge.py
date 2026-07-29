@@ -81,3 +81,47 @@ def test_capture_falls_back_to_run_key(monkeypatch):
     m = asyncio.run(capture.capture_checkpoint(
         session=_FakeSession("ctx-none"), label="T5_invocation_end", store=store))
     assert m.run_id == "orchestrator__ctx-none"
+
+
+# ── Task 4: outbound snapshot-ready callback ─────────────────────────────────
+
+def test_notify_posts_point(monkeypatch):
+    from CoScientist.checkpoints import synapse
+    from CoScientist.checkpoints.model import CheckpointManifest, SessionRef
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["body"] = json
+        class R:
+            status_code = 200
+        return R()
+
+    monkeypatch.setattr(synapse, "_synapse_cfg",
+                        lambda: SimpleNamespace(enabled=True, callback_url="http://plat:9000"))
+    monkeypatch.setattr(synapse.httpx, "post", fake_post)
+    m = CheckpointManifest(
+        checkpoint_id="ckpt_X", label="T1_after_literature_review", run_id="run-1",
+        created_at="t", session=SessionRef(app_name="a", user_id="u", session_id="s"),
+        snapshot_ref="http://host/api/checkpoints/ckpt_X/bundle")
+    synapse.notify_snapshot_saved(m)
+    assert captured["url"] == "http://plat:9000/points"
+    assert captured["body"]["point_id"] == "ckpt_X"
+    assert captured["body"]["run_id"] == "run-1"
+    assert captured["body"]["label"] == "T1_after_literature_review"
+    assert captured["body"]["snapshot_ref"] == "http://host/api/checkpoints/ckpt_X/bundle"
+
+
+def test_notify_noop_when_disabled(monkeypatch):
+    from CoScientist.checkpoints import synapse
+    from CoScientist.checkpoints.model import CheckpointManifest, SessionRef
+    monkeypatch.setattr(synapse, "_synapse_cfg",
+                        lambda: SimpleNamespace(enabled=False, callback_url=None))
+    called = {"n": 0}
+    monkeypatch.setattr(synapse.httpx, "post",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    m = CheckpointManifest(
+        checkpoint_id="c", label="L", run_id="r", created_at="t",
+        session=SessionRef(app_name="a", user_id="u", session_id="s"))
+    synapse.notify_snapshot_saved(m)
+    assert called["n"] == 0

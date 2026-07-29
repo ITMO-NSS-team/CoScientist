@@ -13,6 +13,8 @@ import logging
 import threading
 from typing import Dict, Optional
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
@@ -51,3 +53,27 @@ def snapshot_ref_for(checkpoint_id: str) -> Optional[str]:
     if not base:
         return None
     return f"{base.rstrip('/')}/api/checkpoints/{checkpoint_id}/bundle"
+
+
+def _synapse_cfg():
+    from CoScientist.config import get_settings
+    return get_settings().synapse
+
+
+def notify_snapshot_saved(manifest) -> None:
+    """Tell the platform a snapshot is ready (best-effort). v1 §5: one call,
+    the platform records the point itself — no separate 'snapshot created' event."""
+    cfg = _synapse_cfg()
+    if not cfg.enabled or not cfg.callback_url:
+        return
+    body = {
+        "point_id": manifest.checkpoint_id,
+        "run_id": manifest.run_id,
+        "time": manifest.created_at,
+        "label": manifest.label,
+        "snapshot_ref": manifest.snapshot_ref,
+    }
+    try:
+        httpx.post(f"{cfg.callback_url.rstrip('/')}/points", json=body, timeout=5.0)
+    except Exception as exc:  # noqa: BLE001 — never break the run
+        logger.warning("synapse: snapshot-ready callback failed: %s", exc)
