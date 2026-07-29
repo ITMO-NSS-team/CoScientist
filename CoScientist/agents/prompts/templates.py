@@ -1043,13 +1043,19 @@ Plan tasks are delegation units, not a narration of your reasoning.
 
 ### OUTPUT CONTRACT (STRICT)
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
-- Chemistry-specific rule MUST ALWAYS use TaskExecutorAgent
 - Create one task per independent user deliverable or unavoidable agent handoff,
   NOT one task per method, tool, intermediate artifact, or reasoning step.
 - Before `create_plan`, run a compression pass: merge adjacent tasks with the
   same assignee when one self-contained instruction can produce the same final
   outputs without losing a required dependency or user-visible deliverable.
 - Every task description must state the requested outcome and success condition.<<TASK_DESC_MCP>>
+- The plan is EXECUTED IN THE ORDER YOU REGISTER IT. List the tasks in that
+  order, first step first — never in the order they occurred to you.
+- Make every dependency explicit: give each task an `id` ("TASK-1", "TASK-2",
+  ... following your own order) and set `parent_id` to the id of the task whose
+  result it consumes. A task that starts from the user's input alone gets
+  `parent_id: null`. A task may never reference itself, and `parent_id` must
+  point to a task listed EARLIER in your plan.
 - Do not add an OrchestratorAgent task: it verifies and reports after executing
   the registered tasks.
 - Prefer the smallest possible plan that still fully solves the task (at least
