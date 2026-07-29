@@ -252,6 +252,24 @@ class CheckpointSettings(BaseModel):
 
 
 # =========================
+# SYNAPSE v1 ADAPTER
+# =========================
+class SynapseSettings(BaseModel):
+    """Synapse platform v1 contract bridge (checkpoints/synapse.py).
+
+    OFF by default: enabling makes checkpoints report to the platform
+    (callback_url), stamps platform-issued run_ids, builds snapshot_refs from
+    bundle_base_url, and exports OTel spans to otlp_endpoint. Override via
+    SYNAPSE__ENABLED / SYNAPSE__CALLBACK_URL / SYNAPSE__BUNDLE_BASE_URL /
+    SYNAPSE__OTLP_ENDPOINT.
+    """
+    enabled: bool = False
+    callback_url: Optional[str] = None      # platform base URL for "snapshot ready"
+    bundle_base_url: Optional[str] = None    # adapter base URL used to build snapshot_ref
+    otlp_endpoint: Optional[str] = None      # OTLP HTTP collector for trace export
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -272,6 +290,7 @@ class Settings(BaseSettings):
     mcp: MCPSettings = MCPSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
     checkpoints: CheckpointSettings = CheckpointSettings()
+    synapse: SynapseSettings = SynapseSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          
