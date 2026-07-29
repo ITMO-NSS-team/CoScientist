@@ -36,6 +36,12 @@ class RestoreRequest(BaseModel):
     import_stores: bool = True
 
 
+class RunRegisterRequest(BaseModel):
+    context_id: str
+    run_id: str
+    traceparent: Optional[str] = None
+
+
 def make_checkpoint_router(
     *,
     session_service=None,
@@ -64,6 +70,14 @@ def make_checkpoint_router(
     @router.get("")
     async def list_checkpoints(run_id: Optional[str] = None):
         return {"checkpoints": store.list(run_id)}
+
+    @router.post("/runs")
+    async def register_run(body: RunRegisterRequest):
+        # Synapse v1: the platform registers its run_id + traceparent for a
+        # contextId before message/send, so capture stamps the platform run_id.
+        from CoScientist.checkpoints import synapse
+        synapse.register_run(body.context_id, body.run_id, body.traceparent)
+        return {"ok": True}
 
     @router.get("/{checkpoint_id}")
     async def get_manifest(checkpoint_id: str):

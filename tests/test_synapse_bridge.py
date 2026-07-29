@@ -125,3 +125,24 @@ def test_notify_noop_when_disabled(monkeypatch):
         session=SessionRef(app_name="a", user_id="u", session_id="s"))
     synapse.notify_snapshot_saved(m)
     assert called["n"] == 0
+
+
+# ── Task 5: POST /api/checkpoints/runs ───────────────────────────────────────
+
+def test_runs_endpoint_registers():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from CoScientist.checkpoints.api import make_checkpoint_router
+    from CoScientist.checkpoints import synapse
+    from CoScientist.checkpoints.store import LocalZipStore
+    synapse.clear_runs()
+    app = FastAPI()
+    app.include_router(make_checkpoint_router(
+        session_service=object(), app_name="orchestrator",
+        store=LocalZipStore(tempfile.mkdtemp())))
+    c = TestClient(app)
+    r = c.post("/api/checkpoints/runs",
+               json={"context_id": "ctx-77", "run_id": "run-77", "traceparent": "00-t-s-01"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert synapse.run_id_for("ctx-77") == "run-77"
+    assert synapse.traceparent_for("ctx-77") == "00-t-s-01"
