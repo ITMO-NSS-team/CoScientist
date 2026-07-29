@@ -42,6 +42,47 @@ def _agent(tool_context: Optional[ToolContext]) -> str:
     return getattr(tool_context, "agent_name", None) or "unknown"
 
 
+def _recent_tool_calls(agent: str, limit: int = 6) -> List[Dict[str, Any]]:
+    """The calling agent's most recent EXECUTION tool calls (from the execution
+    graph) — the concrete `tavily_search` / `execute_bash` / MCP calls that
+    produced the finding. Attached to Evidence as provenance so every piece of
+    evidence is traceable back to the exact call + result that yielded it."""
+    try:
+        from CoScientist.graph.memory import knowledge_graph
+        hist = knowledge_graph.history(limit=60)
+    except Exception:  # noqa: BLE001
+        return []
+    calls = [h for h in hist
+             if h.get("kind") == "tool_call" and h.get("agent") == agent
+             and not str(h.get("label", "")).startswith("research_")]
+    out = []
+    for h in calls[-limit:]:
+        out.append({"exec_id": h.get("id"), "tool": h.get("label"),
+                    "result": (h.get("output") or "")[:400]})
+    return out
+
+
+def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str) -> Optional[List[Dict[str, Any]]]:
+    """Stamp each newly-created Evidence node with the producing tool calls."""
+    if not nodes:
+        return nodes
+    prov = None
+    out = []
+    for n in nodes:
+        n = dict(n)
+        # only CREATE ops for Evidence (id-merges keep their existing provenance)
+        if not n.get("id") and str(n.get("type", "")).strip().lower() in ("evidence", "свидетельство"):
+            attrs = dict(n.get("attrs") or {})
+            if "_provenance" not in attrs:
+                if prov is None:
+                    prov = _recent_tool_calls(agent)
+                if prov:
+                    attrs["_provenance"] = prov
+            n["attrs"] = attrs
+        out.append(n)
+    return out
+
+
 def _context_budget() -> int:
     try:
         from CoScientist.config import get_settings
@@ -170,8 +211,9 @@ class ResearchGraphToolset(BaseToolset):
         except Exception:  # noqa: BLE001
             focus = None
         research_graph = get_research_graph(tool_context)
+        agent = _agent(tool_context)
         result = research_graph.commit(
-            source=_agent(tool_context), nodes=nodes, edges=edges,
+            source=agent, nodes=_attach_provenance(nodes, agent), edges=edges,
             status_updates=status_updates, autolink_focus=focus,
         )
         if result.ok:

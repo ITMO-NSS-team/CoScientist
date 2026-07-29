@@ -82,6 +82,27 @@ def _composite_parents() -> dict:
     return _composite_parents_cache
 
 
+_system_root_cache: Optional[str] = None
+
+
+def _system_root() -> str:
+    """The system's true root agent (root: true in system.yaml). Only its
+    top-level invocation opens a goal — sub-agents run in their own ADK
+    invocations and must NOT each spawn a goal."""
+    global _system_root_cache
+    if _system_root_cache is None:
+        try:
+            from CoScientist.assembly.schema import get_config
+            cfg = get_config()
+            _system_root_cache = next(
+                (n for n, a in cfg.agents.items() if getattr(a, "root", False)),
+                "OrchestratorAgent",
+            )
+        except Exception:  # noqa: BLE001
+            _system_root_cache = "OrchestratorAgent"
+    return _system_root_cache
+
+
 def _enabled() -> bool:
     value = os.getenv("LOG_AGENT_EVENTS") or os.getenv("A2A_LOG_EVENTS") or "1"
     return value not in ("0", "false", "False")
@@ -162,50 +183,42 @@ class GraphMemoryPlugin(BasePlugin):
         composite agents is preserved even though their children are not invoked
         as AgentTool delegations.
         """
-        cached = state.agent_node.get(agent)
-        if cached is not None:
-            return cached
-
-        if agent == self._root_name(state):
-            nid = f"{state.goal_id}::agent:{agent}"
-            graph.add_node(
-                id=nid, kind="agent_call", label=agent, executor_agent=agent,
-                status="running", parent_ids=[state.goal_id], t_start=time.time(),
-            )
-            graph.add_edge(state.goal_id, nid, type="caused_by")
-            state.agent_node[agent] = nid
+        # ONE stable node per agent — its roster node `agent:{name}`. An agent is
+        # never duplicated no matter how many times, or from how many ADK
+        # invocations, it is called; its tool calls and delegations all attach to
+        # this single node. add_node MERGES onto the seeded roster node (keeping
+        # its system:root membership) and just marks it running.
+        nid = f"agent:{agent}"
+        if agent in state.agent_node:
             return nid
-
         _seen = _seen or set()
-        parent_agent = _composite_parents().get(agent)
-        if parent_agent and parent_agent not in _seen:
-            _seen.add(parent_agent)
-            parent_node = self._agent_node_for(graph, state, parent_agent, _seen)
-        else:
-            parent_node = self._agent_node_for(
-                graph,
-                state,
-                self._root_name(state),
+        _seen.add(agent)
+        try:
+            graph.add_node(
+                id=nid, kind="agent", label=agent, executor_agent=agent,
+                status="running", t_start=time.time(),
             )
-
-        nid = f"{state.goal_id}::agent:{agent}"
-        graph.add_node(
-            id=nid, kind="agent_call", label=agent, executor_agent=agent,
-            status="running", parent_ids=[parent_node], t_start=time.time(),
-        )
-        graph.add_edge(parent_node, nid, type="delegated_to")
+            # preserve sequential/parallel hierarchy (child under its composite)
+            parent_agent = _composite_parents().get(agent)
+            if parent_agent and parent_agent not in _seen:
+                parent_node = self._agent_node_for(graph, state, parent_agent, _seen)
+                graph.add_edge(parent_node, nid, type="delegated_to")
+        except Exception:  # noqa: BLE001
+            pass
         state.agent_node[agent] = nid
         return nid
 
     async def on_user_message_callback(self, *, invocation_context, user_message) -> Optional[Any]:
         if not _enabled():
             return None
-        state = self._state(invocation_context)
+        # Only the TRUE system root opens a goal. Sub-agents run in their own ADK
+        # invocations and would otherwise each spawn a separate goal + a floating
+        # duplicate of themselves.
         name = self._ctx_agent(invocation_context)
-        if state.root_agent_name is None:
-            state.root_agent_name = name
-        if name != state.root_agent_name:
+        if name != _system_root():
             return None
+        state = self._state(invocation_context)
+        state.root_agent_name = name
         inv = getattr(invocation_context, "invocation_id", "x")
         state.goal_id = f"goal:{inv}"
         state.goal_text = _content_text(user_message)
@@ -218,6 +231,9 @@ class GraphMemoryPlugin(BasePlugin):
                 status="running", parent_ids=[ROOT_ID], t_start=time.time(),
             )
             graph.add_edge(ROOT_ID, state.goal_id, type="caused_by")
+            # the goal flows into the orchestrator; the whole run tree hangs off it
+            orch = self._agent_node_for(graph, state, name)
+            graph.add_edge(state.goal_id, orch, type="caused_by")
         except Exception:  # noqa: BLE001
             pass
         return None
@@ -277,19 +293,16 @@ class GraphMemoryPlugin(BasePlugin):
             parent = self._agent_node_for(graph, state, agent)
             fcid = getattr(tool_context, "function_call_id", None) or f"{tool.name}:{time.time()}"
             if tool.name in _agent_names():
-                # Delegation: the called agent's activity node hangs under the
-                # caller. Keep the request (the prompt the agent was called with)
-                # as the node input so it shows on click.
-                nid = f"{state.goal_id}::agent:{tool.name}"
+                # Delegation: connect the caller to the called agent's ONE stable
+                # node (agent:{name}); its own tool calls attach there too.
+                nid = self._agent_node_for(graph, state, tool.name)
                 graph.add_node(
-                    id=nid, kind="agent_call", label=tool.name, executor_agent=tool.name,
-                    status="running", parent_ids=[parent], input=_short(tool_args, 1000),
-                    t_start=time.time(),
+                    id=nid, kind="agent", label=tool.name, executor_agent=tool.name,
+                    status="running", input=_short(tool_args, 1000), t_start=time.time(),
                 )
                 graph.add_edge(parent, nid, type="delegated_to")
-                state.agent_node[tool.name] = nid
             else:
-                nid = f"{state.goal_id}::tool:{fcid}"
+                nid = f"tool:{fcid}"
                 graph.add_node(
                     id=nid, kind="tool_call", label=tool.name, executor_agent=agent,
                     status="running", parent_ids=[parent], input=_short(tool_args), t_start=time.time(),

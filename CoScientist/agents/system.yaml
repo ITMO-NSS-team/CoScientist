@@ -123,6 +123,9 @@ agents:
     prompt: hypotheses
     output_key: hypotheses
     tools: [task_tracker, graph, research_graph]
+    # HITL so it can co-build the graph with the human: validate proposed
+    # hypotheses and ask for acceptance criteria when the human didn't add any.
+    hitl: true
     callbacks:
       before_agent: [before_get_task, inject_research_context]
       after_model: [guard_unknown_tools]

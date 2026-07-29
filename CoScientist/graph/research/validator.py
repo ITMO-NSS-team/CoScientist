@@ -32,6 +32,19 @@ SOURCE = "ValidatorAgent"
 # Module-level refs so fire-and-forget tasks are not garbage-collected mid-flight.
 _TASKS: set = set()
 
+
+async def drain_validations(timeout: float = 90.0) -> None:
+    """Await outstanding background validations so their verdicts + Conclusions
+    land in the graph before a run reports 'done'. Best-effort and bounded — a
+    stuck judgment can never hang the run."""
+    pending = [t for t in list(_TASKS) if not t.done()]
+    if not pending:
+        return
+    try:
+        await asyncio.wait(pending, timeout=timeout)
+    except Exception:  # noqa: BLE001 — draining must never break a run
+        pass
+
 _SYSTEM = (
     "You are a rigorous scientific hypothesis validator. You are given ONE "
     "hypothesis, its confirmation criteria, and the evidence attached to it. Some "
@@ -306,6 +319,13 @@ class BackgroundValidatorPlugin(BasePlugin):
                 task.add_done_callback(_TASKS.discard)
         except Exception:  # noqa: BLE001
             pass
+        return None
+
+    async def after_run_callback(self, *, invocation_context, **kwargs) -> None:
+        """When the run finishes, wait (bounded) for outstanding validations so
+        their verdicts + Conclusions are in the graph before the answer is
+        reported — otherwise a completed run can still look 'all formulated'."""
+        await drain_validations()
         return None
 
 

@@ -28,12 +28,40 @@ TOOLS_GUARD = (
 _HITL_SECTION = """\
 ### Human-in-the-loop
 
-A human supervises this work. Use `request_approval` BEFORE expensive,
-long-running, outward-facing, or hard-to-reverse actions, and
-`request_selection` when the human must choose among alternatives you
-generated (e.g. several hypotheses or plans). Pass your own agent name as
-`agent_name`. If approval is denied, do not retry the same action — adjust
-your approach using the feedback."""
+A human supervises this work — treat them as a collaborator, not a rubber stamp.
+Two ways to involve them:
+- `request_approval(agent_name, message)` — a yes / no question (ask BEFORE
+  expensive, long-running, outward-facing or hard-to-reverse actions). The human
+  may answer plainly OR reply with free-text ("other") — that free-text is an
+  instruction, follow it. Returns {approved, feedback}.
+- `request_selection(agent_name, message, options)` — offer 2–4 concrete options
+  and let the human choose (e.g. among hypotheses, plans, thresholds). The human
+  may pick one of the options OR give their own answer in the feedback ("other");
+  honor whichever they provide. Returns {selected, approved, feedback}.
+
+Pass your own name as `agent_name`. Ask whenever a real decision is genuinely the
+human's to make, not only for approvals. If a request is denied, don't retry the
+same thing — adjust using the feedback."""
+
+
+_HITL_RESEARCH_COOP = """\
+#### Co-building the research graph with the human
+The research graph is built by BOTH the agents and the human. Pause at each
+epistemic checkpoint, let the human validate and extend it, then record their
+input in the graph:
+- When Hypotheses are proposed, ask the human to validate them (keep / drop /
+  edit) via `request_selection` or `request_approval`.
+- A Hypothesis MUST have acceptance criteria — the metric + threshold that would
+  confirm or refute it — BEFORE it is verified. If the human did not provide any,
+  you MUST ask for them explicitly ("what result would confirm or refute this
+  hypothesis?") and record the answer as its ConfirmationCriteria. Never start
+  verification on a hypothesis that has no criteria.
+- Likewise invite the human to confirm or adjust the verification methods, the
+  question's scope, and the final conclusion.
+Use `research_triggers` to find gaps (e.g. a hypothesis with no criteria) and
+resolve them by asking the human — not by inventing the answer. Commit the
+human's input with `research_commit`; if your role may not create that node type,
+state their decision in your text answer so the orchestrator records it."""
 
 
 @dataclass
@@ -112,7 +140,15 @@ class PromptContext:
         return "\n".join(f"  - {a.name}: {a.description}" for a in self.subordinates)
 
     def render_hitl(self) -> str:
-        return _HITL_SECTION if self.hitl_attached else ""
+        if not self.hitl_attached:
+            return ""
+        section = _HITL_SECTION
+        # Agents that also write the research graph get the co-building protocol
+        # (validate hypotheses with the human; a hypothesis needs acceptance
+        # criteria before verification — ask for them if the human didn't give any).
+        if self.has_tool("research_graph") or self.has_tool("research_graph_orchestrator"):
+            section += "\n\n" + _HITL_RESEARCH_COOP
+        return section
 
     def render_sibling_roster(self) -> str:
         """Planner-style roster of co-subordinates, from their `planning` text."""
