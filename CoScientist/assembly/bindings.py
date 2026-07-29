@@ -93,6 +93,27 @@ def _graph():
     return graph_reader_instance
 
 
+def _planner_tool_enabled(field: str) -> bool:
+    """Per-tool switch for the PlannerAgent, set from the web UI settings."""
+    try:
+        from CoScientist.config import get_settings
+        return bool(getattr(get_settings().web, field))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _planner_retrieval():
+    if not _planner_tool_enabled("planner_retrieval_enabled"):
+        return None
+    return _retrieval()
+
+
+def _planner_graph():
+    if not _planner_tool_enabled("planner_graph_enabled"):
+        return None
+    return _graph()
+
+
 def _research_graph_enabled() -> bool:
     try:
         from CoScientist.config import get_settings
@@ -185,25 +206,36 @@ REGISTRY.register_tool(ToolEntry(
     ),
 ))
 
+_RETRIEVAL_DOCS = (
+    ToolDoc(
+        name="retrieve_tools",
+        signature="retrieve_tools(query)",
+        purpose=(
+            "Searches the MCP registry by capability. Returns ranked tool "
+            "records with tool name, server_id, full description, input_schema, "
+            "and score; use the metadata to determine exact requirement coverage."
+        ),
+    ),
+    ToolDoc(
+        name="get_server_info",
+        signature="get_server_info(server_id)",
+        purpose="Returns server metadata.",
+    ),
+)
+
 REGISTRY.register_tool(ToolEntry(
     key="retrieval",
     factory=_retrieval,
-    docs=(
-        ToolDoc(
-            name="retrieve_tools",
-            signature="retrieve_tools(query)",
-            purpose=(
-                "Searches the MCP registry by capability. Returns ranked tool "
-                "records with tool name, server_id, full description, input_schema, "
-                "and score; use the metadata to determine exact requirement coverage."
-            ),
-        ),
-        ToolDoc(
-            name="get_server_info",
-            signature="get_server_info(server_id)",
-            purpose="Returns server metadata.",
-        ),
-    ),
+    docs=_RETRIEVAL_DOCS,
+))
+
+# Same toolset as "retrieval", gated on the web setting so the planner's MCP
+# discovery can be switched off from the UI without touching any other agent.
+REGISTRY.register_tool(ToolEntry(
+    key="planner_retrieval",
+    factory=_planner_retrieval,
+    optional=True,  # dropped when WEB__PLANNER_RETRIEVAL_ENABLED is false
+    docs=_RETRIEVAL_DOCS,
 ))
 
 REGISTRY.register_tool(ToolEntry(
@@ -224,42 +256,53 @@ REGISTRY.register_tool(ToolEntry(
     ),
 ))
 
+_GRAPH_DOCS = (
+    ToolDoc(
+        name="read_research_graph",
+        signature="read_research_graph()",
+        purpose="Read the shared knowledge graph: roster + every step so far.",
+    ),
+    ToolDoc(
+        name="get_graph_history",
+        signature="get_graph_history(limit)",
+        purpose="Chronological history of steps taken in this session.",
+    ),
+    ToolDoc(
+        name="get_agents_info",
+        signature="get_agents_info()",
+        purpose="Structured info about all agents in the system.",
+    ),
+    ToolDoc(
+        name="search_knowledge_memory",
+        signature="search_knowledge_memory(query)",
+        purpose="Search globally accumulated facts relevant to a query.",
+    ),
+    ToolDoc(
+        name="get_entity_neighbors",
+        signature="get_entity_neighbors(entity)",
+        purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
+    ),
+    ToolDoc(
+        name="get_knowledge_memory",
+        signature="get_knowledge_memory()",
+        purpose="Global knowledge memory shared across users and sessions.",
+    ),
+)
+
 REGISTRY.register_tool(ToolEntry(
     key="graph",
     factory=_graph,
     runtime_resolved=True,  # BaseToolset — tool surface comes from get_tools()
-    docs=(
-        ToolDoc(
-            name="read_research_graph",
-            signature="read_research_graph()",
-            purpose="Read the shared knowledge graph: roster + every step so far.",
-        ),
-        ToolDoc(
-            name="get_graph_history",
-            signature="get_graph_history(limit)",
-            purpose="Chronological history of steps taken in this session.",
-        ),
-        ToolDoc(
-            name="get_agents_info",
-            signature="get_agents_info()",
-            purpose="Structured info about all agents in the system.",
-        ),
-        ToolDoc(
-            name="search_knowledge_memory",
-            signature="search_knowledge_memory(query)",
-            purpose="Search globally accumulated facts relevant to a query.",
-        ),
-        ToolDoc(
-            name="get_entity_neighbors",
-            signature="get_entity_neighbors(entity)",
-            purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
-        ),
-        ToolDoc(
-            name="get_knowledge_memory",
-            signature="get_knowledge_memory()",
-            purpose="Global knowledge memory shared across users and sessions.",
-        ),
-    ),
+    docs=_GRAPH_DOCS,
+))
+
+# Same toolset as "graph", gated on the web setting (planner only).
+REGISTRY.register_tool(ToolEntry(
+    key="planner_graph",
+    factory=_planner_graph,
+    optional=True,  # dropped when WEB__PLANNER_GRAPH_ENABLED is false
+    runtime_resolved=True,
+    docs=_GRAPH_DOCS,
 ))
 
 # ── Research Context Graph ────────────────────────────────────────────────────

@@ -126,6 +126,10 @@ async def _llm_complete(system: str, user: str) -> str:
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=0,
     )
+    # Extraction runs as a detached background task, so it bills the session
+    # that spawned it via the ambient binding rather than a passed-down key.
+    from CoScientist.logging.metrics import record_completion
+    record_completion(resp, model=model, agent="SemanticMemory")
     return resp.choices[0].message.content or ""
 
 

@@ -19,6 +19,9 @@ ADK. This module is the thin adapter that makes it usable as agent tools:
   over, the ``watch_url`` / ``vscode_url`` in its result reach a UI too late to
   watch anything. So a host (the Web app) registers a sink with
   :func:`set_sandbox_start_sink` and gets them the moment the container is up.
+* **Cost out of band too.** What the run cost (its agent's tokens, GPU seconds,
+  electricity) travels on the client's metrics channel into the session ledger,
+  never through the tool result — see :func:`_metrics_sink`.
 
 Note that the sandbox is a *separate* machine from the coder's ``execute_bash``
 workspace: files do not cross between them. Data goes in through ``dataset_url``
@@ -107,6 +110,34 @@ def _host_session(tool_context: Optional[ToolContext]) -> Optional[Tuple[str, st
         return None if key == DEFAULT_SESSION_KEY else key
     except Exception:  # noqa: BLE001 - no ADK/graph context available
         return None
+
+
+def _metrics_sink(tool_context: Optional[ToolContext]):
+    """Route what a sandbox run cost into the session's usage ledger.
+
+    The sandbox bills separately from this process — its own agent's LLM calls,
+    GPU seconds and electricity — and none of it passes through the ADK model
+    callbacks that price everything else. Folding the record in here is what
+    makes the session total cover the whole system.
+
+    Charged to the agent that started the run: the sandbox is the CoderAgent's
+    tool, and reporting it as a nameless line item hides who spent the money.
+    The record itself never goes back to the model — the client keeps it out of
+    the tool result, and nothing here puts it back.
+    """
+    from CoScientist.graph.session_scope import session_key
+    from CoScientist.logging.metrics import record_sandbox_run
+
+    key = session_key(tool_context)
+    agent = getattr(tool_context, "agent_name", None) or "CoderAgent"
+
+    def sink(record: Dict[str, Any]) -> None:
+        sandbox_id = str(record.get("task_id") or "")
+        if not sandbox_id:
+            return
+        record_sandbox_run(key, agent, sandbox_id, sandbox.sandbox_run_digest(record))
+
+    return sink
 
 
 def _start_notifier(tool_context: Optional[ToolContext]):
@@ -224,6 +255,7 @@ async def run_sandbox_task(
         # is over, so waiting for its result to carry the links would show them
         # when there is nothing left to watch.
         on_start=_start_notifier(tool_context),
+        metrics_sink=_metrics_sink(tool_context),
     )
     logger.info(
         "run_sandbox_task -> %s (sandbox=%s, reused=%s)",
@@ -250,6 +282,7 @@ async def check_sandbox_task(tool_context: ToolContext = None) -> Dict[str, Any]
         session_id=_session(tool_context),
         timeout=CHECK_WAIT,
         poll_interval=POLL_INTERVAL,
+        metrics_sink=_metrics_sink(tool_context),
     )
     return _shape(result, waited=CHECK_WAIT)
 

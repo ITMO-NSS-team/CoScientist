@@ -132,7 +132,10 @@ agents:
     # retrieval lets the planner inspect which ready-made MCP tools exist (and
     # what they accept/return) BEFORE writing the roadmap, so the plan reflects
     # real tool capabilities instead of guessing from priors.
-    tools: [retrieval, create_plan_tool, graph]
+    # planner_retrieval / planner_graph are the plain retrieval / graph toolsets
+    # behind a per-planner switch (Settings -> PlannerAgent in the web UI): when
+    # a switch is off the tool drops out of BOTH the agent and its prompt.
+    tools: [planner_retrieval, create_plan_tool, planner_graph]
     output_key: planner_roadmap
     callbacks:
       before_agent: [inject_graph_root]
@@ -271,7 +274,8 @@ agents:
       and read repo X / assemble a dataset."
     planning: |-
       choose for steps that require ENGINEERING work in a sandbox:
-          * writing and running code or scripts
+          * writing, debugging, and running scripts/code
+          * machine learning model preparation, training, and evaluation
           * shell and git operations (cloning repos, committing, pushing)
           * collecting, parsing, or transforming data
           * environment setup and running long jobs

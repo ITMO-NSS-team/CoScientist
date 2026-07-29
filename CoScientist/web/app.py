@@ -97,6 +97,12 @@ def _apply_frontend_settings(frontend: dict) -> None:
         val = str(general["coscientistUsername"]).strip()
         web.coscientist_username = val if val else None
 
+    planner = frontend.get("plannerAgent", {})
+    if "retrievalEnabled" in planner:
+        web.planner_retrieval_enabled = bool(planner["retrievalEnabled"])
+    if "graphEnabled" in planner:
+        web.planner_graph_enabled = bool(planner["graphEnabled"])
+
     research = frontend.get("researchAgent", {})
     if "maxSearches" in research:
         val = int(research["maxSearches"])
@@ -133,6 +139,9 @@ class WebRuntime:
         self.stopping_runs: set[SessionKey] = set()
         self._closing = False
         self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
+        # Latest usage/cost snapshot per session — cumulative, so one entry is
+        # the whole history and a reconnecting tab needs nothing older.
+        self.metrics: dict[SessionKey, dict[str, Any]] = {}
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
         self.hitl_handler.set_sender(self.send_socket)
@@ -356,6 +365,7 @@ class WebRuntime:
                     "active_tasks": _json_safe(active_tasks),
                     "status": status,
                     "run_status_version": version,
+                    "metrics": self.metrics.get(key),
                 })
             except Exception:
                 self.detach_socket(key, ws)
@@ -453,6 +463,26 @@ def _wire_sandbox_links(runtime: WebRuntime) -> None:
     sandbox_tools.set_sandbox_start_sink(deliver)
 
 
+def _wire_metrics(runtime: WebRuntime) -> None:
+    """Stream the running cost of a session to the tabs watching it.
+
+    The ledger is updated on every model call; the sink is rate-limited on the
+    producing side (``METRICS_PUSH_INTERVAL``) so a hundred-call run does not
+    turn into a hundred websocket frames. Only the latest snapshot is kept for
+    replay — it is cumulative, so history would be the same number repeated.
+    """
+    from CoScientist.logging.metrics import set_metrics_sink
+
+    async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
+        if key not in runtime.sockets and key not in runtime.active_runs:
+            return
+        event = {"type": "metrics", **_json_safe(payload)}
+        runtime.metrics[key] = event
+        await runtime.send(key, event)
+
+    set_metrics_sink(deliver)
+
+
 def _wire_tool_activity(runtime: WebRuntime) -> None:
     """Stream every tool call — including those inside AgentTool sub-agents.
 
@@ -513,6 +543,7 @@ def create_app() -> FastAPI:
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
     _wire_tool_activity(runtime)
+    _wire_metrics(runtime)
     app = FastAPI(
         title="CoScientist Web UI",
         version="1.0.0",
@@ -916,6 +947,10 @@ def create_app() -> FastAPI:
                 "autoNamingEnabled": web.auto_naming_enabled,
                 "coscientistUsername": web.coscientist_username or "",
             },
+            "plannerAgent": {
+                "retrievalEnabled": web.planner_retrieval_enabled,
+                "graphEnabled": web.planner_graph_enabled,
+            },
             "researchAgent": {"maxSearches": web.max_searches},
             "taskExecutorAgent": {
                 "keepScore": web.executor_tool_keep_score,
@@ -943,6 +978,10 @@ def create_app() -> FastAPI:
                 "opikEnabled": web.opik_enabled,
                 "autoNamingEnabled": web.auto_naming_enabled,
                 "coscientistUsername": web.coscientist_username or "",
+            },
+            "plannerAgent": {
+                "retrievalEnabled": web.planner_retrieval_enabled,
+                "graphEnabled": web.planner_graph_enabled,
             },
             "researchAgent": {"maxSearches": web.max_searches},
             "taskExecutorAgent": {
@@ -982,6 +1021,27 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"events": runtime.agent_events[(user_id, session_id)][-100:]})
+
+    # --- Usage and cost ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
+    async def get_metrics(user_id: str, session_id: str, report: bool = False):
+        """What this session has spent, broken down by agent.
+
+        Read straight from the ledger rather than from the last pushed snapshot,
+        so the answer is current even when no tab is connected. ``?report=1``
+        adds the console rendering, for a quick look from the terminal.
+        """
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        from CoScientist.logging.metrics import format_report, snapshot
+
+        data = snapshot(key=(user_id, session_id))
+        if report:
+            data = {**data, "report": format_report(data)}
+        return JSONResponse(_json_safe(data))
 
     # --- WebSocket ---
     @app.websocket("/ws")
@@ -1383,6 +1443,17 @@ async def _run_chat_invocation(
         # A cancelled/failed runner must not leave RequestInput records that a
         # reconnecting tab could mistake for a live approval request.
         _cancel_pending_hitl(runtime, key)
+        # Final cost of the run, past the rate limiter: a run that was stopped
+        # or that crashed still spent money, and the tab should show the last
+        # number rather than whichever one the limiter happened to let through.
+        # The server log gets the per-agent breakdown the panel has no room for.
+        try:
+            from CoScientist.logging.metrics import log_report, publish
+            publish(key, force=True)
+            if os.getenv("LOG_USAGE_METRICS", "1") != "0":
+                log_report(key, title=f"Usage & cost — run for {user_id}")
+        except Exception:  # noqa: BLE001 - reporting never fails a run
+            pass
 
 
 def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
