@@ -504,7 +504,12 @@ def create_app() -> FastAPI:
     # --- Knowledge graph (live view) ---
     @app.get("/graph", response_class=HTMLResponse)
     async def graph_page():
-        return (WEB_DIR / "templates" / "graph.html").read_text(encoding="utf-8")
+        # no-store: otherwise the browser heuristically caches graph.html and
+        # silently serves an OLD viewer after an update.
+        return HTMLResponse(
+            (WEB_DIR / "templates" / "graph.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/knowledge")
     async def api_global_knowledge():

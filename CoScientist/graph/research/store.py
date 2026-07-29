@@ -307,10 +307,18 @@ class ResearchGraphStore:
 
     def to_view(self) -> Dict[str, Any]:
         """Project onto the shape web/templates/graph.html already renders
-        (the execution-graph node/edge dicts)."""
+        (the execution-graph node/edge dicts). Also glues each Evidence's
+        execution provenance (the tool calls that produced it) on as flagged
+        overlay nodes/edges the viewer can toggle."""
         with self._lock:
             nodes = []
+            prov_nodes: Dict[str, Dict[str, Any]] = {}
+            prov_edges = []
             for n, d in self._g.nodes(data=True):
+                attrs = d.get("attrs") or {}
+                provenance = attrs.get("_provenance") or []
+                display_attrs = {k: _short(v, 300) for k, v in attrs.items()
+                                 if k != "_provenance"}
                 nodes.append({
                     "id": n,
                     "run_id": self._research_id,
@@ -318,13 +326,26 @@ class ResearchGraphStore:
                     "label": f"{n} · {self._label(d, 60)}",
                     "status": d.get("status", ""),
                     "executor_agent": d.get("source", ""),
-                    "input": {k: _short(v, 300) for k, v in (d.get("attrs") or {}).items()},
+                    "input": display_attrs,
                     "output": self._label(d, 300),
+                    "provenance": provenance,
                     "t_start": d.get("created_at"),
                     "t_end": d.get("updated_at"),
                 })
+                for p in provenance:
+                    eid = p.get("exec_id") or f"call:{n}:{p.get('tool')}"
+                    prov_nodes[eid] = {
+                        "id": eid, "run_id": self._research_id, "kind": "toolcall",
+                        "label": p.get("tool") or "call", "status": "",
+                        "executor_agent": d.get("source", ""),
+                        "output": p.get("result", ""), "overlay": True,
+                    }
+                    prov_edges.append({"src": n, "dst": eid, "type": "via",
+                                       "overlay": True})
             edges = [{"src": u, "dst": v, "type": k}
                      for u, v, k in self._g.edges(keys=True)]
+            nodes += list(prov_nodes.values())
+            edges += prov_edges
             # Cosmetic: tie orphan components (context nodes declared but not yet
             # referenced — a Tool no hypothesis requires, an unconsumed Resource,
             # an unlinked EmpiricalBase) to the root question with a faint
@@ -549,11 +570,34 @@ class ResearchGraphStore:
     # hypothesis to under_verification and reaches the validator.
     _EVIDENCE_EDGES = ("supports", "refutes", "refines", "relates_to")
 
+    def _focus_hypothesis(self, focus: str) -> Optional[str]:
+        """Resolve a focus node to the Hypothesis it belongs to, so evidence
+        gathered while focused on a method/tool/criteria of a hypothesis still
+        auto-links to that hypothesis (the orchestrator often focuses on the VM
+        or Tool it is verifying, not the hypothesis itself)."""
+        t = self._g.nodes[focus].get("type")
+        if t == "Hypothesis":
+            return focus
+        if t == "VerificationMethod":          # H -tested_by-> VM
+            for u, _, k in self._g.in_edges(focus, keys=True):
+                if k == "tested_by" and self._g.nodes[u].get("type") == "Hypothesis":
+                    return u
+        elif t == "Tool":                      # H -requires-> Tool
+            for u, _, k in self._g.in_edges(focus, keys=True):
+                if k == "requires" and self._g.nodes[u].get("type") == "Hypothesis":
+                    return u
+        elif t == "ConfirmationCriteria":      # CC -formulated_for-> H
+            for _, v, k in self._g.out_edges(focus, keys=True):
+                if k == "formulated_for" and self._g.nodes[v].get("type") == "Hypothesis":
+                    return v
+        return None
+
     def _autolink_focus(self, committed: Dict[str, List[Dict[str, Any]]],
                         focus: Optional[str], source: str, now: float) -> None:
         if not focus or not self._g.has_node(focus):
             return
-        if self._g.nodes[focus].get("type") != "Hypothesis":
+        focus = self._focus_hypothesis(focus)
+        if not focus:
             return
         # evidence ids already linked to SOME hypothesis in this commit
         linked = {e["from"] for e in committed["edges"]

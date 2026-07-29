@@ -172,18 +172,35 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
 
-For each hypothesis, also propose HOW it would be verified: a VerificationMethod
-(what procedure yields evidence) and ConfirmationCriteria (when the evidence is
-sufficient). Record all of this in the research graph so the orchestrator can
-schedule verification.
+### CRITICAL — this system has NO physical laboratory
+You are a COMPUTATIONAL / literature research assistant. The only ways it can
+gather evidence are: (a) reviewing published literature, (b) computation
+(modelling, docking, simulation, statistics, ML on existing data), and (c)
+existing ready-made MCP tools / writing code. It CANNOT run wet-lab experiments
+or use physical instruments (HPLC, mass spec, cell culture, animal studies,
+crystallography you would perform, clinical trials).
 
-If a method needs a Tool that is not yet in the graph, CREATE it in the same
-commit with status "needs_adaptation" (you are flagging a NEED, not confirming
-availability) and link it with `requires`/`uses` — the orchestrator/coder
-resolves its real availability later. For `consumes`, only reference Resource
-nodes that already exist (declared at init); do not invent resource ids.
+So every VerificationMethod you propose MUST be doable this way — a literature
+review, a computational analysis, or use of an existing dataset/tool. Do NOT
+propose a method whose only route is a physical experiment, and do NOT declare
+Tools that are physical lab instruments. If a hypothesis can ONLY be settled by
+wet-lab work, still record it but set its priority low and note in its rationale
+that it is "out of scope (requires wet-lab)" — the orchestrator will postpone it
+rather than try to build a physical instrument.
+
+For each hypothesis, also propose HOW it would be verified: a VerificationMethod
+(what literature/computational procedure yields evidence) and ConfirmationCriteria
+(when the evidence is sufficient). Record all of this in the research graph.
+
+Most literature/computational methods need NO tool node at all — only add a Tool
+when the method truly needs a specific COMPUTATIONAL/informational capability
+(a library, an API, a dataset), with status "needs_adaptation", linked via
+`requires`/`uses`. Never add a physical-instrument Tool. For `consumes`, only
+reference Resource nodes that already exist (declared at init).
 
 <<RESEARCH>>
+
+<<HITL>>
 
 ### TASK_MANAGEMENT
 Context of tasks:
@@ -191,7 +208,7 @@ Context of tasks:
 
 Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
 Update task status to "done" immediately upon completion of each work item.
-''', RESEARCH=render_research_protocol(ctx))
+''', RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
 
 
 # NOTE: hypothesis validation (verdict + Conclusion) is a fully-async BACKGROUND
@@ -690,12 +707,19 @@ Retrying the same broken approach until the budget is gone is a failure mode.
   against the same library API — that burns the whole run and converges on
   nothing. Step back and change strategy.
 - Strongly PREFER a library's OWN high-level entry point over hand-writing its
-  internals. If the repo ships a working example / CLI that already does what you
-  need (e.g. GOLEM's `run_experiment` / `molecule_search_setup`), RUN THAT AS-IS
-  first with a tiny config, confirm it works, and only then customize. Do NOT
-  reassemble a library's low-level pieces (optimizer, params, adapters, enums)
-  from scratch when a ready example already wires them correctly — that is the
-  fast path to import-error hell.
+  internals. If the repo ships a working setup function / example (e.g. GOLEM's
+  `run_experiment` / `molecule_search_setup`), CALL THAT FUNCTION with YOUR
+  task's config — your objective/metrics, and a SMALL scale first (few
+  iterations, 1 trial) as a smoke test — then scale up once it works. Do NOT
+  reassemble the library's low-level pieces (optimizer, params, adapters, enums)
+  from scratch — that is the fast path to import-error hell.
+- BUT do not just execute the example module's `__main__` (e.g.
+  `python -m …examples.molecule_search.experiment`): that runs the REPO'S OWN
+  demo — its metrics, its full multi-trial/encoder sweep — which optimizes the
+  WRONG objective for your task and can run for hours. Import the setup/run
+  function and drive it yourself with the task's metrics and scale. Match the
+  objective to the TASK (e.g. optimize `norm_sa_score` when the task is about SA),
+  not whatever the demo happens to optimize.
 - Work in ONE place: clone a repo once and reuse it; never re-clone into a second
   directory or fork a script into parallel variants — that loses state and
   multiplies the debugging.
@@ -1257,8 +1281,17 @@ def orchestrator(ctx: PromptContext) -> str:
     research_graph_section = ""
     if has_research_graph:
         approval_line = (
-            "\n- Use `request_approval` before approving a Conclusion "
-            "(draft→approved) or the research profile."
+            "\n\n#### Co-build the graph with the human (HITL is on)\n"
+            "- After a sub-agent proposes Hypotheses, have the human validate them "
+            "(`request_selection` / `request_approval`) before verification.\n"
+            "- A Hypothesis MUST have acceptance criteria (a metric + threshold that "
+            "would confirm or refute it) before it is verified. If the human gave "
+            "none, you MUST ask them explicitly and record the answer as its "
+            "ConfirmationCriteria — never verify a hypothesis with no criteria.\n"
+            "- Use `request_approval` before approving a Conclusion (draft→approved) "
+            "or the research profile.\n"
+            "- The human may reply with a free-text \"other\" instead of a plain "
+            "yes/no or the offered options — treat it as an instruction and follow it."
             if ctx.hitl_attached else ""
         )
         research_graph_section = (
@@ -1269,6 +1302,10 @@ def orchestrator(ctx: PromptContext) -> str:
             "chat history — is where you read what has been established. Current "
             "state and active triggers:\n"
             "{research_context?}\n\n"
+            "This system has NO physical lab — evidence comes ONLY from literature "
+            "review, computation, or existing tools. NEVER try to build a physical "
+            "instrument (HPLC, mass spec, wet-lab) via CoderAgent, and never loop "
+            "on tool creation.\n"
             "Protocol (for research investigations):\n"
             "- The context-initialization pre-stage normally SEEDS the graph "
             "(root question + framing frame) before you run. Only if the graph is "
@@ -1283,13 +1320,20 @@ def orchestrator(ctx: PromptContext) -> str:
             "research.\n"
             "- Consult `research_triggers` before each step and act on them:\n"
             "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
-            "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "
-            "evidence-gathering (ResearchAgent for literature, Coder/TaskExecutor "
-            "for computation), NAMING the hypothesis in your request. Setting focus "
-            "is the KEY step — every piece of evidence the worker records is then "
-            "auto-attached to that hypothesis, which moves it to under_verification "
-            "and lets the background validator judge it. Do NOT skip set_focus, and "
-            "do NOT set the verdict yourself.\n"
+            "call `research_set_focus(<hypothesis id>)` FIRST (always the hypothesis "
+            "id — never a tool/method id), THEN delegate the evidence-gathering "
+            "(ResearchAgent for literature, Coder/TaskExecutor for computation), "
+            "NAMING the hypothesis in your request. Setting focus is the KEY step — "
+            "every piece of evidence the worker records is then auto-attached to that "
+            "hypothesis, which moves it to under_verification and lets the background "
+            "validator judge it. Do NOT skip set_focus, do NOT set the verdict "
+            "yourself, and do the SAME for EVERY hypothesis so none is left "
+            "un-investigated.\n"
+            "  • BLOCKED hypothesis (its Tool isn't available) ⇒ if the tool is a "
+            "COMPUTATIONAL capability the Coder can build, delegate that once; but if "
+            "it is a physical instrument or otherwise out of scope, POSTPONE the "
+            "hypothesis (status → postponed, reason 'requires wet-lab / out of scope') "
+            "and move on. Do NOT keep trying to build it.\n"
             "  • REFUTE SIGNAL ⇒ review/close that branch; do not keep verifying it.\n"
             "  • NEEDS VERDICT (a hypothesis has evidence) ⇒ you do NOTHING here: a "
             "background validator judges it automatically (confirmed/refuted) and "

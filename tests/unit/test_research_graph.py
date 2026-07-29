@@ -519,6 +519,30 @@ def test_focus_autolink_relates_evidence_to_hypothesis(store):
     assert h1["status"] == "under_verification"
 
 
+def test_autolink_resolves_focus_on_method_or_tool_to_hypothesis(store):
+    """Broadened auto-link: evidence recorded while focused on a hypothesis'
+    VerificationMethod (or Tool) still attaches to the HYPOTHESIS — the
+    orchestrator often focuses on the method it is verifying, not the hypothesis."""
+    _build_verifiable(store)  # H1 -tested_by-> VM1 ; H1 -requires-> T1
+    # focus on the METHOD
+    r = store.commit(source="ResearchAgent",
+                     nodes=[{"type": "Evidence", "ref": "e",
+                             "attrs": {"subtype": "literature", "content": "via method"}}],
+                     autolink_focus="VM1")
+    assert r.ok, r.errors
+    assert any(e["type"] == "relates_to" and e["from"] == "E1" and e["to"] == "H1"
+               for e in store.full()["edges"])
+    assert next(n for n in store.full()["nodes"] if n["id"] == "H1")["status"] == "under_verification"
+    # focus on the TOOL resolves to the same hypothesis
+    r2 = store.commit(source="ResearchAgent",
+                      nodes=[{"type": "Evidence", "ref": "e2",
+                              "attrs": {"subtype": "literature", "content": "via tool"}}],
+                      autolink_focus="T1")
+    assert r2.ok, r2.errors
+    assert any(e["type"] == "relates_to" and e["from"] == "E2" and e["to"] == "H1"
+               for e in store.full()["edges"])
+
+
 def test_validator_assigns_polarity_to_autolinked_evidence(store):
     """The validator turns an auto-linked (polarity-unknown) relates_to evidence
     into a supports/refutes edge as part of its verdict."""

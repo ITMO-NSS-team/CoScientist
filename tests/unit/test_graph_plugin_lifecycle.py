@@ -114,8 +114,10 @@ def test_run_state_survives_until_after_run_and_builds_one_goal_tree(monkeypatch
 
         graph = graphs[("user-a", "session-a")]
         goal_id = "goal:inv-a"
-        agent_id = f"{goal_id}::agent:OrchestratorAgent"
-        tool_id = f"{goal_id}::tool:call-1"
+        # ONE stable node per agent (its roster node) — never goal-scoped, so an
+        # agent invoked from several ADK invocations is a single node.
+        agent_id = "agent:OrchestratorAgent"
+        tool_id = "tool:call-1"
         result_id = "result:inv-a"
 
         assert "goal:pending" not in graph.nodes
@@ -240,10 +242,8 @@ def test_run_without_final_response_is_marked_interrupted(monkeypatch):
 
         graph = graphs[("user-stop", "session-stop")]
         assert graph.nodes["goal:inv-stop"]["status"] == "interrupted"
-        assert graph.nodes[
-            "goal:inv-stop::agent:OrchestratorAgent"
-        ]["status"] == "interrupted"
-        assert graph.nodes["goal:inv-stop::tool:call-1"]["status"] == "interrupted"
+        assert graph.nodes["agent:OrchestratorAgent"]["status"] == "interrupted"
+        assert graph.nodes["tool:call-1"]["status"] == "interrupted"
         assert plugin._runs == {}
 
     asyncio.run(scenario())
