@@ -146,3 +146,32 @@ def test_runs_endpoint_registers():
     assert r.status_code == 200 and r.json()["ok"] is True
     assert synapse.run_id_for("ctx-77") == "run-77"
     assert synapse.traceparent_for("ctx-77") == "00-t-s-01"
+
+
+# ── Task 6: minimal OTel traceparent stitching ───────────────────────────────
+
+def test_otel_span_parents_on_traceparent():
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from CoScientist.checkpoints import synapse
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    synapse._TRACER = provider.get_tracer("test")   # test-local tracer
+
+    synapse.clear_runs()
+    tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    synapse.register_run("ctx-tr", "run-tr", tp)
+    h = synapse._start_run_span("ctx-tr", "ScriptedOrchestrator", "run-tr")
+    synapse._end_run_span(h)
+
+    spans = exporter.get_finished_spans()
+    assert any(s.name == "invoke_agent" for s in spans)
+    inv = next(s for s in spans if s.name == "invoke_agent")
+    assert format(inv.context.trace_id, "032x") == "0af7651916cd43dd8448eb211c80319c"
+    assert inv.attributes["gen_ai.operation.name"] == "invoke_agent"
+    assert inv.attributes["gen_ai.agent.name"] == "ScriptedOrchestrator"
+    assert inv.attributes["run_id"] == "run-tr"
