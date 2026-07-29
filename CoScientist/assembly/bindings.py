@@ -75,6 +75,10 @@ def _alembic():
     from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
     return ALEMBIC_TOOLS
 
+def _verify():
+    from CoScientist.verify.tools import verify_toolset
+    return verify_toolset.get_tools(None)
+
 def _task_tracker():
     from CoScientist.tools import task_tracker_instance
     return task_tracker_instance
@@ -338,6 +342,30 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,
     runtime_resolved=True,
     docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="verify",
+    factory=_verify,
+    docs=(
+        ToolDoc(
+            name="validate_dataset",
+            signature="validate_dataset(path)",
+            purpose=(
+                "Deterministically check that a dataset file holds REAL, diverse "
+                "molecules (RDKit-valid SMILES + a fitness/SA column). Call it on "
+                "your training dataset BEFORE training — training is BLOCKED until a "
+                "real dataset validates; toy/placeholder data (integers, one "
+                "repeated molecule, a synthetic fallback) is rejected."),
+        ),
+        ToolDoc(
+            name="validate_training",
+            signature="validate_training(checkpoint_path, loss_log)",
+            purpose=(
+                "Deterministically check a training result: a real saved checkpoint "
+                "and a loss that actually decreased over >=1 epoch."),
+        ),
+    ),
 ))
 
 REGISTRY.register_tool(ToolEntry(

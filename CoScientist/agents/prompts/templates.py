@@ -699,6 +699,14 @@ because it silently corrupts the science downstream. Therefore:
 - If you are genuinely blocked (missing tool, unavailable data, an API you cannot
   work out), say so plainly and stop. A truthful blocker is a valid result; a
   fake success is not.
+- The system VERIFIES your artifacts deterministically — it does not take your
+  word. Before training a model, call `validate_dataset(path)` on the training
+  data; the system BLOCKS training on anything that is not real, diverse,
+  RDKit-valid molecules with a fitness/property column. Toy/placeholder data
+  (integers, one repeated molecule, a hand-made synthetic fallback) is refused,
+  so fabricating it is pointless — produce REAL data (e.g. actual GOLEM
+  optimization trajectories). Use `validate_training(checkpoint, loss_log)` to
+  confirm a real checkpoint + a decreasing loss before claiming the model trained.
 
 ## When something fails — converge, don't thrash
 Retrying the same broken approach until the budget is gone is a failure mode.
