@@ -1,0 +1,250 @@
+% Integrated anonymous AAAI-27 draft.
+% This version preserves the strongest text from the original draft, adds the
+% system/compiler/research-graph description, removes displayed formulas, and
+% restores the original Experimental Setup structure and removes the prior RQ block.
+
+\documentclass[letterpaper]{article} % DO NOT CHANGE THIS
+\usepackage[submission]{aaai2027}    % DO NOT CHANGE THIS
+\usepackage[hyphens]{url}            % DO NOT CHANGE THIS
+\usepackage{graphicx}                % DO NOT CHANGE THIS
+\urlstyle{rm}
+\def\UrlFont{\rm}
+\usepackage{natbib}                  % DO NOT CHANGE THIS
+\usepackage{caption}                 % DO NOT CHANGE THIS
+\frenchspacing
+\DeclareCaptionStyle{ruled}{labelfont=normalfont,labelsep=colon,strut=off}
+
+\usepackage{booktabs}
+\usepackage{multirow}
+
+\pdfinfo{/TemplateVersion (2027.1)}
+\setcounter{secnumdepth}{2}
+
+\newcommand{\drafttodo}[1]{\textbf{[TODO: #1]}}
+
+\title{Towards Adaptive AI4Science Systems:\\
+Growing a Verified, Reusable Tool Ecosystem from Scientific Repositories}
+\author{Anonymous Submission}
+\affiliations{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+AI4Science systems run computational experiments in one of two limiting ways: a coding agent re-writes a solution on every call, so repeated runs can differ in cost, output format, and value, or the system relies on a small, fixed set of tools that cannot cover the long tail of scientific software. We instead grow a verified, reusable catalogue of experimental capabilities built from scientists' own code. Our experiment module converts a broad class of scientific repositories into served Model Context Protocol tools and reuses them across studies. The repository-to-tool compiler is a five-stage agent pipeline with code-enforced gates, isolated environments, structured validation records, and live invocation checks. Registered tools are composed by a task-specific multi-agent executor, while a research-state graph records hypotheses, methods, evidence, resources, failures, and produced artifacts. On a gold-validated benchmark we characterize when the catalogue helps---reproducible repeated calls, wider coverage, and cost amortized over many uses---and where it does not: a modern coding agent can match its per-task capability. The resulting architecture is hybrid and adaptive: catalogue first, repository conversion when a capability is missing, and coding-agent execution for genuinely novel experiments.
+\end{abstract}
+
+\section{Introduction}
+
+Autonomous AI4Science systems now do more than propose hypotheses: they plan and execute numerical experiments, from chemical synthesis to computational biology \citep{boiko2023autonomous,bran2024chemcrow,lu2024aiscientist,google2025coscientist,swanson2025virtuallab}. Yet their experiment layers still operate mainly in one of two regimes. A general-purpose coding agent re-derives a solution from scratch on every call by installing dependencies, writing code, and executing it in a sandbox \citep{lu2024aiscientist,schmidgall2025agentlab}. Alternatively, the system is wired to a small, fixed set of ready-made tools or servers assembled by its authors \citep{boiko2023autonomous,bran2024chemcrow}. Both regimes place a hard ceiling on reliable scientific execution.
+
+The coding-agent regime is flexible, but it repeatedly pays the cost of repository exploration, environment reconstruction, implementation, and debugging. Independent solutions may also differ in interface and numerical behavior, which makes later reuse and auditing difficult. Repository-level benchmarks show that current agents still struggle to set up and execute real research code \citep{bogin2024super,siegel2025corebench,starace2025paperbench,researchenvbench2026}. This challenge compounds a broader reproducibility problem: scientific software artifacts often fail to rebuild or reproduce their published outputs even before an agent is introduced \citep{samuel2024jupyter}. The fixed-tool regime avoids repeated regeneration, but it cannot scale to obscure, under-documented, or narrowly specialized repositories.
+
+Our starting observation is that an extensible ecosystem of verified scientific tools can relax this ceiling. If an experiment can be executed through a tool built from domain scientists' own implementation, checked once and then reused, the system can rely on expert code rather than regenerate an approximation for every call. This applies the principle of reusable tool making and skill libraries \citep{cai2024latm,yuan2024craft,trove2024,regal2024,wang2023voyager} at the granularity of scientific repositories and inside a system that conducts multiple experiments over time.
+
+We realize this idea as the experiment module of an adaptive AI4Science system. Faced with an experiment, the system first retrieves a suitable capability from a shared catalogue. If none exists, a repository-to-tool compiler analyzes a scientific repository, reconstructs its environment, exposes grounded operations as MCP tools, and admits only tools that pass executable gates. A dynamic multi-agent synthesizer then constructs an executor around the available tools and task constraints. The resulting observations and artifacts are written to a structured research-state graph rather than being reduced immediately to prose. This graph keeps negative results, validation status, resource use, and provenance paths from conclusions back to executable evidence.
+
+The repository-to-tool problem is increasingly visible in recent work, but it is not solved at the reliability level required by an AI4Science system. ToolMaker, Paper2Agent, Code2MCP, ToolRosetta, and ToolUniverse demonstrate that scientific code can be exposed to agents in increasingly automated ways \citep{wolflein2025toolmaker,miao2025paper2agent,ouyang2025code2mcp,di2026toolrosetta,gao2025tooluniverse}. Their existence strengthens the motivation for this direction. Our claim is more specific: repository conversion should be treated as \emph{verified capability acquisition}, with explicit environment isolation, code-enforced admission gates, behavioral evidence, persistent reuse, and integration into the state of an ongoing scientific investigation.
+
+We use the term \emph{adaptive} rather than \emph{general}. Generality would require evidence across arbitrary programming languages, physical laboratories, and scientific norms. Our narrower claim is structural: the available experimental capabilities and the task-specific agent organization can change in response to a research question, while validation and provenance requirements remain explicit.
+
+Our contributions are:
+\begin{itemize}
+    \item an adaptive experiment architecture that combines catalogue-first retrieval, repository-to-tool compilation, task-specific multi-agent execution, and a coding-agent fallback;
+    \item a verification-oriented repository-to-MCP compiler with five agent stages, deterministic gates, separate scientific and server environments, structured inter-stage contracts, and live invocation checks designed to reject hollow or mocked tools;
+    \item a research-state graph based on an operational meta-model of scientific work, representing questions, hypotheses, methods, evidence, feasibility constraints, artifacts, navigation decisions, and cost; and
+    \item an empirical study that separates per-task capability from system-level value, including repeated-call stability, reusable coverage, verification quality, and amortized cost.
+\end{itemize}
+
+\section{Related Work}
+
+\paragraph{Autonomous scientists.}
+Systems such as Coscientist, ChemCrow, the AI Scientist, Google's AI co-scientist, Agent Laboratory, and the Virtual Lab plan and execute substantial parts of scientific work \citep{boiko2023autonomous,bran2024chemcrow,lu2024aiscientist,google2025coscientist,schmidgall2025agentlab,swanson2025virtuallab}. Their experiment layers illustrate the two regimes targeted here: a small set of hand-integrated domain tools or an open-ended coding process that generates experiment code for each run. We retain planning, critique, and iterative execution, but replace the fixed boundary of the experiment layer with a growing catalogue of validated capabilities.
+
+\paragraph{Coding agents on research repositories.}
+SUPER evaluates agents on setting up and executing tasks from real research repositories, CORE-Bench targets computational reproducibility, and PaperBench evaluates full replication of machine-learning papers \citep{bogin2024super,siegel2025corebench,starace2025paperbench}. ResearchEnvBench isolates environment synthesis as a separate repository-level challenge \citep{researchenvbench2026}. ScienceAgentBench and SciCode evaluate scientific programming under expert-curated tasks and tests \citep{chen2025scienceagentbench,tian2024scicode}. Together, these works show that scientific execution is not reducible to ordinary function synthesis. Our system pays the setup and validation cost once, preserves the resulting executable package, and studies its behavior over repeated calls and downstream experiments.
+
+\paragraph{Tool making and reusable skill libraries.}
+Large Language Models as Tool Makers introduced the idea of using a stronger model to build reusable tools for cheaper repeated execution, while CRAFT constructs and retrieves specialized tool sets \citep{cai2024latm,yuan2024craft}. TroVE induces verifiable toolboxes, ReGAL refactors programs into reusable abstractions, Voyager accumulates executable skills, and Toolformer studies learned API use \citep{trove2024,regal2024,wang2023voyager,schick2023toolformer}. We apply the same amortization principle to whole scientific repositories, where environment reconstruction and behavioral validation are as important as interface generation.
+
+\paragraph{Repository and paper conversion into agent tools.}
+ToolMaker is the closest executable baseline: given a repository and task, it installs dependencies and creates a task-specific tool through closed-loop self-correction, and its benchmark supplies held-out executable tests \citep{wolflein2025toolmaker}. It establishes that scientific repository conversion can succeed, but its primary unit is a task-conditioned tool rather than a reusable, multi-tool repository service integrated across studies. Paper2Agent builds MCP servers from papers and associated code and validates them through in-depth reproduction and novel-query case studies \citep{miao2025paper2agent}; its central objective is interactive dissemination of an individual paper rather than persistent capability acquisition across research questions.
+
+Code2MCP automates repository analysis, environment configuration, MCP generation, and repair through an LLM-driven Run--Review--Fix loop \citep{ouyang2025code2mcp}. ToolRosetta emphasizes large-scale standardization of heterogeneous repositories and downstream task completion \citep{di2026toolrosetta}. ToolUniverse provides a broad scientific ecosystem, interface refinement, and workflow composition over hundreds of tools \citep{gao2025tooluniverse}. These approaches solve important parts of the same problem, but emphasize functional generation, case-study reproduction, breadth, or ecosystem integration. Our emphasis is the admission boundary: a proposed capability must be grounded in repository symbols, survive reconstruction in an isolated environment, execute through the served interface, and carry evidence that distinguishes behavioral validation from an import or smoke check. Accepted capabilities then become persistent inputs to dynamic agent construction and to the research-state graph.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Positioning relative to the closest repository and paper conversion approaches. The table summarizes the primary emphasis reported by each system rather than claiming identical evaluation settings.}
+\label{tab:related}
+\begin{tabular}{p{2.1cm}p{2.3cm}p{2.4cm}p{3.3cm}p{3.4cm}}
+\toprule
+Approach & Primary input & Produced artifact & Validation emphasis & Role in a broader scientific system \\
+\midrule
+ToolMaker & Repository, paper context, task & Task-specific tool & Closed-loop repair and held-out benchmark tests & Tool construction for a specified task \\
+Paper2Agent & Paper and associated code & Paper-specific MCP server & Reproduction and novel-query case studies & Interactive dissemination of one research artifact \\
+Code2MCP & Code repository & MCP service & Run--Review--Fix functional loop & Automated service generation \\
+ToolRosetta & Repositories and APIs & Standardized MCP tools & Scale, execution, security, downstream tasks & Broad standardization and tool-chain planning \\
+ToolUniverse & Curated tools, APIs, models, datasets & Shared scientific tool ecosystem & Interface refinement and workflow-level use & Discovery and composition in AI-scientist workflows \\
+This work & Scientific repository and research action & Verified multi-tool MCP package & Deterministic gates, split environments, live invocation, mock guard & Persistent catalogue, dynamic MAS execution, research-state provenance \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Scientific benchmarks and tool selection.}
+TM-Bench provides the closest fit to our conversion setting because generated tools are invoked on multiple held-out cases against executable references \citep{wolflein2025toolmaker}. ML-Bench and BioCoder broaden repository-level and bioinformatics coding evaluation, while ScienceAgentBench and SciCode test scientific code at program and problem level \citep{tang2024mlbench,tang2024biocoder,chen2025scienceagentbench,tian2024scicode}. A growing catalogue also introduces a routing problem: open-world function calling and description-sensitive tool selection show that a large inventory is not automatically usable coverage \citep{qin2025metatool,faghih2025toolpreferences}. We therefore separate retrieval, selection, execution, and scientific adequacy in the analysis.
+
+\paragraph{Structured scientific state and provenance.}
+The research-state graph is related to provenance standards and research packaging, including PROV-O and RO-Crate \citep{w3c2013prov,soilandreyes2022rocrate}. Unlike a workflow DAG, it stores not only execution order but also epistemic objects, confirmation conditions, failed hypotheses, resources, and conclusions. Its purpose is operational: the orchestrator queries the graph to decide what can be executed next, while a reviewer can trace each result back to methods, tool versions, and evidence.
+
+\section{System}
+\label{sec:system}
+
+\subsection{Adaptive AI4Science Architecture}
+
+The system receives a research question and maintains a shared research-state graph throughout the study. A planner expands the question into hypotheses, required evidence, and experiment actions. For each action, a retriever searches a persistent capability catalogue using semantic descriptions, typed signatures, domain metadata, validation status, license, and environmental constraints. If a suitable capability exists, the system reuses it. Otherwise, the repository-to-tool compiler in Section~\ref{sec:compiler} attempts to acquire the missing capability from a scientific repository.
+
+Each accepted catalogue entry contains more than an MCP endpoint. It includes the repository revision, declared operation and signature, reconstruction procedure, isolated runtime, validation records, invocation examples, resource requirements, and provenance. The catalogue therefore represents executable scientific capabilities rather than only interface descriptions.
+
+A dynamic multi-agent synthesizer constructs an executor for the current research action. The selected roles depend on the tools, data modalities, risk, and validation requirements. A task can activate, for example, a data-preparation agent, a domain-analysis agent, a statistical critic, and a result validator. This avoids forcing every experiment through the same agent team. If no repository is suitable or conversion fails, a coding-agent fallback can implement a one-off experiment. Catalogue tools and generated code are recorded through the same artifact and evidence interface.
+
+The experiment controller invokes tools in isolated subprocesses, captures outputs and logs, checks declared contracts, and writes evidence, costs, failures, and generated artifacts to the research-state graph. The planner uses the updated state to continue an experiment, revise a hypothesis, acquire another capability, request human input, or terminate a branch.
+
+% TODO Figure 1: full architecture. Suggested layout:
+% research question -> planner -> research-state graph -> experiment action;
+% catalogue hit -> dynamic MAS -> isolated execution -> evidence/artifact;
+% catalogue miss -> repository compiler -> validation -> catalogue;
+% failed conversion -> alternative repository or coding-agent fallback.
+
+\subsection{Research-State Graph}
+\label{sec:rsg}
+
+The research-state graph is a concrete instance of an operational meta-model of scientific work. Each node stores an entity type, structured content, lifecycle status, timestamp, source, and links to the relevant software and data artifacts. Edges describe relations such as motivates, tests, requires, produces, supports, refutes, consumes, and materializes. Failed and refuted branches remain in the graph as negative results.
+
+The meta-model is organized into six layers:
+\begin{enumerate}
+    \item \textbf{Epistemic objects}: research questions, hypotheses, evidence, and conclusions. A conclusion may generate a new question and begin another research cycle.
+    \item \textbf{Methodological frame}: methods for testing hypotheses and explicit conditions under which evidence is considered sufficient.
+    \item \textbf{Feasibility context}: tools, consumable resources, empirical data, theoretical constraints, domain standards, ethics, expert knowledge, participant roles, and the selected human--AI autonomy profile.
+    \item \textbf{Artifacts}: code, models, generated datasets, reports, publications, technical specifications, and explanations of efficiency.
+    \item \textbf{Navigation logic}: transition triggers, information dependencies, completion criteria, and human-in-the-loop transitions.
+    \item \textbf{Economics and effectiveness}: expected and realized time, compute, monetary cost, and quality indicators.
+\end{enumerate}
+
+Graph construction follows the scientific process. Initialization creates the research question and feasibility context. Literature exploration adds evidence and observations about gaps or contradictions. Hypothesis generation creates parallel branches linked to methods, tools, and confirmation conditions. Experiments deepen these branches with computational evidence and newly created capabilities. Validation forms conclusions while preserving unsupported or refuted branches. Finally, reports, code, datasets, and other deliverables are attached to the conclusions from which they were produced.
+
+The graph has three roles. First, it is the planner's state: transitions are made by checking whether required tools, data, evidence, and human approvals exist. Second, it is a provenance record: a result is accepted only when the graph contains the corresponding hypothesis, method, validated evidence, and satisfied confirmation conditions. Third, it is a reuse substrate: completed studies expose prior tools, datasets, methods, and failures to later research questions. The graph therefore targets structured, checkable research artifacts rather than only automatic article generation.
+
+% TODO Figure 2 or 3: compact research-state graph for one case study.
+% Show the six layers, node status, failed branches, and provenance from result
+% back to question, method, tool, repository revision, and input data.
+
+\section{Repository-to-Tool Compiler}
+\label{sec:compiler}
+
+The compiler accepts a repository reference and, optionally, a target scientific task. It produces a served MCP package containing callable tools, a pinned setup procedure, tests, structured validation records, and provenance metadata. Its design principle is \emph{the model proposes; deterministic code disposes}: language agents interpret the repository and repair failures, but code-enforced gates decide whether a stage can advance.
+
+\subsection{Five-Stage Pipeline}
+
+\paragraph{Explorer.}
+The explorer reads documentation, package structure, entry points, and source symbols. It proposes scientifically meaningful operations with signatures, sample inputs, target symbols, and evidence for expected behavior. A deterministic plan gate resolves targets against the repository's actual source tree, extracts parameter names, removes hallucinated symbols, and checks coverage of any benchmark-specified task.
+
+\paragraph{Environment builder.}
+The environment agent infers interpreter and dependency requirements. The compiler creates one environment for the repository and its scientific dependencies and a separate environment for the MCP server. This split prevents server packages from perturbing fragile or legacy scientific dependencies. The environment gate installs the repository, checks compatibility, imports required modules, and records the exact reconstruction commands.
+
+\paragraph{Tool coder.}
+The coder writes plain functions that expose repository operations without reimplementing the underlying scientific method. It also creates smoke tests and, where evidence is available, invocation-level correctness tests. The artifact gate verifies that functions, tests, contracts, and signatures match the grounded plan.
+
+\paragraph{Validator and debugger.}
+The validator executes every tool in the repository environment, records crashes and outputs, runs tests, and performs bounded repair rounds. We distinguish importability, successful invocation, behavioral agreement with reference cases, and downstream scientific adequacy. The compiler can directly establish the first three only when appropriate executable evidence is available; scientific adequacy is evaluated in the surrounding task.
+
+A mock guard rejects apparent correctness tests that do not exercise repository behavior, including tests that return constants, load expected answers directly, patch the target implementation, or validate only a self-generated wrapper. Plans, signatures, stage status, per-tool verdicts, and metrics are stored as structured records rather than transferred only through free-form agent messages.
+
+\paragraph{Wrapper and export.}
+A deterministic generator creates the MCP server, subprocess invocation boundary, setup script, and package metadata. The final gate starts the server, lists the exported tools, invokes them through the served interface, and checks serialization and error contracts. Accepted packages enter the shared catalogue. Failed conversions retain diagnostics in the research-state graph and can trigger another repository or the coding-agent fallback.
+
+\subsection{Reproducibility Scope}
+
+MCP provides an interface, not reproducibility by itself. We therefore separate four claims. Environment reproducibility means the package can be rebuilt from pinned instructions. Functional reproducibility means repeated calls satisfy the same interface and behavioral checks. Experimental reproducibility means a published analysis can be re-executed to equivalent results. Epistemic traceability means a conclusion is linked to the evidence and assumptions used to support it. The compiler directly targets environment and functional reproducibility; it supports experimental reproducibility when reference experiments are available and contributes provenance to epistemic traceability.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\paragraph{Repository benchmark.}
+We evaluate the compiler on TM-Bench \citep{wolflein2025toolmaker}. Each task pins a scientific repository, specifies a typed operation, and validates the generated tool by live invocation against held-out references. The suite contains fifteen tasks across seven domains, including pathology, radiology, genomics and proteomics, medical imaging, three-dimensional vision, tabular modeling, and language models. Our audit separates strict numerical checks from shape, type, file-existence, and content checks because these forms of gold provide different strengths of evidence. \drafttodo{Confirm the final number of invocations and assertions against the exact benchmark revision used in the released runs.}
+
+\paragraph{Systems compared.}
+The primary comparison uses the same underlying language model in two execution modes. The compiler converts a repository once and later invokes the frozen tool package. The coding-agent baseline reconstructs and solves the same task from scratch on every independent run. Both systems are evaluated using the same repository revision, task specification, held-out tests, resource limits, and denominators. Where executable versions of other repository-to-tool systems are available, we compare them under the same tasks; otherwise, Table~\ref{tab:related} is treated as a mechanism comparison rather than a performance ranking.
+
+\paragraph{Metrics.}
+We report four groups of measurements. Coverage and adequacy count repositories and tools that reach each validation level and include a manual audit for hollow or hallucinated tools. Reproducibility measures repeated-call success, output-schema drift, numerical disagreement, and clean rebuild success. Economy reports conversion or setup cost, invocation cost, latency, and the empirical number of calls required to amortize a one-time conversion. Verification quality measures how many apparently successful tools are rejected by the mock guard or fail stronger held-out checks.
+
+\paragraph{End-to-end scientific cases.}
+The repository benchmark isolates capability acquisition. We additionally run the full experiment module on \drafttodo{insert the final number} scientific tasks from \drafttodo{insert domains}. Each case begins with a research question and a missing experimental capability, retrieves or converts one or more scientific repositories, constructs a task-specific multi-agent executor, runs the experiment, validates the result, and stores evidence and artifacts in the research-state graph. Each case report includes successful and failed branches, reused and newly acquired tools, human interventions, runtime and cost, and the final provenance chain.
+
+\paragraph{Implementation and reproducibility.}
+\drafttodo{Insert exact model identifiers, prompts, temperature and seed policy, hardware, operating system, container runtime, timeouts, repair limits, network policy, and repository commits.} The anonymous supplement should contain task definitions, generated MCP packages, setup scripts, validation records, execution logs, graph snapshots, and analysis code.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Repository Conversion and Verification}
+
+\drafttodo{Insert the conversion table with per-task outcomes, validation strength, clean rebuild status, and failure category. Report strict numerical tasks separately from weak shape or existence checks. Include the number of tools rejected by the mock guard and a manual adequacy audit.}
+
+\subsection{Comparison with Per-Task Coding}
+
+\drafttodo{Insert repeated-run results for the frozen tools and the matched coding agent. Preserve the current negative result if confirmed: the coding agent can match per-task capability. The positive claim should be supported by lower interface drift, stable repeated calls, reuse across tasks, and measured cost amortization. Include cases in which conversion does not pay off.}
+
+\subsection{End-to-End Scientific Cases}
+
+\drafttodo{For each case, report the research question, missing capability, repository selection, conversion result, generated agent team, executed tools, evidence, final artifacts, and failure recovery. Include one compact graph visualization and a quantitative table for task success, reused tools, new tools, human interventions, cost, and provenance completeness.}
+
+\subsection{Component Analysis}
+
+\drafttodo{Add the ablations required to support the design claims: deterministic gates versus smoke-only or model-judge validation; mock guard on and off; split and single environments; catalogue-first and coding-only execution; dynamic and fixed agent teams; graph-backed and log-only provenance. If page limits prevent all ablations, prioritize validation gates, environment isolation, and mock-guard effectiveness in the main paper.}
+
+% Replace all placeholders before submission.
+\begin{table}[t]
+\centering
+\small
+\caption{Core result groups to be populated with measured values.}
+\label{tab:results}
+\begin{tabular}{p{3.1cm}ccc}
+\toprule
+Measurement & Compiler & Coding agent & Full system \\
+\midrule
+Held-out task success & TBD & TBD & -- \\
+Clean rebuild success & TBD & TBD & -- \\
+Repeated-call agreement & TBD & TBD & -- \\
+Median setup or conversion cost & TBD & TBD & -- \\
+End-to-end scientific task success & -- & TBD & TBD \\
+Provenance completeness & -- & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+
+The central contribution is not MCP itself. MCP is an interoperability layer, and recent work already converts papers, repositories, APIs, and curated resources into agent-callable services. The stronger claim is that verification-oriented capability acquisition changes the operating regime of an AI4Science system. Instead of choosing permanently between a rigid inventory and stochastic regeneration, the system can acquire a capability once, preserve the validated package, and compose it differently as scientific objectives change.
+
+This is a step toward adaptive AI4Science in three senses. Capability adaptation adds an executable scientific operation when a plan exposes a gap. Organizational adaptation changes the agent team and coordination logic around the tools and constraints of a task. Epistemic adaptation updates a persistent research graph when evidence supports, refutes, or defers a hypothesis. These claims are narrower than general AI4Science and can be evaluated directly.
+
+The graph also changes the output target. A paper is one view over the research state, not the research state itself. Code, data, failed experiments, costs, hypotheses, confirmation criteria, and evidence remain first-class artifacts. This does not guarantee scientific truth, but it makes the chain from a generated narrative to executable evidence inspectable, addressing concerns that fluent AI-generated science can create an illusion of understanding without transparent support \citep{messeri2024illusions}.
+
+\section{Limitations, Security, and Responsible Use}
+
+The current compiler targets Python-centric, open-source computational repositories. Proprietary software, unavailable data, interactive interfaces, unusual hardware, and physical laboratory protocols may be outside scope. Claims should therefore refer to a broad class of repositories rather than arbitrary scientific software. A passing tool can also faithfully expose an incorrect implementation; validation establishes behavior against available evidence, not the truth of the original scientific claim.
+
+Automated repository conversion creates software-supply-chain and MCP-specific risks, including vulnerable dependencies, tool poisoning, excessive permissions, and weak maintenance practices \citep{hasan2025mcpfirst,hou2026mcp}. Conversion should run in restricted containers with network and secret access denied by default. Catalogue entries should retain licenses, dependency manifests, vulnerability scans, repository revisions, and approval status. Dynamically generated agents should receive least-privilege tool scopes and explicit resource budgets.
+
+The research-state meta-model is intentionally operational and extensible rather than a universal ontology of science. Different domains may require specialized entities, statistical assumptions, or regulatory states. Finally, benchmark conclusions depend on the coverage and strictness of executable gold. We therefore report task-level checks and manually inspect a sample of both successful and failed tools.
+
+\section{Conclusion}
+
+We presented an adaptive experiment layer that acquires verified, reusable capabilities from scientific repositories, composes them through task-specific multi-agent executors, and records experiments as structured evidence in a research-state graph. The central empirical question is not whether repository conversion always outperforms a coding agent on one task. It is whether one-time, behaviorally checked capability acquisition yields a more stable, reusable, and auditable scientific system across repeated calls and multiple studies. A catalogue-first hybrid architecture, explicit admission gates, isolated environments, and graph-grounded provenance provide a concrete path toward that goal.
+
+% aaai2027.sty sets the bibliography style.
+\bibliography{aaai27_integrated_references}
+
+\end{document}

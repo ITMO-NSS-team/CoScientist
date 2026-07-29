@@ -1,0 +1,87 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Отчёт: генеративный трансформер на историях эволюции молекул</title><style>
+:root{color-scheme:light;--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--series:#2a78d6;--good:#0ca30c;--warn:#eda100;--ring:rgba(11,11,11,.1)}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){--surface:#1a1a19;--plane:#0d0d0d;--ink:#fff;--ink2:#c3c2b7;--grid:#2c2c2a;--series:#3987e5;--ring:rgba(255,255,255,.1)}}
+:root[data-theme=dark]{--surface:#1a1a19;--plane:#0d0d0d;--ink:#fff;--ink2:#c3c2b7;--grid:#2c2c2a;--series:#3987e5;--ring:rgba(255,255,255,.1)}
+*{box-sizing:border-box}body{margin:0 auto;max-width:1000px;background:var(--plane);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55;padding:30px}
+h1{font-size:23px;margin:0 0 2px}h2{font-size:16px;margin:28px 0 12px;border-bottom:1px solid var(--ring);padding-bottom:5px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 8px}p{font-size:14px}
+.tiles{display:flex;flex-wrap:wrap;gap:12px}.tile{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:14px 18px;min-width:120px;flex:1}
+.tile .big{font-size:26px;font-weight:650}.tile.good .big{color:var(--good)}.tile.warn .big{color:var(--warn)}
+.tlabel{color:var(--ink2);font-size:12px;margin-top:2px}
+.card{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:14px 16px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card h3{margin:0 0 8px;font-size:14px}
+.card ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--ink2)}.card li{margin:5px 0}
+table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:left;padding:7px 10px;border-bottom:1px solid var(--ring);vertical-align:top}th{color:var(--ink2)}
+.mono{font-family:ui-monospace,monospace;font-size:12px}.mut{color:var(--muted);font-size:12px}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12.5px}.step{background:var(--surface);border:1px solid var(--ring);border-radius:8px;padding:7px 11px}.arrow{color:var(--muted)}
+.chart{width:100%;height:auto}.grid{stroke:var(--grid);stroke-width:1}.line{fill:none;stroke:var(--series);stroke-width:2}.dot{fill:var(--series);stroke:var(--surface);stroke-width:2}
+.bar{fill:var(--series)}.blabel{fill:var(--ink2);font-size:12px}.bval{fill:var(--ink2);font-size:12px;font-variant-numeric:tabular-nums}.tick{fill:var(--muted);font-size:10.5px}
+code{font-family:ui-monospace,monospace;font-size:12.5px}
+</style></head><body>
+<h1>Генеративный трансформер на историях эволюционной оптимизации молекул</h1>
+<p class="sub">Автономный прогон мультиагентной системы · 2026-07-22 12:11 · 82 мин · цель: SA (Synthetic Accessibility) + валидность</p>
+<p>Система от одного запроса автономно построила датасет историй эволюционной оптимизации молекул (GOLEM), обучила на нём генеративный трансформер и сгенерировала новые молекулы с оценкой целевых свойств.</p>
+
+<h2>Модель</h2>
+<p>Трансформер, обучаемый предсказывать <b>следующую (улучшенную по целевому свойству) молекулу</b> по предыдущей, а не следующий символ SMILES. На вход подаётся молекула-предшественник; целевое свойство (SA) задаёт направление. Обучение — как энкодер-декодер с регуляризацией через <b>KL-дивергенцию</b> (CVAE); инференс — авторегрессионная генерация из латентного вектора в режиме декодера.</p>
+<ul style="font-size:13.5px;color:var(--ink2)">
+<li>Архитектура: трансформер-декодер (обучаемые токен- и позиционные эмбеддинги, multi-head attention, causal-маска).</li>
+<li>Токенизация: пословный (atom-wise) словарь SMILES — атомы, заряженные формы, связи, кольца.</li>
+<li>Обучающие примеры: пары «(молекула<sub>i</sub> → молекула<sub>i+1</sub>)» из последовательностей улучшения по поколениям.</li>
+<li>Функция потерь: cross-entropy на токенах целевой молекулы + KL-регуляризация.</li>
+</ul>
+
+<h2>Пайплайн</h2>
+<div class="flow">
+<span class="step">запрос</span><span class="arrow">→</span><span class="step">Оркестратор</span><span class="arrow">→</span>
+<span class="step">гипотезы + граф исследования</span><span class="arrow">→</span><span class="step">CoderAgent: GOLEM/MCPhub</span><span class="arrow">→</span>
+<span class="step">эволюционная оптимизация по SA (параллельно)</span><span class="arrow">→</span><span class="step">40 траекторий / 440 молекул</span><span class="arrow">→</span>
+<span class="step">пары «до→после»</span><span class="arrow">→</span><span class="step">токенизация</span><span class="arrow">→</span>
+<span class="step">обучение CVAE</span><span class="arrow">→</span><span class="step">генерация 300</span><span class="arrow">→</span><span class="step">оценка: валидность + SA + новизна</span>
+</div>
+
+<h2>Кривая обучения (loss)</h2>
+<div class="card"><svg viewBox='0 0 680 250' class='chart'><line x1='52' y1='224.0' x2='666' y2='224.0' class='grid'/><text x='46' y='227.0' class='tick' text-anchor='end'>0.019</text><line x1='52' y1='171.5' x2='666' y2='171.5' class='grid'/><text x='46' y='174.5' class='tick' text-anchor='end'>0.035</text><line x1='52' y1='119.0' x2='666' y2='119.0' class='grid'/><text x='46' y='122.0' class='tick' text-anchor='end'>0.050</text><line x1='52' y1='66.5' x2='666' y2='66.5' class='grid'/><text x='46' y='69.5' class='tick' text-anchor='end'>0.065</text><line x1='52' y1='14.0' x2='666' y2='14.0' class='grid'/><text x='46' y='17.0' class='tick' text-anchor='end'>0.080</text><polyline points='52.0,14.0 120.2,197.4 188.4,206.5 256.7,213.2 324.9,216.7 393.1,219.5 461.3,219.5 529.6,221.6 597.8,222.3 666.0,224.0' class='line'/><circle cx='52.0' cy='14.0' r='4' class='dot'><title>эпоха 1: loss 0.0796</title></circle><circle cx='120.2' cy='197.4' r='4' class='dot'><title>эпоха 2: loss 0.0271</title></circle><circle cx='188.4' cy='206.5' r='4' class='dot'><title>эпоха 3: loss 0.0245</title></circle><circle cx='256.7' cy='213.2' r='4' class='dot'><title>эпоха 4: loss 0.0226</title></circle><circle cx='324.9' cy='216.7' r='4' class='dot'><title>эпоха 5: loss 0.0216</title></circle><circle cx='393.1' cy='219.5' r='4' class='dot'><title>эпоха 6: loss 0.0208</title></circle><circle cx='461.3' cy='219.5' r='4' class='dot'><title>эпоха 7: loss 0.0208</title></circle><circle cx='529.6' cy='221.6' r='4' class='dot'><title>эпоха 8: loss 0.0202</title></circle><circle cx='597.8' cy='222.3' r='4' class='dot'><title>эпоха 9: loss 0.0200</title></circle><circle cx='666.0' cy='224.0' r='4' class='dot'><title>эпоха 10: loss 0.0195</title></circle><text x='52.0' y='244' class='tick' text-anchor='middle'>1</text><text x='120.2' y='244' class='tick' text-anchor='middle'>2</text><text x='188.4' y='244' class='tick' text-anchor='middle'>3</text><text x='256.7' y='244' class='tick' text-anchor='middle'>4</text><text x='324.9' y='244' class='tick' text-anchor='middle'>5</text><text x='393.1' y='244' class='tick' text-anchor='middle'>6</text><text x='461.3' y='244' class='tick' text-anchor='middle'>7</text><text x='529.6' y='244' class='tick' text-anchor='middle'>8</text><text x='597.8' y='244' class='tick' text-anchor='middle'>9</text><text x='666.0' y='244' class='tick' text-anchor='middle'>10</text><text x='340' y='228' class='tick' text-anchor='middle'>эпоха</text></svg></div>
+<p class="mut">Cross-entropy + KL, функция потерь монотонно снижается и выходит на плато.</p>
+
+<h2>Результаты генерации</h2>
+<div class="tiles">
+<div class='tile good'><div class='big'>93%</div><div class='tlabel'>валидных (RDKit)</div></div>
+<div class='tile warn'><div class='big'>24</div><div class='tlabel'>уникальных молекул</div></div>
+<div class='tile warn'><div class='big'>1.1%</div><div class='tlabel'>новых (нет в обучении)</div></div>
+<div class='tile '><div class='big'>1.7%</div><div class='tlabel'>валидных с SA&gt;3</div></div>
+<div class='tile '><div class='big'>1.49</div><div class='tlabel'>средний SA</div></div>
+</div>
+<p class="mut">Сгенерировано 300 молекул · 279 валидных · обучение 25 эпох на 1515 парах из 40 траекторий. Примеры: CCCCCC, C1CC1, CCN, CCCC, CCCCCO.</p>
+
+<h2>Наблюдения и выводы</h2>
+<div class="cols">
+<div class="card"><h3>Что получилось</h3><ul>
+<li>Весь конвейер отработал <b>автономно от одного запроса</b> (82 мин), без падений.</li>
+<li>Реальная эволюционная оптимизация GOLEM по SA (параллельно, с докачкой) дала датасет из 40 траекторий.</li>
+<li>Модель обучается и генерирует <b>93% химически валидных</b> SMILES.</li>
+</ul></div>
+<div class="card"><h3>Ограничения</h3><ul>
+<li><b>Низкое разнообразие и новизна</b> (24 уникальных, 1.1% новых) — на малом датасете модель тяготеет к запоминанию.</li>
+<li><b>Мало молекул с SA&gt;3</b> (1.7%): эволюция оптимизировала в сторону <b>простых</b> молекул (низкий SA) — это направлено против цели «SA&gt;3».</li>
+<li>Демо-масштаб: 40 траекторий, 600 шагов обучения на CPU.</li>
+</ul></div>
+</div>
+
+<h2>Дальнейшие шаги</h2>
+<ul style="font-size:13.5px;color:var(--ink2)">
+<li>Масштабировать на GPU-кластере: ~10 000 траекторий, больше шагов обучения.</li>
+<li>Согласовать цель эволюции с метрикой (оптимизировать в сторону нужного диапазона SA), добавить давление на новизну/разнообразие.</li>
+<li>Настроить вес KL и размер латентного пространства между энкодером и декодером.</li>
+</ul>
+
+<h2>Артефакты</h2>
+<table><tr><th>путь</th><th>что это</th></tr><tr><td class='mono'>optimization_histories/*.csv</td><td>датасет: 40 траекторий эволюционной оптимизации по SA (440 молекул: поколение, fitness, SA)</td></tr><tr><td class='mono'>transformer_model_real.pth</td><td>обученная генеративная модель (CVAE-декодер)</td></tr><tr><td class='mono'>generation_results_real.txt</td><td>метрики генерации</td></tr><tr><td class='mono'>generate_optimization_histories.py</td><td>драйвер эволюционной оптимизации GOLEM (параллельный, с докачкой)</td></tr><tr><td class='mono'>src/ (model_wrapper, modified_transformer, generate)</td><td>архитектура модели, токенизатор, обучение и генерация</td></tr><tr><td class='mono'>/app/run_evolution.jsonl · run_evolution.log</td><td>полный лог прогона мультиагентной системы</td></tr></table>
+<p class="mut">рабочая папка: /app/workspace/ws_session_85f02f4a6c864dd5ad3ded62781579d5</p>
+
+<h2>Активность агентов (за прогон)</h2>
+<div class="card"><svg viewBox='0 0 680 164' class='chart'><text x='142' y='21' class='blabel' text-anchor='end'>CoderAgent</text><rect x='150' y='4' width='484.0' height='18' rx='4' class='bar'><title>CoderAgent: 492</title></rect><text x='640.0' y='21' class='bval'>492</text><text x='142' y='47' class='blabel' text-anchor='end'>OrchestratorAgent</text><rect x='150' y='30' width='67.9' height='18' rx='4' class='bar'><title>OrchestratorAgent: 69</title></rect><text x='223.9' y='47' class='bval'>69</text><text x='142' y='73' class='blabel' text-anchor='end'>ToolRetrieverAgent</text><rect x='150' y='56' width='20.7' height='18' rx='4' class='bar'><title>ToolRetrieverAgent: 21</title></rect><text x='176.7' y='73' class='bval'>21</text><text x='142' y='99' class='blabel' text-anchor='end'>ToolWebSearcherAgent</text><rect x='150' y='82' width='10.8' height='18' rx='4' class='bar'><title>ToolWebSearcherAgent: 11</title></rect><text x='166.8' y='99' class='bval'>11</text><text x='142' y='125' class='blabel' text-anchor='end'>ToolReranker</text><rect x='150' y='108' width='2.0' height='18' rx='4' class='bar'><title>ToolReranker: 2</title></rect><text x='158.0' y='125' class='bval'>2</text><text x='142' y='151' class='blabel' text-anchor='end'>FullSetToolReranker</text><rect x='150' y='134' width='2.0' height='18' rx='4' class='bar'><title>FullSetToolReranker: 2</title></rect><text x='158.0' y='151' class='bval'>2</text></svg></div>
+<p class="mut">вызовы инструментов:</p>
+<div class="card"><svg viewBox='0 0 680 320' class='chart'><text x='142' y='21' class='blabel' text-anchor='end'>execute_bash</text><rect x='150' y='4' width='484.0' height='18' rx='4' class='bar'><title>execute_bash: 49</title></rect><text x='640.0' y='21' class='bval'>49</text><text x='142' y='47' class='blabel' text-anchor='end'>read_file</text><rect x='150' y='30' width='345.7' height='18' rx='4' class='bar'><title>read_file: 35</title></rect><text x='501.7' y='47' class='bval'>35</text><text x='142' y='73' class='blabel' text-anchor='end'>research_commit</text><rect x='150' y='56' width='326.0' height='18' rx='4' class='bar'><title>research_commit: 33</title></rect><text x='482.0' y='73' class='bval'>33</text><text x='142' y='99' class='blabel' text-anchor='end'>write_file</text><rect x='150' y='82' width='138.3' height='18' rx='4' class='bar'><title>write_file: 14</title></rect><text x='294.3' y='99' class='bval'>14</text><text x='142' y='125' class='blabel' text-anchor='end'>list_directory</text><rect x='150' y='108' width='108.7' height='18' rx='4' class='bar'><title>list_directory: 11</title></rect><text x='264.7' y='125' class='bval'>11</text><text x='142' y='151' class='blabel' text-anchor='end'>CoderAgent</text><rect x='150' y='134' width='88.9' height='18' rx='4' class='bar'><title>CoderAgent: 9</title></rect><text x='244.9' y='151' class='bval'>9</text><text x='142' y='177' class='blabel' text-anchor='end'>retrieve_tools</text><rect x='150' y='160' width='79.0' height='18' rx='4' class='bar'><title>retrieve_tools: 8</title></rect><text x='235.0' y='177' class='bval'>8</text><text x='142' y='203' class='blabel' text-anchor='end'>check_job</text><rect x='150' y='186' width='59.3' height='18' rx='4' class='bar'><title>check_job: 6</title></rect><text x='215.3' y='203' class='bval'>6</text><text x='142' y='229' class='blabel' text-anchor='end'>research_init</text><rect x='150' y='212' width='49.4' height='18' rx='4' class='bar'><title>research_init: 5</title></rect><text x='205.4' y='229' class='bval'>5</text><text x='142' y='255' class='blabel' text-anchor='end'>research_overview</text><rect x='150' y='238' width='49.4' height='18' rx='4' class='bar'><title>research_overview: 5</title></rect><text x='205.4' y='255' class='bval'>5</text><text x='142' y='281' class='blabel' text-anchor='end'>research_context_slice</text><rect x='150' y='264' width='39.5' height='18' rx='4' class='bar'><title>research_context_slice: 4</title></rect><text x='195.5' y='281' class='bval'>4</text><text x='142' y='307' class='blabel' text-anchor='end'>search_mcp_servers</text><rect x='150' y='290' width='29.6' height='18' rx='4' class='bar'><title>search_mcp_servers: 3</title></rect><text x='185.6' y='307' class='bval'>3</text></svg></div>
+</body></html>

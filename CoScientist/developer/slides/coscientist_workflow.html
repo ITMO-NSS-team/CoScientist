@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Научные workflow, сгенерированные ИИ — CoScientist</title>
+<style>
+  *{margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  :root{
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f7f9fc;
+    --line:#dde3ec; --line-2:#e7ecf3;
+    --ink:#182231; --muted:#5b6b80; --faint:#8493a6;
+    --human:#b45309;  --human-bg:#fef3c7;  --human-ln:#f0b445;
+    --orch:#4338ca;   --orch-bg:#eef1ff;    --orch-ln:#8b93f0;
+    --agent:#0f766e;  --agent-bg:#effcf9;   --agent-ln:#4bc2b1;
+    --tool:#465569;   --tool-bg:#eef2f7;    --tool-ln:#c3cddb;
+    --result:#15803d; --result-bg:#e2f7e8;  --result-ln:#54c17a;
+    --ok:#15803d; --wait:#b45309; --new:#1d4ed8; --no:#b4231d;
+    --shadow:0 1px 2px rgba(24,34,49,.06), 0 8px 24px -12px rgba(24,34,49,.18);
+    --radius:16px;
+    --sans:ui-sans-serif,system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  img{max-width:100%}
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0e131b; --panel:#161d28; --panel-2:#121824;
+      --line:#28313f; --line-2:#222a37;
+      --ink:#eaf0f7; --muted:#9fb0c4; --faint:#71829a;
+      --human:#f2b263;  --human-bg:#3a2a12;  --human-ln:#8a6524;
+      --orch:#a9b0f7;   --orch-bg:#1e2140;    --orch-ln:#4b52a8;
+      --agent:#5fd7c6;  --agent-bg:#0f2e2b;   --agent-ln:#2b7d72;
+      --tool:#b7c3d4;   --tool-bg:#1b222e;    --tool-ln:#39465a;
+      --result:#63d391; --result-bg:#0f2c1c;  --result-ln:#2c7a4b;
+      --ok:#63d391; --wait:#f2b263; --new:#7ea2ff; --no:#f08a83;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f7f9fc; --line:#dde3ec; --line-2:#e7ecf3;
+    --ink:#182231; --muted:#5b6b80; --faint:#8493a6;
+    --human:#b45309;--human-bg:#fef3c7;--human-ln:#f0b445;--orch:#4338ca;--orch-bg:#eef1ff;--orch-ln:#8b93f0;
+    --agent:#0f766e;--agent-bg:#effcf9;--agent-ln:#4bc2b1;--tool:#465569;--tool-bg:#eef2f7;--tool-ln:#c3cddb;
+    --result:#15803d;--result-bg:#e2f7e8;--result-ln:#54c17a;
+    --ok:#15803d;--wait:#b45309;--new:#1d4ed8;--no:#b4231d;
+    --shadow:0 1px 2px rgba(24,34,49,.06),0 8px 24px -12px rgba(24,34,49,.18);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e131b; --panel:#161d28; --panel-2:#121824; --line:#28313f; --line-2:#222a37;
+    --ink:#eaf0f7; --muted:#9fb0c4; --faint:#71829a;
+    --human:#f2b263;--human-bg:#3a2a12;--human-ln:#8a6524;--orch:#a9b0f7;--orch-bg:#1e2140;--orch-ln:#4b52a8;
+    --agent:#5fd7c6;--agent-bg:#0f2e2b;--agent-ln:#2b7d72;--tool:#b7c3d4;--tool-bg:#1b222e;--tool-ln:#39465a;
+    --result:#63d391;--result-bg:#0f2c1c;--result-ln:#2c7a4b;
+    --ok:#63d391;--wait:#f2b263;--new:#7ea2ff;--no:#f08a83;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.45;
+    -webkit-font-smoothing:antialiased;padding:32px clamp(16px,3vw,48px) 64px}
+  .wrap{max-width:1400px;margin:0 auto}
+
+  .lead{max-width:960px;margin:0 auto 30px}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--agent);font-weight:700}
+  h1{font-size:clamp(26px,3.4vw,40px);line-height:1.1;margin:.35em 0 .3em;font-weight:800;text-wrap:balance;letter-spacing:-.01em}
+  .lead p{color:var(--muted);font-size:clamp(15px,1.5vw,18px);max-width:70ch;margin:0}
+
+  /* ── slide panel ── */
+  .slide{background:var(--panel);border:1px solid var(--line);border-radius:22px;
+    box-shadow:var(--shadow);padding:clamp(20px,2.4vw,34px);margin-bottom:34px}
+  .slide-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .slide-no{font-size:13px;font-weight:800;color:#fff;background:var(--ink);border-radius:999px;
+    width:26px;height:26px;display:grid;place-items:center;flex:none}
+  .slide h2{font-size:clamp(20px,2.2vw,27px);margin:0;font-weight:800;letter-spacing:-.01em}
+  .slide-sub{color:var(--muted);font-size:15px;margin:2px 0 22px;max-width:88ch}
+
+  .flowscroll{overflow-x:auto;padding-bottom:6px}
+  .flow{display:flex;align-items:stretch;gap:0;min-width:1120px}
+  .stage{flex:1 1 0;min-width:0;padding:0 4px;display:flex;flex-direction:column}
+  .stage-lab{font-size:12px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;
+    color:var(--faint);margin:0 0 12px;padding-left:2px}
+  .stage-body{display:flex;flex-direction:column;gap:16px;flex:1}
+  .arrow{flex:0 0 42px;display:flex;align-items:center;justify-content:center;color:var(--faint)}
+  .arrow svg{width:30px;height:30px}
+
+  /* node card */
+  .card{border:1.5px solid var(--line);border-radius:var(--radius);background:var(--panel-2);
+    padding:16px 16px 15px;position:relative;flex:1;min-height:96px}
+  .card .role{display:flex;align-items:center;gap:9px;font-weight:800;font-size:16.5px;letter-spacing:-.01em}
+  .card .role .dot{width:11px;height:11px;border-radius:50%;flex:none}
+  .card .sys{font-size:11.5px;color:var(--faint);font-weight:600;margin-top:1px}
+  .card p{margin:9px 0 0;font-size:14px;color:var(--muted);line-height:1.4}
+  .card.human{background:var(--human-bg);border-color:var(--human-ln)}
+  .card.human .role{color:var(--human)} .card.human .dot{background:var(--human)}
+  .card.human p{color:var(--human);opacity:.92;font-weight:500}
+  .card.orch{background:var(--orch-bg);border-color:var(--orch-ln)}
+  .card.orch .role{color:var(--orch)} .card.orch .dot{background:var(--orch)}
+  .card.agent{background:var(--agent-bg);border-color:var(--agent-ln)}
+  .card.agent .role{color:var(--agent)} .card.agent .dot{background:var(--agent)}
+  .card.result{background:var(--result-bg);border-color:var(--result-ln)}
+  .card.result .role{color:var(--result)} .card.result .dot{background:var(--result)}
+
+  /* tool chips inside an agent card */
+  .tools{margin-top:13px;padding-top:12px;border-top:1px dashed var(--agent-ln)}
+  .tools-lab{font-size:10.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;
+    background:var(--tool-bg);color:var(--tool);border:1px solid var(--tool-ln);border-radius:8px;padding:3px 8px}
+  .chip b{font-variant-numeric:tabular-nums;font-weight:800;opacity:.85}
+  .orch .tools{border-top-color:var(--orch-ln)}
+
+  /* legend */
+  .legend{display:flex;flex-wrap:wrap;gap:16px 22px;margin-top:22px;padding-top:18px;border-top:1px solid var(--line-2)}
+  .leg{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--muted)}
+  .leg .sw{width:15px;height:15px;border-radius:5px;border:1.5px solid}
+  .sw.human{background:var(--human-bg);border-color:var(--human)}
+  .sw.orch{background:var(--orch-bg);border-color:var(--orch)}
+  .sw.agent{background:var(--agent-bg);border-color:var(--agent)}
+  .sw.tool{background:var(--tool-bg);border-color:var(--tool)}
+  .sw.result{background:var(--result-bg);border-color:var(--result)}
+
+  /* ── science panel ── */
+  .sci{display:flex;align-items:stretch;gap:0;min-width:1180px}
+  .col{flex:1 1 0;min-width:0;padding:0 5px;display:flex;flex-direction:column;gap:14px}
+  .col .stage-lab{margin-bottom:4px}
+  .hyp{border-radius:14px;border:1.5px solid var(--line);background:var(--panel-2);padding:14px 15px;position:relative;overflow:hidden}
+  .hyp::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px}
+  .hyp.ok::before{background:var(--ok)} .hyp.wait::before{background:var(--wait)}
+  .hyp.new::before{background:var(--new)} .hyp.no::before{background:var(--no)}
+  .hyp .tag{font-size:11px;font-weight:800;color:var(--faint);letter-spacing:.04em}
+  .hyp .stmt{font-size:13.5px;margin:6px 0 10px;line-height:1.42}
+  .status{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;
+    border-radius:999px;padding:3px 10px;border:1.5px solid}
+  .status .g{font-size:12px}
+  .st-ok{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+  .st-wait{color:var(--wait);border-color:var(--wait);background:color-mix(in srgb,var(--wait) 12%,transparent)}
+  .st-new{color:var(--new);border-color:var(--new);background:color-mix(in srgb,var(--new) 12%,transparent)}
+  .crit{font-size:11.5px;color:var(--muted);margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
+  .crit b{color:var(--ink)}
+
+  .ev{border-radius:12px;border:1px solid var(--line);background:var(--panel-2);padding:11px 13px}
+  .ev .lk{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;margin-bottom:4px}
+  .ev.sup .lk{color:var(--ok)} .ev.rel .lk{color:var(--faint)}
+  .ev p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.4}
+  .ev .src{font-size:11px;color:var(--faint);margin-top:6px;font-variant-numeric:tabular-nums}
+  .concl{border-radius:12px;border:1px solid var(--line);background:var(--panel-2);padding:13px 14px}
+  .concl .lk{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+  .concl p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.42}
+  .qcard{border-radius:14px;border:1.5px solid var(--orch-ln);background:var(--orch-bg);padding:16px}
+  .qcard .tag{font-size:11px;font-weight:800;letter-spacing:.06em;color:var(--orch)}
+  .qcard .q{font-size:16px;font-weight:800;margin:7px 0 0;color:var(--orch);line-height:1.3}
+  .qcard .meta{font-size:12px;color:var(--orch);opacity:.85;margin-top:8px}
+
+  .sci-legend{display:flex;flex-wrap:wrap;gap:14px 20px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line-2)}
+
+  .foot{max-width:960px;margin:26px auto 0;color:var(--faint);font-size:13px;text-align:center}
+  .foot code{background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12px}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="lead">
+    <div class="kicker">CoScientist · мультиагентная система</div>
+    <h1>Научный workflow, который ИИ собирает сам — из агентов</h1>
+    <p>Пользователь задаёт один вопрос. Дальше структуру исследования — какие роли задействовать, какие гипотезы выдвинуть, где искать доказательства, что считать подтверждённым — строит сама система. Никто не рисовал этот пайплайн заранее. Ниже — реальный прогон по вопросу об аспирине.</p>
+  </div>
+
+  <!-- ─────────────── PANEL 1 : AGENT WORKFLOW ─────────────── -->
+  <section class="slide">
+    <div class="slide-head"><span class="slide-no">1</span><h2>Как ИИ разложил задачу на агентов</h2></div>
+    <p class="slide-sub">Один запрос человека превращается в дерево из агентов и их инструментов. Каждый блок — это отдельная роль; мелкие чипы под агентом — инструменты, которые эта роль вызвала (и сколько раз).</p>
+
+    <div class="flowscroll">
+      <div class="flow">
+
+        <div class="stage">
+          <div class="stage-lab">Этап 0 · Запрос человека</div>
+          <div class="stage-body">
+            <div class="card human">
+              <div class="role"><span class="dot"></span>Пользователь</div>
+              <p>«Является ли аспирин вероятным ингибитором COX-2? Предложи 2–3 гипотезы и собери краткие литературные доказательства по каждой.»</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+
+        <div class="stage">
+          <div class="stage-lab">Этап 1 · Оркестрация</div>
+          <div class="stage-body">
+            <div class="card orch">
+              <div class="role"><span class="dot"></span>Оркестратор</div>
+              <div class="sys">OrchestratorAgent · дирижёр</div>
+              <p>Открыл исследование, распределил роли, следил за общим графом и задавал фокус проверки. Свёл результаты агентов в итоговый ответ.</p>
+              <div class="tools">
+                <div class="tools-lab">Вызванные инструменты</div>
+                <div class="chips">
+                  <span class="chip">инициализация&nbsp;графа</span>
+                  <span class="chip">триггеры</span>
+                  <span class="chip">фокус <b>×2</b></span>
+                  <span class="chip">память&nbsp;знаний</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+
+        <div class="stage">
+          <div class="stage-lab">Этап 2 · Агенты-исполнители</div>
+          <div class="stage-body">
+            <div class="card agent">
+              <div class="role"><span class="dot"></span>Генератор гипотез</div>
+              <div class="sys">HypothesesAgent</div>
+              <p>Сформулировал 3 гипотезы и критерии их проверки, записал их в общий граф.</p>
+              <div class="tools">
+                <div class="tools-lab">Вызванные инструменты</div>
+                <div class="chips">
+                  <span class="chip">память&nbsp;знаний <b>×6</b></span>
+                  <span class="chip">запись&nbsp;в&nbsp;граф <b>×5</b></span>
+                  <span class="chip">срез&nbsp;контекста <b>×3</b></span>
+                  <span class="chip">соседи&nbsp;узла <b>×2</b></span>
+                </div>
+              </div>
+            </div>
+            <div class="card agent">
+              <div class="role"><span class="dot"></span>Исследователь</div>
+              <div class="sys">ResearchAgent</div>
+              <p>По каждой гипотезе искал литературу в вебе и записывал найденные доказательства в граф.</p>
+              <div class="tools">
+                <div class="tools-lab">Вызванные инструменты</div>
+                <div class="chips">
+                  <span class="chip">веб-поиск <b>×6</b></span>
+                  <span class="chip">запись&nbsp;доказательств <b>×4</b></span>
+                  <span class="chip">извлечение&nbsp;текста <b>×2</b></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+
+        <div class="stage">
+          <div class="stage-lab">Этап 3 · Результат</div>
+          <div class="stage-body">
+            <div class="card result">
+              <div class="role"><span class="dot"></span>Ответ системы</div>
+              <p>3 гипотезы с литературной поддержкой. Одна <b>подтверждена</b>, одна <b>отложена</b> из-за нехватки данных — система не выдала уверенный ответ там, где доказательств не было.</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="legend">
+      <span class="leg"><span class="sw human"></span>Запрос человека</span>
+      <span class="leg"><span class="sw orch"></span>Оркестратор (дирижёр)</span>
+      <span class="leg"><span class="sw agent"></span>Агент-исполнитель</span>
+      <span class="leg"><span class="sw tool"></span>Инструмент агента</span>
+      <span class="leg"><span class="sw result"></span>Результат</span>
+    </div>
+  </section>
+
+  <!-- ─────────────── PANEL 2 : SCIENCE GRAPH ─────────────── -->
+  <section class="slide">
+    <div class="slide-head"><span class="slide-no">2</span><h2>Научный граф, который построил ИИ</h2></div>
+    <p class="slide-sub">Тот же прогон, но со стороны науки: от вопроса — к гипотезам, к доказательствам из литературы, к выводам. Цвет и значок слева от гипотезы показывают её статус после проверки.</p>
+
+    <div class="flowscroll">
+      <div class="sci">
+
+        <div class="col">
+          <div class="stage-lab">Вопрос</div>
+          <div class="qcard">
+            <div class="tag">ИССЛЕДОВАТЕЛЬСКИЙ ВОПРОС</div>
+            <div class="q">Является ли аспирин вероятным ингибитором COX-2?</div>
+            <div class="meta">Домен: фармакология · форма: проверка гипотез</div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="stage-lab">Гипотезы</div>
+
+          <div class="hyp ok">
+            <div class="tag">ГИПОТЕЗА 1</div>
+            <div class="stmt">Аспирин — вероятный ингибитор COX-2 за счёт необратимого ацетилирования Ser529/530 в активном центре, что даёт устойчивое подавление.</div>
+            <span class="status st-ok"><span class="g">✓</span>Подтверждена</span>
+            <div class="crit">Критерий: <b>IC50 &lt; 100 µM</b> — выполнен</div>
+          </div>
+
+          <div class="hyp wait">
+            <div class="tag">ГИПОТЕЗА 2</div>
+            <div class="stmt">Селективность к COX-2 над COX-1 при низких концентрациях — противовоспалительный эффект с меньшей ЖКТ-токсичностью.</div>
+            <span class="status st-wait"><span class="g">⏸</span>Отложена</span>
+            <div class="crit">Критерий: <b>IC50(COX-1/COX-2) &gt; 5</b> — не выполнен (нет данных)</div>
+          </div>
+
+          <div class="hyp new">
+            <div class="tag">ГИПОТЕЗА 3</div>
+            <div class="stmt">Через ацетилирование COX-2 аспирин запускает синтез 15(R)-HETE и противовоспалительных липоксинов — отдельный механизм.</div>
+            <span class="status st-new"><span class="g">○</span>Сформулирована</span>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="stage-lab">Доказательства (литература)</div>
+
+          <div class="ev sup">
+            <div class="lk">↳ подтверждает Гипотезу 1</div>
+            <p>Аспирин необратимо ацетилирует Ser530 в COX-2, меняя активность фермента.</p>
+            <div class="src">PMC6355089 · PNAS 2009</div>
+          </div>
+          <div class="ev sup">
+            <div class="lk">↳ подтверждает Гипотезу 1</div>
+            <p>IC50 аспирина для COX-2 ≈ 30 µM (против ≈ 3.5 µM для COX-1).</p>
+            <div class="src">DOI:10.1007/s10555-017-9675-z</div>
+          </div>
+          <div class="ev sup">
+            <div class="lk">↳ подтверждает Гипотезу 1</div>
+            <p>Необратимое ингибирование COX через ацетилирование серина — хорошо установлено.</p>
+            <div class="src">PMC64725</div>
+          </div>
+          <div class="ev rel">
+            <div class="lk">✗ нерелевантно Гипотезе 2</div>
+            <p>Найденный источник — про EGCG и колоректальный рак, не про селективность аспирина. Поэтому гипотеза отложена.</p>
+            <div class="src">PMC3813811</div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="stage-lab">Выводы</div>
+
+          <div class="concl">
+            <div class="lk">Вывод по Гипотезе 1</div>
+            <p>IC50 ≈ 30 µM — ниже порога 100 µM; необратимое ацетилирование Ser подтверждает механизм. Оговорка: ацетилирование меняет продукт фермента (15R-HETE), а не полностью его блокирует.</p>
+          </div>
+          <div class="concl">
+            <div class="lk">Вывод по Гипотезе 2</div>
+            <p>Данных о соотношении активности COX-1/COX-2 недостаточно — селективность не оценить. Гипотеза остаётся непроверенной.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="sci-legend">
+      <span class="leg"><span class="status st-ok"><span class="g">✓</span>Подтверждена</span></span>
+      <span class="leg"><span class="status st-wait"><span class="g">⏸</span>Отложена</span></span>
+      <span class="leg"><span class="status st-new"><span class="g">○</span>Сформулирована</span></span>
+      <span class="leg" style="color:var(--muted)">Статус проверяется автоматически, когда набирается достаточно доказательств.</span>
+    </div>
+  </section>
+
+  <p class="foot">Обе схемы построены из реального лога прогона системы (<code>execution.json</code> + научный граф), а не нарисованы вручную. Для слайда — сделайте скриншот любой из панелей.</p>
+</div>
+
+</body>
+</html>

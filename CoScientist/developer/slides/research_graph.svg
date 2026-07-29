@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1280 720" width="1280" height="720" xmlns="http://www.w3.org/2000/svg"><rect width="1280" height="720" fill="#fff"/><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b8c2d0"/></marker></defs>
+<text x="176" y="44" font-size="12" font-weight="700" letter-spacing="1" fill="#93a1b4" text-anchor="middle" font-family="Arial, Helvetica, sans-serif">КЛИНИЧЕСКИЙ ВОПРОС</text>
+<line x1="50" y1="55" x2="302" y2="55" stroke="#edf0f5" stroke-width="2"/>
+<text x="466" y="44" font-size="12" font-weight="700" letter-spacing="1" fill="#93a1b4" text-anchor="middle" font-family="Arial, Helvetica, sans-serif">ГИПОТЕЗЫ (ДИФ.РЯД)</text>
+<line x1="340" y1="55" x2="592" y2="55" stroke="#edf0f5" stroke-width="2"/>
+<text x="788" y="44" font-size="12" font-weight="700" letter-spacing="1" fill="#93a1b4" text-anchor="middle" font-family="Arial, Helvetica, sans-serif">ДОКАЗАТЕЛЬСТВА</text>
+<line x1="662" y1="55" x2="914" y2="55" stroke="#edf0f5" stroke-width="2"/>
+<text x="1116" y="44" font-size="12" font-weight="700" letter-spacing="1" fill="#93a1b4" text-anchor="middle" font-family="Arial, Helvetica, sans-serif">ЗАКЛЮЧЕНИЕ</text>
+<line x1="990" y1="55" x2="1242" y2="55" stroke="#edf0f5" stroke-width="2"/>
+<path d="M297,340 C315.5,340 315.5,116 334,116" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M297,340 C315.5,340 315.5,232 334,232" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M297,340 C315.5,340 315.5,360 334,360" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M297,340 C315.5,340 315.5,494 334,494" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M664,96 C631.0,96 631.0,116 598,116" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M664,186 C631.0,186 631.0,116 598,116" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M664,300 C631.0,300 631.0,232 598,232" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M664,390 C631.0,390 631.0,360 598,360" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M664,500 C631.0,500 631.0,360 598,360" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M990,320 C951.0,320 951.0,96 912,96" fill="none" stroke="#b8c2d0" stroke-width="1.5" marker-end="url(#a)"/>
+<g transform="translate(55,265)">
+<rect width="242" height="150" rx="12" fill="#eeedfa" stroke="#4338ca" stroke-width="2"/>
+<text x="16" y="23" font-size="14" font-weight="700" fill="#4338ca" font-family="Arial, Helvetica, sans-serif">Клинический вопрос</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">В какой степени VLM,</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">связанные с базами</text>
+<text x="16" y="73" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">знаний, повышают</text>
+</g>
+<g transform="translate(334,66)">
+<rect width="264" height="100" rx="12" fill="#f8efe8" stroke="#b45309" stroke-width="2"/>
+<rect width="6" height="100" fill="#b45309"/>
+<text x="16" y="23" font-size="14" font-weight="700" fill="#b45309" font-family="Arial, Helvetica, sans-serif">Гипотеза 1</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">VLM+KG повышают релевантность</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">дифференциального ряда.</text>
+<text x="16" y="90" font-size="11.5" font-weight="700" fill="#b45309" font-family="Arial, Helvetica, sans-serif">⏸ Отложена</text>
+</g>
+<g transform="translate(334,182)">
+<rect width="264" height="100" rx="12" fill="#f8efe8" stroke="#b45309" stroke-width="2"/>
+<rect width="6" height="100" fill="#b45309"/>
+<text x="16" y="23" font-size="14" font-weight="700" fill="#b45309" font-family="Arial, Helvetica, sans-serif">Гипотеза 2</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">VLM+KG дают более структурную</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">PICO-аргументацию.</text>
+<text x="16" y="90" font-size="11.5" font-weight="700" fill="#b45309" font-family="Arial, Helvetica, sans-serif">⏸ Отложена</text>
+</g>
+<g transform="translate(334,310)">
+<rect width="264" height="100" rx="12" fill="#f8ebea" stroke="#b4231d" stroke-width="2"/>
+<rect width="6" height="100" fill="#b4231d"/>
+<text x="16" y="23" font-size="14" font-weight="700" fill="#b4231d" font-family="Arial, Helvetica, sans-serif">Гипотеза 3</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">VLM+KG снижают межмодельную</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">вариабельность.</text>
+<text x="16" y="90" font-size="11.5" font-weight="700" fill="#b4231d" font-family="Arial, Helvetica, sans-serif">✗ Опровергнута</text>
+</g>
+<g transform="translate(334,436)">
+<rect width="264" height="116" rx="12" fill="#eaeffb" stroke="#1d4ed8" stroke-width="2"/>
+<rect width="6" height="116" fill="#1d4ed8"/>
+<text x="16" y="23" font-size="14" font-weight="700" fill="#1d4ed8" font-family="Arial, Helvetica, sans-serif">Гипотеза 4</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">Преимущество VLM+KG есть лишь</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">при выраженных визуальных</text>
+<text x="16" y="73" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">признаках.</text>
+<text x="16" y="106" font-size="11.5" font-weight="700" fill="#1d4ed8" font-family="Arial, Helvetica, sans-serif">○ Сформулирована</text>
+</g>
+<g transform="translate(664,56)">
+<rect width="248" height="80" rx="12" fill="#e9f2f1" stroke="#0f766e" stroke-width="2"/>
+<rect width="6" height="80" fill="#0f766e"/>
+<text x="16" y="23" font-size="12.5" font-weight="700" fill="#0f766e" font-family="Arial, Helvetica, sans-serif">Доказательство · веб</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">Skin-R1: сравнивает версии</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">VLM, но не с врачами.</text>
+<text x="16" y="70" font-size="10" fill="#93a1b4" font-family="Arial, Helvetica, sans-serif">arXiv 2511.14900</text>
+</g>
+<g transform="translate(664,146)">
+<rect width="248" height="80" rx="12" fill="#e9f2f1" stroke="#0f766e" stroke-width="2"/>
+<rect width="6" height="80" fill="#0f766e"/>
+<text x="16" y="23" font-size="12.5" font-weight="700" fill="#0f766e" font-family="Arial, Helvetica, sans-serif">Доказательство · веб</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">Биомед. VLM без сравнения с</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">клиницистами.</text>
+<text x="16" y="70" font-size="10" fill="#93a1b4" font-family="Arial, Helvetica, sans-serif">литературный поиск</text>
+</g>
+<g transform="translate(664,260)">
+<rect width="248" height="80" rx="12" fill="#e8f1f6" stroke="#0369a1" stroke-width="2"/>
+<rect width="6" height="80" fill="#0369a1"/>
+<text x="16" y="23" font-size="12.5" font-weight="700" fill="#0369a1" font-family="Arial, Helvetica, sans-serif">Доказательство · PubMed</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">Публикаций по</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">PICO-аргументации VLM+KG нет.</text>
+<text x="16" y="70" font-size="10" fill="#93a1b4" font-family="Arial, Helvetica, sans-serif">search_pubmed · 0 результатов</text>
+</g>
+<g transform="translate(664,350)">
+<rect width="248" height="80" rx="12" fill="#e8f1f6" stroke="#0369a1" stroke-width="2"/>
+<rect width="6" height="80" fill="#0369a1"/>
+<text x="16" y="23" font-size="12.5" font-weight="700" fill="#0369a1" font-family="Arial, Helvetica, sans-serif">Доказательство · PubMed</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">Прямых сравнений «VLM+KG vs</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">врачи» нет.</text>
+<text x="16" y="70" font-size="10" fill="#93a1b4" font-family="Arial, Helvetica, sans-serif">search_pubmed · 0 результатов</text>
+</g>
+<g transform="translate(664,457)">
+<rect width="248" height="86" rx="12" fill="#e8f1f6" stroke="#0369a1" stroke-width="2"/>
+<rect width="6" height="86" fill="#0369a1"/>
+<text x="16" y="23" font-size="12.5" font-weight="700" fill="#0369a1" font-family="Arial, Helvetica, sans-serif">Доказательство · PubMed</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">Данных о вариабельности</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">выводов нет ни у VLM+KG, ни</text>
+<text x="16" y="73" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">у врачей.</text>
+<text x="16" y="76" font-size="10" fill="#93a1b4" font-family="Arial, Helvetica, sans-serif">→ опровергает H3</text>
+</g>
+<g transform="translate(990,245)">
+<rect width="252" height="150" rx="12" fill="#f3edfd" stroke="#7c3aed" stroke-width="2"/>
+<text x="16" y="23" font-size="14" font-weight="700" fill="#7c3aed" font-family="Arial, Helvetica, sans-serif">Заключение (3 вывода)</text>
+<text x="16" y="41" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">Достоверных сравнительных</text>
+<text x="16" y="57" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">данных «VLM+KG vs</text>
+<text x="16" y="73" font-size="12.5" fill="#1a2536" opacity=".9" font-family="Arial, Helvetica, sans-serif">клиницисты» в литературе</text>
+</g>
+<rect x="60" y="676" width="14" height="14" rx="4" fill="#dbeaf1" stroke="#0369a1" stroke-width="1.6"/>
+<text x="80" y="688" font-size="12" fill="#5c6b80" font-family="Arial, Helvetica, sans-serif">PubMed (медицинский агент)</text>
+<rect x="330" y="676" width="14" height="14" rx="4" fill="#ddebea" stroke="#0f766e" stroke-width="1.6"/>
+<text x="350" y="688" font-size="12" fill="#5c6b80" font-family="Arial, Helvetica, sans-serif">веб-поиск / литература</text></svg>

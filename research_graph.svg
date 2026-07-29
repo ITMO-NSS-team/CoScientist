@@ -1,0 +1,234 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='2550' height='2118' viewBox='0 0 2550 2118' font-family='system-ui,Segoe UI,sans-serif'>
+<rect width='2550' height='2118' fill='#f4f5f7'/>
+<defs>
+<marker id='a-mut' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#6b7280'/></marker>
+<marker id='a-good' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#16a34a'/></marker>
+<marker id='a-crit' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#dc2626'/></marker>
+<marker id='a-warn' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#d97706'/></marker>
+</defs>
+<text x='80' y='52' fill='#111827' font-size='28' font-weight='700'>Research graph — Is aspirin a plausible COX-2 inhibitor?</text>
+<line x1='1207' y1='219' x2='797' y2='417' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='957' y='305' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1002' y='322' fill='#6b7280' font-size='16' text-anchor='middle'>motivates</text>
+<line x1='1232' y1='249' x2='1155' y2='360' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1149' y='291' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1193' y='308' fill='#6b7280' font-size='16' text-anchor='middle'>motivates</text>
+<line x1='1317' y1='250' x2='1390' y2='360' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1309' y='292' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1353' y='309' fill='#6b7280' font-size='16' text-anchor='middle'>motivates</text>
+<line x1='1347' y1='212' x2='1817' y2='381' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1542' y='283' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1582' y='300' fill='#6b7280' font-size='16' text-anchor='middle'>scope of</text>
+<line x1='791' y1='534' x2='1372' y2='788' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1037' y='648' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1081' y='665' fill='#6b7280' font-size='16' text-anchor='middle'>tested by</text>
+<line x1='1197' y1='534' x2='1778' y2='788' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1443' y='648' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1487' y='665' fill='#6b7280' font-size='16' text-anchor='middle'>tested by</text>
+<line x1='1616' y1='555' x2='2170' y2='797' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1849' y='663' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1893' y='680' fill='#6b7280' font-size='16' text-anchor='middle'>tested by</text>
+<line x1='666' y1='728' x2='666' y2='626' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='604' y='664' width='124' height='23' rx='4' fill='#f4f5f7'/>
+<text x='666' y='681' fill='#6b7280' font-size='16' text-anchor='middle'>criterion for</text>
+<line x1='689' y1='846' x2='985' y2='1593' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='766' y='1206' width='142' height='23' rx='4' fill='#f4f5f7'/>
+<text x='837' y='1223' fill='#6b7280' font-size='16' text-anchor='middle'>sufficiency for</text>
+<line x1='1072' y1='728' x2='1072' y2='626' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1010' y='664' width='124' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1072' y='681' fill='#6b7280' font-size='16' text-anchor='middle'>criterion for</text>
+<line x1='1101' y1='874' x2='1394' y2='1592' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1177' y='1220' width='142' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1248' y='1237' fill='#6b7280' font-size='16' text-anchor='middle'>sufficiency for</text>
+<line x1='2169' y1='847' x2='361' y2='820' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1242' y='821' width='45' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1265' y='838' fill='#6b7280' font-size='16' text-anchor='middle'>uses</text>
+<line x1='519' y1='1059' x2='630' y2='621' stroke='#16a34a' stroke-width='2.5' marker-end='url(#a-good)' opacity='0.9'/>
+<rect x='534' y='827' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='574' y='844' fill='#6b7280' font-size='16' text-anchor='middle'>supports</text>
+<line x1='598' y1='1097' x2='1224' y2='255' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='862' y='663' width='98' height='23' rx='4' fill='#f4f5f7'/>
+<text x='911' y='680' fill='#6b7280' font-size='16' text-anchor='middle'>relates to</text>
+<line x1='828' y1='1058' x2='705' y2='621' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='718' y='826' width='98' height='23' rx='4' fill='#f4f5f7'/>
+<text x='767' y='843' fill='#6b7280' font-size='16' text-anchor='middle'>relates to</text>
+<line x1='828' y1='1058' x2='705' y2='621' stroke='#16a34a' stroke-width='2.5' marker-end='url(#a-good)' opacity='0.9'/>
+<rect x='727' y='826' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='767' y='843' fill='#6b7280' font-size='16' text-anchor='middle'>supports</text>
+<line x1='1153' y1='1094' x2='757' y2='594' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='906' y='831' width='98' height='23' rx='4' fill='#f4f5f7'/>
+<text x='955' y='848' fill='#6b7280' font-size='16' text-anchor='middle'>relates to</text>
+<line x1='1153' y1='1094' x2='757' y2='594' stroke='#16a34a' stroke-width='2.5' marker-end='url(#a-good)' opacity='0.9'/>
+<rect x='915' y='831' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='955' y='848' fill='#6b7280' font-size='16' text-anchor='middle'>supports</text>
+<line x1='902' y1='1663' x2='640' y2='1434' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='731' y='1535' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='771' y='1552' fill='#6b7280' font-size='16' text-anchor='middle'>based on</text>
+<line x1='1001' y1='1598' x2='920' y2='1356' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='920' y='1464' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='960' y='1481' fill='#6b7280' font-size='16' text-anchor='middle'>based on</text>
+<line x1='1149' y1='1599' x2='1205' y2='1442' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1137' y='1508' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1177' y='1525' fill='#6b7280' font-size='16' text-anchor='middle'>based on</text>
+<line x1='1567' y1='1092' x2='1164' y2='594' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1316' y='830' width='98' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1365' y='847' fill='#6b7280' font-size='16' text-anchor='middle'>relates to</text>
+<rect x='1095' y='114' width='360' height='144' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1095' y='114' width='6' height='144' rx='3' fill='#2563eb'/>
+<text x='1115' y='148' fill='#2563eb' font-size='24' font-weight='700'>○ ❓ Question 1</text>
+<text x='1115' y='178' fill='#374151' font-size='22'>Is aspirin a plausible COX-2</text>
+<text x='1115' y='208' fill='#374151' font-size='22'>inhibitor?</text>
+<rect x='1907' y='1056' width='360' height='144' rx='12' fill='#ffffff' stroke='#16a34a' stroke-width='2.5'/>
+<rect x='1907' y='1056' width='6' height='144' rx='3' fill='#16a34a'/>
+<text x='1927' y='1090' fill='#16a34a' font-size='24' font-weight='700'>✓ 🔋 Resource 1</text>
+<text x='1927' y='1120' fill='#374151' font-size='22'>Literature Analysis Budget</text>
+<text x='1927' y='1150' fill='#374151' font-size='22'>(100/100)</text>
+<rect x='486' y='348' width='360' height='264' rx='12' fill='#ffffff' stroke='#16a34a' stroke-width='2.5'/>
+<rect x='486' y='348' width='6' height='264' rx='3' fill='#16a34a'/>
+<text x='506' y='382' fill='#16a34a' font-size='24' font-weight='700'>✓ 💡 Hypothesis 1</text>
+<text x='506' y='412' fill='#374151' font-size='22'>Aspirin is a plausible COX-2</text>
+<text x='506' y='442' fill='#374151' font-size='22'>inhibitor due to its</text>
+<text x='506' y='472' fill='#374151' font-size='22'>irreversible acetylation of</text>
+<text x='506' y='502' fill='#374151' font-size='22'>Ser529 in the COX-2 active</text>
+<text x='506' y='532' fill='#374151' font-size='22'>site, leading to sustained</text>
+<text x='506' y='562' fill='#374151' font-size='22'>inhibition.</text>
+<rect x='892' y='348' width='360' height='264' rx='12' fill='#ffffff' stroke='#64748b' stroke-width='2.5'/>
+<rect x='892' y='348' width='6' height='264' rx='3' fill='#64748b'/>
+<text x='912' y='382' fill='#64748b' font-size='24' font-weight='700'>● 💡 Hypothesis 2</text>
+<text x='912' y='412' fill='#374151' font-size='22'>Aspirin&#x27;s COX-2 inhibition is</text>
+<text x='912' y='442' fill='#374151' font-size='22'>selective over COX-1 at low</text>
+<text x='912' y='472' fill='#374151' font-size='22'>concentrations, contributing to</text>
+<text x='912' y='502' fill='#374151' font-size='22'>anti-inflammatory effects with</text>
+<text x='912' y='532' fill='#374151' font-size='22'>reduced gastrointestinal</text>
+<text x='912' y='562' fill='#374151' font-size='22'>toxicity.</text>
+<rect x='1298' y='348' width='360' height='294' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1298' y='348' width='6' height='294' rx='3' fill='#2563eb'/>
+<text x='1318' y='382' fill='#2563eb' font-size='24' font-weight='700'>○ 💡 Hypothesis 3</text>
+<text x='1318' y='412' fill='#374151' font-size='22'>Aspirin promotes the</text>
+<text x='1318' y='442' fill='#374151' font-size='22'>biosynthesis of 15(R)-HETE</text>
+<text x='1318' y='472' fill='#374151' font-size='22'>and anti-inflammatory lipoxins</text>
+<text x='1318' y='502' fill='#374151' font-size='22'>via COX-2 acetylation,</text>
+<text x='1318' y='532' fill='#374151' font-size='22'>representing a distinct</text>
+<text x='1318' y='562' fill='#374151' font-size='22'>plausible mechanism beyond</text>
+<text x='1318' y='592' fill='#374151' font-size='22'>simple inhibition.</text>
+<rect x='1298' y='732' width='360' height='204' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1298' y='732' width='6' height='204' rx='3' fill='#2563eb'/>
+<text x='1318' y='766' fill='#2563eb' font-size='24' font-weight='700'>○ ⚙️ Method 1</text>
+<text x='1318' y='796' fill='#374151' font-size='22'>Review available literature on</text>
+<text x='1318' y='826' fill='#374151' font-size='22'>aspirin&#x27;s IC50 values for</text>
+<text x='1318' y='856' fill='#374151' font-size='22'>COX-2 inhibition to validate its</text>
+<text x='1318' y='886' fill='#374151' font-size='22'>potency as a COX-2 inhibitor.</text>
+<rect x='486' y='732' width='360' height='114' rx='12' fill='#ffffff' stroke='#16a34a' stroke-width='2.5'/>
+<rect x='486' y='732' width='6' height='114' rx='3' fill='#16a34a'/>
+<text x='506' y='766' fill='#16a34a' font-size='24' font-weight='700'>✓ 🎯 Criteria 1</text>
+<text x='506' y='796' fill='#374151' font-size='22'>IC50 &lt; 100 µM for COX-2</text>
+<rect x='1704' y='732' width='360' height='204' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1704' y='732' width='6' height='204' rx='3' fill='#2563eb'/>
+<text x='1724' y='766' fill='#2563eb' font-size='24' font-weight='700'>○ ⚙️ Method 2</text>
+<text x='1724' y='796' fill='#374151' font-size='22'>Review literature comparing</text>
+<text x='1724' y='826' fill='#374151' font-size='22'>aspirin&#x27;s IC50 values for</text>
+<text x='1724' y='856' fill='#374151' font-size='22'>COX-1 and COX-2 to assess its</text>
+<text x='1724' y='886' fill='#374151' font-size='22'>selectivity profile.</text>
+<rect x='892' y='732' width='360' height='144' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='892' y='732' width='6' height='144' rx='3' fill='#2563eb'/>
+<text x='912' y='766' fill='#2563eb' font-size='24' font-weight='700'>○ 🎯 Criteria 2</text>
+<text x='912' y='796' fill='#374151' font-size='22'>IC50 ratio (COX-1 vs COX-2) &gt;</text>
+<text x='912' y='826' fill='#374151' font-size='22'>5</text>
+<rect x='2110' y='732' width='360' height='234' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='2110' y='732' width='6' height='234' rx='3' fill='#2563eb'/>
+<text x='2130' y='766' fill='#2563eb' font-size='24' font-weight='700'>○ ⚙️ Method 3</text>
+<text x='2130' y='796' fill='#374151' font-size='22'>Review literature on aspirin&#x27;s</text>
+<text x='2130' y='826' fill='#374151' font-size='22'>ability to promote biosynthesis</text>
+<text x='2130' y='856' fill='#374151' font-size='22'>of 15(R)-HETE and</text>
+<text x='2130' y='886' fill='#374151' font-size='22'>anti-inflammatory lipoxins via</text>
+<text x='2130' y='916' fill='#374151' font-size='22'>COX-2 acetylation.</text>
+<rect x='80' y='732' width='360' height='174' rx='12' fill='#ffffff' stroke='#ea580c' stroke-width='2.5'/>
+<rect x='80' y='732' width='6' height='174' rx='3' fill='#ea580c'/>
+<text x='100' y='766' fill='#ea580c' font-size='24' font-weight='700'>⚙ 🔧 Tool 1</text>
+<text x='100' y='796' fill='#374151' font-size='22'>A tool for retrieving and</text>
+<text x='100' y='826' fill='#374151' font-size='22'>analyzing scientific literature</text>
+<text x='100' y='856' fill='#374151' font-size='22'>on COX-2 inhibition by aspirin.</text>
+<rect x='283' y='1056' width='360' height='444' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='283' y='1056' width='6' height='444' rx='3' fill='#d97706'/>
+<text x='303' y='1090' fill='#d97706' font-size='24' font-weight='700'>● 🔬 Evidence 1</text>
+<text x='303' y='1120' fill='#374151' font-size='22'>Aspirin irreversibly</text>
+<text x='303' y='1150' fill='#374151' font-size='22'>acetylates Ser530 in COX-2</text>
+<text x='303' y='1180' fill='#374151' font-size='22'>(often cited as Ser516 in some</text>
+<text x='303' y='1210' fill='#374151' font-size='22'>sources), leading to altered</text>
+<text x='303' y='1240' fill='#374151' font-size='22'>enzymatic activity rather than</text>
+<text x='303' y='1270' fill='#374151' font-size='22'>complete inhibition. Acetylated</text>
+<text x='303' y='1300' fill='#374151' font-size='22'>COX-2 produces 15R-HETE</text>
+<text x='303' y='1330' fill='#374151' font-size='22'>and 15R-PGs, which have</text>
+<text x='303' y='1360' fill='#374151' font-size='22'>anti-inflammatory and</text>
+<text x='303' y='1390' fill='#374151' font-size='22'>antiplatelet effects. This</text>
+<text x='303' y='1420' fill='#374151' font-size='22'>mechanism is distinct from</text>
+<text x='303' y='1450' fill='#374151' font-size='22'>COX-1, where acetylation full…</text>
+<rect x='689' y='1056' width='360' height='294' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='689' y='1056' width='6' height='294' rx='3' fill='#d97706'/>
+<text x='709' y='1090' fill='#d97706' font-size='24' font-weight='700'>● 🔬 Evidence 2</text>
+<text x='709' y='1120' fill='#374151' font-size='22'>The IC50 of aspirin for COX-2</text>
+<text x='709' y='1150' fill='#374151' font-size='22'>inhibition is approximately 30</text>
+<text x='709' y='1180' fill='#374151' font-size='22'>µM, based on studies</text>
+<text x='709' y='1210' fill='#374151' font-size='22'>comparing its potency against</text>
+<text x='709' y='1240' fill='#374151' font-size='22'>COX-1 (IC50 ~3.5 µM),</text>
+<text x='709' y='1270' fill='#374151' font-size='22'>indicating lower potency for</text>
+<text x='709' y='1300' fill='#374151' font-size='22'>COX-2.</text>
+<rect x='1095' y='1056' width='360' height='384' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='1095' y='1056' width='6' height='384' rx='3' fill='#d97706'/>
+<text x='1115' y='1090' fill='#d97706' font-size='24' font-weight='700'>● 🔬 Evidence 3</text>
+<text x='1115' y='1120' fill='#374151' font-size='22'>Aspirin&#x27;s irreversible</text>
+<text x='1115' y='1150' fill='#374151' font-size='22'>inhibition of COX enzymes is</text>
+<text x='1115' y='1180' fill='#374151' font-size='22'>well established, with</text>
+<text x='1115' y='1210' fill='#374151' font-size='22'>acetylation of a serine residue</text>
+<text x='1115' y='1240' fill='#374151' font-size='22'>(Ser530 in COX-1,</text>
+<text x='1115' y='1270' fill='#374151' font-size='22'>Ser516/Ser530 in COX-2)</text>
+<text x='1115' y='1300' fill='#374151' font-size='22'>preventing arachidonic acid</text>
+<text x='1115' y='1330' fill='#374151' font-size='22'>binding, confirmed by</text>
+<text x='1115' y='1360' fill='#374151' font-size='22'>crystallography and functional</text>
+<text x='1115' y='1390' fill='#374151' font-size='22'>assays.</text>
+<rect x='1704' y='348' width='360' height='114' rx='12' fill='#ffffff' stroke='#64748b' stroke-width='2.5'/>
+<rect x='1704' y='348' width='6' height='114' rx='3' fill='#64748b'/>
+<text x='1724' y='382' fill='#64748b' font-size='24' font-weight='700'>● 🗄️ Data source 1</text>
+<text x='1724' y='412' fill='#374151' font-size='22'>IC50 = 30 µM COX-2</text>
+<rect x='892' y='1590' width='360' height='444' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='892' y='1590' width='6' height='444' rx='3' fill='#d97706'/>
+<text x='912' y='1624' fill='#d97706' font-size='24' font-weight='700'>● ✅ Conclusion 1</text>
+<text x='912' y='1654' fill='#374151' font-size='22'>Aspirin demonstrates a COX-2</text>
+<text x='912' y='1684' fill='#374151' font-size='22'>inhibitory effect with an IC50</text>
+<text x='912' y='1714' fill='#374151' font-size='22'>of approximately 30 µM, which</text>
+<text x='912' y='1744' fill='#374151' font-size='22'>is below the 100 µM threshold,</text>
+<text x='912' y='1774' fill='#374151' font-size='22'>and its irreversible</text>
+<text x='912' y='1804' fill='#374151' font-size='22'>acetylation of Ser530</text>
+<text x='912' y='1834' fill='#374151' font-size='22'>(commonly cited as Ser516 in</text>
+<text x='912' y='1864' fill='#374151' font-size='22'>some sources) in the COX-2</text>
+<text x='912' y='1894' fill='#374151' font-size='22'>active site is</text>
+<text x='912' y='1924' fill='#374151' font-size='22'>well-documented, leading to</text>
+<text x='912' y='1954' fill='#374151' font-size='22'>sustained inhibition and</text>
+<text x='912' y='1984' fill='#374151' font-size='22'>altered eicosanoid productio…</text>
+<rect x='1501' y='1056' width='360' height='354' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='1501' y='1056' width='6' height='354' rx='3' fill='#d97706'/>
+<text x='1521' y='1090' fill='#d97706' font-size='24' font-weight='700'>● 🔬 Evidence 4</text>
+<text x='1521' y='1120' fill='#374151' font-size='22'>The provided text discusses</text>
+<text x='1521' y='1150' fill='#374151' font-size='22'>EGCG and its effects on VEGF</text>
+<text x='1521' y='1180' fill='#374151' font-size='22'>and MMP-9 in colon cancer</text>
+<text x='1521' y='1210' fill='#374151' font-size='22'>cells, not aspirin or its COX</text>
+<text x='1521' y='1240' fill='#374151' font-size='22'>selectivity. No relevant</text>
+<text x='1521' y='1270' fill='#374151' font-size='22'>information on aspirin&#x27;s</text>
+<text x='1521' y='1300' fill='#374151' font-size='22'>COX-1/COX-2 IC50 ratios or</text>
+<text x='1521' y='1330' fill='#374151' font-size='22'>gastrointestinal toxicity was</text>
+<text x='1521' y='1360' fill='#374151' font-size='22'>found in the retrieved content.</text>
+<rect x='1298' y='1590' width='360' height='414' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='1298' y='1590' width='6' height='414' rx='3' fill='#d97706'/>
+<text x='1318' y='1624' fill='#d97706' font-size='24' font-weight='700'>● ✅ Conclusion 2</text>
+<text x='1318' y='1654' fill='#374151' font-size='22'>The available evidence does</text>
+<text x='1318' y='1684' fill='#374151' font-size='22'>not provide information on</text>
+<text x='1318' y='1714' fill='#374151' font-size='22'>aspirin&#x27;s COX-1 and COX-2</text>
+<text x='1318' y='1744' fill='#374151' font-size='22'>inhibitory activity or the IC50</text>
+<text x='1318' y='1774' fill='#374151' font-size='22'>ratio required to assess</text>
+<text x='1318' y='1804' fill='#374151' font-size='22'>selectivity. Without data on the</text>
+<text x='1318' y='1834' fill='#374151' font-size='22'>IC50 ratio (COX-1 vs COX-2), it</text>
+<text x='1318' y='1864' fill='#374151' font-size='22'>is not possible to determine</text>
+<text x='1318' y='1894' fill='#374151' font-size='22'>whether aspirin selectively</text>
+<text x='1318' y='1924' fill='#374151' font-size='22'>inhibits COX-2 over COX-1 at</text>
+<text x='1318' y='1954' fill='#374151' font-size='22'>low concentrations.</text>
+</svg>

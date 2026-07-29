@@ -1,0 +1,156 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='1332' height='2718' viewBox='0 0 1332 2718' font-family='system-ui,Segoe UI,sans-serif'>
+<rect width='1332' height='2718' fill='#f4f5f7'/>
+<defs>
+<marker id='a-mut' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#6b7280'/></marker>
+<marker id='a-good' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#16a34a'/></marker>
+<marker id='a-crit' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#dc2626'/></marker>
+<marker id='a-warn' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#d97706'/></marker>
+</defs>
+<text x='80' y='52' fill='#111827' font-size='28' font-weight='700'>Research graph — Обеспечивает ли кластеризация по молекулярному сходству с раздельной оценко</text>
+<line x1='666' y1='562' x2='666' y2='634' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='621' y='585' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='666' y='602' fill='#6b7280' font-size='16' text-anchor='middle'>motivates</text>
+<line x1='739' y1='1022' x2='781' y2='1125' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='715' y='1060' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='760' y='1077' fill='#6b7280' font-size='16' text-anchor='middle'>tested by</text>
+<line x1='528' y1='1133' x2='578' y2='1026' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='491' y='1066' width='124' height='23' rx='4' fill='#f4f5f7'/>
+<text x='553' y='1083' fill='#6b7280' font-size='16' text-anchor='middle'>criterion for</text>
+<line x1='489' y1='1418' x2='625' y2='2180' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='486' y='1786' width='142' height='23' rx='4' fill='#f4f5f7'/>
+<text x='557' y='1803' fill='#6b7280' font-size='16' text-anchor='middle'>sufficiency for</text>
+<line x1='342' y1='1668' x2='591' y2='1032' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='418' y='1337' width='98' height='23' rx='4' fill='#f4f5f7'/>
+<text x='467' y='1354' fill='#6b7280' font-size='16' text-anchor='middle'>relates to</text>
+<line x1='342' y1='1668' x2='591' y2='1032' stroke='#dc2626' stroke-width='2.5' marker-end='url(#a-crit)' opacity='0.9'/>
+<rect x='431' y='1337' width='72' height='23' rx='4' fill='#f4f5f7'/>
+<text x='467' y='1354' fill='#6b7280' font-size='16' text-anchor='middle'>refutes</text>
+<line x1='666' y1='1652' x2='666' y2='1046' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='617' y='1336' width='98' height='23' rx='4' fill='#f4f5f7'/>
+<text x='666' y='1353' fill='#6b7280' font-size='16' text-anchor='middle'>relates to</text>
+<line x1='666' y1='1652' x2='666' y2='1046' stroke='#dc2626' stroke-width='2.5' marker-end='url(#a-crit)' opacity='0.9'/>
+<rect x='630' y='1336' width='72' height='23' rx='4' fill='#f4f5f7'/>
+<text x='666' y='1353' fill='#6b7280' font-size='16' text-anchor='middle'>refutes</text>
+<line x1='529' y1='2232' x2='403' y2='2066' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='426' y='2136' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='466' y='2153' fill='#6b7280' font-size='16' text-anchor='middle'>based on</text>
+<line x1='666' y1='2186' x2='666' y2='2114' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='626' y='2137' width='80' height='23' rx='4' fill='#f4f5f7'/>
+<text x='666' y='2154' fill='#6b7280' font-size='16' text-anchor='middle'>based on</text>
+<line x1='990' y1='1668' x2='741' y2='1032' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='816' y='1337' width='98' height='23' rx='4' fill='#f4f5f7'/>
+<text x='865' y='1354' fill='#6b7280' font-size='16' text-anchor='middle'>relates to</text>
+<rect x='486' y='114' width='360' height='444' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='486' y='114' width='6' height='444' rx='3' fill='#2563eb'/>
+<text x='506' y='148' fill='#2563eb' font-size='24' font-weight='700'>○ ❓ Question 1</text>
+<text x='506' y='178' fill='#374151' font-size='22'>Обеспечивает ли</text>
+<text x='506' y='208' fill='#374151' font-size='22'>кластеризация по</text>
+<text x='506' y='238' fill='#374151' font-size='22'>молекулярному сходству с</text>
+<text x='506' y='268' fill='#374151' font-size='22'>раздельной оценкой области</text>
+<text x='506' y='298' fill='#374151' font-size='22'>применимости (AD) для</text>
+<text x='506' y='328' fill='#374151' font-size='22'>каждого кластера более</text>
+<text x='506' y='358' fill='#374151' font-size='22'>надёжное (лучше</text>
+<text x='506' y='388' fill='#374151' font-size='22'>калиброванное)</text>
+<text x='506' y='418' fill='#374151' font-size='22'>предсказание LD₅₀</text>
+<text x='506' y='448' fill='#374151' font-size='22'>пропущенных значений, чем</text>
+<text x='506' y='478' fill='#374151' font-size='22'>единая модель без учёта</text>
+<text x='506' y='508' fill='#374151' font-size='22'>кластерной структуры?</text>
+<rect x='486' y='648' width='360' height='384' rx='12' fill='#ffffff' stroke='#dc2626' stroke-width='2.5'/>
+<rect x='486' y='648' width='6' height='384' rx='3' fill='#dc2626'/>
+<text x='506' y='682' fill='#dc2626' font-size='24' font-weight='700'>✗ 💡 Hypothesis 1</text>
+<text x='506' y='712' fill='#374151' font-size='22'>Разделение на кластеры</text>
+<text x='506' y='742' fill='#374151' font-size='22'>может ухудшить</text>
+<text x='506' y='772' fill='#374151' font-size='22'>предсказание LD₅₀, так как</text>
+<text x='506' y='802' fill='#374151' font-size='22'>ослабляет статистическую</text>
+<text x='506' y='832' fill='#374151' font-size='22'>мощность моделей за счёт</text>
+<text x='506' y='862' fill='#374151' font-size='22'>ограниченного количества</text>
+<text x='506' y='892' fill='#374151' font-size='22'>обучающих примеров в каждом</text>
+<text x='506' y='922' fill='#374151' font-size='22'>кластере, особенно в</text>
+<text x='506' y='952' fill='#374151' font-size='22'>небольших или скудно</text>
+<text x='506' y='982' fill='#374151' font-size='22'>представленных кластерах.</text>
+<rect x='689' y='1122' width='360' height='444' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='689' y='1122' width='6' height='444' rx='3' fill='#2563eb'/>
+<text x='709' y='1156' fill='#2563eb' font-size='24' font-weight='700'>○ ⚙️ Method 1</text>
+<text x='709' y='1186' fill='#374151' font-size='22'>На основе открытых данных</text>
+<text x='709' y='1216' fill='#374151' font-size='22'>по токсичности (например, из</text>
+<text x='709' y='1246' fill='#374151' font-size='22'>базы TOX21 или LD50-баз)</text>
+<text x='709' y='1276' fill='#374151' font-size='22'>провести сравнительное</text>
+<text x='709' y='1306' fill='#374151' font-size='22'>моделирование: обучить</text>
+<text x='709' y='1336' fill='#374151' font-size='22'>единую регрессионную</text>
+<text x='709' y='1366' fill='#374151' font-size='22'>модель и кластеризованные</text>
+<text x='709' y='1396' fill='#374151' font-size='22'>модели (например, случайный</text>
+<text x='709' y='1426' fill='#374151' font-size='22'>лес или XGBoost) для</text>
+<text x='709' y='1456' fill='#374151' font-size='22'>предсказания LD₅₀. Оценить</text>
+<text x='709' y='1486' fill='#374151' font-size='22'>метрики (RMSE, MAE, R²) на</text>
+<text x='709' y='1516' fill='#374151' font-size='22'>тестовых данных,…</text>
+<rect x='283' y='1122' width='360' height='294' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='283' y='1122' width='6' height='294' rx='3' fill='#2563eb'/>
+<text x='303' y='1156' fill='#2563eb' font-size='24' font-weight='700'>○ 🎯 Criteria 1</text>
+<text x='303' y='1186' fill='#374151' font-size='22'>Если кластеризованные</text>
+<text x='303' y='1216' fill='#374151' font-size='22'>модели показывают среднее</text>
+<text x='303' y='1246' fill='#374151' font-size='22'>ухудшение RMSE &gt; 15% по</text>
+<text x='303' y='1276' fill='#374151' font-size='22'>сравнению с единой моделью,</text>
+<text x='303' y='1306' fill='#374151' font-size='22'>особенно в малых кластерах</text>
+<text x='303' y='1336' fill='#374151' font-size='22'>(&lt;20 соединений), гипотеза</text>
+<text x='303' y='1366' fill='#374151' font-size='22'>считается подтверждённой.</text>
+<rect x='80' y='1656' width='360' height='444' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='80' y='1656' width='6' height='444' rx='3' fill='#d97706'/>
+<text x='100' y='1690' fill='#d97706' font-size='24' font-weight='700'>● 🔬 Evidence 1</text>
+<text x='100' y='1720' fill='#374151' font-size='22'>Исследование Gadaleta et al.</text>
+<text x='100' y='1750' fill='#374151' font-size='22'>(2019) анализировало</text>
+<text x='100' y='1780' fill='#374151' font-size='22'>производительность</text>
+<text x='100' y='1810' fill='#374151' font-size='22'>QSAR-моделей для</text>
+<text x='100' y='1840' fill='#374151' font-size='22'>предсказания LD50 острой</text>
+<text x='100' y='1870' fill='#374151' font-size='22'>токсичности у крыс,</text>
+<text x='100' y='1900' fill='#374151' font-size='22'>сравнивая единую и</text>
+<text x='100' y='1930' fill='#374151' font-size='22'>интегрированную</text>
+<text x='100' y='1960' fill='#374151' font-size='22'>(мультимодельную)</text>
+<text x='100' y='1990' fill='#374151' font-size='22'>стратегии. Показано, что</text>
+<text x='100' y='2020' fill='#374151' font-size='22'>интегрированные модели</text>
+<text x='100' y='2050' fill='#374151' font-size='22'>демонстрируют улучшенную…</text>
+<rect x='486' y='1656' width='360' height='444' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='486' y='1656' width='6' height='444' rx='3' fill='#d97706'/>
+<text x='506' y='1690' fill='#d97706' font-size='24' font-weight='700'>● 🔬 Evidence 2</text>
+<text x='506' y='1720' fill='#374151' font-size='22'>Руководство по ПО TEST</text>
+<text x='506' y='1750' fill='#374151' font-size='22'>(EPA, 2020) предоставляет</text>
+<text x='506' y='1780' fill='#374151' font-size='22'>сравнительные результаты</text>
+<text x='506' y='1810' fill='#374151' font-size='22'>нескольких QSAR-методов,</text>
+<text x='506' y='1840' fill='#374151' font-size='22'>включая иерархическую</text>
+<text x='506' y='1870' fill='#374151' font-size='22'>кластеризацию и единую</text>
+<text x='506' y='1900' fill='#374151' font-size='22'>модель. Данные показывают,</text>
+<text x='506' y='1930' fill='#374151' font-size='22'>что выполнение единой</text>
+<text x='506' y='1960' fill='#374151' font-size='22'>модели невозможно для всего</text>
+<text x='506' y='1990' fill='#374151' font-size='22'>набора данных по LD50, что</text>
+<text x='506' y='2020' fill='#374151' font-size='22'>указывает на</text>
+<text x='506' y='2050' fill='#374151' font-size='22'>неоднородность данных.…</text>
+<rect x='486' y='2190' width='360' height='444' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='486' y='2190' width='6' height='444' rx='3' fill='#d97706'/>
+<text x='506' y='2224' fill='#d97706' font-size='24' font-weight='700'>● ✅ Conclusion 1</text>
+<text x='506' y='2254' fill='#374151' font-size='22'>Гипотеза H1 предполагает,</text>
+<text x='506' y='2284' fill='#374151' font-size='22'>что кластеризация ухудшает</text>
+<text x='506' y='2314' fill='#374151' font-size='22'>предсказание LD₅₀ из-за</text>
+<text x='506' y='2344' fill='#374151' font-size='22'>снижения статистической</text>
+<text x='506' y='2374' fill='#374151' font-size='22'>мощности, особенно в малых</text>
+<text x='506' y='2404' fill='#374151' font-size='22'>кластерах. Однако</text>
+<text x='506' y='2434' fill='#374151' font-size='22'>представленные</text>
+<text x='506' y='2464' fill='#374151' font-size='22'>доказательства показывают</text>
+<text x='506' y='2494' fill='#374151' font-size='22'>противоположное: E1</text>
+<text x='506' y='2524' fill='#374151' font-size='22'>демонстрирует, что</text>
+<text x='506' y='2554' fill='#374151' font-size='22'>мультимодельные</text>
+<text x='506' y='2584' fill='#374151' font-size='22'>(кластеризованные) подходы…</text>
+<rect x='892' y='1656' width='360' height='444' rx='12' fill='#ffffff' stroke='#d97706' stroke-width='2.5'/>
+<rect x='892' y='1656' width='6' height='444' rx='3' fill='#d97706'/>
+<text x='912' y='1690' fill='#d97706' font-size='24' font-weight='700'>● 🔬 Evidence 3</text>
+<text x='912' y='1720' fill='#374151' font-size='22'>Не удалось извлечь</text>
+<text x='912' y='1750' fill='#374151' font-size='22'>содержание из целевых</text>
+<text x='912' y='1780' fill='#374151' font-size='22'>статей по сравнению</text>
+<text x='912' y='1810' fill='#374151' font-size='22'>QSAR-моделей. Извлечение</text>
+<text x='912' y='1840' fill='#374151' font-size='22'>из URL</text>
+<text x='912' y='1870' fill='#374151' font-size='22'>https://www.ncbi.nlm.nih.gov</text>
+<text x='912' y='1900' fill='#374151' font-size='22'>/pmc/articles/PMC61354/</text>
+<text x='912' y='1930' fill='#374151' font-size='22'>вернуло содержание по</text>
+<text x='912' y='1960' fill='#374151' font-size='22'>другой теме (единицы</text>
+<text x='912' y='1990' fill='#374151' font-size='22'>измерения в клинических</text>
+<text x='912' y='2020' fill='#374151' font-size='22'>системах). Доступ к</text>
+<text x='912' y='2050' fill='#374151' font-size='22'>https://www.sciencedirect.c…</text>
+</svg>

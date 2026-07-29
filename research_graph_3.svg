@@ -1,0 +1,160 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='2550' height='1710' viewBox='0 0 2550 1710' font-family='system-ui,Segoe UI,sans-serif'>
+<rect width='2550' height='1710' fill='#f4f5f7'/>
+<defs>
+<marker id='a-mut' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#6b7280'/></marker>
+<marker id='a-good' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#16a34a'/></marker>
+<marker id='a-crit' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#dc2626'/></marker>
+<marker id='a-warn' markerWidth='13' markerHeight='13' refX='11' refY='4' orient='auto'><path d='M0,0 L11,4 L0,8 Z' fill='#d97706'/></marker>
+</defs>
+<text x='80' y='52' fill='#111827' font-size='28' font-weight='700'>Research graph — Выучивает ли генеративный трансформер, обученный на траекториях эволюционно</text>
+<line x1='1138' y1='516' x2='1012' y2='682' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1030' y='586' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1075' y='603' fill='#6b7280' font-size='16' text-anchor='middle'>motivates</text>
+<line x1='1275' y1='562' x2='1275' y2='634' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1230' y='585' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1275' y='602' fill='#6b7280' font-size='16' text-anchor='middle'>motivates</text>
+<line x1='1412' y1='516' x2='1538' y2='682' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1430' y='586' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1475' y='603' fill='#6b7280' font-size='16' text-anchor='middle'>motivates</text>
+<line x1='1039' y1='1019' x2='1301' y2='1248' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1125' y='1121' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1170' y='1138' fill='#6b7280' font-size='16' text-anchor='middle'>tested by</text>
+<line x1='1447' y1='1017' x2='1716' y2='1246' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1537' y='1118' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1581' y='1135' fill='#6b7280' font-size='16' text-anchor='middle'>tested by</text>
+<line x1='1853' y1='1017' x2='2122' y2='1246' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1943' y='1118' width='89' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1987' y='1135' fill='#6b7280' font-size='16' text-anchor='middle'>tested by</text>
+<line x1='348' y1='1224' x2='674' y2='1003' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='449' y='1101' width='124' height='23' rx='4' fill='#f4f5f7'/>
+<text x='511' y='1118' fill='#6b7280' font-size='16' text-anchor='middle'>criterion for</text>
+<line x1='742' y1='1219' x2='1078' y2='999' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='848' y='1096' width='124' height='23' rx='4' fill='#f4f5f7'/>
+<text x='910' y='1113' fill='#6b7280' font-size='16' text-anchor='middle'>criterion for</text>
+<line x1='1160' y1='1224' x2='1486' y2='1003' stroke='#cbd5e1' stroke-width='1.6' stroke-dasharray='5 4' marker-end='url(#a-mut)' opacity='0.9'/>
+<rect x='1261' y='1101' width='124' height='23' rx='4' fill='#f4f5f7'/>
+<text x='1323' y='1118' fill='#6b7280' font-size='16' text-anchor='middle'>criterion for</text>
+<rect x='1095' y='114' width='360' height='444' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1095' y='114' width='6' height='444' rx='3' fill='#2563eb'/>
+<text x='1115' y='148' fill='#2563eb' font-size='24' font-weight='700'>○ ❓ Question 1</text>
+<text x='1115' y='178' fill='#374151' font-size='22'>Выучивает ли генеративный</text>
+<text x='1115' y='208' fill='#374151' font-size='22'>трансформер, обученный на</text>
+<text x='1115' y='238' fill='#374151' font-size='22'>траекториях эволюционной</text>
+<text x='1115' y='268' fill='#374151' font-size='22'>оптимизации молекул,</text>
+<text x='1115' y='298' fill='#374151' font-size='22'>недифференцируемые функции</text>
+<text x='1115' y='328' fill='#374151' font-size='22'>приспособленности в</text>
+<text x='1115' y='358' fill='#374151' font-size='22'>неявном виде, так что при</text>
+<text x='1115' y='388' fill='#374151' font-size='22'>генерации по заданному</text>
+<text x='1115' y='418' fill='#374151' font-size='22'>вектору целевых свойств</text>
+<text x='1115' y='448' fill='#374151' font-size='22'>доля валидных молекул с</text>
+<text x='1115' y='478' fill='#374151' font-size='22'>Docking score &lt; −7 и SA &gt; 3</text>
+<text x='1115' y='508' fill='#374151' font-size='22'>значимо превышает долю у…</text>
+<rect x='689' y='648' width='360' height='444' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='689' y='648' width='6' height='444' rx='3' fill='#2563eb'/>
+<text x='709' y='682' fill='#2563eb' font-size='24' font-weight='700'>○ 💡 Hypothesis 1</text>
+<text x='709' y='712' fill='#374151' font-size='22'>A generative transformer</text>
+<text x='709' y='742' fill='#374151' font-size='22'>trained on ordered</text>
+<text x='709' y='772' fill='#374151' font-size='22'>evolutionary trajectories</text>
+<text x='709' y='802' fill='#374151' font-size='22'>learns an implicit fitness</text>
+<text x='709' y='832' fill='#374151' font-size='22'>function that captures docking</text>
+<text x='709' y='862' fill='#374151' font-size='22'>score trends, as evidenced by</text>
+<text x='709' y='892' fill='#374151' font-size='22'>generating a significantly</text>
+<text x='709' y='922' fill='#374151' font-size='22'>higher proportion of</text>
+<text x='709' y='952' fill='#374151' font-size='22'>molecules with docking score</text>
+<text x='709' y='982' fill='#374151' font-size='22'>&lt; -7 compared to a model</text>
+<text x='709' y='1012' fill='#374151' font-size='22'>trained on a shuffled static</text>
+<text x='709' y='1042' fill='#374151' font-size='22'>dataset of the same molecules.</text>
+<rect x='1095' y='648' width='360' height='444' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1095' y='648' width='6' height='444' rx='3' fill='#2563eb'/>
+<text x='1115' y='682' fill='#2563eb' font-size='24' font-weight='700'>○ 💡 Hypothesis 2</text>
+<text x='1115' y='712' fill='#374151' font-size='22'>The conditional generation</text>
+<text x='1115' y='742' fill='#374151' font-size='22'>performance (fraction of valid,</text>
+<text x='1115' y='772' fill='#374151' font-size='22'>target-compliant molecules) of</text>
+<text x='1115' y='802' fill='#374151' font-size='22'>a transformer trained on</text>
+<text x='1115' y='832' fill='#374151' font-size='22'>optimization trajectories is</text>
+<text x='1115' y='862' fill='#374151' font-size='22'>significantly enhanced when</text>
+<text x='1115' y='892' fill='#374151' font-size='22'>the target property vector</text>
+<text x='1115' y='922' fill='#374151' font-size='22'>includes higher-order</text>
+<text x='1115' y='952' fill='#374151' font-size='22'>trajectory features (e.g., rate</text>
+<text x='1115' y='982' fill='#374151' font-size='22'>of fitness improvement),</text>
+<text x='1115' y='1012' fill='#374151' font-size='22'>suggesting that temporal</text>
+<text x='1115' y='1042' fill='#374151' font-size='22'>dynamics carry…</text>
+<rect x='1501' y='648' width='360' height='444' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1501' y='648' width='6' height='444' rx='3' fill='#2563eb'/>
+<text x='1521' y='682' fill='#2563eb' font-size='24' font-weight='700'>○ 💡 Hypothesis 3</text>
+<text x='1521' y='712' fill='#374151' font-size='22'>A transformer trained on</text>
+<text x='1521' y='742' fill='#374151' font-size='22'>evolutionary trajectories</text>
+<text x='1521' y='772' fill='#374151' font-size='22'>generalizes better to</text>
+<text x='1521' y='802' fill='#374151' font-size='22'>unexplored chemical regions</text>
+<text x='1521' y='832' fill='#374151' font-size='22'>with high fitness due to</text>
+<text x='1521' y='862' fill='#374151' font-size='22'>implicit learning of fitness</text>
+<text x='1521' y='892' fill='#374151' font-size='22'>gradients, as shown by</text>
+<text x='1521' y='922' fill='#374151' font-size='22'>superior performance in</text>
+<text x='1521' y='952' fill='#374151' font-size='22'>generating molecules with</text>
+<text x='1521' y='982' fill='#374151' font-size='22'>both docking score &lt; -7 and</text>
+<text x='1521' y='1012' fill='#374151' font-size='22'>SA score &gt; 3 compared to a</text>
+<text x='1521' y='1042' fill='#374151' font-size='22'>static dataset-trained model,…</text>
+<rect x='1298' y='1182' width='360' height='444' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1298' y='1182' width='6' height='444' rx='3' fill='#2563eb'/>
+<text x='1318' y='1216' fill='#2563eb' font-size='24' font-weight='700'>○ ⚙️ Method 1</text>
+<text x='1318' y='1246' fill='#374151' font-size='22'>Train two identical</text>
+<text x='1318' y='1276' fill='#374151' font-size='22'>transformer models: one on</text>
+<text x='1318' y='1306' fill='#374151' font-size='22'>ordered evolutionary</text>
+<text x='1318' y='1336' fill='#374151' font-size='22'>trajectories (time-series</text>
+<text x='1318' y='1366' fill='#374151' font-size='22'>SMILES), one on a shuffled</text>
+<text x='1318' y='1396' fill='#374151' font-size='22'>static set. Generate 1000</text>
+<text x='1318' y='1426' fill='#374151' font-size='22'>molecules conditioned on the</text>
+<text x='1318' y='1456' fill='#374151' font-size='22'>same target docking score.</text>
+<text x='1318' y='1486' fill='#374151' font-size='22'>Compute the fraction with</text>
+<text x='1318' y='1516' fill='#374151' font-size='22'>docking score &lt; -7 using a</text>
+<text x='1318' y='1546' fill='#374151' font-size='22'>pre-trained docking score</text>
+<text x='1318' y='1576' fill='#374151' font-size='22'>predictor (e.g., ML-based…</text>
+<rect x='1704' y='1182' width='360' height='414' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='1704' y='1182' width='6' height='414' rx='3' fill='#2563eb'/>
+<text x='1724' y='1216' fill='#2563eb' font-size='24' font-weight='700'>○ ⚙️ Method 2</text>
+<text x='1724' y='1246' fill='#374151' font-size='22'>Use a trained</text>
+<text x='1724' y='1276' fill='#374151' font-size='22'>trajectory-based transformer</text>
+<text x='1724' y='1306' fill='#374151' font-size='22'>to generate molecules under</text>
+<text x='1724' y='1336' fill='#374151' font-size='22'>two conditioning regimes: (1)</text>
+<text x='1724' y='1366' fill='#374151' font-size='22'>target docking score only, (2)</text>
+<text x='1724' y='1396' fill='#374151' font-size='22'>target docking score plus</text>
+<text x='1724' y='1426' fill='#374151' font-size='22'>trajectory-derived signal (e.g.,</text>
+<text x='1724' y='1456' fill='#374151' font-size='22'>fitness improvement trend).</text>
+<text x='1724' y='1486' fill='#374151' font-size='22'>Compare the valid molecule</text>
+<text x='1724' y='1516' fill='#374151' font-size='22'>fractions achieving both</text>
+<text x='1724' y='1546' fill='#374151' font-size='22'>docking &lt; -7 and SA &gt; 3.</text>
+<rect x='2110' y='1182' width='360' height='414' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='2110' y='1182' width='6' height='414' rx='3' fill='#2563eb'/>
+<text x='2130' y='1216' fill='#2563eb' font-size='24' font-weight='700'>○ ⚙️ Method 3</text>
+<text x='2130' y='1246' fill='#374151' font-size='22'>Sample latent vectors from</text>
+<text x='2130' y='1276' fill='#374151' font-size='22'>unexplored regions of</text>
+<text x='2130' y='1306' fill='#374151' font-size='22'>chemical space (e.g., far from</text>
+<text x='2130' y='1336' fill='#374151' font-size='22'>training data in fingerprint</text>
+<text x='2130' y='1366' fill='#374151' font-size='22'>PCA). Condition both</text>
+<text x='2130' y='1396' fill='#374151' font-size='22'>trajectory-trained and</text>
+<text x='2130' y='1426' fill='#374151' font-size='22'>static-trained models on these.</text>
+<text x='2130' y='1456' fill='#374151' font-size='22'>Compare the fraction of</text>
+<text x='2130' y='1486' fill='#374151' font-size='22'>generated molecules</text>
+<text x='2130' y='1516' fill='#374151' font-size='22'>satisfying docking &lt; -7 and SA</text>
+<text x='2130' y='1546' fill='#374151' font-size='22'>&gt; 3.</text>
+<rect x='80' y='1182' width='360' height='204' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='80' y='1182' width='6' height='204' rx='3' fill='#2563eb'/>
+<text x='100' y='1216' fill='#2563eb' font-size='24' font-weight='700'>○ 🎯 Criteria 1</text>
+<text x='100' y='1246' fill='#374151' font-size='22'>proportion of generated</text>
+<text x='100' y='1276' fill='#374151' font-size='22'>molecules with docking &lt; -7</text>
+<text x='100' y='1306' fill='#374151' font-size='22'>and SA &gt; 3 — p &lt; 0.01</text>
+<text x='100' y='1336' fill='#374151' font-size='22'>(two-proportion z-test)</text>
+<rect x='486' y='1182' width='360' height='174' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='486' y='1182' width='6' height='174' rx='3' fill='#2563eb'/>
+<text x='506' y='1216' fill='#2563eb' font-size='24' font-weight='700'>○ 🎯 Criteria 2</text>
+<text x='506' y='1246' fill='#374151' font-size='22'>fraction of valid, compliant</text>
+<text x='506' y='1276' fill='#374151' font-size='22'>molecules generated —</text>
+<text x='506' y='1306' fill='#374151' font-size='22'>relative improvement &gt; 15%</text>
+<rect x='892' y='1182' width='360' height='204' rx='12' fill='#ffffff' stroke='#2563eb' stroke-width='2.5'/>
+<rect x='892' y='1182' width='6' height='204' rx='3' fill='#2563eb'/>
+<text x='912' y='1216' fill='#2563eb' font-size='24' font-weight='700'>○ 🎯 Criteria 3</text>
+<text x='912' y='1246' fill='#374151' font-size='22'>proportion of conforming</text>
+<text x='912' y='1276' fill='#374151' font-size='22'>molecules in unexplored</text>
+<text x='912' y='1306' fill='#374151' font-size='22'>regions — p &lt; 0.01</text>
+<text x='912' y='1336' fill='#374151' font-size='22'>(two-proportion z-test), OR &gt; 2</text>
+</svg>

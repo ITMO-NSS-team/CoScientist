@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoScientist — графы прогона</title>
+<style>
+  :root{
+    --bg:#eef1f6; --panel:#ffffff; --canvas:#fbfcfe; --line:#dde3ec;
+    --ink:#182231; --muted:#5b6b80; --faint:#93a1b4;
+    --edge:#c2ccda; --edge-lab:#7c8aa0;
+    --system:#3730a3; --goal:#b45309; --agent:#0f766e; --tool:#64748b; --result:#15803d;
+    --q:#4338ca; --evi:#0f766e; --concl:#7c3aed; --sat:#64748b;
+    --ok:#15803d; --wait:#b45309; --new:#1d4ed8; --no:#b4231d;
+    --shadow:0 1px 2px rgba(24,34,49,.06),0 10px 30px -14px rgba(24,34,49,.22);
+    --sans:ui-sans-serif,system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0d121a; --panel:#141b26; --canvas:#0f151f; --line:#26303e;
+    --ink:#eaf0f7; --muted:#9fb0c4; --faint:#63748c;
+    --edge:#31404f; --edge-lab:#7f92aa;
+    --system:#a5b4fc; --goal:#f2b263; --agent:#5fd7c6; --tool:#93a5bd; --result:#63d391;
+    --q:#a5b4fc; --evi:#5fd7c6; --concl:#c4a5fb; --sat:#8fa0b8;
+    --ok:#63d391; --wait:#f2b263; --new:#7ea2ff; --no:#f08a83;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 34px -16px rgba(0,0,0,.7);
+  }}
+  :root[data-theme="light"]{--bg:#eef1f6;--panel:#fff;--canvas:#fbfcfe;--line:#dde3ec;--ink:#182231;--muted:#5b6b80;--faint:#93a1b4;--edge:#c2ccda;--edge-lab:#7c8aa0;--system:#3730a3;--goal:#b45309;--agent:#0f766e;--tool:#64748b;--result:#15803d;--q:#4338ca;--evi:#0f766e;--concl:#7c3aed;--sat:#64748b;--ok:#15803d;--wait:#b45309;--new:#1d4ed8;--no:#b4231d;--shadow:0 1px 2px rgba(24,34,49,.06),0 10px 30px -14px rgba(24,34,49,.22);}
+  :root[data-theme="dark"]{--bg:#0d121a;--panel:#141b26;--canvas:#0f151f;--line:#26303e;--ink:#eaf0f7;--muted:#9fb0c4;--faint:#63748c;--edge:#31404f;--edge-lab:#7f92aa;--system:#a5b4fc;--goal:#f2b263;--agent:#5fd7c6;--tool:#93a5bd;--result:#63d391;--q:#a5b4fc;--evi:#5fd7c6;--concl:#c4a5fb;--sat:#8fa0b8;--ok:#63d391;--wait:#f2b263;--new:#7ea2ff;--no:#f08a83;--shadow:0 1px 2px rgba(0,0,0,.4),0 12px 34px -16px rgba(0,0,0,.7);}
+
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;padding:30px clamp(14px,3vw,40px) 60px}
+  .wrap{max-width:1500px;margin:0 auto}
+  h1{font-size:clamp(22px,2.8vw,32px);font-weight:800;letter-spacing:-.01em;margin-bottom:4px}
+  .sub{color:var(--muted);font-size:15px;max-width:80ch;margin-bottom:26px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:clamp(16px,2vw,26px);margin-bottom:30px}
+  .phead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:2px}
+  .phead h2{font-size:clamp(18px,2vw,24px);font-weight:800;letter-spacing:-.01em}
+  .pill{font-size:12px;font-weight:700;color:var(--faint);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-variant-numeric:tabular-nums}
+  .psub{color:var(--muted);font-size:14px;margin:3px 0 16px;max-width:90ch}
+  .stage{background:var(--canvas);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  svg{display:block;width:100%;height:auto}
+  .legend{display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:16px}
+  .leg{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--muted)}
+  .leg .sw{width:14px;height:14px;border-radius:5px;flex:none}
+  .leg .sw.round{border-radius:50%}
+  .foot{color:var(--faint);font-size:13px;text-align:center;margin-top:8px}
+  .foot code{font-family:var(--mono);font-size:12px;background:var(--canvas);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  /* svg text */
+  .nlab{font-family:var(--sans);fill:var(--ink)}
+  .elab{font-family:var(--sans);fill:var(--edge-lab);font-size:11px;font-weight:600}
+  .tlab{font-family:var(--sans);fill:var(--muted);font-size:11px}
+  .badge{font-family:var(--sans);font-weight:800}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CoScientist — два графа одного прогона</h1>
+  <div class="sub">Вопрос: «Является ли аспирин вероятным ингибитором COX-2?». Слева — как система выполняла задачу (лог), справа по смыслу — что она выяснила (научный граф). Обе схемы построены прямо из данных прогона.</div>
+
+  <div class="panel">
+    <div class="phead"><h2>Научный граф</h2><span class="pill" id="rcount"></span></div>
+    <div class="psub">Вопрос → гипотезы → доказательства → выводы. Цвет гипотезы = её статус после проверки.</div>
+    <div class="stage"><svg id="research" viewBox="0 0 1440 760" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Научный граф"></svg></div>
+    <div class="legend">
+      <span class="leg"><span class="sw" style="background:var(--q)"></span>Вопрос</span>
+      <span class="leg"><span class="sw round" style="background:var(--ok)"></span>Гипотеза · подтверждена</span>
+      <span class="leg"><span class="sw round" style="background:var(--wait)"></span>отложена</span>
+      <span class="leg"><span class="sw round" style="background:var(--new)"></span>сформулирована</span>
+      <span class="leg"><span class="sw" style="background:var(--evi)"></span>Доказательство</span>
+      <span class="leg"><span class="sw" style="background:var(--concl)"></span>Вывод</span>
+      <span class="leg"><span class="sw" style="background:var(--sat)"></span>Метод · критерий · инструмент</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="phead"><h2>Лог выполнения</h2><span class="pill" id="ecount"></span></div>
+    <div class="psub">Дерево растёт из центральной ноды системы: запрос человека → оркестратор → агенты → их вызовы инструментов.</div>
+    <div class="stage"><svg id="exec" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Лог выполнения"></svg></div>
+    <div class="legend">
+      <span class="leg"><span class="sw round" style="background:var(--system)"></span>Система</span>
+      <span class="leg"><span class="sw round" style="background:var(--goal)"></span>Запрос человека</span>
+      <span class="leg"><span class="sw round" style="background:var(--agent)"></span>Агент</span>
+      <span class="leg"><span class="sw round" style="background:var(--tool)"></span>Вызов инструмента</span>
+      <span class="leg"><span class="sw round" style="background:var(--result)"></span>Результат</span>
+    </div>
+  </div>
+
+  <div class="foot">Источник: <code>execution.json</code> + <code>research_active.json</code> реального прогона. Для слайда — скриншот нужной панели.</div>
+</div>
+
+<script>
+const DATA = {"execution": {"nodes": [{"id": "system:root", "kind": "system", "label": "CoScientist multi-agent system", "agent": null, "status": "success"}, {"id": "agent:OrchestratorAgent", "kind": "agent", "label": "OrchestratorAgent", "agent": "OrchestratorAgent", "status": "success"}, {"id": "agent:HypothesesAgent", "kind": "agent", "label": "HypothesesAgent", "agent": "HypothesesAgent", "status": "success"}, {"id": "agent:ResearchAgent", "kind": "agent", "label": "ResearchAgent", "agent": "ResearchAgent", "status": "success"}, {"id": "goal:e-5c6fcdc0-b2e6-4019-bfeb-2214d08fa6fa", "kind": "goal", "label": "Is aspirin a plausible COX-2 inhibitor? Propose 2–3 hypotheses and gather brief literature evidence for each. Literature and reasoning only — do NOT write or run any code", "agent": null, "status": "success"}, {"id": "tool:call_027c", "kind": "tool_call", "label": "research_init", "agent": "OrchestratorAgent", "status": "success"}, {"id": "tool:call_2446", "kind": "tool_call", "label": "read_research_graph", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_12f9", "kind": "tool_call", "label": "research_overview", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_3e29", "kind": "tool_call", "label": "get_entity_neighbors", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_9a02", "kind": "tool_call", "label": "get_entity_neighbors", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_cb6e", "kind": "tool_call", "label": "search_knowledge_memory", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_9011", "kind": "tool_call", "label": "research_commit", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_0860", "kind": "tool_call", "label": "research_context_slice", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_0338", "kind": "tool_call", "label": "research_context_slice", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_d8d7", "kind": "tool_call", "label": "research_context_slice", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_b732", "kind": "tool_call", "label": "get_agents_info", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_851b", "kind": "tool_call", "label": "get_active_tasks", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_2317", "kind": "tool_call", "label": "update_task_status", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_d95d", "kind": "tool_call", "label": "search_knowledge_memory", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_e556", "kind": "tool_call", "label": "search_knowledge_memory", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_5e0d", "kind": "tool_call", "label": "search_knowledge_memory", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_287c", "kind": "tool_call", "label": "search_knowledge_memory", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_a1eb", "kind": "tool_call", "label": "search_knowledge_memory", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_a006", "kind": "tool_call", "label": "research_commit", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_e13b", "kind": "tool_call", "label": "research_commit", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_fb7b", "kind": "tool_call", "label": "research_commit", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_24c6", "kind": "tool_call", "label": "research_commit", "agent": "HypothesesAgent", "status": "success"}, {"id": "tool:call_5332", "kind": "tool_call", "label": "read_research_graph", "agent": "OrchestratorAgent", "status": "success"}, {"id": "tool:call_ab07", "kind": "tool_call", "label": "research_overview", "agent": "OrchestratorAgent", "status": "success"}, {"id": "tool:call_852b", "kind": "tool_call", "label": "research_triggers", "agent": "OrchestratorAgent", "status": "success"}, {"id": "tool:call_2e9f", "kind": "tool_call", "label": "research_set_focus", "agent": "OrchestratorAgent", "status": "success"}, {"id": "tool:call_e23f", "kind": "tool_call", "label": "tavily_search", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_d266", "kind": "tool_call", "label": "tavily_search", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_34d4", "kind": "tool_call", "label": "research_commit", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_c0f5", "kind": "tool_call", "label": "research_commit", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_2174", "kind": "tool_call", "label": "research_commit", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_03d8", "kind": "tool_call", "label": "research_set_focus", "agent": "OrchestratorAgent", "status": "success"}, {"id": "tool:call_3974", "kind": "tool_call", "label": "tavily_search", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_257e", "kind": "tool_call", "label": "update_task_status", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_c551", "kind": "tool_call", "label": "tavily_extract", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_6a7e", "kind": "tool_call", "label": "tavily_search", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_559c", "kind": "tool_call", "label": "research_commit", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_6244", "kind": "tool_call", "label": "research_overview", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_263a", "kind": "tool_call", "label": "get_knowledge_memory", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_3871", "kind": "tool_call", "label": "research_overview", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_253f", "kind": "tool_call", "label": "get_graph_history", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_ce06", "kind": "tool_call", "label": "tavily_search", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_1e8d", "kind": "tool_call", "label": "tavily_extract", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_eac0", "kind": "tool_call", "label": "tavily_search", "agent": "ResearchAgent", "status": "success"}, {"id": "tool:call_ad63", "kind": "tool_call", "label": "search_knowledge_memory", "agent": "OrchestratorAgent", "status": "success"}, {"id": "result:e-5c6fcdc0-b2e6-4019-bfeb-2214d08fa6fa", "kind": "result", "label": "Based on the prior knowledge and evidence, here are 2–3 hypotheses with brief literature support addressing whether aspirin is a plausible COX-2 inhibitor:\n\n### Hypothesis 1: Aspirin irreversibly inhi…", "agent": "OrchestratorAgent", "status": "success"}], "edges": [{"src": "system:root", "dst": "goal:e-5c6fcdc0-b2e6-4019-bfeb-2214d08fa6fa", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "tool:call_027c", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "agent:HypothesesAgent", "type": "delegated_to"}, {"src": "agent:OrchestratorAgent", "dst": "tool:call_5332", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "tool:call_ab07", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "tool:call_852b", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "tool:call_2e9f", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "agent:ResearchAgent", "type": "delegated_to"}, {"src": "agent:OrchestratorAgent", "dst": "tool:call_03d8", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "tool:call_ad63", "type": "caused_by"}, {"src": "agent:OrchestratorAgent", "dst": "result:e-5c6fcdc0-b2e6-4019-bfeb-2214d08fa6fa", "type": "produced"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_2446", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_12f9", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_3e29", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_9a02", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_cb6e", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_9011", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_0860", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_0338", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_d8d7", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_b732", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_851b", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_2317", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_d95d", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_e556", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_5e0d", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_287c", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_a1eb", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_a006", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_e13b", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_fb7b", "type": "caused_by"}, {"src": "agent:HypothesesAgent", "dst": "tool:call_24c6", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_e23f", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_d266", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_34d4", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_c0f5", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_2174", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_3974", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_257e", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_c551", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_6a7e", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_559c", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_6244", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_263a", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_3871", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_253f", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_ce06", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_1e8d", "type": "caused_by"}, {"src": "agent:ResearchAgent", "dst": "tool:call_eac0", "type": "caused_by"}, {"src": "goal:e-5c6fcdc0-b2e6-4019-bfeb-2214d08fa6fa", "dst": "agent:OrchestratorAgent", "type": "caused_by"}]}, "research": {"nodes": [{"id": "Q1", "type": "ResearchQuestion", "status": "open", "text": "Is aspirin a plausible COX-2 inhibitor?", "sub": null, "src": null}, {"id": "R1", "type": "Resource", "status": "available", "text": "", "sub": null, "src": null}, {"id": "H1", "type": "Hypothesis", "status": "confirmed", "text": "Aspirin is a plausible COX-2 inhibitor due to its irreversible acetylation of Ser529 in the COX-2 active site, leading to sustained inhibition.", "sub": null, "src": null}, {"id": "H2", "type": "Hypothesis", "status": "postponed", "text": "Aspirin's COX-2 inhibition is selective over COX-1 at low concentrations, contributing to anti-inflammatory effects with reduced gastrointestinal toxicity.", "sub": null, "src": null}, {"id": "H3", "type": "Hypothesis", "status": "formulated", "text": "Aspirin promotes the biosynthesis of 15(R)-HETE and anti-inflammatory lipoxins via COX-2 acetylation, representing a distinct plausible mechanism beyond simple inhibition.", "sub": null, "src": null}, {"id": "VM1", "type": "VerificationMethod", "status": "planned", "text": "", "sub": null, "src": null}, {"id": "CC1", "type": "ConfirmationCriteria", "status": "met", "text": "IC50 < 100 µM for COX-2", "sub": null, "src": null}, {"id": "VM2", "type": "VerificationMethod", "status": "planned", "text": "", "sub": null, "src": null}, {"id": "CC2", "type": "ConfirmationCriteria", "status": "not_met", "text": "IC50 ratio (COX-1 vs COX-2) > 5", "sub": null, "src": null}, {"id": "VM3", "type": "VerificationMethod", "status": "planned", "text": "", "sub": null, "src": null}, {"id": "T1", "type": "Tool", "status": "needs_adaptation", "text": "Literature Analysis Tool", "sub": null, "src": null}, {"id": "E1", "type": "Evidence", "status": "obtained", "text": "Aspirin irreversibly acetylates Ser530 in COX-2 (often cited as Ser516 in some sources), leading to altered enzymatic activity rather than complete inhibition. Acetylated COX-2 produces 15R-HETE and 15R-PGs, which have anti-inflammatory and antiplatelet effects. This mechanism is distinct from COX-1, where acetylation fully inactivates the enzyme.", "sub": "literature", "src": "PMC6355089, PNAS 10.1073/pnas.0909765106"}, {"id": "E2", "type": "Evidence", "status": "obtained", "text": "The IC50 of aspirin for COX-2 inhibition is approximately 30 µM, based on studies comparing its potency against COX-1 (IC50 ~3.5 µM), indicating lower potency for COX-2.", "sub": "literature", "src": "DOI:10.1007/s10555-017-9675-z"}, {"id": "E3", "type": "Evidence", "status": "obtained", "text": "Aspirin's irreversible inhibition of COX enzymes is well established, with acetylation of a serine residue (Ser530 in COX-1, Ser516/Ser530 in COX-2) preventing arachidonic acid binding, confirmed by crystallography and functional assays.", "sub": "literature", "src": "PMC64725, Wikipedia"}, {"id": "EB1", "type": "EmpiricalBase", "status": "created", "text": "", "sub": null, "src": null}, {"id": "CL1", "type": "Conclusion", "status": "draft", "text": "Aspirin demonstrates a COX-2 inhibitory effect with an IC50 of approximately 30 µM, which is below the 100 µM threshold, and its irreversible acetylation of Ser530 (commonly cited as Ser516 in some sources) in the COX-2 active site is well-documented, leading to sustained inhibition and altered eicosanoid production. This mechanism, while distinct from COX-1 inactivation, supports its role as a plausible COX-2 inhibitor.", "sub": null, "src": null}, {"id": "E4", "type": "Evidence", "status": "obtained", "text": "The provided text discusses EGCG and its effects on VEGF and MMP-9 in colon cancer cells, not aspirin or its COX selectivity. No relevant information on aspirin's COX-1/COX-2 IC50 ratios or gastrointestinal toxicity was found in the retrieved content.", "sub": "literature", "src": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3813811/"}, {"id": "CL2", "type": "Conclusion", "status": "draft", "text": "The available evidence does not provide information on aspirin's COX-1 and COX-2 inhibitory activity or the IC50 ratio required to assess selectivity. Without data on the IC50 ratio (COX-1 vs COX-2), it is not possible to determine whether aspirin selectively inhibits COX-2 over COX-1 at low concentrations.", "sub": null, "src": null}], "edges": [{"src": "Q1", "dst": "H1", "type": "motivates"}, {"src": "Q1", "dst": "H2", "type": "motivates"}, {"src": "Q1", "dst": "H3", "type": "motivates"}, {"src": "Q1", "dst": "EB1", "type": "defines_scope"}, {"src": "H1", "dst": "VM1", "type": "tested_by"}, {"src": "H2", "dst": "VM2", "type": "tested_by"}, {"src": "H3", "dst": "VM3", "type": "tested_by"}, {"src": "CC1", "dst": "H1", "type": "formulated_for"}, {"src": "CC1", "dst": "CL1", "type": "determines_sufficiency"}, {"src": "CC2", "dst": "H2", "type": "formulated_for"}, {"src": "CC2", "dst": "CL2", "type": "determines_sufficiency"}, {"src": "VM3", "dst": "T1", "type": "uses"}, {"src": "E1", "dst": "H1", "type": "supports"}, {"src": "E1", "dst": "Q1", "type": "relates_to"}, {"src": "E2", "dst": "H1", "type": "relates_to"}, {"src": "E2", "dst": "H1", "type": "supports"}, {"src": "E3", "dst": "H1", "type": "relates_to"}, {"src": "E3", "dst": "H1", "type": "supports"}, {"src": "CL1", "dst": "E1", "type": "based_on"}, {"src": "CL1", "dst": "E2", "type": "based_on"}, {"src": "CL1", "dst": "E3", "type": "based_on"}, {"src": "E4", "dst": "H2", "type": "relates_to"}]}};
+const SVGNS="http://www.w3.org/2000/svg";
+const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function el(t,a){const e=document.createElementNS(SVGNS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function wrap(s,max){const w=(s||"").split(/\s+/),out=[];let l="";for(const x of w){if((l+" "+x).trim().length>max){if(l)out.push(l);l=x;}else l=(l?l+" ":"")+x;}if(l)out.push(l);return out;}
+function trunc(s,n){s=s||"";return s.length>n?s.slice(0,n-1)+"…":s;}
+
+/* curved edge between two points */
+function edgePath(x1,y1,x2,y2,curve){
+  const mx=(x1+x2)/2,my=(y1+y2)/2;
+  if(curve==="h"){return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;}
+  return `M${x1},${y1} L${x2},${y2}`;
+}
+function defsArrow(svg,id,color){
+  let defs=svg.querySelector("defs");if(!defs){defs=el("defs",{});svg.appendChild(defs);}
+  const m=el("marker",{id,viewBox:"0 0 10 10",refX:9,refY:5,markerWidth:7,markerHeight:7,orient:"auto-start-reverse"});
+  m.appendChild(el("path",{d:"M0,0 L10,5 L0,10 z",fill:color}));defs.appendChild(m);
+}
+
+/* ---------------- RESEARCH: layered DAG ---------------- */
+function renderResearch(){
+  const svg=document.getElementById("research");const W=1440,H=760;
+  const nodes=DATA.research.nodes, edges=DATA.research.edges;
+  const by={};nodes.forEach(n=>by[n.id]=n);
+  document.getElementById("rcount").textContent=nodes.length+" узлов · "+edges.length+" связей";
+  defsArrow(svg,"ar-r",cssv("--edge"));
+
+  // columns by role
+  const colOf=t=>({ResearchQuestion:0,EmpiricalBase:0,Resource:0,Hypothesis:1,VerificationMethod:1.55,ConfirmationCriteria:1.55,Tool:1.55,Evidence:2.55,Conclusion:3.5})[t] ?? 2;
+  const X=c=>90+c*(1260/3.5);
+  const groups={};nodes.forEach(n=>{const c=colOf(n.type);(groups[c]=groups[c]||[]).push(n);});
+  // order hypotheses H1,H2,H3; evidence near supported H
+  const pos={};
+  Object.keys(groups).map(Number).sort((a,b)=>a-b).forEach(c=>{
+    let g=groups[c].slice();
+    g.sort((a,b)=>a.id.replace(/\D/g,'')*1-b.id.replace(/\D/g,'')*1);
+    const n=g.length, top=90, bot=H-70, gap=(bot-top)/Math.max(n,1);
+    g.forEach((node,i)=>{pos[node.id]={x:X(c),y:top+gap*(i+0.5),node};});
+  });
+
+  // edges first (under nodes)
+  const RLAB={motivates:"мотивирует",tested_by:"проверяется",requires:"нужен инструмент",uses:"использует",consumes:"расходует",produces:"даёт",supports:"подтверждает",refutes:"опровергает",refines:"уточняет",relates_to:"связано",based_on:"на основе",determines_sufficiency:"достаточность",formulated_for:"критерий для",defines_scope:"задаёт рамки",applies_to:"применимо"};
+  const eg=el("g",{});svg.appendChild(eg);
+  edges.forEach(e=>{const a=pos[e.src],b=pos[e.dst];if(!a||!b)return;
+    const strong=(e.type==="supports"||e.type==="based_on"||e.type==="motivates"||e.type==="tested_by");
+    const col=e.type==="supports"?cssv("--ok"):e.type==="refutes"?cssv("--no"):cssv("--edge");
+    eg.appendChild(el("path",{d:edgePath(a.x,a.y,b.x,b.y,"h"),fill:"none",stroke:col,
+      "stroke-width":strong?2:1.2,opacity:strong?.85:.5,"marker-end":"url(#ar-r)"}));
+    if(strong&&RLAB[e.type]){const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+      const t=el("text",{x:mx,y:my-4,class:"elab","text-anchor":"middle"});t.textContent=RLAB[e.type];
+      const bb=el("rect",{}); // bg for label
+      eg.appendChild(t);
+    }
+  });
+
+  // nodes
+  const ng=el("g",{});svg.appendChild(ng);
+  const RU={ResearchQuestion:"Вопрос",Hypothesis:"Гипотеза",Evidence:"Доказательство",Conclusion:"Вывод",VerificationMethod:"Метод проверки",ConfirmationCriteria:"Критерий",Tool:"Инструмент",EmpiricalBase:"Эмп. база",Resource:"Ресурс"};
+  const STLAB={confirmed:["Подтверждена",cssv("--ok"),"✓"],postponed:["Отложена",cssv("--wait"),"⏸"],formulated:["Сформулирована",cssv("--new"),"○"],refuted:["Опровергнута",cssv("--no"),"✗"]};
+  nodes.forEach(n=>{const p=pos[n.id];if(!p)return;const t=n.type;
+    let w,h,fill,stroke,ink=cssv("--ink"),lines,title;
+    const soft=c=>`color-mix(in srgb, ${c} 12%, ${cssv("--panel")})`;
+    if(t==="Hypothesis"){const st=STLAB[n.status]||["",cssv("--new"),""];
+      w=250;h=104;stroke=st[1];fill=`color-mix(in srgb, ${st[1]} 10%, ${cssv("--panel")})`;
+      title=RU[t]+" "+n.id.replace(/\D/g,'');lines=wrap(trunc(n.text,140),34);
+    } else if(t==="ResearchQuestion"){w=230;h=78;stroke=cssv("--q");fill=soft(cssv("--q"));title="Вопрос";lines=wrap(trunc(n.text,90),30);}
+    else if(t==="Evidence"){const sup=edges.some(e=>e.src===n.id&&e.dst.startsWith("H")&&e.type==="supports");
+      w=232;h=86;stroke=sup?cssv("--evi"):cssv("--sat");fill=soft(stroke);title="Доказательство "+n.id.replace(/\D/g,'')+(n.sub?" · "+({literature:"литература",experimental:"эксперимент",computational:"расчёт"}[n.sub]||n.sub):"");lines=wrap(trunc(n.text,120),35);}
+    else if(t==="Conclusion"){w=234;h=92;stroke=cssv("--concl");fill=soft(cssv("--concl"));title="Вывод "+n.id.replace(/\D/g,'');lines=wrap(trunc(n.text,130),36);}
+    else {w=150;h=58;stroke=cssv("--sat");fill=soft(cssv("--sat"));title=RU[t]||t;lines=wrap(trunc(n.text||n.id,60),26);}
+    p.w=w;p.h=h;
+    const g=el("g",{transform:`translate(${p.x-w/2},${p.y-h/2})`});
+    g.appendChild(el("rect",{x:0,y:0,width:w,height:h,rx:12,fill,stroke,"stroke-width":1.7}));
+    if(t==="Hypothesis"){g.appendChild(el("rect",{x:0,y:0,width:5,height:h,rx:0,fill:stroke}));}
+    const tt=el("text",{x:14,y:20,class:"nlab","font-size":12.5,"font-weight":800,fill:stroke});tt.textContent=title;g.appendChild(tt);
+    lines.slice(0,3).forEach((ln,i)=>{const tx=el("text",{x:14,y:38+i*15,class:"nlab","font-size":11.5,fill:ink,opacity:.85});tx.textContent=ln;g.appendChild(tx);});
+    if(t==="Hypothesis"){const st=STLAB[n.status];if(st){const by=h-10;
+      const badge=el("text",{x:14,y:by,"font-size":11.5,"font-weight":800,fill:st[1],class:"badge"});badge.textContent=st[2]+" "+st[0];g.appendChild(badge);}}
+    if(n.src){const s=el("text",{x:14,y:h-9,"font-size":10,fill:cssv("--faint")});s.textContent=trunc(n.src,40);if(t!=="Hypothesis")g.appendChild(s);}
+    ng.appendChild(g);
+  });
+}
+
+/* ---------------- EXECUTION: radial tree ---------------- */
+function renderExec(){
+  const svg=document.getElementById("exec");const W=1440,H=900,cx=W/2,cy=H/2;
+  const nodes=DATA.execution.nodes, edges=DATA.execution.edges;
+  const by={};nodes.forEach(n=>by[n.id]=n);
+  document.getElementById("ecount").textContent=nodes.length+" узлов · "+edges.length+" связей";
+  // children map (directed)
+  const kids={};nodes.forEach(n=>kids[n.id]=[]);const indeg={};nodes.forEach(n=>indeg[n.id]=0);
+  edges.forEach(e=>{if(by[e.src]&&by[e.dst]){kids[e.src].push(e.dst);indeg[e.dst]++;}});
+  const root=nodes.find(n=>indeg[n.id]===0&&n.kind==="system")?.id || nodes.find(n=>indeg[n.id]===0).id;
+  // depth
+  const depth={};const order=[];(function bfs(){let q=[[root,0]];const seen=new Set([root]);while(q.length){const[id,d]=q.shift();depth[id]=d;order.push(id);kids[id].forEach(c=>{if(!seen.has(c)){seen.add(c);q.push([c,d+1]);}});}})();
+  // angle: assign leaves, post-order average
+  let leafA=0;const ang={};const maxD=Math.max(...Object.values(depth));
+  const nLeaves=order.filter(id=>kids[id].filter(c=>depth[c]>depth[id]).length===0).length;
+  const step=(2*Math.PI)/Math.max(nLeaves,1);
+  function assign(id){const ch=kids[id].filter(c=>depth[c]>depth[id]);
+    if(ch.length===0){ang[id]=leafA*step;leafA++;return ang[id];}
+    let s=0;ch.forEach(c=>s+=assign(c));ang[id]=s/ch.length;return ang[id];}
+  assign(root);
+  const ringBase=[0,120,210,315,430];
+  const R=d=>d<ringBase.length?ringBase[d]:ringBase[ringBase.length-1]+(d-ringBase.length+1)*90;
+  const pos={};nodes.forEach(n=>{const a=ang[n.id]-Math.PI/2, r=R(depth[n.id]);
+    pos[n.id]={x:cx+r*Math.cos(a),y:cy+r*Math.sin(a),a:ang[n.id],r,d:depth[n.id]};});
+  pos[root]={x:cx,y:cy,a:0,r:0,d:0};
+
+  // edges
+  const eg=el("g",{});svg.appendChild(eg);
+  edges.forEach(e=>{const a=pos[e.src],b=pos[e.dst];if(!a||!b)return;
+    const del=(e.type==="delegated_to");const prod=(e.type==="produced");
+    const col=del?cssv("--agent"):prod?cssv("--result"):cssv("--edge");
+    eg.appendChild(el("path",{d:`M${a.x},${a.y} L${b.x},${b.y}`,stroke:col,"stroke-width":del?2.4:prod?2:1,opacity:del||prod?.8:.45,fill:"none"}));
+  });
+
+  // nodes
+  const ng=el("g",{});svg.appendChild(ng);
+  const AGRU={OrchestratorAgent:"Оркестратор",HypothesesAgent:"Генератор гипотез",ResearchAgent:"Исследователь"};
+  const TRU={research_init:"инициализация",research_commit:"запись в граф",research_overview:"обзор графа",research_triggers:"триггеры",research_set_focus:"фокус",research_context_slice:"срез контекста",read_research_graph:"чтение графа",search_knowledge_memory:"память знаний",get_knowledge_memory:"память знаний",get_entity_neighbors:"соседи узла",get_agents_info:"инфо агентов",get_active_tasks:"задачи",update_task_status:"статус задачи",get_graph_history:"история графа",tavily_search:"веб-поиск",tavily_extract:"извлечение текста"};
+  nodes.forEach(n=>{const p=pos[n.id];const k=n.kind;
+    let col,rad,lab,fw=700,fs=12;
+    if(k==="system"){col=cssv("--system");rad=0;}
+    else if(k==="goal"){col=cssv("--goal");rad=13;lab="Запрос человека";}
+    else if(k==="agent"){col=cssv("--agent");rad=11;lab=AGRU[n.agent]||n.label;fs=13;}
+    else if(k==="result"){col=cssv("--result");rad=11;lab="Результат";}
+    else {col=cssv("--tool");rad=5;lab=TRU[n.label]||n.label;fw=500;fs=10.5;}
+    if(k==="system"){
+      const w=250,h=48;const g=el("g",{transform:`translate(${p.x-w/2},${p.y-h/2})`});
+      g.appendChild(el("rect",{x:0,y:0,width:w,height:h,rx:24,fill:`color-mix(in srgb, ${col} 16%, ${cssv("--panel")})`,stroke:col,"stroke-width":2}));
+      const t=el("text",{x:w/2,y:h/2+4,"text-anchor":"middle","font-size":13.5,"font-weight":800,fill:col,class:"nlab"});t.textContent="CoScientist";g.appendChild(t);
+      ng.appendChild(g);return;
+    }
+    ng.appendChild(el("circle",{cx:p.x,cy:p.y,r:rad,fill:`color-mix(in srgb, ${col} 22%, ${cssv("--panel")})`,stroke:col,"stroke-width":k==="tool_call"?1.4:2.2}));
+    // label, rotated radially for tools, straight for big nodes
+    if(k==="tool_call"){
+      let deg=p.a*180/Math.PI - 90;const left=(deg>90||deg<-90);const rot=left?deg+180:deg;
+      const dx=(rad+5)*Math.cos(p.a-Math.PI/2),dy=(rad+5)*Math.sin(p.a-Math.PI/2);
+      const t=el("text",{x:p.x+dx,y:p.y+dy,transform:`rotate(${rot} ${p.x+dx} ${p.y+dy})`,
+        "text-anchor":left?"end":"start","dominant-baseline":"middle","font-size":fs,fill:cssv("--muted"),class:"nlab"});
+      t.textContent=lab;ng.appendChild(t);
+    } else {
+      const t=el("text",{x:p.x,y:p.y-rad-7,"text-anchor":"middle","font-size":fs,"font-weight":fw,fill:col,class:"nlab"});
+      t.textContent=lab;ng.appendChild(t);
+    }
+  });
+}
+
+renderResearch();
+renderExec();
+</script>
+</body>
+</html>

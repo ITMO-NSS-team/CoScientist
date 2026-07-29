@@ -1,0 +1,87 @@
+\section{The Research Context Graph}
+\label{sec:research-graph}
+
+A multi-agent scientific system must maintain shared state across its agents: the
+hypotheses under consideration, the evidence bearing on each, and the steps that
+remain. Existing systems typically hold this state as natural-language
+dialogue, relaying intermediate results between agents, or to a central
+orchestrator, as
+prose~\citep{boiko2023coscientist,google2025coscientist,swanson2025virtuallab}.
+Prose is an inadequate coordination substrate for this purpose along three axes.
+It is \emph{unstructured}, and therefore cannot be queried---the orchestrator
+cannot ask whether any hypothesis is ready for verification without re-reading and
+re-interpreting the transcript. It is \emph{unbounded}, growing monotonically with
+the length of the investigation, so per-step context cost scales with history
+rather than with the task. And it is \emph{unverifiable}: an agent can assert an
+arbitrary claim in free text, and consuming agents have no mechanism to
+distinguish a licensed result from a fabricated one.
+
+We instead represent shared state as a typed, schema-validated property graph
+that constitutes the working memory of a single investigation, rooted at one
+research question. The schema instantiates a six-layer meta-model of the
+scientific process, comprising research questions, hypotheses, the verification
+methods and confirmation criteria that would test them, the evidence and
+conclusions they yield, and the tools, resources, and constraints they depend on.
+Agents do not exchange results as messages; each writes typed nodes to the shared
+graph. The orchestrator reads the graph state to select the next action, and each
+worker agent is supplied a \emph{context slice}---the assigned node together with
+its one- or two-hop neighbourhood---rather than the full history.
+
+\paragraph{Data model.}
+A node is a tuple $\langle \mathit{id}, \mathit{type}, \mathit{attrs},
+\mathit{status}, \mathit{source}, \mathit{history} \rangle$; an edge is a typed,
+directed relation over an ordered pair of nodes. The type system is fixed and
+finite. Each node type defines a status lifecycle: a \textsc{Hypothesis}
+transitions
+$\mathit{formulated} \rightarrow \mathit{under\_verification} \rightarrow
+\{\mathit{confirmed}, \mathit{refuted}, \mathit{postponed}\}$; \textsc{Evidence}
+carries a mandatory subtype (literature, experimental, computational, expert, or
+meta) and links to the hypotheses it supports, refutes, or refines;
+\textsc{Conclusion} nodes are grounded in evidence via \emph{based\_on} edges;
+\textsc{VerificationMethod} and \textsc{ConfirmationCriteria} encode how a
+hypothesis is to be tested and the threshold for confirmation; and \textsc{Tool},
+\textsc{Resource}, and \textsc{Constraint} nodes represent the means and limits of
+the study. Edges are range-restricted to admissible type pairs---for example,
+\emph{motivates} $(Q \rightarrow H)$, \emph{tested\_by} $(H \rightarrow VM)$, and
+\emph{supports} $(E \rightarrow H)$---so the graph is a constrained model of the
+reasoning process rather than an unconstrained association network.
+
+\paragraph{Validation at the write boundary.}
+Each write is validated against the schema before it is committed: node type and
+status must be admissible, a status change must follow the corresponding
+lifecycle, and an edge must connect a permitted type pair. Writes are additionally
+constrained by a per-role permission table, and the identity of the writing agent
+is obtained from the trusted tool-call context rather than passed as an argument,
+so it cannot be forged. Consequently, the agent that generates hypotheses may
+create \textsc{Hypothesis} nodes but cannot transition them to
+\emph{confirmed}; only the verification role holds that permission. The write
+boundary thus enforces, in code rather than in prompt text, that every recorded
+state transition is one the process licenses---a structural constraint on the
+class of states an agent can introduce.
+
+\paragraph{Properties.}
+The representation provides four properties that a dialogue transcript does not.
+First, \emph{queryable control flow}: because state is typed, the orchestrator
+selects actions by evaluating named predicates over the graph---hypotheses whose
+required tools are all available (\emph{ready} for verification), evidence that
+refutes a still-open hypothesis, or conclusions whose criteria are satisfied
+(\emph{closable})---rather than by re-interpreting prose. Second,
+\emph{provenance}: each conclusion is traceable through \emph{based\_on} edges to
+its supporting evidence and onward to the methods and sources that produced it,
+and each node retains a status history recording every transition and its author;
+the completed investigation is an inspectable, reproducible artefact. Third,
+\emph{bounded context}: supplying each agent a local slice rather than the full
+transcript keeps per-step context size a function of the immediate task rather
+than of accumulated history, reducing both cost and the error modes associated
+with long, undifferentiated context. Fourth, \emph{explicit negative results}:
+refuted and postponed hypotheses are retained rather than discarded, falsification
+is a defined state transition, and a hypothesis under verification is locked
+against concurrent re-entry. Because agents coordinate through validated shared
+memory rather than point-to-point dialogue, they are decoupled, which admits
+scaling to additional agents and to distributed (agent-to-agent) execution.
+
+The research context graph is the reasoning-level counterpart of the system's
+execution trace: the execution trace records the actions the agents took, whereas
+the research context graph records the claims the investigation established, under
+a schema that keeps that record structured, attributable, and resistant to
+fabrication.
