@@ -195,9 +195,10 @@
     function rText(n){ return String(n.output||n.label||"").replace(/\s+/g," ").trim(); }
     function researchLabel(n){
       const st = rStatus(n.status); const icon = R_ICON[n.kind]||"•";
-      const txt = rText(n); const short = txt.length>110 ? txt.slice(0,110)+"…" : txt;
-      // line 1: status glyph + type icon + readable name ("Hypothesis 1"); line 2: the text
-      return `<b>${st.g} ${icon} ${esc(rTypeName(n))}</b>\n${esc(short)}`;
+      const txt = rText(n); const short = txt.length>320 ? txt.slice(0,320)+"…" : txt;
+      const sw = (n.status||"").replace(/_/g," ");
+      // line 1: status glyph + type icon + readable name + status word; line 2: full text
+      return `<b>${st.g} ${icon} ${esc(rTypeName(n))}${sw ? " · " + esc(sw) : ""}</b>\n${esc(short)}`;
     }
     const titleOf = n => [ "id: "+n.id, "type: "+(n.kind||""),
       n.executor_agent?"source: "+n.executor_agent:"", "status: "+(n.status||""),
@@ -217,8 +218,8 @@
         edges: { arrows: { to: { scaleFactor: 0.55 } }, color: { color: "#3a4150", highlight: "#64748b" },
                  font: { color: "#8b93a1", size: r ? 12 : 10, strokeWidth: 0 }, smooth: r
                    ? { type: "cubicBezier", forceDirection: "vertical", roundness: 0.5 } : { type: "continuous" } },
-        layout: r ? { hierarchical: { enabled: true, direction: "UD", levelSeparation: 150,
-                       nodeSpacing: 215, treeSpacing: 250, blockShifting: true, edgeMinimization: true } }
+        layout: r ? { hierarchical: { enabled: true, direction: "UD", levelSeparation: 220,
+                       nodeSpacing: 300, treeSpacing: 320, blockShifting: true, edgeMinimization: true } }
                   : { hierarchical: false },
         physics: r ? { enabled: false }
           : { enabled: true, solver: "barnesHut", stabilization: { iterations: 150 },
@@ -244,7 +245,7 @@
         font: { color: INK, size: n.overlay ? 12 : 16, multi: "html",
                 face: "-apple-system, Segoe UI, sans-serif", align: "left" },
         borderWidth: n.overlay ? 1 : 2, shapeProperties: { borderRadius: 9 },
-        widthConstraint: { maximum: 260 }, margin: 12,
+        widthConstraint: { minimum: 240, maximum: 360 }, margin: 14,
       };
       if (n.overlay) { node.borderWidthSelected = 2; node.shadow = false;
         node.label = `<b>🛠️ ${esc(n.label)}</b>`; node.font.color = "#9aa3af"; }
