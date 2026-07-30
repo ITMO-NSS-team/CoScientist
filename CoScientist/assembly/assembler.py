@@ -141,7 +141,9 @@ def _check_tool_consistency(cfg: AgentConfig, ctx: PromptContext, tools: list) -
     ``runtime_resolved`` are excluded (their docs are trusted as written).
     """
     documented: Set[str] = {
-        d.name for e in ctx.tool_entries if not e.runtime_resolved for d in e.docs
+        d.name
+        for e in ctx.tool_entries if not e.runtime_resolved
+        for d in e.resolved_docs()
     }
     attached: Set[str] = set()
     for t in tools:

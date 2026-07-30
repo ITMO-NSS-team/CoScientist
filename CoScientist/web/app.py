@@ -7,13 +7,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.web.session_registry import LocalSessionRegistry
@@ -67,6 +69,28 @@ SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 # log and are never dropped, so only the tool stream is capped.
 MAX_TOOL_ACTIVITY_EVENTS = 600
 TOOL_ACTIVITY_TRIM_SLACK = 200
+DATASET_URL_MAX_LENGTH = 2048
+
+
+def _validated_dataset_url(raw: Any) -> str:
+    """Normalize the dataset link the user attached in the chat; "" clears it.
+
+    Only an http(s) ``.zip`` is accepted, because that is what the sandbox does
+    with it: download the URL and unpack the archive into /workspace. Rejecting
+    anything else here turns a typo into an immediate message instead of a run
+    that fails minutes later inside the container.
+    """
+    url = str(raw or "").strip()
+    if not url:
+        return ""
+    if len(url) > DATASET_URL_MAX_LENGTH:
+        raise ValueError("Dataset link is too long.")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Dataset link must be an http(s) URL.")
+    if not parsed.path.lower().endswith(".zip"):
+        raise ValueError("Dataset link must point to a .zip archive.")
+    return url
 
 
 def _apply_frontend_settings(frontend: dict) -> None:
@@ -96,6 +120,12 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "coscientistUsername" in general:
         val = str(general["coscientistUsername"]).strip()
         web.coscientist_username = val if val else None
+    if "knowledgeGraphEnabled" in general:
+        web.knowledge_graph_enabled = bool(general["knowledgeGraphEnabled"])
+    if "researchGraphEnabled" in general:
+        # The research blackboard reads its own settings block (bindings and
+        # graph/research/* both go through settings.research_graph.enabled).
+        get_settings().research_graph.enabled = bool(general["researchGraphEnabled"])
 
     planner = frontend.get("plannerAgent", {})
     if "retrievalEnabled" in planner:
@@ -121,6 +151,46 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "workspaceId" in coder:
         val = coder["workspaceId"]
         web.coder_workspace_id = val if val else None
+    if "localToolsEnabled" in coder:
+        web.coder_local_tools_enabled = bool(coder["localToolsEnabled"])
+
+
+def _settings_payload() -> dict:
+    """The frontend ``appSettings`` shape, read back off the config singleton.
+
+    Both /api/settings endpoints answer with it, so a GET and the echo of a
+    POST can never drift apart.
+    """
+    from CoScientist.config import get_settings
+    settings = get_settings()
+    web = settings.web
+    return {
+        "general": {
+            "startMode": web.start_mode,
+            "maxRetries": web.max_retries,
+            "hitlEnabled": web.hitl_enabled,
+            "usePlanner": web.use_planner,
+            "opikEnabled": web.opik_enabled,
+            "autoNamingEnabled": web.auto_naming_enabled,
+            "coscientistUsername": web.coscientist_username or "",
+            "knowledgeGraphEnabled": web.knowledge_graph_enabled,
+            "researchGraphEnabled": settings.research_graph.enabled,
+        },
+        "plannerAgent": {
+            "retrievalEnabled": web.planner_retrieval_enabled,
+            "graphEnabled": web.planner_graph_enabled,
+        },
+        "researchAgent": {"maxSearches": web.max_searches},
+        "taskExecutorAgent": {
+            "keepScore": web.executor_tool_keep_score,
+            "abstainScore": web.executor_tool_abstain_score,
+        },
+        "coderAgent": {
+            "sandboxUrl": web.sandbox_url,
+            "workspaceId": web.coder_workspace_id or "",
+            "localToolsEnabled": web.coder_local_tools_enabled,
+        },
+    }
 
 
 
@@ -142,6 +212,10 @@ class WebRuntime:
         # Latest usage/cost snapshot per session — cumulative, so one entry is
         # the whole history and a reconnecting tab needs nothing older.
         self.metrics: dict[SessionKey, dict[str, Any]] = {}
+        # Dataset archive attached to a session from the chat's "+" menu. Kept
+        # here as well as in ADK state so a reconnecting tab and a session whose
+        # manager has not been built yet both see the same link.
+        self.dataset_urls: dict[SessionKey, str] = {}
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
         self.hitl_handler.set_sender(self.send_socket)
@@ -366,10 +440,51 @@ class WebRuntime:
                     "status": status,
                     "run_status_version": version,
                     "metrics": self.metrics.get(key),
+                    "dataset_url": self.dataset_urls.get(key, ""),
                 })
             except Exception:
                 self.detach_socket(key, ws)
                 raise
+
+    async def apply_dataset_url(
+        self,
+        key: SessionKey,
+        url: str | None = None,
+    ) -> str:
+        """Attach/clear the session's dataset archive and mirror it into ADK state.
+
+        ``url=None`` re-syncs the stored link without changing it — called at the
+        start of every run, because the ADK session may not have existed yet when
+        the user attached the archive.
+        """
+        if url is not None:
+            if url:
+                self.dataset_urls[key] = url
+            else:
+                self.dataset_urls.pop(key, None)
+        current = self.dataset_urls.get(key, "")
+
+        user_id, session_id = key
+        adk_session = await self.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if adk_session is None:
+            return current
+        if adk_session.state.get(DATASET_URL_STATE_KEY, "") == current:
+            return current
+        await self.session_service.append_event(
+            adk_session,
+            Event(
+                invocation_id=f"dataset_{uuid4().hex}",
+                author="user",
+                actions=EventActions(
+                    state_delta={DATASET_URL_STATE_KEY: current},
+                ),
+            ),
+        )
+        return current
 
     async def send(self, key: SessionKey, payload: dict[str, Any]) -> None:
         """Broadcast an event only to tabs viewing this session."""
@@ -523,6 +638,28 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
     set_tool_activity_sink(deliver)
 
 
+def _wire_agent_output(runtime: WebRuntime) -> None:
+    """Post the final answer of the key agents into the chat.
+
+    A subordinate runs as an ``AgentTool``, so its deliverable — the hypotheses,
+    the research summary, the execution report — arrives as the caller's
+    function_response and is never spoken in the top-level stream. The plugin
+    sink below routes the answer of every agent flagged ``report_output`` in
+    ``system.yaml`` to the tabs watching the session, as a message of its own.
+    """
+    from CoScientist.logging.agent_output import set_agent_output_sink
+
+    async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
+        if key not in runtime.sockets and key not in runtime.active_runs:
+            # A key we never served (e.g. the CLI default scope) has nowhere to go.
+            return
+        event = {"type": "agent_output", **_json_safe(payload)}
+        runtime.agent_events[key].append(event)
+        await runtime.send(key, event)
+
+    set_agent_output_sink(deliver)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -543,6 +680,7 @@ def create_app() -> FastAPI:
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
     _wire_tool_activity(runtime)
+    _wire_agent_output(runtime)
     _wire_metrics(runtime)
     app = FastAPI(
         title="CoScientist Web UI",
@@ -565,6 +703,60 @@ def create_app() -> FastAPI:
         return HTMLResponse(
             TEMPLATE_PATH.read_text(encoding="utf-8"),
             headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/downloads", response_class=HTMLResponse)
+    async def downloads_page():
+        """Live donut view of dataset downloads running inside the sandbox."""
+        page = WEB_DIR / "static" / "downloads.html"
+        if not page.exists():
+            raise HTTPException(status_code=404, detail="downloads.html is missing")
+        return HTMLResponse(
+            page.read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/downloads/logs")
+    async def proxy_download_logs(wait_seconds: float = 60.0):
+        """Relay the sandbox's download SSE stream to the browser.
+
+        The sandbox lives on another origin, so a page served from here cannot
+        open an ``EventSource`` against it without CORS headers we do not
+        control. Proxying keeps the browser same-origin and lets the sandbox
+        URL stay a server-side setting.
+        """
+        import httpx
+
+        from CoScientist.tools.coder_tools.openhands_sandbox import resolve_sandbox_url
+
+        try:
+            base = resolve_sandbox_url()
+        except Exception as exc:  # sandbox_url not configured
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        upstream = f"{base.rstrip('/')}/api/v1/downloads/logs"
+
+        async def relay():
+            # No read timeout: an SSE stream is idle by design between events.
+            timeout = httpx.Timeout(10.0, read=None)
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "GET", upstream, params={"wait_seconds": wait_seconds},
+                    ) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+            except Exception as exc:
+                logging.getLogger("CoScientist.web").warning(
+                    "Download log proxy failed (%s): %s", upstream, exc
+                )
+                yield f"event: status\ndata: unreachable: {exc}\n\n".encode()
+
+        return StreamingResponse(
+            relay(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
     # --- Local users and sessions (process lifetime only) ---
@@ -935,64 +1127,13 @@ def create_app() -> FastAPI:
     @app.get("/api/settings")
     async def get_settings_api():
         """Return current WebSettings."""
-        from CoScientist.config import get_settings as _get_settings
-        web = _get_settings().web
-        return JSONResponse({
-            "general": {
-                "startMode": web.start_mode,
-                "maxRetries": web.max_retries,
-                "hitlEnabled": web.hitl_enabled,
-                "usePlanner": web.use_planner,
-                "opikEnabled": web.opik_enabled,
-                "autoNamingEnabled": web.auto_naming_enabled,
-                "coscientistUsername": web.coscientist_username or "",
-            },
-            "plannerAgent": {
-                "retrievalEnabled": web.planner_retrieval_enabled,
-                "graphEnabled": web.planner_graph_enabled,
-            },
-            "researchAgent": {"maxSearches": web.max_searches},
-            "taskExecutorAgent": {
-                "keepScore": web.executor_tool_keep_score,
-                "abstainScore": web.executor_tool_abstain_score,
-            },
-            "coderAgent": {
-                "sandboxUrl": web.sandbox_url,
-                "workspaceId": web.coder_workspace_id or "",
-            },
-        })
+        return JSONResponse(_settings_payload())
 
     @app.post("/api/settings")
     async def save_settings_api(data: dict):
         """Update WebSettings from the frontend."""
-        from CoScientist.config import get_settings as _get_settings
         _apply_frontend_settings(data)
-        web = _get_settings().web
-        return JSONResponse({
-            "status": "success",
-            "general": {
-                "startMode": web.start_mode,
-                "maxRetries": web.max_retries,
-                "hitlEnabled": web.hitl_enabled,
-                "usePlanner": web.use_planner,
-                "opikEnabled": web.opik_enabled,
-                "autoNamingEnabled": web.auto_naming_enabled,
-                "coscientistUsername": web.coscientist_username or "",
-            },
-            "plannerAgent": {
-                "retrievalEnabled": web.planner_retrieval_enabled,
-                "graphEnabled": web.planner_graph_enabled,
-            },
-            "researchAgent": {"maxSearches": web.max_searches},
-            "taskExecutorAgent": {
-                "keepScore": web.executor_tool_keep_score,
-                "abstainScore": web.executor_tool_abstain_score,
-            },
-            "coderAgent": {
-                "sandboxUrl": web.sandbox_url,
-                "workspaceId": web.coder_workspace_id or "",
-            },
-        })
+        return JSONResponse({"status": "success", **_settings_payload()})
 
     # --- Agent info ---
     @app.get("/api/agents")
@@ -1116,6 +1257,22 @@ def create_app() -> FastAPI:
                         }, key)
                 elif msg_type == "stop_chat":
                     await runtime.stop_run(key)
+                elif msg_type == "set_dataset_url":
+                    try:
+                        url = _validated_dataset_url(data.get("dataset_url"))
+                    except ValueError as exc:
+                        await runtime.send_socket(ws, {
+                            "type": "dataset_url_rejected",
+                            "message": str(exc),
+                        }, key)
+                        continue
+                    await runtime.apply_dataset_url(key, url)
+                    # Broadcast: every tab on this session shows the same
+                    # attachment, whichever one set it.
+                    await runtime.send(key, {
+                        "type": "dataset_url",
+                        "dataset_url": url,
+                    })
                 elif msg_type == "hitl_response":
                     _handle_hitl_response(runtime, key, data)
                 elif msg_type == "ping":
@@ -1183,6 +1340,10 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
 
     try:
         manager = await runtime.get_manager(user_id, session_id)
+        # The attachment may predate the ADK session (it is created with the
+        # manager), so mirror it into state now that the session exists — this is
+        # what puts the link in front of CoderAgent.
+        await runtime.apply_dataset_url(key)
         runtime.registry.touch_session(user_id, session_id, status="processing")
         execution_lock = runtime.execution_locks[key]
 

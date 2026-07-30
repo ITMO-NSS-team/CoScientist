@@ -135,8 +135,18 @@ def inject_graph_root(callback_context: CallbackContext):
       1. the system root — every agent + its capabilities + this session's trace;
       2. relevant facts accumulated by all completed local research sessions,
          retrieved for the current query so agents build on prior findings.
-    Best-effort — the graph must never break a run.
+    Best-effort — the graph must never break a run. Yields nothing when the
+    knowledge graph is switched off, so the placeholder stays empty instead of
+    describing a feature the agent no longer has tools for.
     """
+    try:
+        from CoScientist.config import get_settings
+        if not get_settings().web.knowledge_graph_enabled:
+            callback_context.state['graph_root'] = ""
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+
     parts = []
     query = ""
     try:
@@ -158,6 +168,36 @@ def inject_graph_root(callback_context: CallbackContext):
     callback_context.state['graph_root'] = "\n\n".join(p for p in parts if p)
     return None
 
+
+# ── Dataset archive attached by the user in the web UI ────────────────────────
+# The link is set on the session (web/app.py) and surfaces in the agent's
+# instructions, so the agent KNOWS about the archive and passes it as
+# `dataset_url` when the work it is doing actually needs that data. Nothing
+# fills the argument in for it — sending the data is the agent's own decision.
+DATASET_URL_STATE_KEY = "dataset_url"
+DATASET_CONTEXT_STATE_KEY = "dataset_context"
+
+
+def inject_dataset_context(callback_context: CallbackContext):
+    """before_agent: render state['dataset_url'] into the prompt's dataset block.
+
+    The instruction carries ``{dataset_context?}`` rather than the raw URL, so a
+    session with no attached archive gets nothing at all instead of a heading
+    describing data that does not exist.
+    """
+    url = str(callback_context.state.get(DATASET_URL_STATE_KEY) or "").strip()
+    callback_context.state[DATASET_CONTEXT_STATE_KEY] = (
+        "## Dataset attached to this session\n"
+        f"The user attached a dataset archive (.zip): {url}\n"
+        "When a step needs that data, send the link along as the `dataset_url`\n"
+        "argument of the tool that fetches it (e.g. `run_sandbox_task`) — the\n"
+        "sandbox is a separate machine and this is how the archive gets there.\n"
+        "Judge for yourself whether a given call needs it, and never substitute\n"
+        "a different dataset for the one the user attached.\n"
+    ) if url else ""
+    return None
+
+
 # Recognisable token the orchestrator prompt / post-critic key off to re-route.
 NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
 
@@ -171,8 +211,9 @@ def redirect_when_no_tools(
     ``executor_tool_match``. If no retrieved tool matched the task (and no web
     MCP was deployed), running FEDOT would just pick the nearest-but-wrong tool
     (the "train a GAN for a transformer task" failure). Instead we short-circuit
-    the agent and return a structured redirect so the orchestrator sends the
-    step to CoderAgent.
+    the agent and return a structured redirect: the message is the tool
+    pipeline's final answer, so TaskExecutorAgent (the router that called it)
+    re-issues the step to CoderAgent without it ever reaching the orchestrator.
     """
     state = callback_context.state
     verdict = state.get(TOOL_MATCH_STATE_KEY) or {}
@@ -190,8 +231,8 @@ def redirect_when_no_tools(
         "engineering — a specific architecture, a named repository/example code, "
         "or writing and running code — which no existing tool covers. Do NOT "
         "treat a tool that shares only the verb (e.g. 'train a GAN' for a 'train a "
-        "transformer' request) as a match. Recommend re-routing this step to "
-        "CoderAgent."
+        "transformer' request) as a match. Re-issue this step to CoderAgent — do "
+        "not run this tool pipeline again for it."
     )
     logger.info("[ExperimentAgent] abstaining (no matching tool, best=%s) → CoderAgent", best)
     state["fedot_results"] = message

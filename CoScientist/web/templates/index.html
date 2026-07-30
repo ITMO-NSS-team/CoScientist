@@ -63,6 +63,41 @@
       background-size: 24px 24px;
     }
 
+    /* Collapsible left rail: the sidebar slides out of view and everything that
+       was offset by its width (header, main) reclaims the space. */
+    #side-nav {
+      transition: transform .25s ease;
+    }
+
+    #top-nav,
+    #main-content {
+      transition: margin-left .25s ease, width .25s ease;
+    }
+
+    body.nav-collapsed #side-nav {
+      transform: translateX(-100%);
+    }
+
+    body.nav-collapsed #top-nav {
+      margin-left: 0;
+      width: 100%;
+    }
+
+    body.nav-collapsed #main-content {
+      margin-left: 0;
+    }
+
+    /* Chat composer: wraps text and grows with the content up to a ceiling. */
+    #chat-input {
+      resize: none;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      min-height: 4.5rem;
+      max-height: 15rem;
+      line-height: 1.5rem;
+    }
+
     @keyframes fadeIn {
       from {
         opacity: 0;
@@ -108,11 +143,17 @@
 <body class="bg-background text-on-surface overflow-hidden">
 
   <!-- SideNavBar -->
-  <aside
+  <aside id="side-nav"
     class="w-64 h-full fixed left-0 top-0 border-r border-[#424656]/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
-    <div class="px-6 mb-8">
-      <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
-      <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
+    <div class="px-6 mb-8 flex items-start justify-between gap-2">
+      <div>
+        <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
+        <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
+      </div>
+      <button type="button" onclick="toggleSideNav()" title="Hide sidebar"
+        class="text-outline-variant hover:text-primary transition-colors -mr-1">
+        <span class="material-symbols-outlined text-base">left_panel_close</span>
+      </button>
     </div>
     <div class="px-6 mb-4">
       <h3 class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Agents</h3>
@@ -155,9 +196,13 @@
   </aside>
 
   <!-- TopNavBar -->
-  <header
+  <header id="top-nav"
     class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-[#424656]/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
     <div class="flex items-center gap-8">
+      <button type="button" id="side-nav-toggle" onclick="toggleSideNav()" title="Show/hide sidebar"
+        class="text-[#424656] hover:text-[#00daf3] transition-colors flex items-center">
+        <span id="side-nav-toggle-icon" class="material-symbols-outlined">left_panel_open</span>
+      </button>
       <div class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR</div>
       <div
         class="hidden md:flex items-center gap-6 font-['Space_Grotesk'] text-[10px] uppercase tracking-widest font-bold">
@@ -181,7 +226,7 @@
   </header>
 
   <!-- Main Content -->
-  <main class="ml-64 p-8 flex gap-8 h-[calc(100vh-72px)] overflow-hidden">
+  <main id="main-content" class="ml-64 p-8 flex gap-8 h-[calc(100vh-72px)] overflow-hidden">
 
     <!-- Central Chat Area -->
     <section
@@ -229,11 +274,28 @@
 
       <!-- Chat Input -->
       <div class="p-6 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
+        <!-- Context attached to this session (dataset archive, …) -->
+        <div id="attachment-chips" class="hidden flex flex-wrap items-center gap-2 mb-2"></div>
         <form id="chat-form"
-          class="flex items-center gap-4 bg-surface-container-high/40 p-2 rounded-lg border border-outline-variant/10 focus-within:border-primary/40 transition-colors">
-          <input id="chat-input"
-            class="bg-transparent border-none focus:ring-0 text-sm flex-1 text-on-surface placeholder:text-outline-variant/50 font-medium"
-            placeholder="Send system command..." type="text" autocomplete="off" />
+          class="flex items-end gap-4 bg-surface-container-high/40 p-2 rounded-lg border border-outline-variant/10 focus-within:border-primary/40 transition-colors">
+          <!-- "+" menu: extra context for the agents, not a chat message -->
+          <div class="relative shrink-0">
+            <button type="button" id="attach-btn" onclick="toggleAttachMenu()" title="Add context"
+              class="p-2 bg-surface-container-highest border border-outline-variant/20 text-on-surface-variant rounded-md hover:text-primary hover:border-primary/40 transition-all flex items-center">
+              <span class="material-symbols-outlined text-sm">add</span>
+            </button>
+            <div id="attach-menu"
+              class="hidden absolute bottom-full left-0 mb-2 w-64 z-30 bg-surface-container border border-outline-variant/20 rounded-lg shadow-2xl overflow-hidden py-1">
+              <button type="button" onclick="openDatasetModal()"
+                class="w-full flex items-center gap-2 px-3 py-2.5 text-left text-[11px] font-medium text-on-surface hover:bg-surface-container-high transition-colors">
+                <span class="material-symbols-outlined text-base text-primary">folder_zip</span>
+                Dataset link (.zip)
+              </button>
+            </div>
+          </div>
+          <textarea id="chat-input" rows="3" wrap="soft" spellcheck="false" autocomplete="off"
+            class="bg-transparent border-none focus:ring-0 text-sm flex-1 py-1.5 text-on-surface placeholder:text-outline-variant/50 font-medium no-scrollbar"
+            placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"></textarea>
           <button type="button" id="stop-btn" onclick="stopChat()"
             class="hidden p-2 bg-error/20 text-error border border-error/30 rounded-md hover:bg-error/30 transition-all shadow-md"
             title="Stop agents">
@@ -299,6 +361,7 @@
     const USER_STORAGE_KEY = 'coscientist.user_id';
     const SESSION_STORAGE_KEY = 'coscientist.session_id';
     const NICK_STORAGE_KEY = 'coscientist.nickname';
+    const SIDE_NAV_KEY = 'coscientist.side_nav';
 
     const appSettings = {
       general: {
@@ -308,6 +371,8 @@
         usePlanner: true,
         opikEnabled: false,
         autoNamingEnabled: true,
+        knowledgeGraphEnabled: true,
+        researchGraphEnabled: true,
       },
       researchAgent: {
         maxSearches: 2,
@@ -319,6 +384,7 @@
       coderAgent: {
         sandboxUrl: 'http://localhost:8884',
         workspaceId: '',
+        localToolsEnabled: true,
       },
       orchestratorAgent: {},
       plannerAgent: {
@@ -536,6 +602,54 @@
         </div>
       </div>
     </div>`);
+    }
+
+    // Above this many characters a final answer is folded, so one long report
+    // (a full hypothesis set) cannot bury the rest of the conversation.
+    const AGENT_OUTPUT_FOLD = 900;
+
+    // A key agent's final answer (`agent_output`): the deliverable itself —
+    // the hypotheses, the research summary, the execution report. It reaches
+    // its caller as an AgentTool result and is never spoken in the top-level
+    // stream, so it is rendered here as that agent's own, distinct message.
+    function addAgentOutputMsg(agent, text, timestamp = null, caller = null) {
+      if (!hasText(text)) return;
+      const body = text.trim();
+      const folded = body.length > AGENT_OUTPUT_FOLD;
+      const toggle = folded
+        ? `<button onclick="toggleAgentOutput(this)"
+             class="self-start text-[10px] font-mono uppercase tracking-widest text-primary/80 hover:text-primary transition-colors">
+             Show full output</button>`
+        : '';
+      appendMsgToFeed(`
+    <div class="flex items-start gap-4 max-w-3xl msg-enter">
+      <div class="w-8 h-8 rounded-lg bg-secondary/10 border border-secondary/30 flex items-center justify-center shrink-0">
+        <span class="material-symbols-outlined text-sm text-secondary">lightbulb</span>
+      </div>
+      <div class="flex flex-col gap-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(agent || 'agent')}</span>
+          <span class="text-[9px] font-mono uppercase tracking-widest text-secondary bg-secondary/10 border border-secondary/20 px-1.5 py-0.5 rounded">Result</span>
+          ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml(caller)}</span>` : ''}
+          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
+        </div>
+        <div class="flex flex-col gap-2 bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-secondary/20">
+          <div class="${folded ? 'max-h-64 overflow-hidden' : ''}">
+            <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap break-words">${linkify(escHtml(body))}</p>
+          </div>
+          ${toggle}
+        </div>
+      </div>
+    </div>`);
+    }
+
+    function toggleAgentOutput(button) {
+      const box = button.previousElementSibling;
+      if (!box) return;
+      const collapsed = box.classList.toggle('max-h-64');
+      box.classList.toggle('overflow-hidden', collapsed);
+      button.textContent = collapsed ? 'Show full output' : 'Collapse';
+      if (collapsed) box.scrollIntoView({ block: 'nearest' }); else scrollChat();
     }
 
     function addUserMsg(text, timestamp = null) {
@@ -792,6 +906,8 @@
             appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
             appSettings.general.autoNamingEnabled = data.general.autoNamingEnabled ?? true;
             appSettings.general.coscientistUsername = data.general.coscientistUsername || '';
+            appSettings.general.knowledgeGraphEnabled = data.general.knowledgeGraphEnabled ?? true;
+            appSettings.general.researchGraphEnabled = data.general.researchGraphEnabled ?? true;
           }
           if (data.plannerAgent) {
             appSettings.plannerAgent.retrievalEnabled = data.plannerAgent.retrievalEnabled ?? true;
@@ -807,6 +923,7 @@
           if (data.coderAgent) {
             appSettings.coderAgent.sandboxUrl = data.coderAgent.sandboxUrl || 'http://localhost:8884';
             appSettings.coderAgent.workspaceId = data.coderAgent.workspaceId || '';
+            appSettings.coderAgent.localToolsEnabled = data.coderAgent.localToolsEnabled ?? true;
           }
         }
       } catch (e) {
@@ -827,6 +944,8 @@
       document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
       document.getElementById('auto-naming-enabled-checkbox').checked = appSettings.general.autoNamingEnabled;
       document.getElementById('default-username-input').value = appSettings.general.coscientistUsername || '';
+      document.getElementById('knowledge-graph-checkbox').checked = appSettings.general.knowledgeGraphEnabled;
+      document.getElementById('research-graph-checkbox').checked = appSettings.general.researchGraphEnabled;
       document.getElementById('planner-retrieval-checkbox').checked = appSettings.plannerAgent.retrievalEnabled;
       document.getElementById('planner-graph-checkbox').checked = appSettings.plannerAgent.graphEnabled;
       document.getElementById('research-max-searches').value = appSettings.researchAgent.maxSearches;
@@ -834,7 +953,10 @@
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
       document.getElementById('coder-sandbox-url').value = appSettings.coderAgent.sandboxUrl;
       document.getElementById('coder-workspace-id').value = appSettings.coderAgent.workspaceId;
+      document.getElementById('coder-local-tools-checkbox').checked = appSettings.coderAgent.localToolsEnabled;
       updateStartModeUI();
+      updateGraphToggleUI();
+      updateCoderToolsUI();
     }
 
     function updateStartModeUI() {
@@ -853,6 +975,28 @@
       }
     }
 
+    // The planner's Graph Tools switch only picks WHETHER the planner reads the
+    // knowledge graph — with the graph itself off there is nothing to read, so
+    // grey it out instead of letting it claim a tool the agent will not get.
+    function updateGraphToggleUI() {
+      const graphOn = document.getElementById('knowledge-graph-checkbox').checked;
+      const plannerGraph = document.getElementById('planner-graph-checkbox');
+      const note = document.getElementById('planner-graph-note');
+
+      plannerGraph.disabled = !graphOn;
+      plannerGraph.checked = graphOn && (appSettings.plannerAgent.graphEnabled ?? true);
+      if (note) note.classList.toggle('hidden', graphOn);
+    }
+
+    // Warn when the coder ends up with no way to run anything: local tools off
+    // and no sandbox URL leaves CoderAgent unable to execute at all.
+    function updateCoderToolsUI() {
+      const localOn = document.getElementById('coder-local-tools-checkbox').checked;
+      const sandboxUrl = document.getElementById('coder-sandbox-url').value.trim();
+      const note = document.getElementById('coder-local-tools-note');
+      if (note) note.classList.toggle('hidden', localOn || !!sandboxUrl);
+    }
+
     function closeSettings() {
       document.getElementById('settings-modal').classList.add('hidden');
     }
@@ -868,9 +1012,15 @@
       appSettings.general.opikEnabled = document.getElementById('opik-enabled-checkbox').checked;
       appSettings.general.autoNamingEnabled = document.getElementById('auto-naming-enabled-checkbox').checked;
       appSettings.general.coscientistUsername = document.getElementById('default-username-input').value.trim();
+      appSettings.general.knowledgeGraphEnabled = document.getElementById('knowledge-graph-checkbox').checked;
+      appSettings.general.researchGraphEnabled = document.getElementById('research-graph-checkbox').checked;
 
       appSettings.plannerAgent.retrievalEnabled = document.getElementById('planner-retrieval-checkbox').checked;
-      appSettings.plannerAgent.graphEnabled = document.getElementById('planner-graph-checkbox').checked;
+      // Disabled while the knowledge graph is off — keep the stored preference
+      // so it comes back as it was when the graph is switched on again.
+      if (appSettings.general.knowledgeGraphEnabled) {
+        appSettings.plannerAgent.graphEnabled = document.getElementById('planner-graph-checkbox').checked;
+      }
 
       const maxSearches = parseInt(document.getElementById('research-max-searches').value, 10);
       if (!isNaN(maxSearches) && maxSearches >= 0) {
@@ -882,6 +1032,7 @@
 
       appSettings.coderAgent.sandboxUrl = document.getElementById('coder-sandbox-url').value.trim() || 'http://localhost:8884';
       appSettings.coderAgent.workspaceId = document.getElementById('coder-workspace-id').value.trim();
+      appSettings.coderAgent.localToolsEnabled = document.getElementById('coder-local-tools-checkbox').checked;
 
       const status = document.getElementById('settings-status');
       status.textContent = 'Saving...';
@@ -1017,7 +1168,8 @@
       PlannerAgent: 'map',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
-      TaskExecutorAgent: 'checklist',
+      TaskExecutorAgent: 'alt_route',
+      ToolPipelineAgent: 'checklist',
       CoderAgent: 'terminal',
       DatasetCollectorAgent: 'dataset',
       MedicalAgent: 'ecg_heart',
@@ -1268,9 +1420,8 @@
       const tools = selected ? [...selected.tools.values()] : [];
       const toolsBox = document.getElementById('activity-tools');
       if (!tools.length) {
-        toolsBox.innerHTML = `<span class="text-[9px] font-mono text-outline-variant/60">${
-          selected ? escHtml(selected.name) + ' — no tool calls yet' : 'no tool calls yet'
-        }</span>`;
+        toolsBox.innerHTML = `<span class="text-[9px] font-mono text-outline-variant/60">${selected ? escHtml(selected.name) + ' — no tool calls yet' : 'no tool calls yet'
+          }</span>`;
         return;
       }
 
@@ -1513,6 +1664,8 @@
       populateUserSelectors();
       populateSessionSelector();
       clearChat();
+      // Drop the previous session's attachment; the snapshot brings the new one.
+      applyDatasetUrl('');
       connect();
     }
 
@@ -1596,6 +1749,9 @@
       resetMetrics();
       renderMetrics(snapshot.metrics);
 
+      // The attachment belongs to the session the snapshot describes.
+      applyDatasetUrl(snapshot.dataset_url);
+
       for (const message of messages) {
         if (message.type === 'user_message') {
           addUserMsg(message.message, message.timestamp);
@@ -1608,6 +1764,9 @@
           (message.tool_responses || []).forEach(response => {
             checkAndDisplaySandboxLinks(message.author, response, message.timestamp);
           });
+        } else if (message.type === 'agent_output') {
+          activityTouchAgent(message.agent, message.timestamp);
+          addAgentOutputMsg(message.agent, message.content, message.timestamp, message.caller);
         } else if (message.type === 'tool_activity') {
           applyToolActivity(message, true);
         } else if (message.type === 'error') {
@@ -1713,6 +1872,14 @@
               });
             }
             break;
+          case 'agent_output':
+            // The run continues after a subordinate answers, so the typing
+            // indicator stays up — only the deliverable is posted here.
+            activityTouchAgent(data.agent, data.timestamp);
+            highlightAgent(data.agent);
+            addAgentOutputMsg(data.agent, data.content, data.timestamp, data.caller);
+            addTelemetry('OUTPUT :: ' + data.agent + ' → ' + (data.caller || 'system'));
+            break;
           case 'tool_activity':
             applyToolActivity(data);
             break;
@@ -1755,10 +1922,22 @@
             addSystemMsg(data.message);
             addTelemetry('SEND :: rejected while session is processing');
             break;
+          case 'dataset_url':
+            applyDatasetUrl(data.dataset_url);
+            addTelemetry('DATASET :: ' + (data.dataset_url ? 'attached' : 'detached'));
+            addSystemMsg(data.dataset_url
+              ? 'Dataset attached: ' + data.dataset_url + '\nThe coder agent will pass it to the sandbox when a step needs that data.'
+              : 'Dataset link detached.');
+            break;
+          case 'dataset_url_rejected':
+            showDatasetError(data.message);
+            addSystemMsg('Dataset link rejected: ' + data.message);
+            addTelemetry('DATASET :: rejected');
+            break;
           case 'chat_accepted': {
             const input = document.getElementById('chat-input');
             if (input.value.trim() === String(data.message_text || '').trim()) {
-              input.value = '';
+              resetChatInput();
             }
             break;
           }
@@ -1776,8 +1955,47 @@
     }
 
     // =========================================================================
+    // Layout — collapsible left rail
+    // =========================================================================
+    function applySideNavState() {
+      const collapsed = localStorage.getItem(SIDE_NAV_KEY) === 'off';
+      document.body.classList.toggle('nav-collapsed', collapsed);
+      const icon = document.getElementById('side-nav-toggle-icon');
+      icon.textContent = collapsed ? 'left_panel_open' : 'left_panel_close';
+      document.getElementById('side-nav-toggle').title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+    }
+
+    function toggleSideNav() {
+      const collapsed = document.body.classList.contains('nav-collapsed');
+      localStorage.setItem(SIDE_NAV_KEY, collapsed ? 'on' : 'off');
+      applySideNavState();
+    }
+
+    // =========================================================================
     // Form
     // =========================================================================
+    // The composer is a textarea: it wraps long queries and grows with them,
+    // so Enter has to stay "send" while Shift+Enter inserts a newline.
+    function autoGrowChatInput() {
+      const input = document.getElementById('chat-input');
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 240) + 'px';
+    }
+
+    function resetChatInput() {
+      const input = document.getElementById('chat-input');
+      input.value = '';
+      input.style.height = '';
+    }
+
+    document.getElementById('chat-input').addEventListener('input', autoGrowChatInput);
+
+    document.getElementById('chat-input').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+      e.preventDefault();
+      document.getElementById('chat-form').requestSubmit();
+    });
+
     document.getElementById('chat-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const input = document.getElementById('chat-input');
@@ -1792,6 +2010,113 @@
       if (!ws || ws.readyState !== 1) return;
       ws.send(JSON.stringify({ type: 'stop_chat' }));
       addTelemetry('STOP :: user requested stop');
+    }
+
+    // =========================================================================
+    // "+" menu — context attached to the session, not a chat message.
+    // The dataset link lives on the SERVER (session state), so `datasetUrl` here
+    // is only a mirror of what the last snapshot/broadcast said.
+    // =========================================================================
+    let datasetUrl = '';
+
+    function toggleAttachMenu(show) {
+      const menu = document.getElementById('attach-menu');
+      const open = show === undefined ? menu.classList.contains('hidden') : show;
+      menu.classList.toggle('hidden', !open);
+    }
+
+    document.addEventListener('click', (event) => {
+      // The button's own handler runs first and this must not undo it.
+      if (event.target.closest('#attach-btn') || event.target.closest('#attach-menu')) return;
+      toggleAttachMenu(false);
+    });
+
+    function openDatasetModal() {
+      toggleAttachMenu(false);
+      const input = document.getElementById('dataset-url-input');
+      input.value = datasetUrl;
+      showDatasetError('');
+      document.getElementById('dataset-remove-btn').classList.toggle('hidden', !datasetUrl);
+      document.getElementById('dataset-modal').classList.remove('hidden');
+      input.focus();
+      input.select();
+    }
+
+    function closeDatasetModal() {
+      document.getElementById('dataset-modal').classList.add('hidden');
+    }
+
+    function showDatasetError(message) {
+      const node = document.getElementById('dataset-error');
+      node.textContent = message || '';
+      node.classList.toggle('hidden', !message);
+    }
+
+    function datasetUrlError(raw) {
+      // Mirrors the server-side check, so a typo is caught before it travels.
+      const url = String(raw || '').trim();
+      if (!url) return 'Enter a link to a .zip archive.';
+      let parsed;
+      try {
+        parsed = new URL(url);
+      } catch (error) {
+        return 'That is not a valid URL.';
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return 'The link must be an http(s) URL.';
+      }
+      if (!parsed.pathname.toLowerCase().endsWith('.zip')) {
+        return 'The link must point to a .zip archive.';
+      }
+      return '';
+    }
+
+    function sendDatasetUrl(url) {
+      if (!ws || ws.readyState !== 1) {
+        showDatasetError('Not connected — reconnect and try again.');
+        return false;
+      }
+      ws.send(JSON.stringify({ type: 'set_dataset_url', dataset_url: url }));
+      return true;
+    }
+
+    function saveDatasetLink() {
+      const url = document.getElementById('dataset-url-input').value.trim();
+      const error = datasetUrlError(url);
+      if (error) {
+        showDatasetError(error);
+        return;
+      }
+      if (sendDatasetUrl(url)) closeDatasetModal();
+    }
+
+    function clearDatasetLink() {
+      if (sendDatasetUrl('')) closeDatasetModal();
+    }
+
+    function applyDatasetUrl(url) {
+      datasetUrl = String(url || '');
+      renderAttachments();
+    }
+
+    function renderAttachments() {
+      const row = document.getElementById('attachment-chips');
+      if (!datasetUrl) {
+        row.innerHTML = '';
+        row.classList.add('hidden');
+        return;
+      }
+      row.innerHTML = `
+    <span class="flex items-center gap-1.5 max-w-full bg-surface-container-high border border-primary/20 rounded-md pl-2 pr-1 py-1">
+      <span class="material-symbols-outlined text-primary text-sm">folder_zip</span>
+      <a href="${escHtml(datasetUrl)}" target="_blank" title="${escHtml(datasetUrl)}"
+        class="font-mono text-[10px] text-on-surface-variant truncate max-w-[24rem] hover:text-primary">${escHtml(datasetUrl)}</a>
+      <button type="button" onclick="clearDatasetLink()" title="Detach dataset"
+        class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
+        <span class="material-symbols-outlined text-sm">close</span>
+      </button>
+    </span>`;
+      row.classList.remove('hidden');
     }
 
     function clearChat() {
@@ -1814,6 +2139,7 @@
     // =========================================================================
     initAgentNav();
     renderActivityRail();
+    applySideNavState();
     bootstrap();
 
     // Keep-alive ping
@@ -2194,6 +2520,47 @@
     </div>
   </div>
 
+  <!-- Dataset Link Modal — attaches a .zip archive to the session context -->
+  <div id="dataset-modal"
+    class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-lg shadow-2xl p-6 mx-4">
+      <div class="flex items-start justify-between mb-5">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">folder_zip</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Dataset link (for
+              openhands)</h3>
+            <p class="text-[10px] text-outline-variant mt-1">A direct http(s) URL of a .zip archive. The coder agent
+              sees it and sends it to the sandbox, where it is unpacked, when a step needs that data.</p>
+          </div>
+        </div>
+        <button onclick="closeDatasetModal()" class="text-outline-variant hover:text-on-surface transition-colors">
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+      <input id="dataset-url-input" type="url" spellcheck="false" placeholder="https://example.org/data/dataset.zip"
+        onkeydown="if (event.key === 'Enter') saveDatasetLink()"
+        class="w-full bg-surface-container-lowest border border-outline-variant/10 rounded-md px-3 py-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant/40 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+      <p id="dataset-error" class="hidden text-[10px] text-error mt-2"></p>
+      <div class="flex justify-end gap-3 mt-5">
+        <button id="dataset-remove-btn" onclick="clearDatasetLink()"
+          class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Remove
+        </button>
+        <button onclick="closeDatasetModal()"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Cancel
+        </button>
+        <button onclick="saveDatasetLink()"
+          class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+          <span class="material-symbols-outlined text-sm">attach_file</span> Attach
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Roadmap Editor Modal -->
   <div id="roadmap-modal"
     class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -2419,20 +2786,62 @@
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <label class="text-xs font-bold text-on-surface">Auto-name Sessions</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically generate session titles based on the first prompt.</p>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically generate session titles
+                  based on the first prompt.</p>
               </div>
-              <input id="auto-naming-enabled-checkbox" type="checkbox" checked class="w-5 h-5 accent-primary cursor-pointer" />
+              <input id="auto-naming-enabled-checkbox" type="checkbox" checked
+                class="w-5 h-5 accent-primary cursor-pointer" />
             </div>
             <hr class="border-outline-variant/10" />
             <!-- Default Username -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <label class="text-xs font-bold text-on-surface">Default Username</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Auto-selects user on startup (can also be set via COSCIENTIST_USERNAME in .env).</p>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Auto-selects user on startup (can
+                  also be set via COSCIENTIST_USERNAME in .env).</p>
               </div>
               <input id="default-username-input" type="text" placeholder="e.g. COSCIENTIST_USERNAME in .env"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-48 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
+          </div>
+        </div>
+
+        <!-- ── Graphs ─────────────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">hub</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">Graphs</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- Knowledge graph -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Knowledge Graph</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Records the execution graph of every
+                  run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span
+                    class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>).
+                  When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent
+                  and from their prompts.</p>
+              </div>
+              <input id="knowledge-graph-checkbox" type="checkbox" checked onchange="updateGraphToggleUI()"
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Research graph -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Research Graph</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The typed research blackboard agents
+                  commit findings to (<span class="font-mono">research_commit</span>, <span
+                    class="font-mono">research_context_slice</span>, orchestrator triggers). When off, the whole
+                  feature — tools and prompt sections — drops out and agents pass context through their answers only.
+                </p>
+              </div>
+              <input id="research-graph-checkbox" type="checkbox" checked
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
+              once per session.</p>
           </div>
         </div>
 
@@ -2459,12 +2868,16 @@
             <!-- Graph tools -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Graph Tools</label>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <label class="text-xs font-bold text-on-surface">Graph Tools</label>
+                  <span id="planner-graph-note" class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
+                    — Knowledge Graph is off)</span>
+                </div>
                 <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner read the shared
                   knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.</p>
               </div>
               <input id="planner-graph-checkbox" type="checkbox" checked
-                class="w-5 h-5 accent-primary cursor-pointer" />
+                class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
             </div>
             <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
               once per session.</p>
@@ -2509,6 +2922,23 @@
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">CoderAgent</h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- Local coder tools -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <label class="text-xs font-bold text-on-surface">Local Coder Tools</label>
+                  <span id="coder-local-tools-note" class="text-[10px] text-warning/90 italic font-normal hidden">(no
+                    Sandbox URL set — the coder would have nothing to run code with)</span>
+                </div>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The in-process toolset (<span
+                    class="font-mono">execute_bash</span>, file edits, git). Turn it off to leave the coder family with
+                  the OpenHands <span class="font-mono">sandbox</span> tools only — everything then runs on the remote
+                  sandbox instead of this machine.</p>
+              </div>
+              <input id="coder-local-tools-checkbox" type="checkbox" checked onchange="updateCoderToolsUI()"
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
             <!-- Sandbox URL -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
@@ -2516,7 +2946,7 @@
                 <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The endpoint URL of the isolated
                   code-execution sandbox server.</p>
               </div>
-              <input id="coder-sandbox-url" type="text"
+              <input id="coder-sandbox-url" type="text" oninput="updateCoderToolsUI()"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[240px]" />
             </div>
             <hr class="border-outline-variant/10" />
@@ -2567,8 +2997,8 @@
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <label class="text-xs font-bold text-on-surface">Tool Abstain Threshold</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Threshold below which the executor
-                  completely abstains and redirects to the CoderAgent.</p>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Threshold below which the tool
+                  pipeline completely abstains, so the executor re-routes the task to the CoderAgent.</p>
               </div>
               <input id="task-exec-abstain-score" type="number" min="0" max="1" step="0.05" value="0.2"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />

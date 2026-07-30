@@ -239,10 +239,19 @@ class WebSettings(BaseModel):
     # so the planner writes the roadmap without MCP discovery / graph reads.
     planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
     planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
+    # Knowledge graph (graph/) master switch. When off the `graph` reader
+    # toolset drops out of every agent (and out of their prompts) and the
+    # GraphMemoryPlugin stops recording, so the whole feature vanishes.
+    # The research blackboard is a separate switch — see ResearchGraphSettings.
+    knowledge_graph_enabled: bool = _os.getenv("GRAPH__ENABLED", "true").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
     sandbox_url: str = _os.getenv("SANDBOX_URL", "")
     coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")
+    # CoderAgent tool surface. When off the local coder toolset (execute_bash,
+    # file ops, git) drops out of the coder family, leaving the OpenHands
+    # `sandbox` tools as the only way those agents run anything.
+    coder_local_tools_enabled: bool = _os.getenv("CODER__LOCAL_TOOLS_ENABLED", "true").lower() in ("true", "1", "yes")
     opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
     auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
     coscientist_username: _Optional[str] = _os.getenv("COSCIENTIST_USERNAME") or _os.getenv("DEFAULT_USERNAME")

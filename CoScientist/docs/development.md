@@ -106,6 +106,7 @@ agents:
       before_agent: []
       after_agent: []
     hitl: false             # see §4.5
+    report_output: false    # post my final answer to the chat (see below)
     output_key: my_results  # ADK session-state key for the agent's output
     output_schema: ...      # registered pydantic schema name (structured output)
     planner: plan_react     # registered ADK planner name
@@ -124,6 +125,15 @@ Semantics worth knowing:
   it disappears from rosters, routing, the planner's roster, and the critic's
   roster automatically.
 - `subordinates` order = roster order in the prompt = tool order.
+- **`report_output: true` puts the agent's final answer in the chat.** A
+  subordinate runs as an `AgentTool`, so its deliverable (the hypotheses, the
+  research summary) comes back inside the *caller's* function_response and is
+  never spoken in the event stream — the user only saw the orchestrator's
+  retelling of it. `AgentOutputPlugin` (`logging/agent_output.py`) closes that
+  gap: it reports the answer of every flagged agent to the web UI, which renders
+  it as a message authored by that agent. Reserve it for agents whose output IS
+  a deliverable — pipeline internals (rerankers, retrievers) would only add
+  noise.
 - A composite (`sequential`/`parallel`) cannot have `tools`, `prompt`, `model`
   or `subordinates` — the schema rejects it.
 - Unknown keys anywhere are rejected (`extra="forbid"`), so typos fail loudly.
@@ -282,6 +292,27 @@ disappears from the agent AND from its prompt in one step. `planner_retrieval`
 and `planner_graph` (Settings → PlannerAgent in the web UI) work exactly this
 way; every other agent keeps the ungated `retrieval` / `graph` entries.
 
+To gate a tool **everywhere at once**, skip the alias and put the check in the
+entry's own factory, marking the entry `optional`. Three switches in the web UI
+work this way:
+
+| Switch | Setting | Effect when off |
+|--------|---------|-----------------|
+| Graphs → Knowledge Graph | `web.knowledge_graph_enabled` | `graph` drops off every agent, `inject_graph_root` yields nothing, and `GraphMemoryPlugin` stops recording |
+| Graphs → Research Graph | `research_graph.enabled` | `research_graph` / `research_graph_orchestrator` drop out with their prompt sections |
+| CoderAgent → Local Coder Tools | `web.coder_local_tools_enabled` | `coder` drops out, leaving the coder family with the OpenHands `sandbox` tools only |
+
+Prose that names specific tools has to branch too, or the prompt will advertise
+a tool the agent cannot call and `guard_unknown_tools` will fire on every
+attempt. The coder prompt swaps its whole operating manual on
+`ctx.has_tool("coder")`, and the orchestrator's KNOWLEDGE GRAPH section renders
+only under `ctx.has_tool("graph")`.
+
+When a tool's *documentation* depends on what else is configured, pass a
+callable as `docs` — `ToolEntry.resolved_docs()` calls it at build time. The
+`sandbox` entry uses this to stop cross-referencing `execute_bash` once the
+local coder tools are switched off.
+
 ### 4.5 HITL
 
 `hitl: true` means "this agent uses human-in-the-loop *when HITL is globally
@@ -300,7 +331,7 @@ Your template must contain `<<HITL>>` (it renders empty when off).
 `sequential` / `parallel` agents list `children` in execution order:
 
 ```yaml
-TaskExecutorAgent:
+ToolPipelineAgent:
   class: sequential
   children: [ToolPreparerAgent, ExperimentAgent]
 ```
@@ -309,6 +340,13 @@ Children are full agents declared in the same file. Note that pipeline stages
 usually communicate through ADK session state: one agent's `output_key` is the
 next agent's `{state_key}` prompt injection (see §5) — renaming an
 `output_key` means updating the prompts and callbacks that read it.
+
+A composite can itself be a `subordinate`: listed that way it is attached as an
+AgentTool and an LLM agent above it decides *whether* to run the whole pipeline.
+That is how `TaskExecutorAgent` works — an LLM router whose subordinates are
+`ToolPipelineAgent` (the discover→deploy→run MCP pipeline) and `CoderAgent`, so
+the choice between "a ready tool exists" and "this needs engineering" is made
+inside the executor instead of by the orchestrator.
 
 ### 4.7 Custom agent classes
 

@@ -14,6 +14,7 @@ The YAML declares every agent of the system in one place. Per agent:
   callbacks:    {before_model|after_model|before_tool|after_tool|before_agent|after_agent: [names]}
   hitl:         whether the agent uses human-in-the-loop (tools + prompt section
                 for llm agents, review-loop handler for session agents)
+  report_output: the agent's final answer is a deliverable — show it in the chat
   output_key / output_schema / planner / options: passthrough constructor config
   a2a:          how the agent is exposed as an A2A service (key, port, skill, env)
 """
@@ -124,6 +125,10 @@ class AgentConfig(BaseModel):
     children: List[str] = Field(default_factory=list)
     callbacks: CallbacksConfig = Field(default_factory=CallbacksConfig)
     hitl: bool = False
+    # My final answer is a deliverable in its own right (hypotheses, a research
+    # summary): report it to the chat instead of leaving it buried in the
+    # delegation's function_response. See logging/agent_output.py.
+    report_output: bool = False
     include_contents: Optional[str] = "default"
     mode: Optional[str] = None
     output_key: Optional[str] = None
@@ -281,6 +286,13 @@ class SystemConfig(BaseModel):
     def delegatable_names(self) -> set:
         """Names of every agent that some agent delegates to via AgentTool."""
         return {s for a in self.agents.values() for s in a.subordinates}
+
+    def reported_output_agents(self) -> frozenset:
+        """Enabled agents whose final answer is shown in the chat."""
+        return frozenset(
+            a.name for a in self.agents.values()
+            if a.report_output and a.is_enabled()
+        )
 
     def a2a_agents(self) -> List[AgentConfig]:
         return [a for a in self.agents.values() if a.a2a]

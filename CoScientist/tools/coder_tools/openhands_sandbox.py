@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_POLL_INTERVAL = 10.0
-DEFAULT_SUBMIT_TIMEOUT = 60.0
+DEFAULT_SUBMIT_TIMEOUT = 3600
 DEFAULT_STATUS_TIMEOUT = 15.0
 DEFAULT_METRICS_TIMEOUT = 15.0
 

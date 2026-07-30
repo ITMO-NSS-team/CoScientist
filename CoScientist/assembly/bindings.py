@@ -67,6 +67,10 @@ def _medical():
 
 
 def _coder():
+    """Local coder toolset — dropped when the web UI switches it off, leaving
+    the coder family to work through the OpenHands `sandbox` tools only."""
+    if not _web_flag("coder_local_tools_enabled"):
+        return None
     from CoScientist.tools import coder_toolset_instance
     return coder_toolset_instance
 
@@ -88,13 +92,8 @@ def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
 
-def _graph():
-    from CoScientist.graph.agent_tools import graph_reader_instance
-    return graph_reader_instance
-
-
-def _planner_tool_enabled(field: str) -> bool:
-    """Per-tool switch for the PlannerAgent, set from the web UI settings."""
+def _web_flag(field: str) -> bool:
+    """Read a per-tool switch off ``settings.web`` (set from the web UI)."""
     try:
         from CoScientist.config import get_settings
         return bool(getattr(get_settings().web, field))
@@ -102,14 +101,23 @@ def _planner_tool_enabled(field: str) -> bool:
         return True
 
 
+def _graph():
+    """Knowledge-graph reader toolset — dropped when the graph is switched off,
+    which also stops GraphMemoryPlugin from recording (graph/plugin.py)."""
+    if not _web_flag("knowledge_graph_enabled"):
+        return None
+    from CoScientist.graph.agent_tools import graph_reader_instance
+    return graph_reader_instance
+
+
 def _planner_retrieval():
-    if not _planner_tool_enabled("planner_retrieval_enabled"):
+    if not _web_flag("planner_retrieval_enabled"):
         return None
     return _retrieval()
 
 
 def _planner_graph():
-    if not _planner_tool_enabled("planner_graph_enabled"):
+    if not _web_flag("planner_graph_enabled"):
         return None
     return _graph()
 
@@ -292,6 +300,7 @@ _GRAPH_DOCS = (
 REGISTRY.register_tool(ToolEntry(
     key="graph",
     factory=_graph,
+    optional=True,  # dropped when WEB__KNOWLEDGE_GRAPH_ENABLED is false
     runtime_resolved=True,  # BaseToolset — tool surface comes from get_tools()
     docs=_GRAPH_DOCS,
 ))
@@ -505,6 +514,7 @@ REGISTRY.register_tool(ToolEntry(
 REGISTRY.register_tool(ToolEntry(
     key="coder",
     factory=_coder,
+    optional=True,  # dropped when WEB__CODER_LOCAL_TOOLS_ENABLED is false
     docs=(
         ToolDoc(
             name="execute_bash",
@@ -548,7 +558,11 @@ REGISTRY.register_tool(ToolEntry(
         ),
         ToolDoc(
             name="list_directory",
-        name="install_package",
+            signature="list_directory(path)",
+            purpose="List files in a directory.",
+        ),
+        ToolDoc(
+            name="install_package",
             signature="install_package(package_name, upgrade)",
             purpose=(
                 "Pip-install Python dependencies; like execute_bash it waits "
@@ -601,13 +615,69 @@ REGISTRY.register_tool(ToolEntry(
     ),
 ))
 
-REGISTRY.register_tool(ToolEntry(
-    key="sandbox",
-    factory=_sandbox,
-    # Dropped silently in deployments where SANDBOX_URL is unset — the prompt
-    # then never advertises a sandbox the agent does not have.
-    optional=True,
-    docs=(
+_SANDBOX_TAIL_DOCS = (
+    ToolDoc(
+        name="check_sandbox_task",
+        signature="check_sandbox_task()",
+        purpose=(
+            "Pick up the result of a sandbox task that came back "
+            "\"running\". You normally do NOT need it — run_sandbox_task "
+            "already waits and returns the result."
+        ),
+        usage=(
+            "It waits inline; if the answer is still \"running\", do other "
+            "work and check once later — never poll in a tight loop.",
+        ),
+    ),
+    ToolDoc(
+        name="list_sandbox_files",
+        signature="list_sandbox_files(path)",
+        purpose=(
+            "List files in the sandbox workspace — use it to VERIFY that the "
+            "artifacts the sandbox agent reported really exist before you "
+            "rely on them."
+        ),
+    ),
+)
+
+
+def _sandbox_docs():
+    """Sandbox docs, phrased for whether the local coder toolset is also there.
+
+    With both, the sandbox is the escalation path for heavy jobs and the two
+    workspaces must not be confused. Alone, it IS the way the agent runs
+    anything, so the guidance must not point back at execute_bash.
+    """
+    if _web_flag("coder_local_tools_enabled"):
+        run_usage = (
+            "The sandbox is a SEPARATE machine from your execute_bash "
+            "workspace — files do NOT cross between them. Data goes in via "
+            "`dataset_url`; results come back as the summary.",
+            "It is bound to your session: the first call creates it, later "
+            "calls continue in the SAME sandbox with its files and memory "
+            "intact — so build one experiment up over several calls.",
+            "Pass `new_sandbox=True` ONLY for an independent experiment on a "
+            "clean machine; everything the previous one produced is lost.",
+            "Say exactly what the deliverable is and where to write it — you "
+            "cannot watch it work, you only get its report back.",
+            "For ordinary code, shell and git work keep using execute_bash.",
+        )
+    else:
+        run_usage = (
+            "This is your ONLY way to run anything: you have no local shell, "
+            "so every command, script, clone and install happens here. Data "
+            "goes in via `dataset_url`; results come back as the summary.",
+            "It is bound to your session: the first call creates it, later "
+            "calls continue in the SAME sandbox with its files and memory "
+            "intact — so build the work up over several calls.",
+            "Pass `new_sandbox=True` ONLY for an independent experiment on a "
+            "clean machine; everything the previous one produced is lost.",
+            "Say exactly what the deliverable is and where to write it — you "
+            "cannot watch it work, you only get its report back.",
+            "Give it a WHOLE self-contained unit of work per call, not a "
+            "single shell command — each call spins up a full coding agent.",
+        )
+    return (
         ToolDoc(
             name="run_sandbox_task",
             signature="run_sandbox_task(task, dataset_url, new_sandbox)",
@@ -618,40 +688,19 @@ REGISTRY.register_tool(ToolEntry(
                 "report; hands back status \"running\" only if the job outlives "
                 "the wait."
             ),
-            usage=(
-                "The sandbox is a SEPARATE machine from your execute_bash "
-                "workspace — files do NOT cross between them. Data goes in via "
-                "`dataset_url`; results come back as the summary.",
-                "It is bound to your session: the first call creates it, later "
-                "calls continue in the SAME sandbox with its files and memory "
-                "intact — so build one experiment up over several calls.",
-                "Pass `new_sandbox=True` ONLY for an independent experiment on a "
-                "clean machine; everything the previous one produced is lost.",
-                "Say exactly what the deliverable is and where to write it — you "
-                "cannot watch it work, you only get its report back.",
-                "For ordinary code, shell and git work keep using execute_bash.",
-            ),
+            usage=run_usage,
         ),
-        ToolDoc(
-            name="check_sandbox_task",
-            signature="check_sandbox_task()",
-            purpose=(
-                "Pick up the result of a sandbox task that came back "
-                "\"running\". You normally do NOT need it — run_sandbox_task "
-                "already waits and returns the result."
-            ),
-            usage=(
-                "It waits inline; if the answer is still \"running\", do other "
-                "work and check once later — never poll in a tight loop.",
-            ),
-        ),
-        ToolDoc(
-            name="list_sandbox_files",
-            signature="list_sandbox_files(path)",
-            purpose=(
-                "List files in the sandbox workspace — use it to VERIFY that the "
-                "artifacts the sandbox agent reported really exist before you "
-                "rely on them."
+    ) + _SANDBOX_TAIL_DOCS
+
+
+REGISTRY.register_tool(ToolEntry(
+    key="sandbox",
+    factory=_sandbox,
+    # Dropped silently in deployments where SANDBOX_URL is unset — the prompt
+    # then never advertises a sandbox the agent does not have.
+    optional=True,
+    docs=_sandbox_docs,
+))
 
 # HITL tools are not a YAML-listed tool entry: the assembler attaches them via
 # the per-agent `hitl: true` flag (when HITL is globally enabled) and appends
@@ -742,6 +791,11 @@ def _inject_graph_root():
     return inject_graph_root
 
 
+def _inject_dataset_context():
+    from CoScientist.agents.callbacks import inject_dataset_context
+    return inject_dataset_context
+
+
 def _inject_research_context(ctx):
     """before_agent callback seeding state['research_context']. The orchestrator
     (root) gets the overview + trigger digest; a worker gets its focus slice.
@@ -785,7 +839,7 @@ def _guard_unknown_tools(ctx):
     e.g. ExperimentAgent) can't be guarded — their real tools aren't known at
     build time — so skip the guard for them to avoid blocking valid calls."""
     from CoScientist.agents.callbacks import make_unknown_tool_guard
-    docs = [d for e in ctx.tool_entries for d in e.docs]
+    docs = [d for e in ctx.tool_entries for d in e.resolved_docs()]
     # A placeholder doc (name in <angle brackets>, e.g. "<dynamic MCP tools>")
     # marks a toolset whose real tool names are resolved per turn from state
     # (ExperimentAgent's dynamic MCP tools) — we can't enumerate them at build
@@ -809,6 +863,12 @@ def _post_action_critique(ctx):
     return make_post_action_critique(REGISTRY.prompt("post_action_critic")(ctx))
 
 
+def _hitl_before_model():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.hitl.callbacks import make_hitl_before_callback
+    return make_hitl_before_callback(hitl_handler)
+
+
 # Plain callbacks are registered through tiny lazy factories that ignore the
 # context — so importing bindings never drags in S3/opik/etc. transitively.
 _cb("save_uploaded_artifacts", "before_model", factory=lambda ctx: _save_uploaded_artifacts())
@@ -829,6 +889,12 @@ _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
 # Seed state['research_context'] from the research blackboard (role-dependent).
 _cb("inject_research_context", "before_agent", factory=_inject_research_context)
+# Tell the agent about the dataset archive the user attached in the web UI; it
+# decides itself which calls need the link.
+_cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_dataset_context())
+# Human-In-The-Loop approval callback before model/agent execution.
+_cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
+_cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
