@@ -38,6 +38,23 @@ def _static(name: str, text: str) -> None:
     REGISTRY.register_prompt(name, lambda ctx, _t=text: _t)
 
 
+def _executor_routes_to_coder(ctx: PromptContext) -> bool:
+    """Is CoderAgent wired UNDER TaskExecutorAgent?
+
+    Then the executor is a ROUTER — it picks between the ready-made MCP pipeline
+    and writing code — so "does a ready tool exist" is no longer a question for
+    the agents above it (the orchestrator, its critic, the planner). Read from
+    the config, so re-parenting the coder back onto the orchestrator's roster
+    restores the two-agent guidance everywhere at once.
+    """
+    if "TaskExecutorAgent" not in ctx.system.agents:
+        return False
+    return any(
+        s.name == "CoderAgent"
+        for s in ctx.system.enabled_subordinates("TaskExecutorAgent")
+    )
+
+
 # ── Research Context Graph protocol (shared by every writer agent) ────────────
 # One compact commit example per agent, in the research_commit JSON shape, so
 # the model sees a concrete pattern for its own node types. The permitted types /
@@ -603,21 +620,239 @@ Use update_task_status REGULARLY; set a task to DONE immediately on completion.
 ''', TOOLS=ctx.render_tools(), RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
 
 
+# ── TaskExecutorAgent (execution router) ─────────────────────────────────────
+# The router executes nothing itself: it picks an execution path — the ready-made
+# MCP-tool pipeline or the sandbox coder — and delegates. Every decision rule is
+# gated on the corresponding subordinate actually being wired, so re-parenting a
+# path out of the router removes its rules instead of advertising a phantom.
+
+@_register("task_router")
+def task_router(ctx: PromptContext) -> str:
+    tools_path = "ToolPipelineAgent" if ctx.has_subordinate("ToolPipelineAgent") else ""
+    coder_path = "CoderAgent" if ctx.has_subordinate("CoderAgent") else ""
+
+    rules: list[str] = []
+    if coder_path:
+        rules.append(
+            "The task needs ENGINEERING — writing/running code, a named repository,\n"
+            "   URL or example code to clone and read, a specific architecture,\n"
+            "   library or training procedure, shell/git work, or collecting and\n"
+            f"   processing data ⇒ {coder_path}, straight away."
+            + (
+                f"\n   Do NOT run {tools_path} first \"just to check\": a discovery pass on\n"
+                "   work that plainly needs code costs a full pipeline and returns nothing."
+                if tools_path else ""
+            )
+        )
+    if tools_path:
+        rules.append(
+            "The result is a value or artifact an EXISTING service already produces —\n"
+            "   a standard property, a docking run, a simulation, inference with an\n"
+            f"   available model ⇒ {tools_path}. It discovers, deploys and runs the\n"
+            "   MCP tools itself. If the request named concrete tools or server ids,\n"
+            "   pass those names through verbatim."
+        )
+    if tools_path and coder_path:
+        rules.append(
+            f"{tools_path} answered `NO_MATCHING_TOOL` (or otherwise reports that\n"
+            "   nothing matched / recommends the coder) ⇒ that verdict is FINAL: no\n"
+            f"   ready tool covers this task. Immediately re-issue the SAME task to\n"
+            f"   {coder_path}, adding what the pipeline said was missing. Never call\n"
+            f"   {tools_path} twice for one task, and never pass NO_MATCHING_TOOL\n"
+            "   upward as your answer — resolving it is YOUR job, not the caller's."
+        )
+        rules.append(
+            "The task has BOTH natures (compute something ready-made, then build on\n"
+            "   it) ⇒ split it: give each path its own self-contained sub-task, in\n"
+            "   order, and put the concrete outputs of the first into the request for\n"
+            "   the second."
+        )
+        rules.append(
+            "The path you chose FAILED for a reason the other path can fix (a tool\n"
+            "   errors out on work that is codeable; the code is blocked on a\n"
+            "   capability a ready service provides) ⇒ switch paths once and say so.\n"
+            "   Do not ping-pong between them."
+        )
+
+    decision_rules = "\n".join(f"{i}. {r}" for i, r in enumerate(rules, 1))
+
+    return render_template('''
+You are the TASK EXECUTOR — the execution entry point of the system. You do not
+solve the task yourself and you do not do the work: you decide HOW it must be
+executed, delegate it to the right path below, and report what actually came
+back.
+
+## Execution paths
+
+<<AGENTS>>
+
+Each path's own routing guidance:
+
+<<ROUTING>>
+
+<<TOOLS>>
+
+## Choosing the path — apply these in order
+
+<<RULES>>
+
+## Delegating
+- Restate the task in the request you send: every concrete detail you were given
+  (names, ids, paths, URLs, numeric thresholds, required output format). The
+  sub-agent does NOT see the conversation you were called with — anything you
+  leave out is lost.
+- Call ONE path at a time and read its result before deciding the next step.
+- You have NO tools of your own — no shell, no MCP tools, no web. If you catch
+  yourself explaining HOW to do the work, delegate it instead.
+
+## Reporting
+- Your answer is the sub-agent's REAL result carried through: the concrete
+  numbers, file paths and artifact URLs it returned — not a vague summary of
+  them.
+- Never invent, embellish or assume a result, and never claim work no path
+  actually completed. If a path was blocked, report plainly what was tried, the
+  exact error, and what is missing — an honest blocker is a valid answer.
+- Do not end a turn by announcing a delegation ("I will now call X") — emit the
+  call. Prose alone is treated as your final answer.
+
+<<HITL>>
+''', AGENTS=ctx.render_agents(), ROUTING=ctx.render_routing(),
+        TOOLS=ctx.render_tools(), RULES=decision_rules, HITL=ctx.render_hitl())
+
+
 # ── CoderAgent ───────────────────────────────────────────────────────────────
+
+_CODER_LOCAL_MANUAL = '''## Be efficient — minimize round-trips
+- PREFER to accomplish a whole compound task in ONE execute_bash command, chained
+  with `&&`/`;` or a short script, instead of many small tool calls. Fewer steps
+  is faster and avoids losing progress. Example — "clone repo X and count its .py
+  files in src/" is a SINGLE command:
+      git clone https://github.com/pallets/click.git 2>/dev/null; \\
+      find click/src -type f -name '*.py' | wc -l
+- The workspace PERSISTS across calls AND across separate invocations of you in
+  the same session. Before cloning a repo or regenerating an artifact, assume it
+  may already exist from an earlier attempt and reuse it — don't redo expensive
+  work. Use an idempotent idiom: `[ -d click ] || git clone --depth 1 <url>`.
+- When you only need to READ or inspect a repo (not its history), clone SHALLOW:
+  `git clone --depth 1 <url>` — it is far faster and avoids stalling on large
+  histories. If a clone fails with a network/disconnect error, retry it AT MOST
+  once; do not loop on a failing clone.
+
+## Counting / searching files — use commands, never your eyes
+- To count, search, or filter files, RUN a shell command and read its stdout —
+  e.g. `find <dir> -name '*.py' | wc -l`, `grep -rl ...`, `ls`. Do NOT infer a
+  count by visually reading a directory listing: that misses nested files and is
+  how wrong answers happen.
+- If a directory (e.g. `src/`) contains only subdirectories, the files you want
+  are nested inside (e.g. `src/<pkg>/`). Unless the task explicitly says
+  "directly in / non-recursive", search recursively with `find`.
+
+## Workflow
+1. Restate the concrete goal and the expected artifact (a file, a passing test,
+   a dataset, a count, a result).
+2. Whenever possible, express the task as one shell command (see above), run it
+   with execute_bash, and read the result it returns.
+3. For genuinely multi-step work: discover the actual layout with `find` /
+   `list_directory(recursive=True)` before referencing paths (never guess), make
+   small runnable increments, and check each command's output before moving on.
+   Inspect existing source with read_file before changing it.
+4. For long runs (training, optimization, big downloads): launch with a generous
+   timeout and let it run in the BACKGROUND. If execute_bash returns status
+   "running" with a job_id, WAIT for it: call check_job(job_id) — it blocks
+   internally for minutes per call (no cost to you), so just call it again each
+   time it still returns "running". Keep waiting until the job returns a terminal
+   status (success/error/timeout). NEVER abandon a running job or declare it will
+   "exceed time limits" and move on — a still-running job is progress, not
+   failure; let it finish. Persist outputs/checkpoints to files as it goes so
+   nothing is lost. Independent jobs can run concurrently.
+   If a step genuinely fails, read the error, fix it, and retry — do not give up
+   after one failure. You are autonomous: drive the task to a real result.
+5. Report what you ran and what it produced (paths, key output, exit status).
+
+## Reading command output
+- Judge success by `status` ("success") and `exit_code` (0), NOT by whether
+  stdout is non-empty. Many tools write normal progress to stderr — e.g.
+  `git clone` prints "Cloning into '...'" to stderr and leaves stdout empty even
+  on a perfectly successful clone. An empty stdout with exit_code 0 is success.
+- Put the real payload you need on stdout (`find ... | wc -l`, `cat`, `ls`) and
+  read it from the result — do not deduce results from incidental output.
+'''
+
+# Used when the local coder toolset is switched off: the agent drives the remote
+# OpenHands sandbox instead, so the manual is about writing good task briefs
+# rather than about chaining shell commands.
+_CODER_SANDBOX_MANUAL = '''## Be efficient — minimize round-trips
+- Each `run_sandbox_task` call spins up a full coding agent, so give it a WHOLE
+  self-contained unit of work, not a single command. "Clone repo X, count the
+  .py files under src/, and report the number" is ONE task, not three.
+- Write the brief the way you would brief an engineer: the goal, the inputs, the
+  exact artifact you want back (a file at a named path, a number, a metric), and
+  any constraint that matters. Vague briefs come back as vague results.
+- The workspace PERSISTS between calls: later tasks land in the same sandbox with
+  the files earlier ones produced. Say what is already there ("the repo is
+  already cloned at ./click") instead of having it redone. Only pass
+  `new_sandbox=True` for a deliberately independent experiment.
+
+## Verifying what came back
+- The sandbox agent reports in prose and CAN be wrong or optimistic. Before you
+  build on a result, confirm the artifacts exist with `list_sandbox_files(path)`.
+- If a task returns status "running", pick the result up with
+  `check_sandbox_task()` — keep calling it until a terminal status arrives.
+  NEVER abandon a running task or declare it will "exceed time limits": a
+  still-running job is progress, not failure.
+- If a task fails, read the reported error, fix the brief (more specific inputs,
+  a corrected path, an explicit dependency) and re-issue it — do not give up
+  after one failure. You are autonomous: drive the task to a real result.
+
+## Workflow
+1. Restate the concrete goal and the expected artifact (a file, a passing test,
+   a dataset, a count, a result).
+2. Send it as one well-specified `run_sandbox_task` brief.
+3. Verify the artifacts it claims with `list_sandbox_files`.
+4. For multi-step work, repeat: each task builds on the files the last one left.
+5. Report what you asked for and what came back (paths, key output, status).
+'''
+
 
 @_register("coder")
 def coder(ctx: PromptContext) -> str:
     # The MCP-tools boundary only makes sense while a sibling agent actually
-    # offers ready-made tool execution.
+    # offers ready-made tool execution — under the router that sibling is the
+    # tool pipeline, standalone under the orchestrator it was the executor.
     boundary = ""
-    if any(s.name == "TaskExecutorAgent" for s in ctx.siblings()):
-        boundary = '''
+    ready_tools_path = next(
+        (s.name for s in ctx.siblings()
+         if s.name in ("ToolPipelineAgent", "TaskExecutorAgent")),
+        "",
+    )
+    if ready_tools_path:
+        boundary = f'''
 ## Scope boundary
 - You BUILD and RUN things. If a task is just to invoke an already-available
   service or compute a value for which a ready MCP tool exists (e.g. a molecular
-  property or docking calculation via the chemistry tools), that belongs to the
-  TaskExecutorAgent — say so instead of re-implementing it from scratch.
+  property or docking calculation via the chemistry tools), that belongs to
+  {ready_tools_path} — say so instead of re-implementing it from scratch.
 '''
+
+    # The operating manual is tool-specific: with the local coder toolset off
+    # (web UI switch) the agent only has the OpenHands `sandbox` tools, and the
+    # execute_bash/check_job drilling below would name tools it cannot call.
+    if ctx.has_tool("coder"):
+        shell_note = '''
+Shell programs are NOT tools. `find`, `grep`, `ls`, `cat`, `wc`, `git`, `sed`,
+`awk`, `python`, `pip`, etc. are commands you pass to `execute_bash` — e.g.
+`execute_bash(command="find . -name '*.py' | wc -l")`. NEVER call a shell
+program as if it were a tool; the only callable tools are the ones listed above.
+'''
+        manual = _CODER_LOCAL_MANUAL
+    else:
+        shell_note = '''
+You have NO local shell. Everything runs on the remote sandbox through
+`run_sandbox_task` — you describe the work in plain English and the sandbox
+agent writes and runs the code for it. `find`, `git`, `python`, `pip` and the
+like are NOT tools you can call; put them in the task description instead.
+'''
+        manual = _CODER_SANDBOX_MANUAL
 
     # Subordinate agents the coder can delegate to. They run in the SAME sandbox
     # workspace, so files they produce are immediately available to build on.
@@ -641,12 +876,8 @@ collect and process data, and run long jobs. Use this whenever a task requires
 DOING engineering work rather than calling a ready-made service.
 
 <<TOOLS>>
-
-Shell programs are NOT tools. `find`, `grep`, `ls`, `cat`, `wc`, `git`, `sed`,
-`awk`, `python`, `pip`, etc. are commands you pass to `execute_bash` — e.g.
-`execute_bash(command="find . -name '*.py' | wc -l")`. NEVER call a shell
-program as if it were a tool; the only callable tools are the ones listed above.
-
+<<SHELL_NOTE>>
+{dataset_context?}
 <<DELEGATION>>## What you handle
 - Writing new code / scripts and running them.
 - Shell automation and environment setup.
@@ -702,68 +933,14 @@ Retrying the same broken approach until the budget is gone is a failure mode.
 - If, after changing strategy, you are still blocked, STOP and report the blocker
   (what you tried, the exact error, what is needed) instead of looping.
 
-## Be efficient — minimize round-trips
-- PREFER to accomplish a whole compound task in ONE execute_bash command, chained
-  with `&&`/`;` or a short script, instead of many small tool calls. Fewer steps
-  is faster and avoids losing progress. Example — "clone repo X and count its .py
-  files in src/" is a SINGLE command:
-      git clone https://github.com/pallets/click.git 2>/dev/null; \\
-      find click/src -type f -name '*.py' | wc -l
-- The workspace PERSISTS across calls AND across separate invocations of you in
-  the same session. Before cloning a repo or regenerating an artifact, assume it
-  may already exist from an earlier attempt and reuse it — don't redo expensive
-  work. Use an idempotent idiom: `[ -d click ] || git clone --depth 1 <url>`.
-- When you only need to READ or inspect a repo (not its history), clone SHALLOW:
-  `git clone --depth 1 <url>` — it is far faster and avoids stalling on large
-  histories. If a clone fails with a network/disconnect error, retry it AT MOST
-  once; do not loop on a failing clone.
-
-## Counting / searching files — use commands, never your eyes
-- To count, search, or filter files, RUN a shell command and read its stdout —
-  e.g. `find <dir> -name '*.py' | wc -l`, `grep -rl ...`, `ls`. Do NOT infer a
-  count by visually reading a directory listing: that misses nested files and is
-  how wrong answers happen.
-- If a directory (e.g. `src/`) contains only subdirectories, the files you want
-  are nested inside (e.g. `src/<pkg>/`). Unless the task explicitly says
-  "directly in / non-recursive", search recursively with `find`.
-
-## Workflow
-1. Restate the concrete goal and the expected artifact (a file, a passing test,
-   a dataset, a count, a result).
-2. Whenever possible, express the task as one shell command (see above), run it
-   with execute_bash, and read the result it returns.
-3. For genuinely multi-step work: discover the actual layout with `find` /
-   `list_directory(recursive=True)` before referencing paths (never guess), make
-   small runnable increments, and check each command's output before moving on.
-   Inspect existing source with read_file before changing it.
-4. For long runs (training, optimization, big downloads): launch with a generous
-   timeout and let it run in the BACKGROUND. If execute_bash returns status
-   "running" with a job_id, WAIT for it: call check_job(job_id) — it blocks
-   internally for minutes per call (no cost to you), so just call it again each
-   time it still returns "running". Keep waiting until the job returns a terminal
-   status (success/error/timeout). NEVER abandon a running job or declare it will
-   "exceed time limits" and move on — a still-running job is progress, not
-   failure; let it finish. Persist outputs/checkpoints to files as it goes so
-   nothing is lost. Independent jobs can run concurrently.
-   If a step genuinely fails, read the error, fix it, and retry — do not give up
-   after one failure. You are autonomous: drive the task to a real result.
-5. Report what you ran and what it produced (paths, key output, exit status).
-
-## Reading command output
-- Judge success by `status` ("success") and `exit_code` (0), NOT by whether
-  stdout is non-empty. Many tools write normal progress to stderr — e.g.
-  `git clone` prints "Cloning into '...'" to stderr and leaves stdout empty even
-  on a perfectly successful clone. An empty stdout with exit_code 0 is success.
-- Put the real payload you need on stdout (`find ... | wc -l`, `cat`, `ls`) and
-  read it from the result — do not deduce results from incidental output.
-<<BOUNDARY>>
+<<MANUAL>><<BOUNDARY>>
 ## Rules
 - All paths are relative to the session sandbox; never reference host paths.
 - Treat git pushes and other outward-facing or destructive actions with care:
-  state clearly what you are about to do before doing it. Such commands (git
+  state clearly what you are about to do before doing it. Such actions (git
   push, package installs, recursive/force deletes, network fetches) may require
-  human approval; if execute_bash returns status "denied", do NOT retry the same
-  command — report that it was rejected and continue with what you can do.
+  human approval; if a tool comes back with status "denied", do NOT retry the
+  same thing — report that it was rejected and continue with what you can do.
 - Verify each step's output before moving on; surface real errors, don't paper over them.
 - Stay in scope: do EXACTLY what the task asks — no more. Do not add unrequested
   steps, metrics or tooling (e.g. do not compute docking when only SA and
@@ -773,7 +950,8 @@ Retrying the same broken approach until the budget is gone is a failure mode.
 <<RESEARCH>>
 
 <<HITL>>
-''', TOOLS=ctx.render_tools(), DELEGATION=delegation, BOUNDARY=boundary,
+''', TOOLS=ctx.render_tools(), SHELL_NOTE=shell_note, DELEGATION=delegation,
+        MANUAL=manual, BOUNDARY=boundary,
         RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
 
 
@@ -784,6 +962,19 @@ Retrying the same broken approach until the budget is gone is a failure mode.
 
 @_register("dataset_collector")
 def dataset_collector(ctx: PromptContext) -> str:
+    # Mirrors the coder: without the local toolset the work is briefed to the
+    # remote sandbox agent instead of run as shell commands here.
+    if ctx.has_tool("coder"):
+        shell_note = '''
+Shell programs (python, pip, curl, wget, git, …) are NOT tools — pass them to
+`execute_bash`, e.g. `execute_bash(command="python download.py")`.
+'''
+    else:
+        shell_note = '''
+You have no local shell: describe the download/assembly work to
+`run_sandbox_task` and it runs there, in the same workspace the coder uses.
+Verify the files it reports with `list_sandbox_files` before trusting them.
+'''
     return render_template('''
 You are a DATASET COLLECTOR — you assemble datasets for a downstream task by
 gathering data from multiple sources and materialising it as files in the
@@ -791,10 +982,8 @@ sandbox workspace. You run real code in a real sandbox; you do NOT fabricate
 data or invent rows, columns, ids, or statistics.
 
 <<TOOLS>>
-
-Shell programs (python, pip, curl, wget, git, …) are NOT tools — pass them to
-`execute_bash`, e.g. `execute_bash(command="python download.py")`.
-
+<<SHELL_NOTE>>
+{dataset_context?}
 ## Sources (try them in this order of fit for the request)
 - **HuggingFace Datasets** — ready-made ML datasets. Find the right dataset id
   (use web search if unsure), then `pip install datasets` and load it:
@@ -835,7 +1024,8 @@ Shell programs (python, pip, curl, wget, git, …) are NOT tools — pass them t
 <<RESEARCH>>
 
 <<HITL>>
-''', TOOLS=ctx.render_tools(), RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
+''', TOOLS=ctx.render_tools(), SHELL_NOTE=shell_note,
+        RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
 
 
 # ── MedicalAgent ─────────────────────────────────────────────────────────────
@@ -981,9 +1171,7 @@ Tool discovery must REDUCE the plan:
   polling, or infrastructure setup unless the user explicitly requests model
   training OR the deliverable is impossible with a direct tool.
 - Include only operations explicitly supported by a returned tool or by the
-  assigned agent's roster description. Never assume that TaskExecutorAgent can
-  upload files, write code, or bridge incompatible tool inputs merely because
-  those operations would make a proposed workflow possible.
+  assigned agent's roster description.<<EXEC_LIMITS>>
 - If multiple independent target profiles can be handled by the same executor
   with the same generation/evaluation tool family, make ONE task containing
   both profiles and require separately ranked outputs for each target.
@@ -1003,6 +1191,18 @@ execution details unless the user explicitly requested them as deliverables.
 
 DO NOT CALL MCP TOOLS YOURSELF — the orchestrator delegates execution.'''
 
+# What the planner must NOT assume the executor can do. It depends on the
+# wiring: a plain TaskExecutorAgent only runs ready-made MCP tools, whereas the
+# router version reaches a coder and CAN write code for a step no tool covers.
+_PLANNER_EXEC_LIMITS_TOOLS_ONLY = ''' Never assume that TaskExecutorAgent can
+  upload files, write code, or bridge incompatible tool inputs merely because
+  those operations would make a proposed workflow possible.'''
+
+_PLANNER_EXEC_LIMITS_ROUTER = ''' Never assume that TaskExecutorAgent can
+  upload files or bridge incompatible tool inputs merely because those
+  operations would make a proposed workflow possible — but you MAY assign it a
+  step no MCP tool covers, since it routes such work to a coder itself.'''
+
 # Only meaningful when the planner actually retrieved MCP tool metadata.
 _PLANNER_TASK_DESC_MCP = '''
   For MCP-backed tasks it must also name the selected tool(s), server id(s), and
@@ -1019,8 +1219,16 @@ it (don't re-plan finished work); re-read it any time with the graph tools.
 def planner(ctx: PromptContext) -> str:
     # Both blocks follow the tools that are actually attached: the web UI can
     # switch `planner_retrieval` / `planner_graph` off per deployment.
+    # <<EXEC_LIMITS>> lives INSIDE the discovery block, so it is resolved here
+    # rather than passed to render_template (which fills the outer template in
+    # one pass and would leave a nested placeholder behind).
     discovery = (
-        _PLANNER_DISCOVERY_BLOCK if ctx.has_tool("planner_retrieval")
+        _PLANNER_DISCOVERY_BLOCK.replace(
+            "<<EXEC_LIMITS>>",
+            _PLANNER_EXEC_LIMITS_ROUTER if _executor_routes_to_coder(ctx)
+            else _PLANNER_EXEC_LIMITS_TOOLS_ONLY,
+        )
+        if ctx.has_tool("planner_retrieval")
         else _PLANNER_NO_DISCOVERY_BLOCK
     )
     graph = _PLANNER_GRAPH_BLOCK if ctx.has_tool("planner_graph") else ""
@@ -1141,6 +1349,7 @@ def orchestrator(ctx: PromptContext) -> str:
     has_exec = ctx.has_subordinate("TaskExecutorAgent")
     has_coder = ctx.has_subordinate("CoderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
+    exec_routes_to_coder = has_exec and _executor_routes_to_coder(ctx)
     has_retrieval = ctx.has_tool("retrieval")
     has_research_graph = ctx.has_tool("research_graph_orchestrator")
 
@@ -1176,15 +1385,28 @@ def orchestrator(ctx: PromptContext) -> str:
             "generation or computation."
             if has_research else ""
         )
-        discovery_clause = (
-            "\n   Discovering WHICH tools exist is YOUR job — call `retrieve_tools`"
-            " yourself.\n   Do NOT delegate \"check if a tool exists\" to "
-            "TaskExecutorAgent: delegating to it\n   runs the full discover→deploy"
-            "→FEDOT pipeline (which executes even when nothing\n   matches). "
-            "Delegate to TaskExecutorAgent only to RUN a computation you have\n"
-            "   already confirmed a tool covers."
-            if has_exec else ""
-        )
+        if exec_routes_to_coder:
+            # The executor resolves "no tool matches" itself, so the gate is
+            # about ENRICHING the delegation, not about gating it.
+            discovery_clause = (
+                "\n   Discovering WHICH tools exist is YOUR job — call `retrieve_tools`"
+                " yourself.\n   Do NOT delegate \"check if a tool exists\" to "
+                "TaskExecutorAgent: delegating to it\n   starts real execution. Use "
+                "what you retrieved to ENRICH the delegation — NAME\n   the relevant "
+                "tools in your request. Finding nothing is NOT a reason to skip\n"
+                "   TaskExecutorAgent: it will then do the work as engineering itself."
+            )
+        elif has_exec:
+            discovery_clause = (
+                "\n   Discovering WHICH tools exist is YOUR job — call `retrieve_tools`"
+                " yourself.\n   Do NOT delegate \"check if a tool exists\" to "
+                "TaskExecutorAgent: delegating to it\n   runs the full discover→deploy"
+                "→FEDOT pipeline (which executes even when nothing\n   matches). "
+                "Delegate to TaskExecutorAgent only to RUN a computation you have\n"
+                "   already confirmed a tool covers."
+            )
+        else:
+            discovery_clause = ""
         steps.append(
             "BEFORE delegating, call `retrieve_tools` to discover which ready-made MCP\n"
             "   tools exist for the task. Run one or two focused `retrieve_tools` queries per capability\n"
@@ -1203,7 +1425,10 @@ def orchestrator(ctx: PromptContext) -> str:
     if has_research and (has_exec or has_coder):
         alternatives = []
         if has_exec:
-            alternatives.append("computed (TaskExecutorAgent)")
+            alternatives.append(
+                "executed (TaskExecutorAgent — ready tools or code)"
+                if exec_routes_to_coder else "computed (TaskExecutorAgent)"
+            )
         if has_coder:
             alternatives.append("produced by writing/running code (CoderAgent)")
         steps.append(
@@ -1213,10 +1438,26 @@ def orchestrator(ctx: PromptContext) -> str:
             + ". Research is a fallback for genuine knowledge gaps, not the first move."
         )
 
-    # The Executor-vs-Coder discriminator. A retrieved tool is a match only if it
-    # does the EXACT requested operation — same verb AND same object. The
-    # symmetric redirect (Executor abstaining back to Coder) is enforced
-    # deterministically by ExperimentAgent; the orchestrator must honour it.
+    # With the coder under the executor there is no Executor-vs-Coder decision
+    # left for the orchestrator: it delegates the OUTCOME once and the router
+    # picks the path (and absorbs the NO_MATCHING_TOOL abstention internally).
+    if exec_routes_to_coder:
+        steps.append(
+            "Send ALL execution to TaskExecutorAgent — both \"compute this with an\n"
+            "   existing tool\" and \"write/run code, clone repo X, build this\n"
+            "   dataset\". It routes to the right path itself, so do NOT pre-judge\n"
+            "   whether a ready tool exists, and do not split a step by execution\n"
+            "   mechanism. Delegate the OUTCOME you need, with every concrete\n"
+            "   detail (names, ids, URLs, thresholds, output format). If it reports\n"
+            "   that no tool matched AND no code path worked, that is a real\n"
+            "   blocker — re-delegating the same step unchanged will not fix it."
+        )
+
+    # The Executor-vs-Coder discriminator, for the wiring where BOTH are on the
+    # orchestrator's roster. A retrieved tool is a match only if it does the
+    # EXACT requested operation — same verb AND same object. The symmetric
+    # redirect (Executor abstaining back to Coder) is enforced deterministically
+    # by ExperimentAgent; the orchestrator must honour it.
     if has_exec and has_coder:
         steps.append(
             "Distinguish TaskExecutorAgent from CoderAgent by whether an EXISTING tool\n"
@@ -1274,7 +1515,10 @@ def orchestrator(ctx: PromptContext) -> str:
     if has_coder:
         trust_examples.append("CoderAgent runs real commands in a real\nsandbox")
     if has_exec:
-        trust_examples.append("TaskExecutorAgent runs real tools")
+        trust_examples.append(
+            "TaskExecutorAgent runs real tools and real code in a\nreal sandbox"
+            if exec_routes_to_coder else "TaskExecutorAgent runs real tools"
+        )
     trust_intro = "Sub-agents really execute their work" + (
         " — " + ", ".join(trust_examples) if trust_examples else ""
     )
@@ -1313,8 +1557,9 @@ def orchestrator(ctx: PromptContext) -> str:
             "- Consult `research_triggers` before each step and act on them:\n"
             "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
             "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "
-            "evidence-gathering (ResearchAgent for literature, Coder/TaskExecutor "
-            "for computation), NAMING the hypothesis in your request. Setting focus "
+            "evidence-gathering (ResearchAgent for literature, TaskExecutorAgent "
+            "for computation/engineering), NAMING the hypothesis in your request. "
+            "Setting focus "
             "is the KEY step — every piece of evidence the worker records is then "
             "auto-attached to that hypothesis, which moves it to under_verification "
             "and lets the background validator judge it. Do NOT skip set_focus, and "
@@ -1353,13 +1598,7 @@ Available tools from agents:
 
 <<AGENTS>>
 
-### KNOWLEDGE GRAPH (system root)
-This is the shared knowledge graph — the agents in the system and what has
-already happened. Consult it before planning/delegating, and re-read it any time
-with the graph tools (read_research_graph / get_graph_history / get_agents_info).
-{graph_root?}
-
-<<RESEARCH_GRAPH>>
+<<KNOWLEDGE_GRAPH>><<RESEARCH_GRAPH>>
 ### Instructions:
 
 <<INSTRUCTIONS>>
@@ -1388,12 +1627,25 @@ authoritative.
 
 <<CRITIC_PROTOCOL>>
 '''
+    # Drops out with the knowledge graph itself — without the reader tools there
+    # is nothing to consult and {graph_root?} renders empty anyway.
+    knowledge_graph_section = ""
+    if ctx.has_tool("graph"):
+        knowledge_graph_section = '''### KNOWLEDGE GRAPH (system root)
+This is the shared knowledge graph — the agents in the system and what has
+already happened. Consult it before planning/delegating, and re-read it any time
+with the graph tools (read_research_graph / get_graph_history / get_agents_info).
+{graph_root?}
+
+'''
+
     return render_template(
         template,
         AGENTS=ctx.render_agents(),
         INSTRUCTIONS=instructions,
         DIRECT_TOOLS=direct_tools_section,
         TRUST_INTRO=trust_intro,
+        KNOWLEDGE_GRAPH=knowledge_graph_section,
         RESEARCH_GRAPH=research_graph_section,
         CRITIC_PROTOCOL=render_critic_protocol(ctx),
     )
@@ -1408,12 +1660,18 @@ def pre_action_critic(ctx: PromptContext) -> str:
     has_exec = ctx.has_subordinate("TaskExecutorAgent")
     has_coder = ctx.has_subordinate("CoderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
+    # When the executor routes to the coder, the tool-vs-code boundary is not
+    # the orchestrator's call — so the critic must not police it.
+    exec_routes_to_coder = has_exec and _executor_routes_to_coder(ctx)
 
     revise_compute_line = ""
     if has_research and (has_exec or has_coder):
         alternatives = []
         if has_exec:
-            alternatives.append("TaskExecutorAgent (ready tool exists)")
+            alternatives.append(
+                "TaskExecutorAgent (ready tool or code)"
+                if exec_routes_to_coder else "TaskExecutorAgent (ready tool exists)"
+            )
         if has_coder:
             alternatives.append("CoderAgent")
         revise_compute_line = (
@@ -1422,7 +1680,16 @@ def pre_action_critic(ctx: PromptContext) -> str:
         )
 
     boundary_section = ""
-    if has_exec and has_coder:
+    if exec_routes_to_coder:
+        boundary_section = '''
+### Execution is routed, not chosen here
+  TaskExecutorAgent decides internally between running an existing MCP tool and
+  writing/running code, so do NOT reject or revise one of its calls on the
+  grounds that "this needs code, not a tool" (or the reverse) — that boundary is
+  its call, not the orchestrator's. Judge only WHETHER execution is the right
+  move and whether the request carries the concrete details the work needs.
+'''
+    elif has_exec and has_coder:
         boundary_section = '''
 ### Experiment vs Coder boundary
   Do NOT reject a call merely because it is "computational". The two compute

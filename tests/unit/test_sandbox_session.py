@@ -254,3 +254,41 @@ def test_expiry_is_surfaced_so_the_model_knows_the_files_are_gone():
 def test_tools_drop_out_when_no_sandbox_is_configured(monkeypatch):
     monkeypatch.setattr(sandbox_tools, "sandbox_configured", lambda: False)
     assert sandbox_tools.get_sandbox_tools() == []
+
+
+# ── The dataset archive attached in the web UI ────────────────────────────────
+# The user attaches one .zip per session. It reaches the agent as a prompt
+# section, not as an auto-filled argument: passing it to the sandbox is the
+# agent's own call, since only it knows whether a given step needs that data.
+
+def _dataset_ctx(url):
+    from CoScientist.agents.callbacks import tool_callbacks
+    state = {tool_callbacks.DATASET_URL_STATE_KEY: url} if url else {}
+    return SimpleNamespace(state=state)
+
+
+def test_dataset_prompt_block_names_the_link_and_is_empty_without_one():
+    from CoScientist.agents.callbacks import inject_dataset_context
+    from CoScientist.agents.callbacks.tool_callbacks import DATASET_CONTEXT_STATE_KEY
+
+    url = "https://example.org/data/dataset.zip"
+    attached = _dataset_ctx(url)
+    inject_dataset_context(attached)
+    block = attached.state[DATASET_CONTEXT_STATE_KEY]
+    assert url in block and "dataset_url" in block
+
+    empty = _dataset_ctx("")
+    inject_dataset_context(empty)
+    assert empty.state[DATASET_CONTEXT_STATE_KEY] == ""
+
+
+def test_nothing_fills_dataset_url_in_behind_the_agent():
+    """No callback may pre-fill the argument — the agent sends it or it stays out."""
+    from CoScientist.agents import build_for_mode
+
+    system = build_for_mode()
+    for name in ("CoderAgent", "DatasetCollectorAgent"):
+        callbacks = system.agents[name].canonical_before_tool_callbacks
+        assert not any(
+            "dataset" in getattr(cb, "__name__", "") for cb in callbacks
+        ), f"{name} must not auto-attach the dataset link"

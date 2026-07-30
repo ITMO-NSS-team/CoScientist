@@ -23,6 +23,7 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     before_get_task,
     before_tool_reranker_model,
     capture_mcp_artifacts,
+    inject_dataset_context,
     inject_graph_root,
     make_unknown_tool_guard,
     print_research_agent_tool_call,
@@ -46,5 +47,6 @@ __all__ = [
     "make_unknown_tool_guard",
     "before_get_task",
     "inject_graph_root",
+    "inject_dataset_context",
     "sanitize_json_output",
 ]

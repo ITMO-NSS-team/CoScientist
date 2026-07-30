@@ -331,7 +331,10 @@ class TaskTrackerToolset(BaseToolset):
             cleaned_task = {k: v for k, v in task.items() if k not in ("created_at", "updated_at")}
             if task.get("assignee") != current_agent:
                 cleaned_task.pop("description", None)
-                
+
+            if task.get("assignee") == current_agent:
+                cleaned_task.pop("description", None)
+
             if task.get("assignee") != current_agent and current_agent != "OrchestratorAgent":
                 cleaned_task.pop("notes", None)
 

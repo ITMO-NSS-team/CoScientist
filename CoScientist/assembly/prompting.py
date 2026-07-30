@@ -85,7 +85,7 @@ class PromptContext:
 
     @property
     def docs(self) -> List[ToolDoc]:
-        return [d for e in self.tool_entries for d in e.docs]
+        return [d for e in self.tool_entries for d in e.resolved_docs()]
 
     # ── section renderers ────────────────────────────────────────────────────
     def render_tools(self) -> str:

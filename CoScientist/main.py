@@ -186,6 +186,7 @@ class CoScientistManager:
             from google.adk.apps.app import App
             from CoScientist.logging.event_logger import EventLoggerPlugin
             from CoScientist.logging.tool_activity import ToolActivityPlugin
+            from CoScientist.logging.agent_output import AgentOutputPlugin
             from CoScientist.logging.metrics import UsageMetricsPlugin
             from CoScientist.graph.plugin import GraphMemoryPlugin
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
@@ -204,6 +205,11 @@ class CoScientistManager:
                     # too, which the top-level event stream cannot see. Inert
                     # unless a consumer (the Web UI) registered a sink.
                     ToolActivityPlugin(),
+                    # Observer: posts the final answer of the agents flagged
+                    # `report_output` (hypotheses, research, execution report),
+                    # which otherwise only exists inside the caller's
+                    # function_response. Inert without a sink.
+                    AgentOutputPlugin(),
                     # Prices every model call, in nested AgentTool runners too,
                     # so one session total covers the whole agent tree.
                     UsageMetricsPlugin(),

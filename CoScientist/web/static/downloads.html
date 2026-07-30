@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <title>CoScientist — загрузка датасетов</title>
+  <style>
+    /* ------------------------------------------------------------------
+       Roles, not raw hex. Light is the base; dark is a *selected* set of
+       steps for the dark surface (not an automatic flip), declared under
+       both the OS media query and the explicit [data-theme] stamp.
+       ------------------------------------------------------------------ */
+    :root {
+      color-scheme: light;
+      --surface-1: #fcfcfb;
+      /* chart surface */
+      --plane: #f9f9f7;
+      /* page plane */
+      --text-primary: #0b0b0b;
+      --text-secondary: #52514e;
+      --text-muted: #898781;
+      --gridline: #e1e0d9;
+      --border: rgba(11, 11, 11, 0.10);
+
+      --accent: #2a78d6;
+      /* meter fill — sequential blue 450 */
+      --good: #0ca30c;
+      --critical: #d03b3b;
+      --warning: #fab219;
+
+      /* Unfilled track: a lighter step of the FILL's own ramp, so the state
+         reads across the whole ring and the empty part never impersonates
+         a second series. */
+      --track: #cde2fb;
+      --track-good: #c3e9c3;
+      --track-bad: #f4d2d2;
+
+      --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+      --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:where(:not([data-theme="light"])) {
+        color-scheme: dark;
+        --surface-1: #1a1a19;
+        --plane: #0d0d0d;
+        --text-primary: #ffffff;
+        --text-secondary: #c3c2b7;
+        --text-muted: #898781;
+        --gridline: #2c2c2a;
+        --border: rgba(255, 255, 255, 0.10);
+        --accent: #3987e5;
+        --track: #184f95;
+        --track-good: #0a4a0a;
+        --track-bad: #5e2020;
+      }
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --plane: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --gridline: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent: #3987e5;
+      --track: #184f95;
+      --track-good: #0a4a0a;
+      --track-bad: #5e2020;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--plane);
+      color: var(--text-primary);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .wrap {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    /* --- header / controls ------------------------------------------- */
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: -0.01em;
+    }
+
+    .sub {
+      color: var(--text-muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button,
+    input[type="text"] {
+      font: inherit;
+      font-size: 13px;
+      color: var(--text-primary);
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 12px;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: var(--text-muted);
+    }
+
+    button[aria-pressed="true"] {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    input[type="text"] {
+      min-width: 260px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .conn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      flex: none;
+    }
+
+    .dot.live {
+      background: var(--good);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent);
+    }
+
+    .dot.err {
+      background: var(--critical);
+    }
+
+    /* --- KPI row ------------------------------------------------------ */
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      /* Surface (not gridline) as the container fill: a half-empty last row
+         must not leave a grey block where a tile isn't. */
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+
+    .kpi {
+      padding: 16px 18px;
+    }
+
+    .kpi+.kpi {
+      border-left: 1px solid var(--gridline);
+    }
+
+    .kpi .label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+
+    .kpi .value {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .kpi.hero .value {
+      font-size: 52px;
+      line-height: 1.05;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .kpi .unit {
+      font-size: 0.5em;
+      color: var(--text-secondary);
+      font-weight: 500;
+      margin-left: 2px;
+    }
+
+    /* --- donut grid --------------------------------------------------- */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+
+    .card .fname {
+      font-weight: 600;
+      font-size: 14px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .card .did {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-bottom: 12px;
+    }
+
+    .ring-wrap {
+      display: flex;
+      justify-content: center;
+      padding: 4px 0 6px;
+    }
+
+    .caption {
+      text-align: center;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 8px;
+    }
+
+    svg.ring {
+      display: block;
+      overflow: visible;
+    }
+
+    svg.ring path {
+      transition: d 220ms linear;
+    }
+
+    .ring-center-value {
+      font-size: 34px;
+      font-weight: 600;
+      fill: var(--text-primary);
+      letter-spacing: -0.02em;
+    }
+
+    .ring-center-unit {
+      font-size: 15px;
+      font-weight: 500;
+      fill: var(--text-secondary);
+    }
+
+    /* identity is never colour-alone: icon + word ride along with it */
+    .state {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .state .glyph {
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    .state.good {
+      color: var(--good);
+    }
+
+    .state.bad {
+      color: var(--critical);
+    }
+
+    .state.busy {
+      color: var(--accent);
+    }
+
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin: 2px 0 12px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      flex: none;
+    }
+
+    .facts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 12px;
+      border-top: 1px solid var(--gridline);
+      padding-top: 12px;
+    }
+
+    .facts .k {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .facts .v {
+      font-size: 13px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .err-line {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--critical);
+      word-break: break-word;
+    }
+
+    /* --- table view --------------------------------------------------- */
+    .panel {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--gridline);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .scroll-x {
+      overflow-x: auto;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 9px 16px;
+      border-bottom: 1px solid var(--gridline);
+    }
+
+    th {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* --- log tail ----------------------------------------------------- */
+    #log {
+      max-height: 260px;
+      overflow: auto;
+      padding: 12px 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* --- tooltip ------------------------------------------------------ */
+    #tip {
+      position: fixed;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 100ms;
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 11px;
+      font-size: 12px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+      z-index: 10;
+      max-width: 260px;
+    }
+
+    #tip .t-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      margin-bottom: 3px;
+    }
+
+    #tip .t-row {
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .empty {
+      padding: 40px 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Загрузка датасетов в песочницу</h1>
+        <div class="sub">Живой поток <code>/api/v1/downloads/logs</code> (SSE)</div>
+      </div>
+      <div class="controls">
+        <span class="conn"><span class="dot" id="dot"></span><span id="conn-text">не подключено</span></span>
+        <input type="text" id="url" spellcheck="false" title="URL SSE-потока" />
+        <button id="toggle">Подключиться</button>
+        <button id="theme" title="Светлая / тёмная тема">Тема</button>
+      </div>
+    </header>
+
+    <section class="kpis" id="kpis">
+      <div class="kpi hero">
+        <div class="label">Общий прогресс</div>
+        <div class="value" id="k-overall">—</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Загружено</div>
+        <div class="value" id="k-bytes">—</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Скорость</div>
+        <div class="value" id="k-speed">—</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Осталось (ETA)</div>
+        <div class="value" id="k-eta">—</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Активных</div>
+        <div class="value" id="k-active">—</div>
+      </div>
+    </section>
+
+    <div class="grid" id="grid"></div>
+    <div class="panel" id="placeholder">
+      <div class="empty">Активных загрузок нет. Подключитесь к потоку и запустите задачу с <code>dataset_url</code>.</div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <span>Все загрузки</span>
+        <button id="table-toggle" aria-pressed="true">Скрыть</button>
+      </div>
+      <div class="scroll-x" id="table-box">
+        <table>
+          <thead>
+            <tr>
+              <th>Файл</th>
+              <th>Состояние</th>
+              <th class="num">Готово</th>
+              <th class="num">Размер</th>
+              <th class="num">%</th>
+              <th class="num">Скорость</th>
+              <th class="num">ETA</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <span>Лог загрузки</span>
+        <button id="log-toggle" aria-pressed="true">Автопрокрутка</button>
+      </div>
+      <div id="log"></div>
+    </section>
+  </div>
+
+  <div id="tip" role="tooltip"></div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      // ---------------------------------------------------------------
+      // Theme: remember the viewer's pick, default to the app's dark chrome.
+      // ---------------------------------------------------------------
+      const root = document.documentElement;
+      const params = new URLSearchParams(location.search);
+      const saved = params.get("theme") || localStorage.getItem("cs-dl-theme");
+      if (saved) root.setAttribute("data-theme", saved);
+      document.getElementById("theme").addEventListener("click", () => {
+        const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        root.setAttribute("data-theme", next);
+        localStorage.setItem("cs-dl-theme", next);
+        render();
+      });
+
+      // ---------------------------------------------------------------
+      // Formatting
+      // ---------------------------------------------------------------
+      const fmtSize = (mb) => {
+        if (mb == null || !isFinite(mb)) return "—";
+        if (mb >= 1024) return (mb / 1024).toFixed(2) + " ГБ";
+        if (mb < 1) return (mb * 1024).toFixed(0) + " КБ";
+        return mb.toFixed(1) + " МБ";
+      };
+      const fmtSpeed = (s) => (s == null || !isFinite(s)) ? "—" : s.toFixed(1) + " МБ/с";
+      const fmtEta = (sec) => {
+        if (sec == null || !isFinite(sec) || sec < 0) return "—";
+        const s = Math.round(sec);
+        if (s < 60) return s + "с";
+        const m = Math.floor(s / 60), r = s % 60;
+        if (m < 60) return m + "м " + String(r).padStart(2, "0") + "с";
+        return Math.floor(m / 60) + "ч " + String(m % 60).padStart(2, "0") + "м";
+      };
+      const pct1 = (p) => (Math.round(p * 10) / 10).toFixed(1);
+
+      // A status string we did not anticipate must not silently read as "fine".
+      const classify = (raw) => {
+        const s = String(raw || "").toLowerCase();
+        if (/error|fail|abort|cancel/.test(s)) return "bad";
+        if (/complete|finish|done|success|ready/.test(s)) return "good";
+        if (/download|running|progress|start/.test(s)) return "busy";
+        return "idle";
+      };
+      const STATE_TEXT = {
+        busy: ["↓", "Загружается"], good: ["✓", "Завершено"],
+        bad: ["✕", "Ошибка"], idle: ["·", "Ожидание"],
+      };
+
+      // ---------------------------------------------------------------
+      // State: download_id -> last snapshot from the `download` event.
+      // ---------------------------------------------------------------
+      const downloads = new Map();
+      let logLines = [];
+      let es = null, autoscroll = true;
+
+      const $ = (id) => document.getElementById(id);
+      const dot = $("dot"), connText = $("conn-text"), btn = $("toggle");
+
+      const defaultUrl = new URL("/api/downloads/logs", location.href).toString();
+      $("url").value = params.get("stream") || defaultUrl;
+
+      function setConn(state, text) {
+        dot.className = "dot" + (state ? " " + state : "");
+        connText.textContent = text;
+        btn.textContent = es ? "Отключиться" : "Подключиться";
+      }
+
+      function connect() {
+        disconnect();
+        const url = $("url").value.trim();
+        if (!url) return;
+        try { es = new EventSource(url); }
+        catch (e) { setConn("err", "неверный URL"); return; }
+
+        setConn("", "подключение…");
+        es.onopen = () => setConn("live", "поток открыт");
+        es.onerror = () => {
+          // EventSource retries on its own; say so rather than looking dead.
+          setConn("err", es && es.readyState === 0 ? "переподключение…" : "нет связи");
+        };
+        es.addEventListener("log", (e) => {
+          logLines.push(e.data);
+          if (logLines.length > 400) logLines = logLines.slice(-400);
+          paintLog();
+        });
+        es.addEventListener("download", (e) => {
+          try {
+            const d = JSON.parse(e.data);
+            if (d && d.download_id) downloads.set(d.download_id, d);
+            render();
+          } catch (_) { /* a malformed frame must not kill the stream */ }
+        });
+        es.addEventListener("status", (e) => {
+          if (String(e.data).trim() === "idle") {
+            // The server closes after `idle`; without closing here EventSource
+            // would reconnect forever against a stream that has nothing left.
+            disconnect();
+            setConn("", "поток завершён (idle)");
+          }
+        });
+        setConn("", "подключение…");
+      }
+
+      function disconnect() {
+        if (es) { es.close(); es = null; }
+        setConn("", "не подключено");
+      }
+
+      btn.addEventListener("click", () => (es ? (disconnect(), setConn("", "отключено")) : connect()));
+
+      // ---------------------------------------------------------------
+      // The donut. Two fills — downloaded and remaining — separated by a
+      // 2px surface gap, drawn from 12 o'clock clockwise.
+      // ---------------------------------------------------------------
+      const R = 62, SW = 20, CX = 84, CY = 84, GAP_PX = 2;
+
+      function arcPath(startFrac, endFrac) {
+        const a0 = startFrac * 2 * Math.PI - Math.PI / 2;
+        const a1 = endFrac * 2 * Math.PI - Math.PI / 2;
+        const x0 = CX + R * Math.cos(a0), y0 = CY + R * Math.sin(a0);
+        const x1 = CX + R * Math.cos(a1), y1 = CY + R * Math.sin(a1);
+        const large = (endFrac - startFrac) > 0.5 ? 1 : 0;
+        return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${R} ${R} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+      }
+
+      function fullCircle() {
+        return `M ${CX} ${CY - R} A ${R} ${R} 0 1 1 ${CX - 0.01} ${CY - R} Z`;
+      }
+
+      function donutSvg(frac, fillVar, trackVar) {
+        const gap = GAP_PX / (2 * Math.PI * R);   // 2px expressed in turns
+        const f = Math.min(1, Math.max(0, frac));
+        let segs = "";
+        const stroke = (d, color, cls, label) =>
+          `<path d="${d}" fill="none" stroke="${color}" stroke-width="${SW}" ` +
+          `stroke-linecap="butt" class="${cls}" data-label="${label}"></path>`;
+
+        if (f >= 0.999) {
+          segs = stroke(fullCircle(), `var(${fillVar})`, "seg-done", "done");
+        } else if (f <= 0.001) {
+          segs = stroke(fullCircle(), `var(${trackVar})`, "seg-left", "left");
+        } else {
+          // Both arcs shrink by half a gap at each shared end.
+          segs =
+            stroke(arcPath(gap / 2, f - gap / 2), `var(${fillVar})`, "seg-done", "done") +
+            stroke(arcPath(f + gap / 2, 1 - gap / 2), `var(${trackVar})`, "seg-left", "left");
+        }
+        return segs;
+      }
+
+      function card(d) {
+        const p = d.progress || {};
+        const kind = classify(d.status || p.status);
+        const total = Number(p.total_mb) || 0;
+        const done = Number(p.downloaded_mb) || 0;
+        const pctRaw = (p.percent != null) ? Number(p.percent)
+          : (total > 0 ? (done / total) * 100 : 0);
+        const pct = Math.min(100, Math.max(0, isFinite(pctRaw) ? pctRaw : 0));
+        const fillVar = kind === "bad" ? "--critical" : kind === "good" ? "--good" : "--accent";
+        const trackVar = kind === "bad" ? "--track-bad" : kind === "good" ? "--track-good" : "--track";
+        const [glyph, word] = STATE_TEXT[kind];
+
+        const el = document.createElement("div");
+        el.className = "card";
+        el.innerHTML = `
+          <div class="fname" title="${esc(d.filename || "—")}">${esc(d.filename || "—")}</div>
+          <div class="did" title="${esc(d.download_id)}">${esc(d.download_id)}</div>
+          <div class="ring-wrap">
+            <svg class="ring" width="168" height="168" viewBox="0 0 168 168" role="img"
+                 aria-label="Загружено ${pct1(pct)} процентов из ${fmtSize(total)}">
+              ${donutSvg(pct / 100, fillVar, trackVar)}
+              <text x="${CX}" y="${CY}" text-anchor="middle" dominant-baseline="middle"
+                    class="ring-center-value">${pct1(pct)}<tspan class="ring-center-unit">%</tspan></text>
+            </svg>
+          </div>
+          <div class="caption">${esc(fmtSize(done))} / ${esc(fmtSize(total))}</div>
+          <div class="legend">
+            <span><i class="swatch" style="background:var(${fillVar})"></i>Загружено</span>
+            <span><i class="swatch" style="background:var(${trackVar})"></i>Осталось</span>
+            <span class="state ${kind}"><i class="glyph">${glyph}</i>${word}</span>
+          </div>
+          <div class="facts">
+            <div><div class="k">Скорость</div><div class="v">${esc(fmtSpeed(p.speed_mb_s))}</div></div>
+            <div><div class="k">Осталось времени</div><div class="v">${esc(fmtEta(p.eta_seconds))}</div></div>
+            <div><div class="k">Осталось данных</div><div class="v">${esc(fmtSize(Math.max(0, total - done)))}</div></div>
+            <div><div class="k">Задача</div><div class="v" style="font-size:12px">${esc(d.task_id || "—")}</div></div>
+          </div>
+          ${d.error ? `<div class="err-line">✕ ${esc(d.error)}</div>` : ""}
+        `;
+
+        // Hover layer: each fill answers "how much is this slice?".
+        const tipRows = {
+          done: [`Загружено`, `${fmtSize(done)} · ${pct1(pct)}%`],
+          left: [`Осталось`, `${fmtSize(Math.max(0, total - done))} · ${pct1(100 - pct)}%`],
+        };
+        el.querySelectorAll("path").forEach((path) => {
+          const key = path.dataset.label;
+          path.style.cursor = "crosshair";
+          path.addEventListener("mousemove", (ev) => {
+            const [t, v] = tipRows[key] || tipRows.done;
+            const color = key === "left" ? `var(${trackVar})` : `var(${fillVar})`;
+            showTip(ev, `<div class="t-title"><i class="swatch" style="background:${color}"></i>${esc(t)}</div>` +
+              `<div class="t-row">${esc(v)}</div>` +
+              `<div class="t-row">${esc(d.filename || d.download_id)}</div>`);
+          });
+          path.addEventListener("mouseleave", hideTip);
+        });
+        return el;
+      }
+
+      const esc = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+      const tip = $("tip");
+      function showTip(ev, html) {
+        tip.innerHTML = html;
+        tip.style.opacity = "1";
+        const pad = 14;
+        const r = tip.getBoundingClientRect();
+        let x = ev.clientX + pad, y = ev.clientY + pad;
+        if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+        if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+        tip.style.left = x + "px";
+        tip.style.top = y + "px";
+      }
+      function hideTip() { tip.style.opacity = "0"; }
+
+      // ---------------------------------------------------------------
+      // Render
+      // ---------------------------------------------------------------
+      function render() {
+        const list = [...downloads.values()];
+        const grid = $("grid");
+        grid.innerHTML = "";
+        // Active first, then most recently seen.
+        list.sort((a, b) => (classify(b.status) === "busy") - (classify(a.status) === "busy"));
+        list.forEach((d) => grid.appendChild(card(d)));
+        $("placeholder").classList.toggle("hidden", list.length > 0);
+
+        let done = 0, total = 0, speed = 0, eta = 0, active = 0;
+        for (const d of list) {
+          const p = d.progress || {};
+          const t = Number(p.total_mb) || 0, dn = Number(p.downloaded_mb) || 0;
+          if (t > 0) { total += t; done += Math.min(dn, t); }
+          if (classify(d.status || p.status) === "busy") {
+            active++;
+            speed += Number(p.speed_mb_s) || 0;
+            eta = Math.max(eta, Number(p.eta_seconds) || 0);
+          }
+        }
+        const overall = total > 0 ? (done / total) * 100 : (list.length ? 0 : null);
+        $("k-overall").innerHTML = overall == null ? "—"
+          : `${pct1(overall)}<span class="unit">%</span>`;
+        $("k-bytes").textContent = total > 0 ? `${fmtSize(done)} / ${fmtSize(total)}` : "—";
+        $("k-speed").textContent = active ? fmtSpeed(speed) : "—";
+        $("k-eta").textContent = active ? fmtEta(eta) : "—";
+        $("k-active").textContent = list.length ? `${active} / ${list.length}` : "—";
+
+        // Table view — the same numbers without relying on colour or hover.
+        const tb = $("tbody");
+        tb.innerHTML = "";
+        if (!list.length) {
+          tb.innerHTML = `<tr><td colspan="7" style="color:var(--text-muted)">нет данных</td></tr>`;
+        }
+        for (const d of list) {
+          const p = d.progress || {};
+          const kind = classify(d.status || p.status);
+          const [glyph, word] = STATE_TEXT[kind];
+          const t = Number(p.total_mb) || 0, dn = Number(p.downloaded_mb) || 0;
+          const pc = p.percent != null ? Number(p.percent) : (t > 0 ? dn / t * 100 : 0);
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            `<td title="${esc(d.download_id)}">${esc(d.filename || d.download_id)}</td>` +
+            `<td><span class="state ${kind}"><i class="glyph">${glyph}</i>${word}</span></td>` +
+            `<td class="num">${esc(fmtSize(dn))}</td>` +
+            `<td class="num">${esc(fmtSize(t))}</td>` +
+            `<td class="num">${esc(pct1(isFinite(pc) ? pc : 0))}</td>` +
+            `<td class="num">${esc(fmtSpeed(p.speed_mb_s))}</td>` +
+            `<td class="num">${esc(fmtEta(p.eta_seconds))}</td>`;
+          tb.appendChild(tr);
+        }
+      }
+
+      function paintLog() {
+        const box = $("log");
+        box.textContent = logLines.join("\n");
+        if (autoscroll) box.scrollTop = box.scrollHeight;
+      }
+
+      $("log-toggle").addEventListener("click", (e) => {
+        autoscroll = !autoscroll;
+        e.target.setAttribute("aria-pressed", String(autoscroll));
+        if (autoscroll) paintLog();
+      });
+      $("table-toggle").addEventListener("click", (e) => {
+        const box = $("table-box");
+        const shown = box.classList.toggle("hidden");
+        e.target.setAttribute("aria-pressed", String(!shown));
+        e.target.textContent = shown ? "Показать" : "Скрыть";
+      });
+
+      render();
+      connect();   // autoconnect on load; the button toggles it
+    })();
+  </script>
+</body>
+
+</html>

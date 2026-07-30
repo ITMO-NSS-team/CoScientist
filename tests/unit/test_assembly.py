@@ -183,7 +183,6 @@ def test_planner_optimizes_for_capability_coverage_not_step_count(system):
     """MCP metadata compresses delegation units instead of expanding them."""
     instruction = system.agent("PlannerAgent").instruction
     assert "SHORTEST executable roadmap" in instruction
-    assert "FULL description and `input_schema`" in instruction
     assert "one task per independent user deliverable" in instruction
     assert "run a compression pass" in instruction
     assert "Do not add an OrchestratorAgent task" in instruction
@@ -223,6 +222,44 @@ def test_executor_sufficiency_and_discovery_guardrails(config, system):
         assert "retrieve_tools" in orch
         assert 'delegate "check if a tool exists"' in orch.lower() or \
                'Do NOT delegate "check if a tool exists"' in orch
+
+
+def test_task_executor_is_a_router_over_both_execution_paths(config, system):
+    """TaskExecutorAgent is an LLM ROUTER, not the tool pipeline itself: it picks
+    between the ready-made MCP pipeline and the coder, both wired under it as
+    AgentTools. The coder is therefore reached THROUGH it, not from the root."""
+    executor = config.agent("TaskExecutorAgent")
+    assert executor.cls == "llm"
+    assert executor.subordinates == ["ToolPipelineAgent", "CoderAgent"]
+
+    # The old sequential body moved to ToolPipelineAgent, reachable only via the
+    # router (no A2A card of its own).
+    pipeline = config.agent("ToolPipelineAgent")
+    assert pipeline.cls == "sequential"
+    assert pipeline.children == ["ToolPreparerAgent", "ExperimentAgent"]
+    assert pipeline.a2a is None
+
+    # Execution has ONE entry point on the orchestrator's roster.
+    orch_subs = config.agent("OrchestratorAgent").subordinates
+    assert "TaskExecutorAgent" in orch_subs
+    assert "CoderAgent" not in orch_subs
+
+    attached = [t.agent.name for t in system.agent("TaskExecutorAgent").tools
+                if hasattr(t, "agent")]
+    assert attached == ["ToolPipelineAgent", "CoderAgent"]
+
+
+def test_router_prompt_absorbs_the_no_matching_tool_handoff(config, system):
+    """The abstain verdict is resolved one level DOWN: the router re-issues the
+    step to the coder itself, so the orchestrator is never asked to re-route it."""
+    router = system.agent("TaskExecutorAgent").instruction
+    assert "ToolPipelineAgent" in router and "CoderAgent" in router
+    assert "NO_MATCHING_TOOL" in router
+
+    orch = system.agent("OrchestratorAgent").instruction
+    # The Executor-vs-Coder discriminator belongs to the router now.
+    assert "re-route that step to" not in orch
+    assert "Send ALL execution to TaskExecutorAgent" in orch
 
 
 def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(config, system):
@@ -300,3 +337,94 @@ def test_build_for_mode_orchestrator(monkeypatch):
     assert system is not None
     assert system.root.name == "OrchestratorAgent"
 
+
+
+# ── web UI feature switches ──────────────────────────────────────────────────
+# Knowledge Graph / Research Graph / Local Coder Tools each drop a tool entry
+# out of every agent that lists it. The invariant under test is the one the
+# assembler exists to protect: a switched-off tool must vanish from the agent
+# AND from its prompt, so the model is never told to call something it lacks.
+
+def _tool_names(agent) -> set:
+    """Every identifier an attached tool goes by.
+
+    Plain function tools carry ``__name__``, FunctionTool carries ``name``, and
+    a toolset resolves its surface at runtime — so it is identified by class
+    (GraphReaderToolset, ResearchGraphToolset).
+    """
+    names = set()
+    for tool in getattr(agent, "tools", []):
+        for candidate in (
+            getattr(tool, "name", None),
+            getattr(tool, "__name__", None),
+            type(tool).__name__,
+        ):
+            if candidate:
+                names.add(candidate)
+    return names
+
+
+def _build_with(monkeypatch, config, **flags):
+    from CoScientist.config import get_settings
+
+    settings = get_settings()
+    for field, value in flags.items():
+        if field == "research_graph_enabled":
+            monkeypatch.setattr(settings.research_graph, "enabled", value)
+        else:
+            monkeypatch.setattr(settings.web, field, value)
+    return build_system(config)
+
+
+def test_knowledge_graph_switch_drops_graph_tools_and_prompt(monkeypatch, config):
+    off = _build_with(monkeypatch, config, knowledge_graph_enabled=False)
+
+    for name, cfg in config.agents.items():
+        if "graph" not in cfg.tools:
+            continue
+        agent = off.agent(name)
+        assert "GraphReaderToolset" not in _tool_names(agent), f"{name}: graph tool attached"
+
+    # The orchestrator's KNOWLEDGE GRAPH section goes with it.
+    assert "### KNOWLEDGE GRAPH" not in off.agent("OrchestratorAgent").instruction
+
+
+def test_knowledge_graph_on_by_default(config, system):
+    orchestrator = system.agent("OrchestratorAgent")
+    assert "GraphReaderToolset" in _tool_names(orchestrator)
+    assert "### KNOWLEDGE GRAPH" in orchestrator.instruction
+
+
+def test_research_graph_switch_drops_tools_and_prompt(monkeypatch, config):
+    off = _build_with(monkeypatch, config, research_graph_enabled=False)
+
+    for name, cfg in config.agents.items():
+        if not ({"research_graph", "research_graph_orchestrator"} & set(cfg.tools)):
+            continue
+        agent = off.agent(name)
+        assert "ResearchGraphToolset" not in _tool_names(agent), f"{name}: research tool attached"
+        if cfg.cls == "llm" and cfg.prompt:
+            assert "research_commit" not in agent.instruction, f"{name}: prompt leaked"
+
+
+def test_coder_local_tools_switch_leaves_only_the_sandbox(monkeypatch, config):
+    """The CoderAgent keeps working — through the sandbox — and its prompt stops
+    telling it to reach for execute_bash."""
+    off = _build_with(monkeypatch, config, coder_local_tools_enabled=False)
+
+    for name in ("CoderAgent", "DatasetCollectorAgent"):
+        cfg = config.agent(name)
+        assert "coder" in cfg.tools and "sandbox" in cfg.tools
+        agent = off.agent(name)
+        names = _tool_names(agent)
+        assert "execute_bash" not in names, f"{name}: local coder tool still attached"
+        assert "execute_bash" not in agent.instruction, f"{name}: prompt still names it"
+        # Sandbox tools are the remaining execution surface (when configured).
+        if "run_sandbox_task" in names:
+            assert "run_sandbox_task" in agent.instruction
+
+
+def test_coder_local_tools_on_by_default(config, system):
+    coder = system.agent("CoderAgent")
+    assert "execute_bash" in _tool_names(coder)
+    assert "execute_bash" in coder.instruction
