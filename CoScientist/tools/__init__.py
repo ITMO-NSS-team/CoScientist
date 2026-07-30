@@ -10,10 +10,19 @@ from CoScientist.tools.servers_web_search import search_mcp_servers
 from CoScientist.tools.med_tools import med_toolset_instance
 from CoScientist.tools.coder_tools import CoderToolset, coder_toolset_instance
 from CoScientist.tools.task_tracker import TaskTrackerToolset, task_tracker_instance
+from CoScientist.tools.result_formatter_tool import (
+    ResultFormatterToolset,
+    result_formatter_tool,
+    result_formatter_toolset_instance,
+)
+from CoScientist.tools.dynamic_tools import DynamicMCPToolset, dynamic_mcp_toolset_instance
+from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
 
 __all__ = [
     "FedotMASToolset",
     "fedot_toolset_instance",
+    "DynamicMCPToolset",
+    "dynamic_mcp_toolset_instance",
     "websearch_toolset_instance",
     "paper_analysis_toolset_instance",
     "papers_search_toolset_instance",
@@ -24,5 +33,9 @@ __all__ = [
     "CoderToolset",
     "coder_toolset_instance",
     "TaskTrackerToolset",
-    "task_tracker_instance"
+    "task_tracker_instance",
+    "ResultFormatterToolset",
+    "result_formatter_tool",
+    "result_formatter_toolset_instance",
+    "ALEMBIC_TOOLS",
 ]

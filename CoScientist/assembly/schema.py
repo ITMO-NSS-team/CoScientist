@@ -19,6 +19,7 @@ The YAML declares every agent of the system in one place. Per agent:
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -28,7 +29,27 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from CoScientist.config import get_settings
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "agents" / "system.yaml"
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "agents"
+DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
+
+# Env var selecting an alternative system profile for the whole process.
+# Accepts a bare profile name ("microfluidics" -> CoScientist/agents/
+# microfluidics.yaml) or a filesystem path to a YAML file. Every entry point
+# that builds the system through get_config() (CLI, web server, A2A serving)
+# honours it, so one deployment can run a differently-shaped CoScientist
+# without touching the default system.yaml.
+CONFIG_ENV_VAR = "COSCIENTIST_CONFIG"
+
+
+def resolve_config_path(ref: Optional[str] = None) -> Path:
+    """Resolve a config reference: explicit ref, $COSCIENTIST_CONFIG, or default."""
+    ref = ref or os.environ.get(CONFIG_ENV_VAR)
+    if not ref:
+        return DEFAULT_CONFIG_PATH
+    path = Path(ref)
+    if path.suffix in (".yaml", ".yml"):
+        return path
+    return CONFIG_DIR / f"{ref}.yaml"
 
 
 def _resolve_setting_ref(value: Union[bool, str]) -> bool:
@@ -146,10 +167,32 @@ class DefaultsConfig(BaseModel):
     model: str = "main"
 
 
+class PipelineConfig(BaseModel):
+    """System lifecycle flow around the root orchestrator.
+
+    ``pre`` stages run (in order) BEFORE the root agent, ``post`` stages run
+    AFTER it — each as its own pass over the SAME session, so state flows
+    between them. Stage agents are ordinary agents declared in ``agents``; they
+    need not be attached to any parent (the assembler builds every declared
+    agent regardless). This keeps the delegation tree (root + subordinates)
+    separate from the run lifecycle instead of forcing flow through a
+    ``SequentialAgent`` root.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pre: List[str] = Field(default_factory=list)
+    post: List[str] = Field(default_factory=list)
+
+    def stage_names(self) -> List[str]:
+        return list(self.pre) + list(self.post)
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     agents: Dict[str, AgentConfig]
 
     @model_validator(mode="after")
@@ -162,6 +205,15 @@ class SystemConfig(BaseModel):
         roots = [a.name for a in self.agents.values() if a.root]
         if len(roots) != 1:
             raise ValueError(f"Exactly one agent must have root: true, got {roots}")
+
+        for stage in self.pipeline.stage_names():
+            if stage not in self.agents:
+                raise ValueError(f"pipeline references unknown agent {stage!r}")
+            if stage == roots[0]:
+                raise ValueError(
+                    f"pipeline stage {stage!r} is the root — the root runs on its "
+                    "own, do not list it as a pre/post stage"
+                )
 
         for agent in self.agents.values():
             for ref in agent.subordinates + agent.children:
@@ -242,7 +294,7 @@ class SystemConfig(BaseModel):
 
 
 def load_config(path: Optional[Path] = None) -> SystemConfig:
-    path = Path(path) if path else DEFAULT_CONFIG_PATH
+    path = Path(path) if path else resolve_config_path()
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     return SystemConfig.model_validate(raw)
@@ -250,7 +302,8 @@ def load_config(path: Optional[Path] = None) -> SystemConfig:
 
 @lru_cache(maxsize=1)
 def get_config() -> SystemConfig:
-    """The default system config, loaded once per process."""
+    """The process-wide system config ($COSCIENTIST_CONFIG or the default),
+    loaded once per process."""
     return load_config()
 
 
@@ -258,10 +311,13 @@ __all__ = [
     "A2AConfig",
     "AgentConfig",
     "CallbacksConfig",
+    "CONFIG_ENV_VAR",
     "DEFAULT_CONFIG_PATH",
     "DefaultsConfig",
+    "PipelineConfig",
     "SkillConfig",
     "SystemConfig",
     "get_config",
     "load_config",
+    "resolve_config_path",
 ]

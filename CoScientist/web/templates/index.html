@@ -121,12 +121,32 @@
       <!-- Populated by JS -->
     </nav>
     <div class="px-4 mt-auto space-y-4">
+      <div class="space-y-2 pt-4 border-t border-outline-variant/10">
+        <div class="flex items-center justify-between">
+          <label class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">User</label>
+          <button onclick="openIdentityModal()" title="Register user"
+            class="text-primary hover:brightness-125"><span class="material-symbols-outlined text-sm">person_add</span></button>
+        </div>
+        <select id="user-select" onchange="onUserSelected(this.value)"
+          class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
+        <div class="flex items-center justify-between">
+          <label class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">Session</label>
+          <div class="flex gap-2">
+            <button onclick="renameCurrentSession()" title="Rename session"
+              class="text-outline-variant hover:text-primary"><span class="material-symbols-outlined text-sm">edit</span></button>
+            <button onclick="createNewSession()" title="New session"
+              class="text-primary hover:brightness-125"><span class="material-symbols-outlined text-sm">add_circle</span></button>
+          </div>
+        </div>
+        <select id="session-select" onchange="onSessionSelected(this.value)"
+          class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
+      </div>
       <div class="flex items-center gap-3 pt-4 border-t border-outline-variant/10">
         <div class="w-8 h-8 rounded bg-surface-container-high flex items-center justify-center">
           <span class="material-symbols-outlined text-primary text-sm">science</span>
         </div>
         <div>
-          <p class="text-[10px] font-bold text-on-surface">SYS_ADMIN</p>
+          <p id="active-nickname" class="text-[10px] font-bold text-on-surface">No user selected</p>
           <p id="conn-status" class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
         </div>
       </div>
@@ -145,6 +165,14 @@
       </div>
     </div>
     <div class="flex items-center gap-4 text-[#424656]">
+      <a id="graph-link" href="/graph" target="_blank" title="Knowledge graph (live)">
+        <span
+          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">hub</span>
+      </a>
+      <a href="/builds" target="_blank" title="MCP builds (live)">
+        <span
+          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">build</span>
+      </a>
       <button onclick="clearChat()" title="Clear chat">
         <span
           class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
@@ -229,6 +257,16 @@
     let ws = null;
     let eventCount = 0;
     let reconnectTimer = null;
+    let intentionalDisconnect = false;
+    let activeUser = null;
+    let activeSession = null;
+    let runStatusVersion = -1;
+    let knownUsers = [];
+    let knownSessions = [];
+
+    const USER_STORAGE_KEY = 'coscientist.user_id';
+    const SESSION_STORAGE_KEY = 'coscientist.session_id';
+    const NICK_STORAGE_KEY = 'coscientist.nickname';
 
     const AGENTS = [
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
@@ -322,15 +360,18 @@
       feed.scrollTop = feed.scrollHeight;
     }
 
-    function ts() { return new Date().toLocaleTimeString('en-GB', { hour12: false }); }
+    function ts(timestamp = null) {
+      const date = timestamp ? new Date(timestamp) : new Date();
+      return date.toLocaleTimeString('en-GB', { hour12: false });
+    }
 
-    function addSystemMsg(text) {
+    function addSystemMsg(text, timestamp = null) {
       const feed = document.getElementById('chat-feed');
       feed.innerHTML += `
     <div class="flex flex-col gap-2 max-w-2xl msg-enter">
       <div class="flex items-center gap-2">
         <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">System</span>
-        <span class="text-[10px] text-outline-variant font-mono">${ts()}</span>
+        <span class="text-[10px] text-outline-variant font-mono">${ts(timestamp)}</span>
       </div>
       <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
         <p class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>
@@ -339,7 +380,32 @@
       scrollChat();
     }
 
-    function addAgentMsg(author, text) {
+    function escJs(s) {
+      // For embedding a value inside a single-quoted onclick attribute.
+      return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+
+    function linkify(escapedText) {
+      // Input is already HTML-escaped. Render links in two ordered passes:
+      //   1) markdown links [label](url) — the agent emits these;
+      //   2) bare http(s) URLs and known paths, but ONLY in text that is not
+      //      already inside an <a> from pass 1 (otherwise the http:// inside a
+      //      freshly-built href gets re-linked → the [url](url) double-link bug).
+      const A = ' target="_blank" class="text-primary underline"';
+      let s = escapedText.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g,
+        '<a href="$2"' + A + '>$1</a>');
+      return s.split(/(<a\b[^>]*>.*?<\/a>)/g).map(seg => {
+        if (seg.startsWith('<a')) return seg;   // leave existing anchors alone
+        return seg
+          .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1"' + A + '>$1</a>')
+          .replace(/(^|\s)(\/api\/tz-document[^\s<]*)/g, '$1<a href="$2"' + A + '>$2</a>')
+          // Live MCP build page: /builds/<job_id> (agent surfaces it as progress_page).
+          .replace(/(^|\s)(\/builds\/[A-Za-z0-9._-]+)/g, '$1<a href="$2"' + A + '>$2</a>');
+      }).join('');
+    }
+
+    function addAgentMsg(author, text, timestamp = null) {
       const feed = document.getElementById('chat-feed');
       feed.innerHTML += `
     <div class="flex items-start gap-4 max-w-3xl msg-enter">
@@ -349,17 +415,17 @@
       <div class="flex flex-col gap-1">
         <div class="flex items-center gap-2">
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(author)}</span>
-          <span class="text-[10px] text-outline-variant">${ts()}</span>
+          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
-          <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">${escHtml(text)}</p>
+          <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">${linkify(escHtml(text))}</p>
         </div>
       </div>
     </div>`;
       scrollChat();
     }
 
-    function addUserMsg(text) {
+    function addUserMsg(text, timestamp = null) {
       const feed = document.getElementById('chat-feed');
       feed.innerHTML += `
     <div class="flex items-start gap-4 max-w-2xl ml-auto flex-row-reverse msg-enter">
@@ -368,7 +434,7 @@
       </div>
       <div class="flex flex-col gap-1 items-end">
         <div class="flex items-center gap-2">
-          <span class="text-[10px] text-outline-variant">${ts()}</span>
+          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">You</span>
         </div>
         <div class="bg-primary/5 p-4 rounded-xl rounded-tr-none border border-primary/20">
@@ -425,7 +491,20 @@
     `;
       }
 
-      // Show in sidebar
+      const hasOptions = !!(data.options && data.options.length);
+
+      // Show in sidebar. For question windows (options present) the sidebar is
+      // informational only — a bare Accept there would silently skip the question.
+      const sidebarButtons = hasOptions ? `
+        <p class="text-[10px] text-outline-variant leading-relaxed">Ответьте в карточке вопроса в чате.</p>` : `
+        <div class="flex gap-3">
+          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+            <span class="material-symbols-outlined text-base">check_circle</span> Accept
+          </button>
+          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+            <span class="material-symbols-outlined text-base">close</span> Reject
+          </button>
+        </div>`;
       panel.classList.remove('hidden');
       panel.innerHTML = `
     <div class="relative">
@@ -438,19 +517,18 @@
           <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">HITL Required</h3>
         </div>
         <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(data.message)}</p>
-        <div class="flex gap-3">
-          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-            <span class="material-symbols-outlined text-base">check_circle</span> Accept
-          </button>
-          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-            <span class="material-symbols-outlined text-base">close</span> Reject
-          </button>
-        </div>
+        ${sidebarButtons}
         ${openRoadmapSidebarBtn}
       </div>
     </div>`;
 
-      // Also show in chat
+      // Also show in chat: the proposed output itself + Accept / Revise controls.
+      const proposedOutput = (data.context && data.context.output) ? String(data.context.output) : '';
+      const outputBlock = proposedOutput ? `
+        <div class="mt-3 pl-11">
+          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">Proposed output</p>
+          <pre class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap bg-surface-container-high p-3 rounded-lg border border-outline-variant/10 max-h-96 overflow-auto">${escHtml(proposedOutput)}</pre>
+        </div>` : '';
       feed.innerHTML += `
     <div class="my-6 relative msg-enter">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
@@ -462,18 +540,58 @@
           <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">Human-In-The-Loop Required</h3>
         </div>
         <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(data.message)}</p>
-        <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)}</p>
+        <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)} · ${escHtml(data.agent_name || '')}</p>
+        ${outputBlock}
+        ${hasOptions ? `
+        <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Ваш ответ на вопрос — затем «Ответить»"
+            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-base">reply</span> Ответить
+            </button>
+            ${data.options.map(o => `
+            <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
+          </div>
+        </div>` : `
+        <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Правки для агента — затем Revise"
+            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+          <div class="flex gap-3">
+            <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-base">check_circle</span> Accept
+            </button>
+            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+              <span class="material-symbols-outlined text-base">edit_note</span> Revise
+            </button>
+            <button onclick="respondHITL('${data.request_id}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+              <span class="material-symbols-outlined text-base">close</span> Reject
+            </button>
+          </div>
+        </div>`}
         ${openRoadmapChatBtn}
       </div>
     </div>`;
       scrollChat();
     }
 
+    function disableHitlControls(requestId) {
+      const box = document.getElementById('hitl-controls-' + requestId);
+      if (!box) return;
+      box.querySelectorAll('button, textarea').forEach(el => {
+        el.disabled = true;
+        el.classList.add('opacity-40', 'pointer-events-none');
+      });
+    }
+
     let currentPlannerHitlRequest = null;
 
     function respondHITL(requestId, approved) {
-      const feedbackEl = document.getElementById('hitl-feedback');
-      const feedback = feedbackEl ? feedbackEl.value : '';
+      // Reject carries the feedback (the agent regenerates with it); Accept is
+      // ALWAYS clean — on approve the backend treats `instructions` as edited
+      // replacement text, which must never happen implicitly.
+      const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
+      const feedback = (!approved && feedbackEl) ? feedbackEl.value.trim() : '';
       if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify({
           type: 'hitl_response',
@@ -481,11 +599,57 @@
           action: approved ? 'approve' : 'reject',
           approved: approved,
           instructions: feedback || null,
-          free_input: feedback || null,
+          free_input: null,
         }));
       }
       document.getElementById('hitl-panel').classList.add('hidden');
-      addSystemMsg(approved ? '✓ HITL Approved' + (feedback ? ': ' + feedback : '') : '✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
+      disableHitlControls(requestId);
+      addSystemMsg(approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
+
+      if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
+        currentPlannerHitlRequest = null;
+        updateRoadmapModalButtons();
+      }
+    }
+
+    function respondHITLOption(requestId, option) {
+      // A question-window option button: a complete answer by itself.
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'hitl_response',
+          request_id: requestId,
+          action: 'select',
+          approved: true,
+          selected_option: option,
+        }));
+      }
+      document.getElementById('hitl-panel').classList.add('hidden');
+      disableHitlControls(requestId);
+      addSystemMsg('☑ ' + option);
+    }
+
+    function respondHITLEdit(requestId) {
+      // Send the operator's corrections: the agent rewrites its output with them.
+      const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
+      const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+      if (!feedback) {
+        addSystemMsg('Введите правки в поле выше, затем нажмите Revise.');
+        if (feedbackEl) feedbackEl.focus();
+        return;
+      }
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'hitl_response',
+          request_id: requestId,
+          action: 'edit',
+          approved: false,
+          instructions: feedback,
+          free_input: feedback,
+        }));
+      }
+      document.getElementById('hitl-panel').classList.add('hidden');
+      disableHitlControls(requestId);
+      addSystemMsg('✎ HITL Revision requested: ' + feedback);
 
       if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
         currentPlannerHitlRequest = null;
@@ -506,13 +670,277 @@
     }
 
     // =========================================================================
+    // Local users and sessions
+    // =========================================================================
+    async function apiJson(url, options = {}) {
+      const response = await fetch(url, options);
+      let data = {};
+      try { data = await response.json(); } catch (_) { /* empty response */ }
+      if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+      return data;
+    }
+
+    function sessionApi(path = '') {
+      if (!activeUser || !activeSession) throw new Error('Select a user and session first.');
+      return `/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}${path}`;
+    }
+
+    function roadmapUrl() { return sessionApi('/roadmap'); }
+
+    function populateUserSelectors() {
+      const options = knownUsers.map(user =>
+        `<option value="${escHtml(user.id)}" ${activeUser && activeUser.id === user.id ? 'selected' : ''}>${escHtml(user.nickname)}</option>`
+      ).join('');
+      document.getElementById('user-select').innerHTML = options || '<option value="">No local users</option>';
+      document.getElementById('identity-user-select').innerHTML = options;
+      document.getElementById('existing-user-block').classList.toggle('hidden', knownUsers.length === 0);
+    }
+
+    function populateSessionSelector() {
+      document.getElementById('session-select').innerHTML = knownSessions.map(session =>
+        `<option value="${escHtml(session.id)}" ${activeSession && activeSession.id === session.id ? 'selected' : ''}>${escHtml(session.title)}</option>`
+      ).join('') || '<option value="">No sessions</option>';
+    }
+
+    function openIdentityModal() {
+      populateUserSelectors();
+      document.getElementById('identity-error').classList.add('hidden');
+      document.getElementById('identity-close-btn').classList.toggle('hidden', !activeUser);
+      document.getElementById('identity-modal').classList.remove('hidden');
+      setTimeout(() => document.getElementById('nickname-input').focus(), 0);
+    }
+
+    function closeIdentityModal() {
+      if (activeUser) document.getElementById('identity-modal').classList.add('hidden');
+    }
+
+    function showIdentityError(error) {
+      const element = document.getElementById('identity-error');
+      element.textContent = error.message || String(error);
+      element.classList.remove('hidden');
+    }
+
+    async function loadSessions(user) {
+      const data = await apiJson(`/api/users/${encodeURIComponent(user.id)}/sessions`);
+      knownSessions = data.sessions || [];
+      populateSessionSelector();
+      return knownSessions;
+    }
+
+    async function ensureUserSession(user, preferredSessionId = null) {
+      activeUser = user;
+      let sessions = await loadSessions(user);
+      if (!sessions.length) {
+        const created = await apiJson(`/api/users/${encodeURIComponent(user.id)}/sessions`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'New session' })
+        });
+        sessions = [created.session];
+        knownSessions = sessions;
+      }
+      const selected = sessions.find(item => item.id === preferredSessionId)
+        || sessions.find(item => item.id === user.last_session_id)
+        || sessions[0];
+      await activateSession(user, selected);
+    }
+
+    async function registerLocalUser() {
+      const nicknameInput = document.getElementById('nickname-input');
+      const nickname = nicknameInput.value.trim();
+      if (!nickname) return showIdentityError(new Error('Enter a Nick.'));
+      try {
+        const data = await apiJson('/api/users', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nickname })
+        });
+        knownUsers.push(data.user);
+        nicknameInput.value = '';
+        populateUserSelectors();
+        await ensureUserSession(data.user);
+        closeIdentityModal();
+      } catch (error) { showIdentityError(error); }
+    }
+
+    async function continueExistingUser() {
+      const userId = document.getElementById('identity-user-select').value;
+      const user = knownUsers.find(item => item.id === userId);
+      if (!user) return;
+      try {
+        await ensureUserSession(user, localStorage.getItem(SESSION_STORAGE_KEY));
+        closeIdentityModal();
+      } catch (error) { showIdentityError(error); }
+    }
+
+    async function onUserSelected(userId) {
+      const user = knownUsers.find(item => item.id === userId);
+      if (user) await ensureUserSession(user);
+    }
+
+    async function onSessionSelected(sessionId) {
+      const session = knownSessions.find(item => item.id === sessionId);
+      if (session && activeUser) await activateSession(activeUser, session);
+    }
+
+    async function createNewSession() {
+      if (!activeUser) return openIdentityModal();
+      const title = prompt('Session title:', 'New session');
+      if (title === null) return;
+      try {
+        const data = await apiJson(`/api/users/${encodeURIComponent(activeUser.id)}/sessions`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title })
+        });
+        knownSessions.unshift(data.session);
+        await activateSession(activeUser, data.session);
+      } catch (error) { addSystemMsg('Could not create session: ' + error.message); }
+    }
+
+    async function renameCurrentSession() {
+      if (!activeUser || !activeSession) return;
+      const title = prompt('New session title:', activeSession.title);
+      if (!title || title.trim() === activeSession.title) return;
+      try {
+        const data = await apiJson(sessionApi(), {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title })
+        });
+        activeSession = data.session;
+        knownSessions = knownSessions.map(item => item.id === activeSession.id ? activeSession : item);
+        populateSessionSelector();
+      } catch (error) { addSystemMsg('Could not rename session: ' + error.message); }
+    }
+
+    function disconnectCurrentSocket() {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      if (ws) {
+        intentionalDisconnect = true;
+        ws.onclose = null;
+        ws.close();
+        ws = null;
+      }
+    }
+
+    async function activateSession(user, session) {
+      const changingSession = !activeSession || activeSession.id !== session.id;
+      disconnectCurrentSocket();
+      activeUser = user;
+      activeSession = session;
+      if (changingSession) runStatusVersion = -1;
+      activeUser.last_session_id = session.id;
+      knownUsers = knownUsers.map(item => item.id === user.id ? activeUser : item);
+      localStorage.setItem(USER_STORAGE_KEY, user.id);
+      localStorage.setItem(SESSION_STORAGE_KEY, session.id);
+      localStorage.setItem(NICK_STORAGE_KEY, user.nickname);
+      document.getElementById('active-nickname').textContent = user.nickname;
+      document.getElementById('graph-link').href =
+        `/graph?user_id=${encodeURIComponent(user.id)}&session_id=${encodeURIComponent(session.id)}`;
+      populateUserSelectors();
+      populateSessionSelector();
+      clearChat();
+      connect();
+    }
+
+    async function bootstrap() {
+      try {
+        const data = await apiJson('/api/users');
+        knownUsers = data.users || [];
+        populateUserSelectors();
+        const savedUserId = localStorage.getItem(USER_STORAGE_KEY);
+        const savedUser = knownUsers.find(item => item.id === savedUserId);
+        if (!savedUser) {
+          activeUser = null;
+          activeSession = null;
+          knownSessions = [];
+          localStorage.removeItem(USER_STORAGE_KEY);
+          localStorage.removeItem(SESSION_STORAGE_KEY);
+          document.getElementById('active-nickname').textContent = 'No user selected';
+          populateSessionSelector();
+          openIdentityModal();
+          return;
+        }
+        await ensureUserSession(savedUser, localStorage.getItem(SESSION_STORAGE_KEY));
+      } catch (error) {
+        addSystemMsg('Failed to initialize local sessions: ' + error.message);
+        openIdentityModal();
+      }
+    }
+
+    function applyRunStatus(status, version = null) {
+      if (version !== null && version !== undefined) {
+        const parsedVersion = Number(version);
+        if (Number.isFinite(parsedVersion) && parsedVersion < runStatusVersion) return;
+        if (Number.isFinite(parsedVersion)) runStatusVersion = parsedVersion;
+      }
+      const processing = status === 'processing';
+      document.getElementById('status-badge').textContent =
+        'Status: ' + (processing ? 'Processing' : 'Idle');
+      document.getElementById('send-btn').disabled = processing;
+      document.getElementById('stop-btn').classList.toggle('hidden', !processing);
+      if (processing) {
+        showTyping();
+      } else {
+        hideTyping();
+        resetAgents();
+        document.getElementById('hitl-panel').classList.add('hidden');
+        currentPlannerHitlRequest = null;
+        updateRoadmapModalButtons();
+      }
+    }
+
+    function renderSessionSnapshot(snapshot) {
+      const previousSessionId = activeSession && activeSession.id;
+      activeUser = snapshot.user || activeUser;
+      activeSession = snapshot.session || activeSession;
+      if (activeSession && activeSession.id !== previousSessionId) {
+        runStatusVersion = -1;
+      }
+      activeUser.last_session_id = activeSession.id;
+      knownUsers = knownUsers.map(item => item.id === activeUser.id ? activeUser : item);
+      knownSessions = knownSessions.map(item => item.id === activeSession.id ? activeSession : item);
+      document.getElementById('active-nickname').textContent = activeUser.nickname;
+      const feed = document.getElementById('chat-feed');
+      const messages = snapshot.messages || [];
+      experimentToolEvents = [];
+      eventCount = 0;
+      document.getElementById('event-count').textContent = 'Events: 0';
+      feed.innerHTML = '';
+
+      for (const message of messages) {
+        if (message.type === 'user_message') {
+          addUserMsg(message.message, message.timestamp);
+        } else if (message.type === 'agent_event') {
+          if (message.content) addAgentMsg(message.author || 'system', message.content, message.timestamp);
+          (message.tool_calls || []).forEach(call => addExperimentToolCall(message.author, call));
+          (message.tool_responses || []).forEach(response => addExperimentToolResponse(message.author, response));
+        } else if (message.type === 'error') {
+          addSystemMsg('Error: ' + message.message, message.timestamp);
+        }
+      }
+      if (!messages.length) clearChat();
+      eventCount = messages.length;
+      document.getElementById('event-count').textContent = 'Events: ' + eventCount;
+
+      applyRunStatus(snapshot.status, snapshot.run_status_version);
+      populateUserSelectors();
+      populateSessionSelector();
+    }
+
+    // =========================================================================
     // WebSocket
     // =========================================================================
     function connect() {
+      if (!activeUser || !activeSession) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      const userId = activeUser.id;
+      const sessionId = activeSession.id;
+      intentionalDisconnect = false;
+      const socket = new WebSocket(
+        `${proto}://${location.host}/ws?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`
+      );
+      ws = socket;
 
-      ws.onopen = () => {
+      socket.onopen = () => {
         document.getElementById('conn-status').textContent = 'Connected';
         document.getElementById('conn-status').className = 'text-[8px] text-secondary uppercase font-bold tracking-widest';
         document.getElementById('live-dot').className = 'w-2 h-2 bg-secondary rounded-full animate-pulse';
@@ -523,34 +951,50 @@
         addTelemetry('CONNECTED to backend');
       };
 
-      ws.onclose = () => {
+      socket.onclose = (event) => {
+        if (ws === socket) ws = null;
         document.getElementById('conn-status').textContent = 'Disconnected';
         document.getElementById('conn-status').className = 'text-[8px] text-error uppercase font-bold tracking-widest';
         document.getElementById('live-dot').className = 'w-2 h-2 bg-[#424656] rounded-full';
         document.getElementById('active-badge').textContent = 'Offline';
         document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest';
+        if (intentionalDisconnect || !activeUser || !activeSession
+            || activeUser.id !== userId || activeSession.id !== sessionId) return;
+        if (event.code === 4404) {
+          localStorage.removeItem(USER_STORAGE_KEY);
+          localStorage.removeItem(SESSION_STORAGE_KEY);
+          bootstrap();
+          return;
+        }
         addTelemetry('DISCONNECTED — retrying in 3s');
         reconnectTimer = setTimeout(connect, 3000);
       };
 
-      ws.onerror = () => addTelemetry('ERROR :: WebSocket error');
+      socket.onerror = () => addTelemetry('ERROR :: WebSocket error');
 
-      ws.onmessage = (e) => {
+      socket.onmessage = (e) => {
         const data = JSON.parse(e.data);
         switch (data.type) {
           case 'connected':
             addTelemetry('INIT :: ' + data.message);
             break;
+          case 'session_snapshot':
+            renderSessionSnapshot(data);
+            break;
           case 'status':
-            document.getElementById('status-badge').textContent = 'Status: ' + data.status;
+            applyRunStatus(data.status, data.run_status_version);
             addTelemetry('STATUS :: ' + data.message);
-            showTyping();
+            break;
+          case 'user_message':
+            addUserMsg(data.message, data.timestamp);
+            eventCount++;
+            document.getElementById('event-count').textContent = 'Events: ' + eventCount;
             break;
           case 'agent_event':
             if (data.content) {
               hideTyping();
               highlightAgent(data.author);
-              addAgentMsg(data.author, data.content);
+              addAgentMsg(data.author, data.content, data.timestamp);
               addTelemetry('EVENT :: ' + data.author + (data.is_final ? ' [FINAL]' : ''));
               if (!data.is_final) showTyping();
             } else {
@@ -573,9 +1017,6 @@
           case 'final_response':
             hideTyping();
             resetAgents();
-            document.getElementById('status-badge').textContent = 'Status: Idle';
-            document.getElementById('send-btn').disabled = false;
-            document.getElementById('stop-btn').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             addTelemetry('COMPLETE :: Final response received');
@@ -589,12 +1030,36 @@
             }
             addTelemetry('HITL :: ' + data.agent_name + ' requests ' + data.action_type);
             break;
+          case 'hitl_timeout':
+            disableHitlControls(data.request_id);
+            document.getElementById('hitl-panel').classList.add('hidden');
+            currentPlannerHitlRequest = null;
+            updateRoadmapModalButtons();
+            addSystemMsg('⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.');
+            addTelemetry('HITL :: auto-approve on timeout (' + (data.agent_name || '?') + ')');
+            break;
+          case 'hitl_cancelled':
+            disableHitlControls(data.request_id);
+            document.getElementById('hitl-panel').classList.add('hidden');
+            currentPlannerHitlRequest = null;
+            updateRoadmapModalButtons();
+            addTelemetry('HITL :: cancelled with its run');
+            break;
+          case 'chat_rejected':
+            addSystemMsg(data.message);
+            addTelemetry('SEND :: rejected while session is processing');
+            break;
+          case 'chat_accepted': {
+            const input = document.getElementById('chat-input');
+            if (input.value.trim() === String(data.message_text || '').trim()) {
+              input.value = '';
+            }
+            break;
+          }
           case 'error':
             hideTyping();
             addSystemMsg('Error: ' + data.message);
             addTelemetry('ERROR :: ' + data.message);
-            document.getElementById('send-btn').disabled = false;
-            document.getElementById('stop-btn').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             break;
@@ -612,27 +1077,14 @@
       const input = document.getElementById('chat-input');
       const msg = input.value.trim();
       if (!msg || !ws || ws.readyState !== 1) return;
-      addUserMsg(msg);
       ws.send(JSON.stringify({ type: 'chat_message', message: msg }));
-      input.value = '';
-      document.getElementById('send-btn').disabled = true;
-      document.getElementById('stop-btn').classList.remove('hidden');
       addTelemetry('SEND :: user query');
     });
 
     function stopChat() {
       if (!ws || ws.readyState !== 1) return;
       ws.send(JSON.stringify({ type: 'stop_chat' }));
-      document.getElementById('stop-btn').classList.add('hidden');
-      document.getElementById('send-btn').disabled = false;
-      hideTyping();
-      resetAgents();
-      document.getElementById('status-badge').textContent = 'Status: Idle';
-      document.getElementById('hitl-panel').classList.add('hidden');
-      currentPlannerHitlRequest = null;
-      updateRoadmapModalButtons();
-      addTelemetry('STOP :: user requested stop, clearing agent context');
-      addSystemMsg('⏹ Chat stopped. All agents and their context have been cleared.');
+      addTelemetry('STOP :: user requested stop');
     }
 
     function clearChat() {
@@ -653,7 +1105,7 @@
     // Init
     // =========================================================================
     initAgentNav();
-    connect();
+    bootstrap();
 
     // Keep-alive ping
     setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
@@ -670,7 +1122,7 @@
       // Show modal
       modal.classList.remove('hidden');
       status.classList.remove('hidden');
-      status.textContent = 'Loading task_tracker_data.json...';
+      status.textContent = 'Loading the current session roadmap...';
       status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
       textarea.disabled = true;
       saveBtn.disabled = true;
@@ -678,7 +1130,7 @@
       updateRoadmapModalButtons();
 
       try {
-        const response = await fetch('/api/roadmap');
+        const response = await fetch(roadmapUrl());
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -714,7 +1166,7 @@
       saveBtn.disabled = true;
 
       try {
-        const response = await fetch('/api/roadmap', {
+        const response = await fetch(roadmapUrl(), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -779,7 +1231,7 @@
       status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
 
       try {
-        const response = await fetch('/api/roadmap', {
+        const response = await fetch(roadmapUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: content })
@@ -831,7 +1283,7 @@
       confirmBtn.disabled = true;
 
       try {
-        const response = await fetch('/api/roadmap', {
+        const response = await fetch(roadmapUrl(), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -978,6 +1430,41 @@
     }
   </script>
 
+  <!-- Local user picker (in-memory development mode) -->
+  <div id="identity-modal"
+    class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-md shadow-2xl p-6 mx-4">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h3 class="font-headline font-bold text-on-surface uppercase tracking-wider">Local user</h3>
+          <p class="text-[10px] text-outline-variant mt-1">Users and sessions are cleared when the service restarts.</p>
+        </div>
+        <button id="identity-close-btn" onclick="closeIdentityModal()" class="text-outline-variant hover:text-on-surface">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div id="existing-user-block" class="space-y-2 mb-5">
+        <label class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Continue as</label>
+        <div class="flex gap-2">
+          <select id="identity-user-select"
+            class="flex-1 bg-surface-container-high border-outline-variant/20 rounded text-xs text-on-surface"></select>
+          <button onclick="continueExistingUser()"
+            class="px-4 py-2 bg-secondary text-on-primary rounded text-[10px] font-bold uppercase">Open</button>
+        </div>
+      </div>
+      <div class="border-t border-outline-variant/10 pt-5 space-y-2">
+        <label class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Register a new Nick</label>
+        <div class="flex gap-2">
+          <input id="nickname-input" maxlength="64" placeholder="Gleb"
+            class="flex-1 bg-surface-container-high border-outline-variant/20 rounded text-xs text-on-surface" />
+          <button onclick="registerLocalUser()"
+            class="px-4 py-2 bg-primary text-on-primary rounded text-[10px] font-bold uppercase">Register</button>
+        </div>
+        <p id="identity-error" class="hidden text-[10px] text-error"></p>
+      </div>
+    </div>
+  </div>
+
   <!-- Roadmap Editor Modal -->
   <div id="roadmap-modal"
     class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -999,10 +1486,8 @@
       <!-- Modal Body -->
       <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4">
         <p class="text-xs text-on-surface-variant leading-relaxed">
-          Edit the execution plan stored in <code
-            class="bg-surface-container-highest px-1.5 py-0.5 rounded text-primary font-mono">task_tracker_data.json</code>.
-          This
-          plan guides agent execution.
+          Edit the execution plan stored in the current user's active session.
+          This plan guides agent execution and is isolated from other sessions.
         </p>
 
         <div class="relative flex-1 flex flex-col min-h-[300px]">

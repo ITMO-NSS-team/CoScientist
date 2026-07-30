@@ -1,5 +1,5 @@
-from CoScientist.tools.task_tracker import task_tracker_instance
 import os
+import re
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
@@ -112,11 +112,47 @@ def after_fullset_reranker_agent(
     callback_context.state['retrieval_queries_mcp'] = []
     return
 
-def before_get_task(callback_context: CallbackContext):  
-    """Get task before agent is called"""  
-    active_tasks = task_tracker_instance.get_active_tasks(readonly_context=callback_context)  
-    callback_context.state['active_tasks'] = active_tasks
-    return None 
+def before_get_task(callback_context: CallbackContext):
+    """Ensure the current session has a task list before the agent runs.
+
+    Task data already lives in ADK session state.  In particular, do not reload
+    it from process-global storage here: that used to resurrect stale plans and
+    mix concurrent users.
+    """
+    if callback_context.state.get("active_tasks") is None:
+        callback_context.state["active_tasks"] = []
+    return None
+
+
+def inject_graph_root(callback_context: CallbackContext):
+    """Give the agent the session graph root and relevant global memory.
+
+    state['graph_root'] (rendered via the {graph_root?} placeholder) gets:
+      1. the system root — every agent + its capabilities + this session's trace;
+      2. relevant facts accumulated by all completed local research sessions,
+         retrieved for the current query so agents build on prior findings.
+    Best-effort — the graph must never break a run.
+    """
+    parts = []
+    query = ""
+    try:
+        from CoScientist.graph.memory import get_knowledge_graph
+        knowledge_graph = get_knowledge_graph(callback_context)
+        parts.append(knowledge_graph.root_summary())
+        goals = [h for h in knowledge_graph.history(limit=50) if h.get("kind") == "goal"]
+        query = goals[-1]["label"] if goals else ""
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from CoScientist.graph.memory_store import get_knowledge_memory
+        knowledge_memory = get_knowledge_memory(callback_context)
+        mem = knowledge_memory.relevant_summary(query)
+        if mem:
+            parts.append(mem)
+    except Exception:  # noqa: BLE001
+        pass
+    callback_context.state['graph_root'] = "\n\n".join(p for p in parts if p)
+    return None
 
 # Recognisable token the orchestrator prompt / post-critic key off to re-route.
 NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
@@ -237,6 +273,46 @@ def print_research_agent_tool_call(
     except Exception as e:
         logger.error("Failed to persist downloaded paper S3 keys: %s", e)
 
+def capture_mcp_artifacts(
+    tool: BaseTool,
+    args: Dict[str, Any],
+    tool_context: ToolContext,
+    tool_response: Any,
+) -> None:
+    """after_tool: stash figure/table artifact URLs a tool returned into
+    ``state['mcp_artifacts']`` so the graph-first Result Aggregator's
+    ``format_results`` downloads them into the report folder.
+
+    Many MCP tools (e.g. the tox-antitargets suite) render a plot server-side and
+    return a presigned URL to it (commonly ``metadata.figure.artifact``). That link
+    only lives in the tool result; with the aggregator running ``include_contents:
+    none`` it never reaches the report unless captured here — at the AGENT's own
+    tool boundary, which fires for sub-agent (AgentTool) MCP calls where an
+    App-level plugin does not.
+    """
+    try:
+        from CoScientist.reporting.collect import find_artifact_urls
+        urls = find_artifact_urls(tool_response)
+    except Exception:  # noqa: BLE001 — capture must never break a tool call
+        return
+    if not urls:
+        return
+    try:
+        existing = list(tool_context.state.get("mcp_artifacts") or [])
+        seen = {a.get("url") for a in existing if isinstance(a, dict)}
+        name = getattr(tool, "name", None)
+        for u in urls:
+            if u in seen:
+                continue
+            seen.add(u)
+            existing.append({"url": u, "tool": name})
+        tool_context.state["mcp_artifacts"] = existing
+        logger.info("capture_mcp_artifacts: %s → +%d artifact URL(s) (%d total)",
+                    name, len(urls), len(existing))
+    except Exception as e:  # noqa: BLE001
+        logger.error("capture_mcp_artifacts failed: %s", e)
+
+
 class SearchLimiter:
 
     _STATE_KEY = "_search_limiter_count"
@@ -245,7 +321,12 @@ class SearchLimiter:
         self.max_searches = max_searches
 
     def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
-        if "search" not in tool.name.lower():
+        # Match "search" as a whole name token, NOT as a substring: otherwise
+        # "re-search" tools (research_commit, research_context_slice, …) are
+        # wrongly counted as searches and blocked once the cap is hit, which
+        # stops agents recording anything in the research graph.
+        tokens = re.split(r"[^a-z]+", tool.name.lower())
+        if "search" not in tokens:
             return None
 
         count = tool_context.state.get(self._STATE_KEY, 0)

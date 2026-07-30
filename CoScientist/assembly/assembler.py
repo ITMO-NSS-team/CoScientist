@@ -301,6 +301,8 @@ def load_config_cli() -> None:  # pragma: no cover — `python -m` helper
     """Validate the config and print a build summary (no LLM calls)."""
     config = get_config()
     print(f"OK: {len(config.agents)} agents, root={config.root.name}")
+    if config.pipeline.pre or config.pipeline.post:
+        print(f"  pipeline: pre={config.pipeline.pre} post={config.pipeline.post}")
     for name in config.build_order():
         cfg = config.agent(name)
         bits = [cfg.cls]

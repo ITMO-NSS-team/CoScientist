@@ -51,6 +51,16 @@ def _fedot():
     return fedot_toolset_instance
 
 
+def _result_formatter():
+    from CoScientist.tools import result_formatter_tool
+    return result_formatter_tool
+
+
+def _dynamic_tools():
+    from CoScientist.tools import dynamic_mcp_toolset_instance
+    return dynamic_mcp_toolset_instance
+
+
 def _medical():
     from CoScientist.tools import med_toolset_instance
     return med_toolset_instance
@@ -60,6 +70,11 @@ def _coder():
     from CoScientist.tools import coder_toolset_instance
     return coder_toolset_instance
 
+
+def _alembic():
+    from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
+    return ALEMBIC_TOOLS
+
 def _task_tracker():
     from CoScientist.tools import task_tracker_instance
     return task_tracker_instance
@@ -67,6 +82,39 @@ def _task_tracker():
 def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
+
+def _graph():
+    from CoScientist.graph.agent_tools import graph_reader_instance
+    return graph_reader_instance
+
+
+def _research_graph_enabled() -> bool:
+    try:
+        from CoScientist.config import get_settings
+        return get_settings().research_graph.enabled
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _research_graph():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_worker_toolset
+    return research_worker_toolset
+
+
+def _research_graph_orchestrator():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_orchestrator_toolset
+    return research_orchestrator_toolset
+
+
+def _research_graph_readonly():
+    if not _research_graph_enabled():
+        return None
+    from CoScientist.graph.research.agent_tools import research_reporter_toolset
+    return research_reporter_toolset
 
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
@@ -139,7 +187,11 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="retrieve_tools",
             signature="retrieve_tools(query)",
-            purpose="Retrieves tools from MCP servers using RAG.",
+            purpose=(
+                "Searches the MCP registry by capability. Returns ranked tool "
+                "records with tool name, server_id, full description, input_schema, "
+                "and score; use the metadata to determine exact requirement coverage."
+            ),
         ),
         ToolDoc(
             name="get_server_info",
@@ -156,15 +208,136 @@ REGISTRY.register_tool(ToolEntry(
     docs=(
         ToolDoc(
             name="get_active_tasks",
-            signature="get_active_tasks(query)",
-            purpose="Get tasks from TaskTracker",
+            signature="get_active_tasks()",
+            purpose="Get tasks from the current ADK session",
         ),
         ToolDoc(
             name="update_task_status",
-            signature="update_task_status(task_id)",
+            signature="update_task_status(task_id, status, notes=None)",
             purpose="Set task status to DONE/FAILED/IN_PROGRESS",
         ),
     ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="graph",
+    factory=_graph,
+    runtime_resolved=True,  # BaseToolset — tool surface comes from get_tools()
+    docs=(
+        ToolDoc(
+            name="read_research_graph",
+            signature="read_research_graph()",
+            purpose="Read the shared knowledge graph: roster + every step so far.",
+        ),
+        ToolDoc(
+            name="get_graph_history",
+            signature="get_graph_history(limit)",
+            purpose="Chronological history of steps taken in this session.",
+        ),
+        ToolDoc(
+            name="get_agents_info",
+            signature="get_agents_info()",
+            purpose="Structured info about all agents in the system.",
+        ),
+        ToolDoc(
+            name="search_knowledge_memory",
+            signature="search_knowledge_memory(query)",
+            purpose="Search globally accumulated facts relevant to a query.",
+        ),
+        ToolDoc(
+            name="get_entity_neighbors",
+            signature="get_entity_neighbors(entity)",
+            purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
+        ),
+        ToolDoc(
+            name="get_knowledge_memory",
+            signature="get_knowledge_memory()",
+            purpose="Global knowledge memory shared across users and sessions.",
+        ),
+    ),
+))
+
+# ── Research Context Graph ────────────────────────────────────────────────────
+# The typed blackboard (CoScientist/graph/research). Two surfaces: workers get
+# read + research_commit; the orchestrator additionally gets init/triggers/focus.
+# Both optional (drop out when RESEARCH_GRAPH__ENABLED is false) and
+# runtime_resolved (BaseToolset — real tool names come from get_tools()).
+_RESEARCH_COMMIT_DOC = ToolDoc(
+    name="research_commit",
+    signature="research_commit(nodes, edges, status_updates)",
+    purpose=("Record your results in the shared research graph in ONE "
+             "transaction (validated + applied all-or-nothing). You may only "
+             "write types/edges/status changes your role allows."),
+    usage=(
+        'create a node: {"type": "Evidence", "attrs": {...}, "status"?: "...", "ref"?: "e1"}',
+        'enrich an existing node: {"id": "EB1", "attrs": {...}} (no "type")',
+        'edge: {"type": "supports", "from": "E4", "to": "H2"} — use "#e1" to point at a node created in this call',
+        'status change: {"id": "H2", "status": "under_verification", "reason"?: "..."}',
+        "on ok=false, read errors, fix the payload, and call it again (nothing was saved).",
+    ),
+)
+_RESEARCH_SLICE_DOC = ToolDoc(
+    name="research_context_slice",
+    signature="research_context_slice(node_id, depth=1)",
+    purpose="Get one node plus its 1–2 hop neighborhood (the focused view to work from).",
+)
+_RESEARCH_OVERVIEW_DOC = ToolDoc(
+    name="research_overview",
+    signature="research_overview()",
+    purpose="Compact index of the whole research graph (ids, types, statuses, labels).",
+)
+_RESEARCH_PROVENANCE_DOC = ToolDoc(
+    name="research_provenance",
+    signature="research_provenance(node_id)",
+    purpose="Trace a node back to the root question (chain of nodes/edges + sources).",
+)
+_RESEARCH_WORKER_DOCS = (_RESEARCH_COMMIT_DOC, _RESEARCH_SLICE_DOC,
+                         _RESEARCH_OVERVIEW_DOC, _RESEARCH_PROVENANCE_DOC)
+_RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
+    ToolDoc(
+        name="research_init",
+        signature="research_init(question, attrs, constraints, tools, resources, empirical_bases)",
+        purpose=("Start a NEW research: create the root ResearchQuestion + its "
+                 "context star. Call once at the start; archives any active graph."),
+    ),
+    ToolDoc(
+        name="research_triggers",
+        signature="research_triggers()",
+        purpose=("Evaluate the decision triggers (READY / BLOCKED / REFUTE / "
+                 "CLOSABLE / PENDING / TOOLS / RESOURCES / QUESTIONS / PROGRESS)."),
+    ),
+    ToolDoc(
+        name="research_set_focus",
+        signature="research_set_focus(node_id)",
+        purpose=("Set the node the NEXT delegated worker focuses on — it "
+                 "receives that node's slice automatically. Call before delegating."),
+    ),
+)
+
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph",
+    factory=_research_graph,
+    optional=True,
+    runtime_resolved=True,
+    docs=_RESEARCH_WORKER_DOCS,
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph_orchestrator",
+    factory=_research_graph_orchestrator,
+    optional=True,
+    runtime_resolved=True,
+    docs=_RESEARCH_ORCH_DOCS,
+))
+
+# Read-only surface for the Result Aggregator: overview / slice / provenance,
+# no research_commit (the reporter reads the finished graph, never mutates it).
+REGISTRY.register_tool(ToolEntry(
+    key="research_graph_readonly",
+    factory=_research_graph_readonly,
+    optional=True,
+    runtime_resolved=True,
+    docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
 ))
 
 REGISTRY.register_tool(ToolEntry(
@@ -202,6 +375,38 @@ REGISTRY.register_tool(ToolEntry(
             name="fedot_tool",
             signature="fedot_tool(task_description)",
             purpose="Builds and executes a multi-agent pipeline to solve the task.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="result_formatter",
+    factory=_result_formatter,
+    docs=(
+        ToolDoc(
+            name="format_results",
+            signature="format_results()",
+            purpose=(
+                "Collect every figure and data table this run produced (from session "
+                "artifacts and the sandbox workspace) into the per-run report folder and "
+                "return ready-to-embed Markdown blocks (image embeds + tables). Call FIRST."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="dynamic_tools",
+    factory=_dynamic_tools,
+    runtime_resolved=True,  # tool surface is the task's MCP servers, resolved per turn from state
+    docs=(
+        ToolDoc(
+            name="<dynamic MCP tools>",
+            signature="(varies)",
+            purpose=(
+                "The MCP tools selected for THIS task by the tool-prep pipeline "
+                "(filtered_tools/deployed_mcps). Call them directly to run the work."
+            ),
         ),
     ),
 ))
@@ -306,6 +511,48 @@ REGISTRY.register_tool(ToolEntry(
     ),
 ))
 
+REGISTRY.register_tool(ToolEntry(
+    key="alembic",
+    factory=_alembic,
+    docs=(
+        ToolDoc(
+            name="build_mcp_server",
+            signature="build_mcp_server(repo_url, force_rebuild)",
+            purpose=(
+                "Start an Alembic build: turn a scientific GitHub repository into "
+                "a served MCP tool server (clone -> env -> generated+validated "
+                "tools -> FastMCP server in Docker)."
+            ),
+            usage=(
+                "Returns immediately with a job_id; the build itself runs in the "
+                "background and takes tens of minutes — report the job_id and "
+                "do NOT poll it in a tight loop, check back later instead.",
+                "Reuses an already running/done build for the same repo_url "
+                "unless force_rebuild=true is passed.",
+            ),
+        ),
+        ToolDoc(
+            name="check_mcp_build",
+            signature="check_mcp_build(job_id)",
+            purpose=(
+                "Check the status of a build started by build_mcp_server: "
+                "\"running\" with the current pipeline stage and a log tail, "
+                "\"done\" with the served mcp_url/image/container, or \"failed\" "
+                "with the error tail of the build log."
+            ),
+        ),
+        ToolDoc(
+            name="list_mcp_builds",
+            signature="list_mcp_builds()",
+            purpose=(
+                "List every Alembic build known to this process (running and "
+                "finished) — use it to find a build from an earlier "
+                "delegation/session (e.g. a lost job_id)."
+            ),
+        ),
+    ),
+))
+
 # HITL tools are not a YAML-listed tool entry: the assembler attaches them via
 # the per-agent `hitl: true` flag (when HITL is globally enabled) and appends
 # these docs so the prompt always matches.
@@ -360,6 +607,11 @@ def _log_research_tool_calls():
     return print_research_agent_tool_call
 
 
+def _capture_mcp_artifacts():
+    from CoScientist.agents.callbacks import capture_mcp_artifacts
+    return capture_mcp_artifacts
+
+
 def _skip_retriever_context():
     from CoScientist.agents.callbacks import before_tool_reranker_model
     return before_tool_reranker_model
@@ -385,16 +637,64 @@ def _before_get_task():
     return before_get_task
 
 
+def _inject_graph_root():
+    from CoScientist.agents.callbacks import inject_graph_root
+    return inject_graph_root
+
+
+def _inject_research_context(ctx):
+    """before_agent callback seeding state['research_context']. The orchestrator
+    (root) gets the overview + trigger digest; a worker gets its focus slice.
+    Which branch is baked in at build time from the agent's role."""
+    from CoScientist.graph.research.agent_tools import make_inject_research_context
+    is_root = bool(getattr(ctx.config, "root", False))
+    return make_inject_research_context(is_root=is_root)
+
+
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     return SearchLimiter(max_searches=2).limit_searches
 
 
+def _sanitize_json_output():
+    from CoScientist.agents.callbacks import sanitize_json_output
+    return sanitize_json_output
+
+
+def _save_tz_document():
+    from CoScientist.microfluidics.tz_agent import save_tz_document
+    return save_tz_document
+
+
+def _export_tz_and_queries():
+    from CoScientist.microfluidics.export import export_tz_and_queries
+    return export_tz_and_queries
+
+
 def _guard_unknown_tools(ctx):
     """after_model guard capturing the agent's REAL tool names from its context,
-    so a hallucinated tool call is corrected instead of crashing the run."""
+    so a hallucinated tool call is corrected instead of crashing the run.
+
+    The valid set must include BOTH the agent's function tools AND its
+    subordinate AgentTools: sub-agents (e.g. CoderAgent, DatasetCollectorAgent)
+    are legitimate call targets but are attached outside `tool_entries`, so
+    leaving them out makes the guard false-block real delegations.
+
+    Agents whose tool surface is resolved at runtime (dynamic MCP toolsets,
+    e.g. ExperimentAgent) can't be guarded — their real tools aren't known at
+    build time — so skip the guard for them to avoid blocking valid calls."""
     from CoScientist.agents.callbacks import make_unknown_tool_guard
-    names = [d.name for e in ctx.tool_entries for d in e.docs]
+    docs = [d for e in ctx.tool_entries for d in e.docs]
+    # A placeholder doc (name in <angle brackets>, e.g. "<dynamic MCP tools>")
+    # marks a toolset whose real tool names are resolved per turn from state
+    # (ExperimentAgent's dynamic MCP tools) — we can't enumerate them at build
+    # time, so skip the guard rather than false-block valid calls. Fixed
+    # BaseToolsets (graph, task_tracker) are runtime_resolved too but DO declare
+    # their real tool names in docs, so they stay guarded.
+    if any(d.name.startswith("<") for d in docs):
+        return None
+    names = [d.name for d in docs]
+    names += [s.name for s in ctx.subordinates]  # subordinate AgentTools
     return make_unknown_tool_guard(names)
 
 
@@ -416,6 +716,7 @@ _cb("seed_coder_workspace", "before_model", factory=lambda ctx: _seed_coder_work
 _cb("inject_medical_artifacts", "before_model", factory=lambda ctx: _inject_medical_artifacts())
 _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_uploaded_papers())
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
+_cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
@@ -423,10 +724,21 @@ _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranke
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+# Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
+_cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
+# Seed state['research_context'] from the research blackboard (role-dependent).
+_cb("inject_research_context", "before_agent", factory=_inject_research_context)
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
+# Trim prose/fences/trailing text around a JSON answer BEFORE strict
+# output_schema validation (providers don't always honour response_format).
+_cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())
+# Render the approved ТЗ into the reference Markdown document (state + file).
+_cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
+# Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
+_cb("export_tz_and_queries", "after_agent", factory=lambda ctx: _export_tz_and_queries())
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
@@ -438,17 +750,24 @@ def _register_classes() -> None:
     from CoScientist.agents.custom_agents import WebToolsDeployerAgent
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.hypothesis_subsystem import HypothesisSubsystemAgent
+    from CoScientist.microfluidics.tz_agent import TZSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
     REGISTRY.register_agent_class("hypothesis_subsystem", HypothesisSubsystemAgent)
-
+    # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
+    REGISTRY.register_agent_class("tz_session", TZSessionAgent)
 
 def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
+    from CoScientist.microfluidics.models import LiteratureQueries, StructuredTZ
 
     REGISTRY.register_output_schema("tool_ranking", ToolRanking)
     REGISTRY.register_output_schema("mcp_ranking", MCPRanking)
+    # Microfluidics profile: structured ТЗ and the literature queries derived
+    # from it (see CoScientist/agents/microfluidics.yaml).
+    REGISTRY.register_output_schema("structured_tz", StructuredTZ)
+    REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
 
 
 def _register_planners() -> None:

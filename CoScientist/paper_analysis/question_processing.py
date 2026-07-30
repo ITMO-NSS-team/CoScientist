@@ -13,7 +13,6 @@ from io import BytesIO
 from CoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
 from CoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt, extract_query_filters_prompt
 from CoScientist.paper_analysis.research_taxonomy import (
-    DOMAIN_TO_SUBDOMAINS,
     ResearchDomain,
     get_sub_domains_for_domain,
 )
@@ -28,8 +27,43 @@ load_dotenv(find_dotenv())
 VISION_LLM_URL = os.getenv("LLM__VISION_URL")
 
 
+class ResearchDomainFilter(BaseModel):
+    """A domain and the sub-domains that must be matched within it."""
+
+    domain: ResearchDomain = Field(description="One OpenAlex research domain")
+    sub_domains: list[str] | None = Field(
+        description="Up to three sub-domains that belong to this domain",
+        default=None,
+        max_length=3,
+    )
+
+    @field_validator("sub_domains", mode="before")
+    @classmethod
+    def normalize_sub_domains(cls, value):
+        if value is None or isinstance(value, list):
+            return value
+        return [value]
+
+    @model_validator(mode="after")
+    def validate_sub_domains(self):
+        if not self.sub_domains:
+            return self
+
+        allowed_sub_domains = get_sub_domains_for_domain(self.domain)
+        invalid_sub_domains = [
+            sub_domain for sub_domain in self.sub_domains
+            if sub_domain not in allowed_sub_domains
+        ]
+        if invalid_sub_domains:
+            raise ValueError(
+                "sub_domains must belong to the selected domain: "
+                f"{', '.join(invalid_sub_domains)}"
+            )
+        return self
+
+
 class QueryFilters(BaseModel):
-    """Metadata filters extracted from user question."""
+    """Metadata filters extracted from a user question."""
     paper_authors: list[str] | None = Field(
         description="Author names mentioned in the question",
         default=None
@@ -50,44 +84,22 @@ class QueryFilters(BaseModel):
         description="Journal or publication source name",
         default=None
     )
-    research_domain: list[ResearchDomain] | None = Field(
-        description="Broad research domains",
-        default=None
-    )
-    research_sub_domain: list[str] | None = Field(
-        description="Specific research sub-domains within the selected research domains"
-        " Must match the selected research_domain based on this mapping:\n"
-        f"{DOMAIN_TO_SUBDOMAINS}\n",
-        default=None
+    research_domains: list[ResearchDomainFilter] | None = Field(
+        description=(
+            "Up to two research-domain selections. Each selection keeps its "
+            "sub-domains paired with its domain."
+        ),
+        default=None,
+        max_length=2,
     )
 
-    @field_validator("paper_authors", "research_domain", "research_sub_domain", mode="before")
+    @field_validator("paper_authors", mode="before")
     def normalize_list_fields(cls, v):
         if v is None:
             return None
         if isinstance(v, list):
             return v
         return [v]
-
-    @model_validator(mode="after")
-    def validate_domain_sub_domain_pair(self):
-        if not self.research_sub_domain:
-            return self
-
-        if not self.research_domain:
-            raise ValueError("research_domain must be set when research_sub_domain is provided")
-
-        allowed_sub_domains = []
-        for domain in self.research_domain:
-            allowed_sub_domains.extend(get_sub_domains_for_domain(domain))
-
-        invalid_sub_domains = [sd for sd in self.research_sub_domain if sd not in allowed_sub_domains]
-        if invalid_sub_domains:
-            raise ValueError(
-                "research_sub_domain must belong to one of the selected research_domain values"
-            )
-        return self
-
 
 def extract_metadata_filters(question: str) -> QueryFilters:
     """
@@ -167,11 +179,25 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
     if filters.publication_source is not None:
         conditions.append({"publication_source": {"$eq": filters.publication_source}})
     
-    if filters.research_domain is not None:
-        conditions.append({"research_domain": {"$in": filters.research_domain}})
-    
-    if filters.research_sub_domain is not None:
-        conditions.append({"research_sub_domain": {"$in": filters.research_sub_domain}})
+    if filters.research_domains:
+        domain_conditions = []
+        for selection in filters.research_domains:
+            domain_condition = {"research_domain": {"$eq": selection.domain}}
+            if selection.sub_domains:
+                domain_conditions.append({
+                    "$and": [
+                        domain_condition,
+                        {"research_sub_domain": {"$in": selection.sub_domains}},
+                    ]
+                })
+            else:
+                domain_conditions.append(domain_condition)
+
+        conditions.append(
+            domain_conditions[0]
+            if len(domain_conditions) == 1
+            else {"$or": domain_conditions}
+        )
     
     if not conditions:
         return None
@@ -179,6 +205,19 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
     if len(conditions) == 1:
         return conditions[0]
     return {"$and": conditions}
+
+
+def get_domain_metadata_type(filters: QueryFilters) -> str | None:
+    """Return the domain-specific metadata handler relevant to the query."""
+    if not filters.research_domains:
+        return None
+
+    if any(
+        "Chemistry" in (selection.sub_domains or [])
+        for selection in filters.research_domains
+    ):
+        return "Chemistry"
+    return None
 
 
 def query_llm(
@@ -345,6 +384,7 @@ def process_question(
     """
     meta_filter = extract_metadata_filters(question)
     meta_filter_chroma = build_chroma_where_filter(meta_filter)
+    domain_metadata_type = get_domain_metadata_type(meta_filter)
     
     txt_data, img_data = store.retrieve_context(question, meta_filter=meta_filter_chroma)
     txt_context = ""
@@ -377,7 +417,7 @@ def process_question(
                     {"image_path": img_path}
                 )
             img_meta = image_data["metadatas"][0][0]
-            img_info = add_domain_metadata_to_img_info(meta_filter.research_domain, img_meta, img_info)
+            img_info = add_domain_metadata_to_img_info(domain_metadata_type, img_meta, img_info)
             img_paths.append(img_info)
     
     for img_meta in img_data["metadatas"][0]:
@@ -394,12 +434,12 @@ def process_question(
                     {"image_path": img_meta['image_path']}
                 )
             img_meta = image_data["metadatas"][0][0]
-            img_info = add_domain_metadata_to_img_info(meta_filter.research_domain, img_meta, img_info)
+            img_info = add_domain_metadata_to_img_info(domain_metadata_type, img_meta, img_info)
             img_paths.append(img_info)
 
     img_paths_list = set([d['path'] for d in img_paths])
     
-    domain_metadata = format_domain_metadata(meta_filter.research_domain, img_paths)
+    domain_metadata = format_domain_metadata(domain_metadata_type, img_paths)
     if domain_metadata != "":
         txt_context += f"Domain metadata\n{domain_metadata}\n\n"
     else:
