@@ -219,6 +219,20 @@
         </div>
       </div>
 
+      <!-- Checkpoints -->
+      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
+        <div class="absolute top-3 right-3">
+          <button onclick="refreshCheckpoints()" title="Обновить"
+            class="text-[#424656] hover:text-primary transition-colors">
+            <span class="material-symbols-outlined text-sm">refresh</span>
+          </button>
+        </div>
+        <h4 class="text-[10px] font-bold text-outline-variant uppercase mb-3 tracking-widest">Checkpoints</h4>
+        <div id="checkpoint-list" class="space-y-2 max-h-96 overflow-y-auto no-scrollbar">
+          <div class="text-outline-variant text-[9px] font-mono">Пока нет снимков</div>
+        </div>
+      </div>
+
       <!-- HITL Pending -->
       <div id="hitl-panel" class="hidden">
         <!-- Filled dynamically -->
@@ -772,8 +786,62 @@
     // =========================================================================
     // Init
     // =========================================================================
+    // ── Checkpoints panel ──────────────────────────────────────────────
+    async function refreshCheckpoints() {
+      try {
+        const r = await fetch('/api/checkpoints');
+        const d = await r.json();
+        renderCheckpoints(d.checkpoints || []);
+      } catch (e) { /* keep last render */ }
+    }
+    function renderCheckpoints(cps) {
+      const el = document.getElementById('checkpoint-list');
+      if (!el) return;
+      if (!cps.length) {
+        el.innerHTML = '<div class="text-outline-variant text-[9px] font-mono">Пока нет снимков</div>';
+        return;
+      }
+      cps.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      el.innerHTML = cps.map(c => {
+        const t = (c.created_at || '').slice(11, 19);
+        return `
+        <div class="bg-surface-container-high/40 rounded-md p-2 border border-outline-variant/10 flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <div class="text-[10px] font-bold text-on-surface-variant truncate">${escHtml(c.label)}</div>
+            <div class="text-[8px] font-mono text-outline-variant">${t} · ${c.size_kb}KB</div>
+          </div>
+          <button onclick="restoreCheckpoint('${c.checkpoint_id}')" title="Откатиться к этой точке"
+            class="shrink-0 flex items-center gap-1 px-2 py-1 bg-primary/15 text-primary border border-primary/30 rounded hover:bg-primary/25 transition-all text-[9px] font-bold uppercase tracking-widest">
+            <span class="material-symbols-outlined text-[13px]">restore</span> Откат
+          </button>
+        </div>`;
+      }).join('');
+    }
+    async function restoreCheckpoint(id) {
+      addSystemMsg('Восстановление из точки …' + id.slice(-8));
+      try {
+        const r = await fetch('/api/checkpoints/' + encodeURIComponent(id) + '/restore', { method: 'POST' });
+        const d = await r.json();
+        if (r.ok && d.context_id) {
+          addSystemMsg('✓ Откат выполнен — новый прогон …' + d.context_id.slice(-8) +
+            ' (' + d.event_count + ' событий). ' + (d.resume_hint || ''));
+        } else {
+          const why = d.detail ? (typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail)) : ('HTTP ' + r.status);
+          addSystemMsg('✗ Откат отклонён: ' + why);
+        }
+      } catch (e) {
+        addSystemMsg('✗ Ошибка отката: ' + e);
+      }
+      refreshCheckpoints();
+    }
+    function initCheckpoints() {
+      refreshCheckpoints();
+      setInterval(refreshCheckpoints, 5000);
+    }
+
     initAgentNav();
     connect();
+    initCheckpoints();
 
     // Keep-alive ping
     setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
