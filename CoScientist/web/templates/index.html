@@ -787,21 +787,29 @@
     // Init
     // =========================================================================
     // ── Checkpoints panel ──────────────────────────────────────────────
+    let _cpSig = null;
     async function refreshCheckpoints() {
       try {
-        const r = await fetch('/api/checkpoints');
+        // no-store + cache-bust: the endpoint sends no cache headers, so a plain
+        // fetch can be served stale by the browser and the list would freeze.
+        const r = await fetch('/api/checkpoints?_=' + Date.now(), { cache: 'no-store' });
+        if (!r.ok) return;
         const d = await r.json();
         renderCheckpoints(d.checkpoints || []);
-      } catch (e) { /* keep last render */ }
+      } catch (e) { console.error('checkpoints refresh failed', e); }
     }
     function renderCheckpoints(cps) {
       const el = document.getElementById('checkpoint-list');
       if (!el) return;
+      cps.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+      // only touch the DOM when the set actually changed → no 5s flicker / scroll jump
+      const sig = cps.map(c => c.checkpoint_id).join('|');
+      if (sig === _cpSig) return;
+      _cpSig = sig;
       if (!cps.length) {
         el.innerHTML = '<div class="text-outline-variant text-[9px] font-mono">Пока нет снимков</div>';
         return;
       }
-      cps.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
       el.innerHTML = cps.map(c => {
         const t = (c.created_at || '').slice(11, 19);
         return `
