@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -765,6 +766,185 @@ def test_web_graph_api_is_scoped_to_registered_session(tmp_path, monkeypatch):
             f"/api/users/{user['id']}/sessions/{other_session['id']}/graph"
         )
         assert wrong_owner_response.status_code == 404
+
+
+def test_web_graph_delete_wipes_only_the_requested_store(tmp_path, monkeypatch):
+    memory_path = tmp_path / "memory" / "knowledge_memory.json"
+    research_dir = tmp_path / "research"
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path / "execution"))
+    monkeypatch.setenv("KG_MEMORY_PATH", str(memory_path))
+    monkeypatch.setattr(research_store, "_default_dir", lambda: str(research_dir))
+
+    from CoScientist.web.app import create_app
+
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, f"delete-user-{uuid4().hex}")
+        target = _create_session(client, user["id"], "Target")
+        neighbour = _create_session(client, user["id"], "Neighbour")
+
+        target_execution = get_knowledge_graph(
+            user_id=user["id"],
+            session_id=target["id"],
+        )
+        neighbour_execution = get_knowledge_graph(
+            user_id=user["id"],
+            session_id=neighbour["id"],
+        )
+        target_execution.add_node(id="goal:doomed", kind="goal", label="doomed")
+        neighbour_execution.add_node(id="goal:kept", kind="goal", label="kept")
+
+        target_research = research_store.get_research_graph(
+            user_id=user["id"],
+            session_id=target["id"],
+        )
+        assert target_research.init_research(
+            source="OrchestratorAgent",
+            question="Delete this research",
+        )["ok"]
+
+        marker = uuid4().hex
+        memory = get_knowledge_memory()
+        memory.ingest(
+            Extraction(
+                entities=[
+                    Entity(key=f"molecule:{marker}", type="molecule", name=marker),
+                    Entity(key=f"target:{marker}", type="target", name=f"t-{marker}"),
+                ],
+                relations=[
+                    Relation(
+                        src=f"molecule:{marker}",
+                        dst=f"target:{marker}",
+                        type="inhibits",
+                    )
+                ],
+            ),
+            source="delete-api-test",
+            refs={"result_id": f"result:{marker}"},
+        )
+
+        execution_delete = client.delete(
+            f"/api/users/{user['id']}/sessions/{target['id']}/graph",
+            params={"view": "execution"},
+        )
+        assert execution_delete.status_code == 200
+        assert execution_delete.json()["deleted"]["execution"]["cleared"] is True
+
+        # Only the selected session's trace is gone; the roster is re-seeded so
+        # the Graph view still renders, and nothing else was touched.
+        assert "goal:doomed" not in {
+            node["id"] for node in target_execution.full()["nodes"]
+        }
+        assert "goal:kept" in {
+            node["id"] for node in neighbour_execution.full()["nodes"]
+        }
+        assert target_research.full()["nodes"]
+        assert marker in str(get_knowledge_memory().full())
+
+        research_delete = client.delete(
+            f"/api/users/{user['id']}/sessions/{target['id']}/graph",
+            params={"view": "research"},
+        )
+        assert research_delete.status_code == 200
+        assert target_research.full()["nodes"] == []
+        assert research_delete.json()["deleted"]["research"]["archived"]
+        assert marker in str(get_knowledge_memory().full())
+
+        memory_delete = client.delete(
+            f"/api/users/{user['id']}/sessions/{target['id']}/graph",
+            params={"view": "memory"},
+        )
+        assert memory_delete.status_code == 200
+        deleted_memory = memory_delete.json()["deleted"]["memory"]
+        assert deleted_memory["scope"] == "global"
+        assert deleted_memory["entities"] == 2
+        assert deleted_memory["relations"] == 1
+        assert deleted_memory["cleared"] is True
+        assert Path(deleted_memory["archived"]).is_file()
+        assert marker not in str(get_knowledge_memory().full())
+        # The wipe is persisted, not just held in the live singleton.
+        assert KnowledgeMemory(str(memory_path)).entities == {}
+
+        assert client.delete(
+            f"/api/users/{user['id']}/sessions/{target['id']}/graph",
+            params={"view": "knowledge"},
+        ).status_code == 400
+
+        other_user = _create_user(client, f"other-user-{uuid4().hex}")
+        other_session = _create_session(client, other_user["id"], "Other")
+        assert client.delete(
+            f"/api/users/{user['id']}/sessions/{other_session['id']}/graph"
+        ).status_code == 404
+
+
+def test_web_graph_delete_all_clears_every_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path / "execution"))
+    monkeypatch.setenv(
+        "KG_MEMORY_PATH",
+        str(tmp_path / "memory" / "knowledge_memory.json"),
+    )
+    monkeypatch.setattr(
+        research_store,
+        "_default_dir",
+        lambda: str(tmp_path / "research"),
+    )
+
+    from CoScientist.web.app import create_app
+
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, f"delete-all-{uuid4().hex}")
+        session = _create_session(client, user["id"], "Everything")
+
+        execution = get_knowledge_graph(user_id=user["id"], session_id=session["id"])
+        execution.add_node(id="goal:all", kind="goal", label="all")
+        research = research_store.get_research_graph(
+            user_id=user["id"],
+            session_id=session["id"],
+        )
+        assert research.init_research(
+            source="OrchestratorAgent",
+            question="Delete everything",
+        )["ok"]
+        marker = uuid4().hex
+        get_knowledge_memory().ingest(
+            Extraction(
+                entities=[
+                    Entity(key=f"molecule:{marker}", type="molecule", name=marker),
+                ],
+                relations=[],
+            ),
+            source="delete-all-test",
+            refs={"result_id": f"result:{marker}"},
+        )
+
+        response = client.delete(
+            f"/api/users/{user['id']}/sessions/{session['id']}/graph",
+            params={"view": "all"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
+        assert set(response.json()["deleted"]) == {
+            "execution",
+            "research",
+            "memory",
+        }
+        assert "goal:all" not in {node["id"] for node in execution.full()["nodes"]}
+        assert research.full()["nodes"] == []
+        assert marker not in str(get_knowledge_memory().full())
+
+
+def test_settings_modal_exposes_a_graph_delete_button():
+    from CoScientist.web.app import create_app
+
+    app = create_app()
+    with TestClient(app) as client:
+        index_html = client.get("/").text
+
+    assert 'id="graph-delete-btn"' in index_html
+    assert 'id="graph-delete-target"' in index_html
+    assert "async function deleteGraphData()" in index_html
+    assert "method: 'DELETE'" in index_html
 
 
 def test_graph_ui_uses_active_user_and_session_in_url():

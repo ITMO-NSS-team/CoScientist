@@ -180,10 +180,16 @@ agents:
 
   HypothesesAgent:
     class: llm
-    description: generates ideas and hypotheses.
-    routing: when the direction is unclear or multiple approaches need to be proposed.
+    description: >-
+      generates candidate hypotheses and returns ONE selected hypothesis to
+      verify next (the alternatives stay in the graph as postponed backlog).
+    routing: >-
+      when the direction is unclear or approaches need to be proposed. It comes
+      back with a single SELECTED hypothesis — verify that one; do not start its
+      alternatives in parallel.
     planning: |-
-      Use this to generate and test hypotheses when the solution is unclear or multiple approaches need to be proposed.
+      Use this to generate hypotheses when the solution is unclear or approaches need to be proposed.
+      It picks the single most relevant hypothesis to test first, so plan ONE verification branch after it.
       Decision-making and compatibility assessment based on gathered facts.
     prompt: hypotheses
     output_key: hypotheses

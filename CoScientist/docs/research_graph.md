@@ -117,12 +117,34 @@ with instructive per-item messages so the model self-corrects and retries.
 
 Before each step the orchestrator consults `research_triggers`, which evaluates
 named queries over the graph (`queries.py`): **READY** hypotheses (all their
-tools available), **BLOCKED**, **REFUTE SIGNAL**, **CLOSABLE** (evidence in +
-criteria met → write a Conclusion), **PENDING** conclusions, **TOOLS** not
-ready, **RESOURCES LOW**, open **QUESTIONS**, **PROGRESS**. Moving a hypothesis
-to `under_verification` **locks the branch** (a second start is rejected) so two
-agents don't verify the same hypothesis. Refuted/postponed branches are never
-deleted — they stay as negative results so work isn't repeated.
+tools available), **BLOCKED**, **BACKLOG**, **REFUTE SIGNAL**, **CLOSABLE**
+(evidence in + criteria met → write a Conclusion), **PENDING** conclusions,
+**TOOLS** not ready, **RESOURCES LOW**, open **QUESTIONS**, **PROGRESS**. Moving
+a hypothesis to `under_verification` **locks the branch** (a second start is
+rejected) so two agents don't verify the same hypothesis. Refuted/postponed
+branches are never deleted — they stay as negative results so work isn't
+repeated.
+
+### One hypothesis at a time
+
+A generator agent proposes several hypotheses; the run verifies **one**. Two
+mechanisms enforce it, so no single LLM decision can start a parallel batch:
+
+* **Commit invariant** (`store._normalize_hypothesis_selection`): if one commit
+  creates several hypotheses as `formulated`, only the picked one
+  (`attrs.selected`, else the highest `attrs.priority`, else the first) stays
+  active — the rest are created `postponed` and the commit returns a warning
+  saying so. Nothing is dropped: they are the ranked backlog.
+* **Trigger serialization** (`queries.ready_hypotheses`): `items` holds at most
+  ONE hypothesis (the same ranking), the others come back under `queued` and are
+  rendered as "do NOT verify in parallel"; anything already
+  `under_verification` is rendered first as the active branch. When nothing is
+  ready or active, `postponed_hypotheses` surfaces the **BACKLOG** so the
+  orchestrator revives the next one (`postponed`→`formulated`).
+
+`HypothesesAgent` is prompted to make that choice itself and to answer with a
+`SELECTED HYPOTHESIS: <id> — …` line plus the backlog; the two mechanisms above
+are the deterministic net under it.
 
 ## Context slices (spec §3)
 

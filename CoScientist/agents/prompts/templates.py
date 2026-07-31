@@ -63,11 +63,16 @@ def _executor_routes_to_coder(ctx: PromptContext) -> bool:
 _RESEARCH_EXAMPLES = {
     "HypothesesAgent": (
         'research_commit(nodes=[{"type":"Hypothesis","ref":"h","attrs":'
-        '{"formulation":"…","priority":"high"}}, {"type":"VerificationMethod",'
-        '"ref":"vm","attrs":{"method_type":"computational"}}, '
+        '{"formulation":"…","priority":"high","selected":"true",'
+        '"rationale":"why THIS one first"}}, '
+        '{"type":"Hypothesis","ref":"alt","status":"postponed","attrs":'
+        '{"formulation":"alternative …","priority":"medium"}},   '
+        '# alternatives go in as postponed backlog\n  '
+        '{"type":"VerificationMethod","ref":"vm","attrs":{"method_type":"computational"}}, '
         '{"type":"ConfirmationCriteria","ref":"cc","attrs":{"threshold":"…"}}, '
         '{"type":"Tool","ref":"t","status":"needs_adaptation","attrs":{"name":"NGS panel"}}], '
         'edges=[{"type":"motivates","from":"Q1","to":"#h"}, '
+        '{"type":"motivates","from":"Q1","to":"#alt"}, '
         '{"type":"tested_by","from":"#h","to":"#vm"}, '
         '{"type":"formulated_for","from":"#cc","to":"#h"}, '
         '{"type":"requires","from":"#h","to":"#t"}, {"type":"uses","from":"#vm","to":"#t"}])'
@@ -176,8 +181,50 @@ def render_research_protocol(ctx: PromptContext) -> str:
 
 @_register("hypotheses")
 def hypotheses(ctx: PromptContext) -> str:
+    # The "one active hypothesis" rule is the same either way; only HOW the
+    # selection is recorded differs — with the research graph it is a status on
+    # the committed nodes, without it, it is just the shape of the answer. Naming
+    # graph tools when the graph is off would make the model call a tool it does
+    # not have.
+    if ctx.has_tool("research_graph"):
+        selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
+The research verifies ONE hypothesis at a time — verifying several at once burns
+the budget and lets the evidence of one branch contaminate the verdict of another.
+So, in your single `research_commit`:
+
+- the SELECTED hypothesis is created with the default status (`formulated`) plus
+  `"selected": "true"` and a high `"priority"` in its attrs — this is the one the
+  orchestrator will verify;
+- EVERY alternative is created with `"status": "postponed"` and its own
+  `"priority"` — it stays in the graph as a ranked backlog and the orchestrator
+  can revive it (postponed→formulated) once the selected branch has a verdict;
+- build the full verification frame (VerificationMethod + ConfirmationCriteria +
+  any Tool it needs) for the SELECTED hypothesis. For the postponed alternatives
+  a formulation + rationale is enough — do not equip branches nobody will run yet.
+
+If you commit several hypotheses as active anyway, the graph keeps only the
+highest-priority one active and postpones the others automatically, and tells you
+so in the commit warnings — better to make the choice yourself, deliberately.'''
+        answer_head = ("Start with exactly this line (real ids from your commit, "
+                       "one hypothesis):\n\nSELECTED HYPOTHESIS: <H-id> — "
+                       "<formulation in one sentence>")
+        answer_backlog = ("- BACKLOG (postponed): the alternatives as a ranked "
+                          "one-line list, explicitly\n  marked as NOT to be "
+                          "started now.")
+    else:
+        selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
+The research verifies ONE hypothesis at a time — verifying several at once burns
+the budget and lets the evidence of one branch contaminate the verdict of another.
+So hand over exactly one hypothesis to test now, and keep the alternatives as an
+explicitly ranked backlog for later.'''
+        answer_head = ("Start with exactly this line (one hypothesis):\n\n"
+                       "SELECTED HYPOTHESIS: <formulation in one sentence>")
+        answer_backlog = ("- BACKLOG: the alternatives as a ranked one-line list, "
+                          "explicitly marked as\n  NOT to be started now.")
+
     return render_template('''
-Your role is to generate plausible, scientifically grounded hypotheses that can be validated for a given task.
+Your role is to generate plausible, scientifically grounded hypotheses that can be
+validated for a given task — and to hand the orchestrator exactly ONE of them to test.
 
 ### Instructions:
 
@@ -186,13 +233,20 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
 5. If relevant, briefly note assumptions or required conditions.
+6. SELECT exactly ONE — the single most relevant hypothesis to verify FIRST —
+   and say why. Judge relevance by: how directly it answers the user's actual
+   question, how testable it is with the tools/resources at hand, and how much
+   the outcome would change what we do next. The rest are the BACKLOG, not work
+   to start now.
 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
 
-For each hypothesis, also propose HOW it would be verified: a VerificationMethod
-(what procedure yields evidence) and ConfirmationCriteria (when the evidence is
-sufficient). Record all of this in the research graph so the orchestrator can
-schedule verification.
+<<SELECTION>>
+
+For the selected hypothesis, propose HOW it would be verified: a
+VerificationMethod (what procedure yields evidence) and ConfirmationCriteria
+(when the evidence is sufficient). Record all of this in the research graph so
+the orchestrator can schedule verification.
 
 If a method needs a Tool that is not yet in the graph, CREATE it in the same
 commit with status "needs_adaptation" (you are flagging a NEED, not confirming
@@ -202,13 +256,27 @@ nodes that already exist (declared at init); do not invent resource ids.
 
 <<RESEARCH>>
 
+### YOUR ANSWER
+The orchestrator acts on your text, so hand it ONE hypothesis, unambiguously.
+<<ANSWER_HEAD>>
+
+Then, briefly:
+- WHY THIS ONE: what makes it the most relevant/decisive to test first;
+- HOW TO VERIFY IT: the VerificationMethod, the ConfirmationCriteria, and any
+  Tool that must be built or adapted first;
+<<ANSWER_BACKLOG>>
+
+Never present the alternatives as a set of parallel tasks and never ask for all
+of them to be tested — one hypothesis goes forward, the rest wait their turn.
+
 ### TASK_MANAGEMENT
 Context of tasks:
 {active_tasks}
 
 Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
 Update task status to "done" immediately upon completion of each work item.
-''', RESEARCH=render_research_protocol(ctx))
+''', SELECTION=selection, ANSWER_HEAD=answer_head,
+        ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx))
 
 
 # NOTE: hypothesis validation (verdict + Conclusion) is a fully-async BACKGROUND
@@ -779,38 +847,18 @@ _CODER_LOCAL_MANUAL = '''## Be efficient — minimize round-trips
 '''
 
 # Used when the local coder toolset is switched off: the agent drives the remote
-# OpenHands sandbox instead, so the manual is about writing good task briefs
-# rather than about chaining shell commands.
-_CODER_SANDBOX_MANUAL = '''## Be efficient — minimize round-trips
-- Each `run_sandbox_task` call spins up a full coding agent, so give it a WHOLE
-  self-contained unit of work, not a single command. "Clone repo X, count the
-  .py files under src/, and report the number" is ONE task, not three.
-- Write the brief the way you would brief an engineer: the goal, the inputs, the
-  exact artifact you want back (a file at a named path, a number, a metric), and
-  any constraint that matters. Vague briefs come back as vague results.
-- The workspace PERSISTS between calls: later tasks land in the same sandbox with
-  the files earlier ones produced. Say what is already there ("the repo is
-  already cloned at ./click") instead of having it redone. Only pass
-  `new_sandbox=True` for a deliberately independent experiment.
-
-## Verifying what came back
-- The sandbox agent reports in prose and CAN be wrong or optimistic. Before you
-  build on a result, confirm the artifacts exist with `list_sandbox_files(path)`.
-- If a task returns status "running", pick the result up with
-  `check_sandbox_task()` — keep calling it until a terminal status arrives.
-  NEVER abandon a running task or declare it will "exceed time limits": a
-  still-running job is progress, not failure.
-- If a task fails, read the reported error, fix the brief (more specific inputs,
-  a corrected path, an explicit dependency) and re-issue it — do not give up
-  after one failure. You are autonomous: drive the task to a real result.
-
-## Workflow
-1. Restate the concrete goal and the expected artifact (a file, a passing test,
-   a dataset, a count, a result).
-2. Send it as one well-specified `run_sandbox_task` brief.
-3. Verify the artifacts it claims with `list_sandbox_files`.
-4. For multi-step work, repeat: each task builds on the files the last one left.
-5. Report what you asked for and what came back (paths, key output, status).
+# OpenHands sandbox instead, so the prompt instructs the agent to pass through
+# tasks to the sandbox agent and relay its response without over-complicating or
+# requesting file contents.
+_CODER_SANDBOX_MANUAL = '''## Driving the Sandbox Agent
+- An autonomous coding agent runs inside the remote sandbox workspace (`run_sandbox_task`).
+- It performs all code writing, file reading/editing, debugging, shell operations, and execution.
+- DO NOT try to solve coding problems or debug code yourself — the sandbox agent handles all of that.
+- DO NOT demand or request that the sandbox agent send back the contents of all files or output raw source code.
+- DO NOT overcomplicate or over-analyze: simply convey the goal clearly.
+- Give `run_sandbox_task` a clear, self-contained task description.
+- The workspace PERSISTS between calls: later tasks land in the same sandbox with the files earlier ones produced.
+- Once finished, simply RELAY (pass through) the exact response, report, and results written by the sandbox agent to the caller.
 '''
 
 
@@ -845,30 +893,22 @@ Shell programs are NOT tools. `find`, `grep`, `ls`, `cat`, `wc`, `git`, `sed`,
 program as if it were a tool; the only callable tools are the ones listed above.
 '''
         manual = _CODER_LOCAL_MANUAL
-    else:
-        shell_note = '''
-You have NO local shell. Everything runs on the remote sandbox through
-`run_sandbox_task` — you describe the work in plain English and the sandbox
-agent writes and runs the code for it. `find`, `git`, `python`, `pip` and the
-like are NOT tools you can call; put them in the task description instead.
-'''
-        manual = _CODER_SANDBOX_MANUAL
 
-    # Subordinate agents the coder can delegate to. They run in the SAME sandbox
-    # workspace, so files they produce are immediately available to build on.
-    delegation = ""
-    if ctx.subordinates:
-        routing = ctx.render_routing()
-        delegation = (
-            "## Delegating sub-tasks\n"
-            "You can hand a self-contained sub-task to one of these agents. They\n"
-            "work in the SAME sandbox workspace as you, so the files they produce\n"
-            "(datasets, downloads) are right here for you to build on afterwards:\n\n"
-            f"{ctx.render_agents()}\n"
-            + (f"\n{routing}\n" if routing else "")
-        )
+        # Subordinate agents the coder can delegate to. They run in the SAME sandbox
+        # workspace, so files they produce are immediately available to build on.
+        delegation = ""
+        if ctx.subordinates:
+            routing = ctx.render_routing()
+            delegation = (
+                "## Delegating sub-tasks\n"
+                "You can hand a self-contained sub-task to one of these agents. They\n"
+                "work in the SAME sandbox workspace as you, so the files they produce\n"
+                "(datasets, downloads) are right here for you to build on afterwards:\n\n"
+                f"{ctx.render_agents()}\n"
+                + (f"\n{routing}\n" if routing else "")
+            )
 
-    return render_template('''
+        return render_template('''
 You are a CODER / SANDBOX agent — a general-purpose software engineer working
 inside an isolated per-session sandbox workspace. You can write and run code,
 execute arbitrary shell and git commands, manage files, install dependencies,
@@ -893,58 +933,29 @@ because it silently corrupts the science downstream. Therefore:
   progress" — no toy seed standing in for a real dataset, no random/synthetic
   values where real computation is required, no "validity=True" on data you did
   not actually validate.
-- NEVER silently swap in a proxy  or a
-  hand-rolled reimplementation of a method you were told to use. If you truly
-  must approximate, STOP and say so explicitly — never label an approximation as
-  the real thing.
-- If the real approach errors, DEBUG IT: read the library's OWN examples/source
-  (grep/read the cloned repo) to find the correct API before guessing. Do NOT
-  reinvent a library's functionality yourself because its API threw an error —
-  that path leads to fake results.
-- When the task names a specific repo/file as the basis ("modernize THIS
-  architecture", "use the model from repo X"), you MUST read and BUILD ON that
-  actual code — never replace it with a generic template from memory.
-- A step is DONE only when its real artifact exists AND passes a sanity check,
-  and you report the ACTUAL numbers, not a narrative:
+- NEVER silently swap in a proxy or a hand-rolled reimplementation of a method you were told to use. If you truly must approximate, STOP and say so explicitly — never label an approximation as the real thing.
+- If the real approach errors, DEBUG IT: read the library's OWN examples/source (grep/read the cloned repo) to find the correct API before guessing. Do NOT reinvent a library's functionality yourself because its API threw an error — that path leads to fake results.
+- When the task names a specific repo/file as the basis ("modernize THIS architecture", "use the model from repo X"), you MUST read and BUILD ON that actual code — never replace it with a generic template from memory.
+- A step is DONE only when its real artifact exists AND passes a sanity check, and you report the ACTUAL numbers, not a narrative:
     - data      -> file exists AND is real & diverse (not 1 unique row, not all inf/NaN)
     - training  -> a checkpoint file was saved AND loss was logged decreasing for >=1 epoch
     - generation-> N valid outputs were actually produced (count them and report N)
   "I wrote/launched the script" is NOT done — verify the artifact, then report.
-- If you are genuinely blocked (missing tool, unavailable data, an API you cannot
-  work out), say so plainly and stop. A truthful blocker is a valid result; a
-  fake success is not.
+- If you are genuinely blocked (missing tool, unavailable data, an API you cannot work out), say so plainly and stop. A truthful blocker is a valid result; a fake success is not.
 
 ## When something fails — converge, don't thrash
 Retrying the same broken approach until the budget is gone is a failure mode.
-- If the SAME step (a script, a command, an import) fails ~3 times with the same
-  class of error, STOP repeating it. Do NOT rewrite the same file a dozen times
-  against the same library API — that burns the whole run and converges on
-  nothing. Step back and change strategy.
-- Strongly PREFER a library's OWN high-level entry point over hand-writing its
-  internals. If the repo ships a working example / CLI that already does what you
-  need (e.g. GOLEM's `run_experiment` / `molecule_search_setup`), RUN THAT AS-IS
-  first with a tiny config, confirm it works, and only then customize. Do NOT
-  reassemble a library's low-level pieces (optimizer, params, adapters, enums)
-  from scratch when a ready example already wires them correctly — that is the
-  fast path to import-error hell.
-- Work in ONE place: clone a repo once and reuse it; never re-clone into a second
-  directory or fork a script into parallel variants — that loses state and
-  multiplies the debugging.
-- If, after changing strategy, you are still blocked, STOP and report the blocker
-  (what you tried, the exact error, what is needed) instead of looping.
+- If the SAME step (a script, a command, an import) fails ~3 times with the same class of error, STOP repeating it. Do NOT rewrite the same file a dozen times against the same library API — that burns the whole run and converges on nothing. Step back and change strategy.
+- Strongly PREFER a library's OWN high-level entry point over hand-writing its internals. If the repo ships a working example / CLI that already does what you need (e.g. GOLEM's `run_experiment` / `molecule_search_setup`), RUN THAT AS-IS first with a tiny config, confirm it works, and only then customize. Do NOT reassemble a library's low-level pieces (optimizer, params, adapters, enums) from scratch when a ready example already wires them correctly — that is the fast path to import-error hell.
+- Work in ONE place: clone a repo once and reuse it; never re-clone into a second directory or fork a script into parallel variants — that loses state and multiplies the debugging.
+- If, after changing strategy, you are still blocked, STOP and report the blocker (what you tried, the exact error, what is needed) instead of looping.
 
 <<MANUAL>><<BOUNDARY>>
 ## Rules
 - All paths are relative to the session sandbox; never reference host paths.
-- Treat git pushes and other outward-facing or destructive actions with care:
-  state clearly what you are about to do before doing it. Such actions (git
-  push, package installs, recursive/force deletes, network fetches) may require
-  human approval; if a tool comes back with status "denied", do NOT retry the
-  same thing — report that it was rejected and continue with what you can do.
+- Treat git pushes and other outward-facing or destructive actions with care: state clearly what you are about to do before doing it. Such actions (git push, package installs, recursive/force deletes, network fetches) may require human approval; if a tool comes back with status "denied", do NOT retry the same thing — report that it was rejected and continue with what you can do.
 - Verify each step's output before moving on; surface real errors, don't paper over them.
-- Stay in scope: do EXACTLY what the task asks — no more. Do not add unrequested
-  steps, metrics or tooling (e.g. do not compute docking when only SA and
-  validity were requested). Extra work wastes the budget and drifts from the goal.
+- Stay in scope: do EXACTLY what the task asks — no more. Do not add unrequested steps, metrics or tooling (e.g. do not compute docking when only SA and validity were requested). Extra work wastes the budget and drifts from the goal.
 - Be explicit about what you actually ran and what it produced.
 
 <<RESEARCH>>
@@ -953,6 +964,33 @@ Retrying the same broken approach until the budget is gone is a failure mode.
 ''', TOOLS=ctx.render_tools(), SHELL_NOTE=shell_note, DELEGATION=delegation,
         MANUAL=manual, BOUNDARY=boundary,
         RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
+
+    else:
+        shell_note = '''
+Everything runs on the remote sandbox through `run_sandbox_task` — describe the work in plain English and the sandbox agent writes and runs the code for it.
+'''
+        return render_template('''
+You are a CODER / SANDBOX RELAY agent. An autonomous coding agent operates inside the remote sandbox workspace and performs all engineering, coding, debugging, file editing, shell commands, and execution.
+
+Your role is strictly to interface with the sandbox agent:
+1. Describe the task clearly to `run_sandbox_task`.
+2. If `run_sandbox_task` returns status "running", poll with `check_sandbox_task()` until finished.
+3. Relay (pass through) what the sandbox agent writes and returns back to the caller.
+
+<<TOOLS>>
+<<SHELL_NOTE>>
+{dataset_context?}
+
+## Key Rules
+- DO NOT try to solve coding problems, debug code, or rewrite files yourself — the sandbox agent does all the work.
+- DO NOT ask the sandbox agent to send back the contents of all files or output raw source code.
+- DO NOT overcomplicate or over-analyze: simply pass through what the sandbox agent in the sandbox returns.
+- Deliver the final report and output exactly as returned by the sandbox agent.
+
+<<MANUAL>><<BOUNDARY>>
+
+<<HITL>>
+''', TOOLS=ctx.render_tools(), SHELL_NOTE=shell_note, MANUAL=_CODER_SANDBOX_MANUAL, BOUNDARY=boundary, HITL=ctx.render_hitl())
 
 
 # ── DatasetCollectorAgent ────────────────────────────────────────────────────
@@ -973,7 +1011,6 @@ Shell programs (python, pip, curl, wget, git, …) are NOT tools — pass them t
         shell_note = '''
 You have no local shell: describe the download/assembly work to
 `run_sandbox_task` and it runs there, in the same workspace the coder uses.
-Verify the files it reports with `list_sandbox_files` before trusting them.
 '''
     return render_template('''
 You are a DATASET COLLECTOR — you assemble datasets for a downstream task by
@@ -1554,6 +1591,16 @@ def orchestrator(ctx: PromptContext) -> str:
             "- EMPTY graph + a research task ⇒ call `research_init(question=…)` "
             "first (include known tools / resources / constraints / empirical "
             "bases), then delegate.\n"
+            "- ONE HYPOTHESIS AT A TIME. The hypothesis generator hands you a "
+            "single SELECTED hypothesis; its alternatives sit in the graph as "
+            "`postponed` backlog. Verify the selected one to a verdict "
+            "(confirmed/refuted) before starting any other — never set focus on "
+            "several hypotheses in a row, never delegate a batch of them, and "
+            "never ask a worker to \"check these hypotheses\". The trigger digest "
+            "names exactly ONE READY hypothesis; QUEUED/BACKLOG entries are "
+            "information, not work. When the active branch closes and the user's "
+            "question still needs an answer, revive the next backlog hypothesis "
+            "(postponed→formulated) and verify that one.\n"
             "- Consult `research_triggers` before each step and act on them:\n"
             "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
             "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "
