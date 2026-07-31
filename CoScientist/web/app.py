@@ -70,6 +70,9 @@ SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 MAX_TOOL_ACTIVITY_EVENTS = 600
 TOOL_ACTIVITY_TRIM_SLACK = 200
 DATASET_URL_MAX_LENGTH = 2048
+# Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
+# absent on purpose: it is a projection of ``execution`` plus ``memory``.
+GRAPH_DELETE_TARGETS = ("execution", "research", "memory")
 
 
 def _validated_dataset_url(raw: Any) -> str:
@@ -951,6 +954,78 @@ def create_app() -> FastAPI:
             else 200
         )
         return JSONResponse(payload, status_code=status_code)
+
+    @app.delete("/api/users/{user_id}/sessions/{session_id}/graph")
+    async def delete_session_graph(
+        user_id: str,
+        session_id: str,
+        view: str = "all",
+    ):
+        """Drop stored graph data on the operator's explicit request.
+
+        ``execution`` and ``research`` belong to this session alone; ``memory``
+        is the installation-wide semantic memory, so it disappears for every
+        session at once. Both the research graph and the semantic memory are
+        archived next to their files first; the execution graph is re-seeded
+        with the agent roster so the Graph view keeps rendering.
+        """
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        targets = GRAPH_DELETE_TARGETS if view == "all" else (view,)
+        unknown = [name for name in targets if name not in GRAPH_DELETE_TARGETS]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown graph view {unknown[0]!r}; expected one of "
+                    f"{', '.join((*GRAPH_DELETE_TARGETS, 'all'))}"
+                ),
+            )
+
+        deleted: dict[str, Any] = {}
+        failed = False
+        for name in targets:
+            try:
+                if name == "execution":
+                    from CoScientist.graph.memory import reset_knowledge_graph
+                    reset_knowledge_graph(user_id=user_id, session_id=session_id)
+                    deleted[name] = {"scope": "session", "cleared": True}
+                elif name == "research":
+                    from CoScientist.graph.research.store import get_research_graph
+                    archived = get_research_graph(
+                        user_id=user_id,
+                        session_id=session_id,
+                    ).reset(archive=True)
+                    deleted[name] = {
+                        "scope": "session",
+                        "cleared": True,
+                        "archived": archived,
+                    }
+                else:  # memory
+                    from CoScientist.graph.memory_store import (
+                        get_global_knowledge_memory,
+                    )
+                    result = get_global_knowledge_memory().clear()
+                    deleted[name] = {
+                        "scope": "global",
+                        "cleared": bool(result.get("persisted")),
+                        **result,
+                    }
+                    failed = failed or not result.get("persisted")
+            except Exception as exc:  # noqa: BLE001 — report every target's fate
+                logging.getLogger("CoScientist.web").warning(
+                    "Graph deletion failed for %s: %s", name, exc
+                )
+                deleted[name] = {"cleared": False, "error": str(exc)}
+                failed = True
+
+        return JSONResponse(
+            {"status": "error" if failed else "success", "deleted": deleted},
+            status_code=500 if failed else 200,
+        )
 
     @app.get("/api/graph")
     async def api_graph(

@@ -282,6 +282,32 @@ def test_dataset_prompt_block_names_the_link_and_is_empty_without_one():
     assert empty.state[DATASET_CONTEXT_STATE_KEY] == ""
 
 
+@pytest.mark.parametrize("local_coder_tools", [True, False])
+def test_the_dataset_block_reaches_the_coder_in_both_tool_setups(local_coder_tools):
+    """Since nothing auto-fills the argument, the prompt is the ONLY way in.
+
+    The coder has two prompts — one for the local toolset, one for the
+    sandbox-relay setup the web UI switch leaves it in — and the relay one used
+    to omit the block, so an attached archive was invisible to the very agent
+    that had to forward it.
+    """
+    from CoScientist.agents import build_for_mode
+    from CoScientist.config import get_settings
+
+    settings = get_settings()
+    previous = settings.web.coder_local_tools_enabled
+    settings.web.coder_local_tools_enabled = local_coder_tools
+    try:
+        system = build_for_mode()
+        for name in ("CoderAgent", "DatasetCollectorAgent"):
+            assert "{dataset_context?}" in system.agents[name].instruction, (
+                f"{name} cannot see the attached archive with "
+                f"coder_local_tools_enabled={local_coder_tools}"
+            )
+    finally:
+        settings.web.coder_local_tools_enabled = previous
+
+
 def test_nothing_fills_dataset_url_in_behind_the_agent():
     """No callback may pre-fill the argument — the agent sends it or it stays out."""
     from CoScientist.agents import build_for_mode

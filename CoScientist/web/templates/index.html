@@ -954,6 +954,10 @@
       document.getElementById('coder-sandbox-url').value = appSettings.coderAgent.sandboxUrl;
       document.getElementById('coder-workspace-id').value = appSettings.coderAgent.workspaceId;
       document.getElementById('coder-local-tools-checkbox').checked = appSettings.coderAgent.localToolsEnabled;
+      // A deletion result from an earlier visit says nothing about now.
+      const graphDeleteStatus = document.getElementById('graph-delete-status');
+      graphDeleteStatus.textContent = '';
+      graphDeleteStatus.classList.add('hidden');
       updateStartModeUI();
       updateGraphToggleUI();
       updateCoderToolsUI();
@@ -986,6 +990,55 @@
       plannerGraph.disabled = !graphOn;
       plannerGraph.checked = graphOn && (appSettings.plannerAgent.graphEnabled ?? true);
       if (note) note.classList.toggle('hidden', graphOn);
+    }
+
+    // Deleting a graph rewrites files on the server, so the confirmation names
+    // exactly what goes — in particular that the knowledge memory is shared by
+    // every session, not just the one currently open.
+    const GRAPH_DELETE_LABELS = {
+      execution: "this session's execution graph",
+      research: "this session's research graph",
+      memory: 'the GLOBAL knowledge memory (shared by every session)',
+      all: "this session's execution and research graphs AND the GLOBAL knowledge memory",
+    };
+
+    function describeGraphDeletion(deleted) {
+      return Object.entries(deleted || {}).map(([name, info]) => {
+        if (info && info.error) return `${name} failed (${info.error})`;
+        if (name === 'memory') {
+          return `${name} (${info.entities || 0} entities, ${info.relations || 0} relations)`;
+        }
+        return name;
+      }).join(', ');
+    }
+
+    async function deleteGraphData() {
+      const target = document.getElementById('graph-delete-target').value;
+      const button = document.getElementById('graph-delete-btn');
+      const status = document.getElementById('graph-delete-status');
+      if (!confirm(`Delete ${GRAPH_DELETE_LABELS[target]}?\n\nThis cannot be undone from the UI.`)) return;
+
+      status.classList.remove('hidden');
+      status.textContent = 'Deleting...';
+      status.className = 'text-[10px] font-mono mt-1.5 text-primary/70 animate-pulse';
+      button.disabled = true;
+      try {
+        const url = sessionApi(`/graph?view=${encodeURIComponent(target)}`);
+        const response = await fetch(url, { method: 'DELETE' });
+        let data = {};
+        try { data = await response.json(); } catch (_) { /* empty response */ }
+        if (!response.ok) {
+          throw new Error(data.detail || describeGraphDeletion(data.deleted) || `HTTP ${response.status}`);
+        }
+        status.textContent = `Deleted ${describeGraphDeletion(data.deleted) || 'nothing'}.`;
+        status.className = 'text-[10px] font-mono mt-1.5 text-secondary';
+        addTelemetry(`GRAPHS :: deleted ${target}`);
+      } catch (error) {
+        status.textContent = 'Error deleting graphs: ' + (error.message || error);
+        status.className = 'text-[10px] font-mono mt-1.5 text-error';
+      } finally {
+        button.disabled = false;
+      }
     }
 
     // Warn when the coder ends up with no way to run anything: local tools off
@@ -2842,6 +2895,31 @@
             </div>
             <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
               once per session.</p>
+            <hr class="border-outline-variant/10" />
+            <!-- Delete stored graphs -->
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Delete Graph Data</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Wipe what the graphs have recorded.
+                  The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory
+                  is installation-wide and disappears for every session at once. The research graph and the knowledge
+                  memory are archived next to their files first; the execution graph keeps only the agent roster.</p>
+                <div id="graph-delete-status" class="hidden text-[10px] font-mono mt-1.5"></div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <select id="graph-delete-target"
+                  class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 cursor-pointer">
+                  <option value="execution">Execution (session)</option>
+                  <option value="research">Research (session)</option>
+                  <option value="memory">Knowledge memory (global)</option>
+                  <option value="all">All of the above</option>
+                </select>
+                <button id="graph-delete-btn" onclick="deleteGraphData()"
+                  class="px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
+                  <span class="material-symbols-outlined text-sm">delete_forever</span> Delete
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
