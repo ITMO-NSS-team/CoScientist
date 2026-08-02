@@ -229,7 +229,7 @@ async def _run_critic_loop(
     hypotheses: List[Hypothesis] = []
     for h in raw_hypotheses:
         if isinstance(h, dict):
-            h.setdefault("provenance", {"creator": "MooseChemMCPTool"})
+            h.setdefault("provenance", {"creator": "MooseChem"})
             h.setdefault("strategy_type", "MooseChem")
             h.setdefault("domain", "chemistry")
             h.setdefault("refutation_conditions", "Refuted if the predicted effect is not observed under the verification plan.")
