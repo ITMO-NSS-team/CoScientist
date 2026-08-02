@@ -1,9 +1,11 @@
 """
-Isolated integration test: HypothesisGenerator + Critic loop.
+Isolated integration test: HypothesisGenerator + MooseChemMCPTool.
 
-Uses the full hypothesis_subsystem pipeline (MooseChemTool →
-LoopCoordinator → HypothesisCriticAgent) as a black box via
-build_hypothesis_subsystem().
+Uses the hypothesis_subsystem pipeline (retrieve_validation_tools →
+MooseChemMCPTool) as a black box via build_hypothesis_subsystem().
+
+Verifies that the subsystem produces structured Hypothesis objects with
+validation_tool_matching annotations.
 
 Reads test_cases.json, runs all cases, saves structured output.
 
@@ -47,30 +49,13 @@ litellm.api_base = _API_URL
 # ---- Subsystem imports ----
 from CoScientist.hypothesis_subsystem import build_hypothesis_subsystem
 from CoScientist.hypothesis_subsystem.audit import HypothesisAuditLogger
-from CoScientist.hypothesis_subsystem.models import HypothesisStatus
-
-
-# ---- Helpers ----
-
-def _extract_scores(h) -> dict:
-    """Extract critic scores from provenance history."""
-    scores = {"verifiability": None, "consistency": None, "specificity": None, "novelty": None}
-    for ev in h.provenance.history:
-        if ev.action == "critiqued" and ev.detail and "Passed: scores=" in ev.detail:
-            try:
-                raw = ev.detail.split("Passed: scores=")[1]
-                scores.update(eval(raw))
-            except Exception:
-                pass
-    return scores
 
 
 async def run_one_case(case: dict, case_index: int) -> dict:
-    """Run a single case through the full subsystem (Generator+Critic)."""
+    """Run a single case through the Generator+MCPTool subsystem."""
     case_id = case.get("id", f"case_{case_index}")
     question = case["research_question"]
 
-    # ---- Per-case output dir + logging ----
     case_dir = OUTPUT_DIR / case_id
     case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,7 +71,6 @@ async def run_one_case(case: dict, case_index: int) -> dict:
     root.addHandler(file_handler)
 
     log = logging.getLogger("test")
-    audit = HypothesisAuditLogger(logging.getLogger("hypothesis"))
 
     summary = {
         "case_id": case_id,
@@ -95,8 +79,9 @@ async def run_one_case(case: dict, case_index: int) -> dict:
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "PASS",
         "duration_sec": 0.0,
-        "hypotheses_count": 0, "approved": 0, "deferred": 0, "proposed": 0,
-        "critic_scores": [],
+        "hypotheses_count": 0,
+        "with_tool_matching": 0,
+        "without_tool_matching": 0,
         "hypotheses": [],
         "error": None,
     }
@@ -112,7 +97,6 @@ async def run_one_case(case: dict, case_index: int) -> dict:
         subsystem = build_hypothesis_subsystem(model=_MODEL)
         log.info(f"Subsystem built: agent={subsystem.agent.name}, model={_MODEL}")
 
-        # Run the subsystem agent directly via ADK runner
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
@@ -130,7 +114,6 @@ async def run_one_case(case: dict, case_index: int) -> dict:
         log.info("Running hypothesis subsystem...")
         t_run = time.monotonic()
 
-        final_response = ""
         async for event in runner.run_async(
             user_id="integration_test",
             session_id=case_id,
@@ -139,80 +122,59 @@ async def run_one_case(case: dict, case_index: int) -> dict:
                 parts=[types.Part(text=question)],
             ),
         ):
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    parts = event.content.parts
-                    final_response = "\n".join(
-                        p.text for p in parts
-                        if getattr(p, "text", None) and not getattr(p, "thought", False)
-                    ) or ""
-            # Collect generated hypotheses from state
-            session = await session_service.get_session(
-                app_name="test", user_id="integration_test", session_id=case_id,
-            )
-            state = getattr(session, "state", {}) or {}
-            generated = state.get("generated_hypotheses")
+            pass  # Events are collected below
 
         log.info(f"Subsystem run done in {(time.monotonic() - t_run) * 1000:.0f}ms")
 
-        # Parse generated hypotheses from state
-        hypotheses = []
-        if generated and isinstance(generated, dict):
-            raw_hyps = generated.get("hypotheses", [])
-            from CoScientist.hypothesis_subsystem.models import Hypothesis
-            for h in raw_hyps:
-                try:
-                    hypotheses.append(Hypothesis(**h) if isinstance(h, dict) else h)
-                except Exception:
-                    pass
+        # Read hypotheses from session state (written by _generate_via_moosechem)
+        session = await session_service.get_session(
+            app_name="test", user_id="integration_test", session_id=case_id,
+        )
+        state = getattr(session, "state", {}) or {}
+        generated = state.get("generated_hypotheses")
 
-        if not hypotheses:
-            # Fallback: try parsing final_response as HypothesisList JSON
+        # Parse generated hypotheses
+        raw_hyps = generated.get("hypotheses", []) if isinstance(generated, dict) else []
+        from CoScientist.hypothesis_subsystem.models import Hypothesis, ValidationToolInfo
+
+        for i, h in enumerate(raw_hyps, 1):
             try:
-                import json as _json
-                parsed = _json.loads(final_response) if isinstance(final_response, str) else {}
-                raw_hyps = parsed.get("hypotheses", [])
-                from CoScientist.hypothesis_subsystem.models import Hypothesis
-                for h in raw_hyps:
-                    try:
-                        hypotheses.append(Hypothesis(**h) if isinstance(h, dict) else h)
-                    except Exception:
-                        pass
+                hyp = Hypothesis(**h) if isinstance(h, dict) else h
             except Exception:
-                pass
+                continue
 
-        log.info("--- OUTPUT HYPOTHESES ---")
-        for i, h in enumerate(hypotheses, 1):
-            icon = {HypothesisStatus.ACTIVE: "PASS", HypothesisStatus.DEFERRED: "DEFER",
-                    HypothesisStatus.PROPOSED: "NEW"}.get(h.status, "???")
-            scores = _extract_scores(h)
-            log.info(f"[{icon}] H#{i} [{h.status.value}] {h.claim[:120]}...")
-            log.info(f"  Scores: {scores}")
-            for ev in h.provenance.history:
-                log.info(f"  provenance: [{ev.action}] {ev.agent}: "
-                         f"{ev.detail[:120] if ev.detail else '-'}")
+            tool_matches = hyp.validation_tool_matching or []
+            tool_names = [t.name if hasattr(t, "name") else t.get("name", "?")
+                         for t in tool_matches]
+
+            log.info(f"H#{i} [{hyp.strategy_type}] {hyp.claim[:120]}...")
+            log.info(f"  domain={hyp.domain}")
+            log.info(f"  tools={hyp.tools}")
+            log.info(f"  validation_tool_matching={tool_names}")
 
             hy_summary = {
-                "claim": h.claim,
-                "status": h.status.value,
-                "strategy": h.strategy_type,
-                "scores": scores,
-                "domain": h.domain,
-                "refutation": h.refutation_conditions[:300],
-                "provenance_events": len(h.provenance.history),
+                "claim": hyp.claim,
+                "strategy": hyp.strategy_type,
+                "domain": hyp.domain,
+                "hypothesis_tools": hyp.tools,
+                "validation_tool_matching": [
+                    t.model_dump(mode="json") if hasattr(t, "model_dump")
+                    else (t if isinstance(t, dict) else str(t))
+                    for t in tool_matches
+                ],
+                "refutation": hyp.refutation_conditions[:300],
             }
             summary["hypotheses"].append(hy_summary)
 
-            status_key = {"active": "approved", "proposed": "proposed",
-                          "deferred": "deferred"}.get(h.status.value, "proposed")
-            summary[status_key] += 1
-            if scores.get("verifiability") is not None:
-                summary["critic_scores"].append(scores)
+            if tool_matches:
+                summary["with_tool_matching"] += 1
+            else:
+                summary["without_tool_matching"] += 1
 
-        summary["hypotheses_count"] = len(hypotheses)
+        summary["hypotheses_count"] = len(summary["hypotheses"])
         summary["duration_sec"] = round(time.monotonic() - t0, 1)
 
-        if not hypotheses:
+        if not summary["hypotheses"]:
             summary["status"] = "FAIL"
             summary["error"] = "No hypotheses produced"
 
@@ -240,11 +202,9 @@ async def main():
 
     cases_path = Path(args.cases)
     if not cases_path.exists():
-        # Fallback: try relative to integration test directory
         cases_path = Path(__file__).resolve().parent.parent / "test_cases.json"
     if not cases_path.exists():
         print(f"ERROR: test_cases.json not found at {cases_path}")
-        print("Creating default test case...")
         cases = [{"id": "default", "research_question": "What molecular features predict EGFR kinase inhibition?", "max_hypotheses": 2}]
     else:
         with open(cases_path, encoding="utf-8") as f:
@@ -267,7 +227,8 @@ async def main():
 
         icon = {"PASS": "OK", "FAIL": "FAIL", "ERROR": "ERR"}.get(summary["status"], "???")
         print(f"  [{icon}] {summary['status']} | {summary['hypotheses_count']} hyps | "
-              f"{summary['approved']} appr, {summary['deferred']} def | {dt:.0f}s")
+              f"{summary['with_tool_matching']} tool-matched, "
+              f"{summary['without_tool_matching']} unmatched | {dt:.0f}s")
         if summary["error"]:
             print(f"  Error: {summary['error']}")
 
@@ -275,9 +236,8 @@ async def main():
             "case_id": summary["case_id"], "status": summary["status"],
             "duration_sec": summary["duration_sec"],
             "hypotheses_count": summary["hypotheses_count"],
-            "approved": summary["approved"], "deferred": summary["deferred"],
-            "proposed": summary["proposed"],
-            "critic_scores": summary.get("critic_scores", []),
+            "with_tool_matching": summary["with_tool_matching"],
+            "without_tool_matching": summary["without_tool_matching"],
             "error": summary["error"],
         })
 
