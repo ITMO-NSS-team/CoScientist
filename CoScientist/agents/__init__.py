@@ -82,7 +82,7 @@ def build_for_mode():
     """Build an AgentSystem configured for the current start mode from settings.
 
     Reads ``settings.web.start_mode``:
-      * ``"init"`` (default) — InitAgent is root (sequential: PlannerAgent →
+      * ``"init"`` (default) — PlanningPipelineAgent is root (sequential: PlannerAgent →
         OrchestratorAgent).
       * ``"orchestrator"`` — OrchestratorAgent is root, with PlannerAgent
         added to its subordinates so it can be invoked on demand.
@@ -99,8 +99,10 @@ def build_for_mode():
     if start_mode == "init":
         raw_config = load_config()
         patched = copy.deepcopy(raw_config)
-        if "InitAgent" in patched.agents:
-            patched.agents["InitAgent"].root = True
+        pipeline_agent_name = "PlanningPipelineAgent" if "PlanningPipelineAgent" in patched.agents else "InitAgent"
+        if pipeline_agent_name in patched.agents:
+            patched.agents[pipeline_agent_name].root = True
+            patched.agents[pipeline_agent_name].enabled = True
             patched.agents["OrchestratorAgent"].root = False
             # In Init mode the PlannerAgent runs first and its output replaces
             # the original user query; inject_original_query restores it so the
@@ -111,7 +113,7 @@ def build_for_mode():
             system = build_system(config=patched)
         else:
             logger.warning(
-                "start_mode is set to 'init' but 'InitAgent' is not present in "
+                "start_mode is set to 'init' but 'PlanningPipelineAgent' is not present in "
                 "the system config; falling back to default build_system()"
             )
             system = build_system()
@@ -129,8 +131,10 @@ def build_for_mode():
 
     # Make OrchestratorAgent the root.
     patched.agents["OrchestratorAgent"].root = True
-    if "InitAgent" in patched.agents:
-        patched.agents["InitAgent"].root = False
+    for name in ("PlanningPipelineAgent", "InitAgent"):
+        if name in patched.agents:
+            patched.agents[name].root = False
+            patched.agents[name].enabled = False
 
     # Add PlannerAgent to OrchestratorAgent's subordinates (if not already).
     orch_subs = patched.agents["OrchestratorAgent"].subordinates

@@ -411,7 +411,7 @@ def test_build_for_mode_init(monkeypatch):
 
     system = build_for_mode()
     assert system is not None
-    assert system.root.name == "InitAgent"
+    assert system.root.name == "PlanningPipelineAgent"
 
 
 def test_build_for_mode_orchestrator(monkeypatch):

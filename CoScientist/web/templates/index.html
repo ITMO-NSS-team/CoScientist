@@ -211,13 +211,6 @@
       </div>
     </div>
     <div class="flex items-center gap-4 text-[#424656]">
-      <a id="graph-link" href="/graph" target="_blank" title="Knowledge graph (live)">
-        <span class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">hub</span>
-      </a>
-      <a href="/builds" target="_blank" title="MCP builds (live)">
-        <span
-          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">build</span>
-      </a>
       <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
           class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
@@ -455,12 +448,14 @@
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
-      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph" },
+      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
+      { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
+      { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
     ];
 
     function isAgentHighlightedByDefault(name) {
-      return name === "PlannerAgent" || name === "OrchestratorAgent" || name === "ToolsViewer" || name === "KnowledgeGraph" || name === "__settings__";
+      return true;
     }
 
     function initAgentNav() {
@@ -470,14 +465,20 @@
         const opacityClass = highlighted ? "opacity-100" : "opacity-50";
         const iconColorClass = highlighted ? "text-primary" : "text-outline-variant";
         const textColorClass = highlighted ? "text-on-surface font-semibold" : "text-outline-variant font-medium";
+        const elemIdAttr = (a.name === "KnowledgeGraph") ? 'id="graph-link"' : ((a.name === "CoderSandbox") ? 'id="coder-sandbox-link"' : `id="agent-${a.name}"`);
+        const hrefAttr = a.href ? `href="${a.href}"` : '';
+        const extraDot = (a.name === "CoderSandbox")
+          ? `<span id="sandbox-status-dot" class="w-2 h-2 rounded-full bg-outline-variant/40 ml-auto" title="Sandbox standby"></span>`
+          : '';
 
         return `
-          <div id="agent-${a.name}" onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
+          <div ${elemIdAttr} ${hrefAttr} onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
             <span class="material-symbols-outlined ${iconColorClass} text-lg">${a.icon}</span>
             <div class="flex flex-col">
               <span class="text-sm ${textColorClass}">${a.desc}</span>
               <span class="text-[8px] text-outline-variant/50 font-mono uppercase">${a.name}</span>
             </div>
+            ${extraDot}
           </div>
         `;
       }).join('');
@@ -499,12 +500,19 @@
         } else {
           window.open('/graph', '_blank');
         }
+      } else if (name === "MCPBuilds") {
+        window.open('/builds', '_blank');
+      } else if (name === "CoderSandbox") {
+        const link = document.getElementById('coder-sandbox-link');
+        const url = (link && link.href) ? link.href : (activeSandboxWatchUrl || getBaseSandboxUrl());
+        window.open(url, '_blank');
       }
     }
 
     function highlightAgent(name) {
       AGENTS.forEach(a => {
-        const el = document.getElementById('agent-' + a.name);
+        const targetId = a.id || ('agent-' + a.name);
+        const el = document.getElementById(targetId);
         if (!el) return;
         if (a.name === name) {
           el.className = "flex items-center gap-3 py-3 px-4 bg-[#272a31] rounded-lg transition-all duration-200 border-l-2 border-[#00daf3] cursor-pointer";
@@ -529,7 +537,8 @@
 
     function resetAgents() {
       AGENTS.forEach(a => {
-        const el = document.getElementById('agent-' + a.name);
+        const targetId = a.id || ('agent-' + a.name);
+        const el = document.getElementById(targetId);
         if (el) {
           const highlighted = isAgentHighlightedByDefault(a.name);
           const opacityClass = highlighted ? "opacity-100" : "opacity-50";
@@ -613,10 +622,61 @@
       }).join('');
     }
 
+    let activeSandboxWatchUrl = null;
+
+    function getBaseSandboxUrl() {
+      const customUrl = (typeof appSettings !== 'undefined' && appSettings.coderAgent && appSettings.coderAgent.sandboxUrl)
+        ? appSettings.coderAgent.sandboxUrl.trim() : '';
+      if (customUrl) {
+        return customUrl.endsWith('/') ? customUrl : customUrl + '/';
+      }
+      return 'http://localhost:8884/';
+    }
+
+    function extractSandboxUrlFromText(text) {
+      if (!text || typeof text !== 'string') return null;
+      const matches = text.match(/(https?:\/\/[^\s\n"']+)/g);
+      if (!matches) return null;
+      for (const url of matches) {
+        if (url.includes('task_id=') || text.includes('Sandbox is up:')) {
+          return url;
+        }
+      }
+      return null;
+    }
+
+    function updateCoderSandboxButton(fullUrl = null) {
+      const linkEl = document.getElementById('coder-sandbox-link');
+      const dotEl = document.getElementById('sandbox-status-dot');
+      if (!linkEl) return;
+
+      if (fullUrl) {
+        activeSandboxWatchUrl = fullUrl;
+        linkEl.href = fullUrl;
+        linkEl.title = 'Open Active CoderSandbox: ' + fullUrl;
+        if (dotEl) {
+          dotEl.className = 'w-2 h-2 rounded-full bg-secondary animate-pulse';
+          dotEl.title = 'Sandbox active: ' + fullUrl;
+        }
+      } else {
+        activeSandboxWatchUrl = null;
+        const baseUrl = getBaseSandboxUrl();
+        linkEl.href = baseUrl;
+        linkEl.title = 'Open CoderSandbox: ' + baseUrl;
+        if (dotEl) {
+          dotEl.className = 'w-2 h-2 rounded-full bg-outline-variant/40';
+          dotEl.title = 'Sandbox standby: ' + baseUrl;
+        }
+      }
+    }
+
     function checkAndDisplaySandboxLinks(author, tr, timestamp = null) {
       if (!tr || !tr.response || typeof tr.response !== 'object') return;
       const watchUrl = tr.response.watch_url || tr.response.watchUrl;
       const vscodeUrl = tr.response.vscode_url || tr.response.vscodeUrl;
+      if (watchUrl) {
+        updateCoderSandboxButton(watchUrl);
+      }
       if (watchUrl || vscodeUrl) {
         const lines = [];
         if (watchUrl) lines.push(watchUrl);
@@ -1012,6 +1072,9 @@
             appSettings.coderAgent.workspaceId = data.coderAgent.workspaceId || '';
             appSettings.coderAgent.localToolsEnabled = data.coderAgent.localToolsEnabled ?? true;
           }
+          if (!activeSandboxWatchUrl) {
+            updateCoderSandboxButton(null);
+          }
         }
       } catch (e) {
         console.warn('Failed to load settings from server:', e);
@@ -1196,6 +1259,9 @@
       appSettings.coderAgent.sandboxUrl = document.getElementById('coder-sandbox-url').value.trim() || 'http://localhost:8884';
       appSettings.coderAgent.workspaceId = document.getElementById('coder-workspace-id').value.trim();
       appSettings.coderAgent.localToolsEnabled = document.getElementById('coder-local-tools-checkbox').checked;
+      if (!activeSandboxWatchUrl) {
+        updateCoderSandboxButton(null);
+      }
 
       const status = document.getElementById('settings-status');
       status.textContent = 'Saving...';
@@ -1833,6 +1899,7 @@
     }
 
     async function bootstrap() {
+      updateCoderSandboxButton(null);
       try {
         const data = await apiJson('/api/users');
         knownUsers = data.users || [];
@@ -1914,13 +1981,18 @@
 
       // The attachment belongs to the session the snapshot describes.
       applyDatasetUrl(snapshot.dataset_url);
+      updateCoderSandboxButton(null);
 
       for (const message of messages) {
         if (message.type === 'user_message') {
           addUserMsg(message.message, message.timestamp);
         } else if (message.type === 'agent_event') {
           activityTouchAgent(message.author, message.timestamp);
-          if (hasText(message.content)) addAgentMsg(message.author || 'system', message.content, message.timestamp);
+          if (hasText(message.content)) {
+            addAgentMsg(message.author || 'system', message.content, message.timestamp);
+            const foundUrl = extractSandboxUrlFromText(message.content);
+            if (foundUrl) updateCoderSandboxButton(foundUrl);
+          }
           (message.tool_calls || [])
             .filter(call => call.name === 'transfer_to_agent')
             .forEach(call => activityRecordCall(message.author, call, message.timestamp));
@@ -2015,6 +2087,8 @@
               hideTyping();
               highlightAgent(data.author);
               addAgentMsg(data.author, data.content, data.timestamp);
+              const foundUrl = extractSandboxUrlFromText(data.content);
+              if (foundUrl) updateCoderSandboxButton(foundUrl);
               addTelemetry('EVENT :: ' + data.author + (data.is_final ? ' [FINAL]' : ''));
               if (!data.is_final) showTyping();
             } else {
