@@ -276,6 +276,55 @@
       <div class="p-6 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
         <!-- Context attached to this session (dataset archive, …) -->
         <div id="attachment-chips" class="hidden flex flex-wrap items-center gap-2 mb-2"></div>
+
+        <!-- Dataset Sandbox Upload Widget (Circular Progress) -->
+        <div id="dataset-upload-widget"
+          class="hidden mb-3 bg-[#13151b] border border-outline-variant/15 border-l-[3px] border-l-[#00d2d3] rounded-xl p-3.5 shadow-xl transition-all">
+          <div class="flex items-center gap-3.5">
+            <!-- Circular Progress Ring (Donut Chart) -->
+            <div class="relative shrink-0 w-12 h-12 flex items-center justify-center">
+              <svg class="w-12 h-12 transform -rotate-90" viewBox="0 0 44 44">
+                <!-- Background Ring Track -->
+                <circle cx="22" cy="22" r="18" fill="none" stroke="#252a36" stroke-width="4"></circle>
+                <!-- Cyan Progress Arc -->
+                <circle id="dataset-upload-arc" cx="22" cy="22" r="18" fill="none" stroke="#00d2d3" stroke-width="4"
+                  stroke-linecap="round" stroke-dasharray="113.097" stroke-dashoffset="62.20"
+                  class="transition-all duration-300"></circle>
+              </svg>
+              <span id="dataset-upload-pct"
+                class="absolute text-xs font-bold font-mono text-on-surface">45%</span>
+            </div>
+
+            <!-- Labels and Controls -->
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[10px] font-bold tracking-wider uppercase text-outline-variant font-mono">DATASET UPLOAD</span>
+                <button type="button" id="dataset-upload-cancel-btn" onclick="cancelDatasetUpload()"
+                  class="px-2.5 py-0.5 text-[11px] font-medium bg-[#222631] hover:bg-[#2c3140] border border-outline-variant/20 rounded-md text-on-surface-variant hover:text-on-surface transition-colors">
+                  Cancel
+                </button>
+              </div>
+              <div class="flex items-center justify-between gap-2 mt-0.5">
+                <span id="dataset-upload-text" class="text-xs font-semibold text-on-surface truncate">
+                  Uploading: 1.2 GB / 2.5 GB
+                </span>
+                <button type="button" id="dataset-upload-details-btn" onclick="toggleDatasetUploadDetails()"
+                  class="text-xs font-medium text-[#00d2d3] hover:underline hover:text-cyan-300 transition-colors shrink-0">
+                  Details
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Expandable Details Drawer -->
+          <div id="dataset-upload-details" class="hidden mt-3 pt-2.5 border-t border-outline-variant/10 text-[11px] font-mono text-outline-variant space-y-1">
+            <div class="flex justify-between"><span class="text-outline-variant/70">Filename:</span><span id="dataset-upload-filename" class="text-on-surface truncate max-w-[220px]">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">Speed:</span><span id="dataset-upload-speed" class="text-on-surface">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">ETA:</span><span id="dataset-upload-eta" class="text-on-surface">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">Status:</span><span id="dataset-upload-status" class="text-on-surface font-semibold">—</span></div>
+          </div>
+        </div>
+
         <form id="chat-form"
           class="flex items-end gap-4 bg-surface-container-high/40 p-2 rounded-lg border border-outline-variant/10 focus-within:border-primary/40 transition-colors">
           <!-- "+" menu: extra context for the agents, not a chat message -->
@@ -390,6 +439,9 @@
       plannerAgent: {
         retrievalEnabled: true,
         graphEnabled: true,
+        criticEnabled: false,
+        criticRounds: 1,
+        mergeTasksEnabled: true,
       },
       hypothesesAgent: {},
       medicalAgent: {},
@@ -725,12 +777,13 @@
     `;
       }
 
+      const isProvideInput = data.action_type === 'provide_input';
       const hasOptions = !!(data.options && data.options.length);
 
-      // Show in sidebar. For question windows (options present) the sidebar is
-      // informational only — a bare Accept there would silently skip the question.
-      const sidebarButtons = hasOptions ? `
-        <p class="text-[10px] text-outline-variant leading-relaxed">Ответьте в карточке вопроса в чате.</p>` : `
+      // Show in sidebar. For question windows (options present) or input requests the sidebar is
+      // informational only — answer directly in the chat card.
+      const sidebarButtons = (hasOptions || isProvideInput) ? `
+        <p class="text-[10px] text-outline-variant leading-relaxed">Ответьте в карточке в чате.</p>` : `
         <div class="flex gap-3">
           <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
             <span class="material-symbols-outlined text-base">check_circle</span> Accept
@@ -776,7 +829,16 @@
         <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(data.message)}</p>
         <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)} · ${escHtml(data.agent_name || '')}</p>
         ${outputBlock}
-        ${hasOptions ? `
+        ${isProvideInput ? `
+        <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Введите инструкции для агента..."
+            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+          <div class="flex">
+            <button onclick="respondHITLInput('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-base">send</span> Отправить
+            </button>
+          </div>
+        </div>` : hasOptions ? `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
           <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Ваш ответ на вопрос — затем «Ответить»"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
@@ -819,12 +881,32 @@
 
     let currentPlannerHitlRequest = null;
 
-    function respondHITL(requestId, approved) {
-      // Reject carries the feedback (the agent regenerates with it); Accept is
-      // ALWAYS clean — on approve the backend treats `instructions` as edited
-      // replacement text, which must never happen implicitly.
+    function respondHITLInput(requestId) {
       const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
-      const feedback = (!approved && feedbackEl) ? feedbackEl.value.trim() : '';
+      const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'hitl_response',
+          request_id: requestId,
+          action: 'provide_input',
+          approved: true,
+          instructions: feedback,
+          free_input: feedback,
+        }));
+      }
+      document.getElementById('hitl-panel').classList.add('hidden');
+      disableHitlControls(requestId);
+      addSystemMsg('💬 HITL Input: ' + (feedback || '(empty)'));
+
+      if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
+        currentPlannerHitlRequest = null;
+        updateRoadmapModalButtons();
+      }
+    }
+
+    function respondHITL(requestId, approved) {
+      const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
+      const feedback = feedbackEl ? feedbackEl.value.trim() : '';
       if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify({
           type: 'hitl_response',
@@ -832,7 +914,7 @@
           action: approved ? 'approve' : 'reject',
           approved: approved,
           instructions: feedback || null,
-          free_input: null,
+          free_input: feedback || null,
         }));
       }
       document.getElementById('hitl-panel').classList.add('hidden');
@@ -854,6 +936,8 @@
           action: 'select',
           approved: true,
           selected_option: option,
+          instructions: option,
+          free_input: option,
         }));
       }
       document.getElementById('hitl-panel').classList.add('hidden');
@@ -912,6 +996,9 @@
           if (data.plannerAgent) {
             appSettings.plannerAgent.retrievalEnabled = data.plannerAgent.retrievalEnabled ?? true;
             appSettings.plannerAgent.graphEnabled = data.plannerAgent.graphEnabled ?? true;
+            appSettings.plannerAgent.criticEnabled = data.plannerAgent.criticEnabled ?? false;
+            appSettings.plannerAgent.criticRounds = data.plannerAgent.criticRounds ?? 1;
+            appSettings.plannerAgent.mergeTasksEnabled = data.plannerAgent.mergeTasksEnabled ?? true;
           }
           if (data.researchAgent) {
             appSettings.researchAgent.maxSearches = data.researchAgent.maxSearches ?? 2;
@@ -948,6 +1035,9 @@
       document.getElementById('research-graph-checkbox').checked = appSettings.general.researchGraphEnabled;
       document.getElementById('planner-retrieval-checkbox').checked = appSettings.plannerAgent.retrievalEnabled;
       document.getElementById('planner-graph-checkbox').checked = appSettings.plannerAgent.graphEnabled;
+      document.getElementById('planner-critic-checkbox').checked = appSettings.plannerAgent.criticEnabled;
+      document.getElementById('planner-critic-rounds').value = appSettings.plannerAgent.criticRounds;
+      document.getElementById('planner-merge-tasks-checkbox').checked = appSettings.plannerAgent.mergeTasksEnabled;
       document.getElementById('research-max-searches').value = appSettings.researchAgent.maxSearches;
       document.getElementById('task-exec-keep-score').value = appSettings.taskExecutorAgent.keepScore;
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
@@ -960,6 +1050,7 @@
       graphDeleteStatus.classList.add('hidden');
       updateStartModeUI();
       updateGraphToggleUI();
+      updatePlanCriticUI();
       updateCoderToolsUI();
     }
 
@@ -990,6 +1081,18 @@
       plannerGraph.disabled = !graphOn;
       plannerGraph.checked = graphOn && (appSettings.plannerAgent.graphEnabled ?? true);
       if (note) note.classList.toggle('hidden', graphOn);
+    }
+
+    // The round budget only means anything while the critic runs at all, so it
+    // follows the Plan Critic switch instead of sitting there claiming a review
+    // nobody will perform.
+    function updatePlanCriticUI() {
+      const criticOn = document.getElementById('planner-critic-checkbox').checked;
+      const rounds = document.getElementById('planner-critic-rounds');
+      const row = document.getElementById('planner-critic-rounds-row');
+
+      rounds.disabled = !criticOn;
+      row.classList.toggle('opacity-40', !criticOn);
     }
 
     // Deleting a graph rewrites files on the server, so the confirmation names
@@ -1074,6 +1177,13 @@
       if (appSettings.general.knowledgeGraphEnabled) {
         appSettings.plannerAgent.graphEnabled = document.getElementById('planner-graph-checkbox').checked;
       }
+      appSettings.plannerAgent.criticEnabled = document.getElementById('planner-critic-checkbox').checked;
+      const criticRounds = parseInt(document.getElementById('planner-critic-rounds').value, 10);
+      if (!isNaN(criticRounds) && criticRounds >= 1) {
+        appSettings.plannerAgent.criticRounds = criticRounds;
+      }
+
+      appSettings.plannerAgent.mergeTasksEnabled = document.getElementById('planner-merge-tasks-checkbox').checked;
 
       const maxSearches = parseInt(document.getElementById('research-max-searches').value, 10);
       if (!isNaN(maxSearches) && maxSearches >= 0) {
@@ -2188,12 +2298,122 @@
     }
 
     // =========================================================================
+    // Sandbox Dataset Upload Progress Widget
+    // =========================================================================
+    let datasetLogEventSource = null;
+    let activeUploadData = null;
+
+    function formatDatasetSize(mb) {
+      const num = Number(mb) || 0;
+      if (num >= 1024) {
+        return (num / 1024).toFixed(1) + ' GB';
+      }
+      return Math.round(num) + ' MB';
+    }
+
+    function updateDatasetUploadUI(d) {
+      if (!d) return;
+      activeUploadData = d;
+      const widget = document.getElementById('dataset-upload-widget');
+      const arc = document.getElementById('dataset-upload-arc');
+      const pctEl = document.getElementById('dataset-upload-pct');
+      const textEl = document.getElementById('dataset-upload-text');
+
+      const p = d.progress || {};
+      const total = Number(p.total_mb) || 0;
+      const done = Number(p.downloaded_mb) || 0;
+      let pctRaw = p.percent != null ? Number(p.percent) : (total > 0 ? (done / total) * 100 : 0);
+      const pct = Math.min(100, Math.max(0, isFinite(pctRaw) ? pctRaw : 0));
+
+      const circumference = 113.097; // 2 * PI * 18
+      const dashoffset = circumference * (1 - pct / 100);
+
+      if (arc) arc.style.strokeDashoffset = dashoffset;
+      if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+
+      if (textEl) {
+        if (total > 0) {
+          textEl.textContent = `Uploading: ${formatDatasetSize(done)} / ${formatDatasetSize(total)}`;
+        } else if (done > 0) {
+          textEl.textContent = `Uploading: ${formatDatasetSize(done)}`;
+        } else if (d.filename) {
+          textEl.textContent = `Uploading: ${d.filename}`;
+        } else {
+          textEl.textContent = `Uploading dataset to sandbox...`;
+        }
+      }
+
+      const filenameEl = document.getElementById('dataset-upload-filename');
+      const speedEl = document.getElementById('dataset-upload-speed');
+      const etaEl = document.getElementById('dataset-upload-eta');
+      const statusEl = document.getElementById('dataset-upload-status');
+
+      if (filenameEl) filenameEl.textContent = d.filename || d.download_id || '—';
+      if (speedEl) speedEl.textContent = p.speed_mb_s ? `${Number(p.speed_mb_s).toFixed(1)} MB/s` : '—';
+      if (etaEl) etaEl.textContent = p.eta_seconds ? `${Math.round(p.eta_seconds)}s` : '—';
+      if (statusEl) statusEl.textContent = d.status || p.status || 'in_progress';
+
+      if (widget) widget.classList.remove('hidden');
+    }
+
+    async function cancelDatasetUpload() {
+      const downloadId = activeUploadData ? activeUploadData.download_id : null;
+      const userId = activeUser ? activeUser.id : null;
+      const sessionId = activeSession ? activeSession.id : null;
+      try {
+        await fetch('/api/v1/downloads/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            download_id: downloadId,
+            user_id: userId,
+            session_id: sessionId
+          })
+        });
+      } catch (err) {
+        console.warn('Failed to send download cancel request:', err);
+      }
+      const widget = document.getElementById('dataset-upload-widget');
+      if (widget) widget.classList.add('hidden');
+    }
+
+    function toggleDatasetUploadDetails() {
+      const drawer = document.getElementById('dataset-upload-details');
+      if (drawer) drawer.classList.toggle('hidden');
+    }
+
+    function connectDatasetLogsSSE() {
+      if (datasetLogEventSource) return;
+      try {
+        const url = new URL('/api/downloads/logs', location.href).toString();
+        datasetLogEventSource = new EventSource(url);
+        datasetLogEventSource.addEventListener('download', (e) => {
+          try {
+            const d = JSON.parse(e.data);
+            if (d) updateDatasetUploadUI(d);
+          } catch (_) {}
+        });
+        datasetLogEventSource.addEventListener('status', (e) => {
+          if (String(e.data).trim() === 'idle') {
+            // Stream idle
+          }
+        });
+        datasetLogEventSource.onerror = () => {
+          // EventSource automatically retries
+        };
+      } catch (err) {
+        console.warn('Dataset logs SSE connection error:', err);
+      }
+    }
+
+    // =========================================================================
     // Init
     // =========================================================================
     initAgentNav();
     renderActivityRail();
     applySideNavState();
     bootstrap();
+    connectDatasetLogsSSE();
 
     // Keep-alive ping
     setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
@@ -2956,6 +3176,43 @@
               </div>
               <input id="planner-graph-checkbox" type="checkbox" checked
                 class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Plan critic -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Plan Critic</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Have an LLM critic review the
+                  registered roadmap (assignees, coverage, dependencies) before it is executed, and send it back to
+                  the planner if it objects. Runs whether or not HITL is on, before a human sees the plan. Costs one
+                  extra LLM call per planning run.</p>
+              </div>
+              <input id="planner-critic-checkbox" type="checkbox" onchange="updatePlanCriticUI()"
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <!-- Critic revision rounds -->
+            <div id="planner-critic-rounds-row" class="flex items-center justify-between gap-4 pl-3">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Revision Rounds</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many times the critic may send
+                  the roadmap back. <span class="font-mono">1</span> — it gets a single say and the rewrite then
+                  stands. Each extra round is a full replan, and a critic that never approves would otherwise keep
+                  the planner going.</p>
+              </div>
+              <input id="planner-critic-rounds" type="number" min="1" max="5" value="1"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-20 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40 disabled:cursor-not-allowed" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Merge tasks -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Merge Tasks</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically merge consecutive
+                  tasks assigned to the same executor (CoderAgent / TaskExecutorAgent) into a single task. Turn off to
+                  keep every task the planner wrote as a separate unit of work.</p>
+              </div>
+              <input id="planner-merge-tasks-checkbox" type="checkbox" checked
+                class="w-5 h-5 accent-primary cursor-pointer" />
             </div>
             <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
               once per session.</p>

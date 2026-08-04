@@ -117,14 +117,22 @@ def after_fullset_reranker_agent(
     return
 
 def before_get_task(callback_context: CallbackContext):
-    """Ensure the current session has a task list before the agent runs.
+    """Ensure session has a task list and sanitize active_tasks for the target agent before it runs."""
+    master = callback_context.state.get("_master_active_tasks")
+    active = callback_context.state.get("active_tasks")
 
-    Task data already lives in ADK session state.  In particular, do not reload
-    it from process-global storage here: that used to resurrect stale plans and
-    mix concurrent users.
-    """
-    if callback_context.state.get("active_tasks") is None:
+    if master is None and active is None:
         callback_context.state["active_tasks"] = []
+        callback_context.state["_master_active_tasks"] = []
+        return None
+
+    if master is None:
+        master = list(active) if isinstance(active, list) else []
+        callback_context.state["_master_active_tasks"] = master
+
+    current_agent = getattr(callback_context, "agent_name", None)
+    from CoScientist.tools.task_tracker import clean_tasks_for_agent
+    callback_context.state["active_tasks"] = clean_tasks_for_agent(master, current_agent)
     return None
 
 
@@ -283,6 +291,60 @@ def make_unknown_tool_guard(valid_names: Iterable[str]) -> Callable:
     return guard
 
 
+def make_plan_registration_guard() -> Callable:
+    """Build an after_model_callback that ends the planner's turn once the plan
+    is registered, instead of letting it re-register forever.
+
+    `create_plan` NORMALISES what it is given: it renumbers ids, drops
+    OrchestratorAgent tasks and MERGES consecutive tasks with the same executor
+    assignee. The planner prompt tells the model to check the returned plan — so
+    when the plan it gets back is not the one it sent, the model registers again
+    to "fix" it, gets the same normalisation, and loops. It cannot win: the
+    difference it is chasing is the tracker's own doing.
+
+    That loop is reachable on its own, but the plan critic makes it likely: ask
+    for "a separate analysis step" next to an existing executor step and the
+    tracker merges the two back together on every attempt.
+
+    A registered plan is exactly ``state['active_tasks']`` being non-empty —
+    SessionAgent clears it before each planner run, so the flag is per-run and
+    a retry after a REJECTED create_plan (which registers nothing) still works.
+    """
+
+    def guard(
+        callback_context: CallbackContext, llm_response: LlmResponse
+    ) -> Optional[LlmResponse]:
+        tasks = callback_context.state.get("active_tasks")
+        if not tasks:
+            return None  # nothing registered yet — the first call must go through
+        content = getattr(llm_response, "content", None)
+        parts = getattr(content, "parts", None) if content is not None else None
+        if not parts:
+            return None
+        if not any(
+            getattr(getattr(p, "function_call", None), "name", None) == "create_plan"
+            for p in parts
+        ):
+            return None
+
+        logger.warning(
+            "[%s] create_plan called again after %d task(s) were registered — "
+            "ending the turn instead of re-registering",
+            _agent_name(callback_context), len(tasks),
+        )
+        roster = "\n".join(
+            f"{i}. {t.get('title')} → {t.get('assignee')}"
+            for i, t in enumerate(tasks, 1)
+        )
+        return LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(
+                text=f"The plan is registered and stands as follows:\n\n{roster}"
+            )])
+        )
+
+    return guard
+
+
 def _agent_name(callback_context: CallbackContext) -> str:
     return getattr(callback_context, "agent_name", None) or "agent"
 
@@ -387,3 +449,34 @@ class SearchLimiter:
                 )
             }
         return None
+
+def inject_original_query(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> None:
+    """Replace the last message in llm_request.contents with the original query."""
+
+    original = getattr(callback_context, "user_content", None)
+    if original is None or not original.parts:
+        return
+
+    # Extract original text
+    original_text = None
+    for part in original.parts:
+        if part.text:
+            original_text = part.text
+            break
+    if not original_text:
+        return
+
+    # Replace the last user-role content in llm_request.contents
+    for i, content in enumerate(llm_request.contents):
+        content = llm_request.contents[i]
+        if content.role == "user" and content.parts:
+            llm_request.contents[i] = types.Content(
+                role="user",
+                parts=[types.Part(text=original_text)],
+            )
+            logger.info(
+                "[OrchestratorAgent] Replaced planner messages with original user query"
+            )
+            return

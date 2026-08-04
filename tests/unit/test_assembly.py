@@ -179,9 +179,15 @@ def test_planner_roster_uses_real_agent_names(config, system):
     assert "Hypothesis Agent" not in instruction
 
 
-def test_planner_optimizes_for_capability_coverage_not_step_count(system):
-    """MCP metadata compresses delegation units instead of expanding them."""
-    instruction = system.agent("PlannerAgent").instruction
+def test_planner_optimizes_for_capability_coverage_not_step_count(monkeypatch, config):
+    """MCP metadata compresses delegation units instead of expanding them.
+
+    Built with the planner's retrieval tool pinned ON: the MCP guidance lives in
+    the discovery block, which the switch removes by design, so reading the
+    ambient system would assert whatever the developer's .env happens to say.
+    """
+    on = _build_with(monkeypatch, config, planner_retrieval_enabled=True)
+    instruction = on.agent("PlannerAgent").instruction
     assert "SHORTEST executable roadmap" in instruction
     assert "one task per independent user deliverable" in instruction
     assert "run a compression pass" in instruction
@@ -262,34 +268,46 @@ def test_router_prompt_absorbs_the_no_matching_tool_handoff(config, system):
     assert "Send ALL execution to TaskExecutorAgent" in orch
 
 
-def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(config, system):
+def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(monkeypatch, config):
     """The DatasetCollectorAgent is wired under CoderAgent, named in the coder's
     prompt, and uses the coder toolset — so it works in the same per-session
-    sandbox workspace (the data it downloads lands where the coder builds on it)."""
+    sandbox workspace (the data it downloads lands where the coder builds on it).
+
+    Built with the local coder tools pinned ON: without them the coder prompt is
+    the thin sandbox relay, which deliberately names no subordinate.
+    """
     coder = config.agent("CoderAgent")
     assert "DatasetCollectorAgent" in coder.subordinates
     collector = config.agent("DatasetCollectorAgent")
     # Both share the coder toolset -> same workspace-state anchor -> same sandbox.
     assert "coder" in collector.tools and "coder" in coder.tools
+    on = _build_with(monkeypatch, config, coder_local_tools_enabled=True)
     # The coder prompt advertises the subordinate (rendered from config).
-    coder_instruction = system.agent("CoderAgent").instruction
+    coder_instruction = on.agent("CoderAgent").instruction
     assert "DatasetCollectorAgent" in coder_instruction
     assert "SAME sandbox" in coder_instruction
     # Reached only through the coder — not a standalone A2A service.
     assert collector.a2a is None
     # Built and attached as an AgentTool on the coder.
-    attached = [t.agent.name for t in system.agent("CoderAgent").tools if hasattr(t, "agent")]
+    attached = [t.agent.name for t in on.agent("CoderAgent").tools if hasattr(t, "agent")]
     assert attached == ["DatasetCollectorAgent"]
 
 
-def test_research_graph_tools_match_prompt(config, system):
+def test_research_graph_tools_match_prompt(monkeypatch, config):
     """Agents wired with a research_graph* tool document its write/read tools in
     their prompt (and agents without it don't) — the same consistency the
-    assembler enforces for every tool, asserted explicitly for this feature."""
+    assembler enforces for every tool, asserted explicitly for this feature.
+
+    Built with the research graph pinned ON, because the roster below is read
+    from `cfg.tools` (the YAML list), which still names the tool after the
+    switch has dropped it. The switched-off half is its own test.
+    """
+    on = _build_with(monkeypatch, config, research_graph_enabled=True)
+
     for name, cfg in config.agents.items():
         if cfg.cls != "llm" or not cfg.prompt:
             continue
-        instruction = system.agent(name).instruction
+        instruction = on.agent(name).instruction
         has_worker = "research_graph" in cfg.tools
         has_orch = "research_graph_orchestrator" in cfg.tools
         if has_worker or has_orch:
@@ -312,6 +330,76 @@ def test_orchestrator_prompt_documents_only_wired_critics(config, system):
     assert ("Post-action critic" in instruction) == (
         "post_action_critique" in cfg.callbacks.after_tool
     )
+
+
+def _planner_ctx(config, critic):
+    """A PromptContext for the planner with the plan critic on or off."""
+    cfg = config.agent("PlannerAgent").model_copy(update={"critic": critic})
+    return PromptContext(config=cfg, system=config)
+
+
+def test_plan_critic_prompt_lists_exactly_the_agents_a_plan_can_assign_to(config):
+    """The plan critic checks assignees, so its roster must be the planner's
+    SIBLINGS (what the orchestrator delegates to) — not the planner itself."""
+    critic_prompt = REGISTRY.prompt("plan_critic")(_planner_ctx(config, True))
+    for sub in config.enabled_subordinates("OrchestratorAgent"):
+        if sub.name != "PlannerAgent":
+            assert sub.name in critic_prompt
+    assert "PlannerAgent" not in critic_prompt
+
+
+def test_planner_prompt_documents_the_plan_review_only_when_the_critic_is_wired(config):
+    planner_prompt = REGISTRY.prompt("planner")
+    assert "PLAN REVIEW" in planner_prompt(_planner_ctx(config, True))
+    assert "PLAN REVIEW" not in planner_prompt(_planner_ctx(config, False))
+
+
+def test_plan_critic_is_wired_exactly_when_the_config_asks_for_it(config, system):
+    """`critic:` is what puts a critic on the planner — nothing else does."""
+    cfg = config.agent("PlannerAgent")
+    assert (system.agent("PlannerAgent").plan_critic is not None) == cfg.uses_critic()
+    # One round: a critic that keeps objecting must not loop the planner forever.
+    assert system.agent("PlannerAgent").critic_max_rounds == 1
+
+
+def test_turning_the_critic_on_builds_a_planner_that_has_one(config):
+    raw = copy.deepcopy(config.model_dump(by_alias=True))
+    raw["agents"]["PlannerAgent"]["critic"] = True
+    planner = build_system(SystemConfig.model_validate(raw)).agent("PlannerAgent")
+
+    assert planner.plan_critic is not None
+    assert "PLAN REVIEW" in planner.instruction
+
+
+def test_options_follow_settings_references(config, monkeypatch):
+    """An `options:` value may be "${settings.path}" — that is how the plan
+    critic's round budget reaches the agent from the web UI."""
+    from CoScientist.config import get_settings
+
+    cfg = config.agent("PlannerAgent")
+    assert cfg.options["critic_max_rounds"] == "${web.planner_critic_rounds}"
+
+    monkeypatch.setattr(get_settings().web, "planner_critic_rounds", 4)
+    assert cfg.resolved_options() == {"critic_max_rounds": 4}
+
+
+def test_the_critic_round_budget_reaches_the_built_planner(config, monkeypatch):
+    from CoScientist.config import get_settings
+
+    monkeypatch.setattr(get_settings().web, "planner_critic_rounds", 2)
+    raw = copy.deepcopy(config.model_dump(by_alias=True))
+    raw["agents"]["PlannerAgent"]["critic"] = True
+    planner = build_system(SystemConfig.model_validate(raw)).agent("PlannerAgent")
+
+    assert planner.critic_max_rounds == 2
+
+
+def test_critic_on_a_plain_llm_agent_is_rejected(config):
+    """Only the session agents own a review→revise loop a critic can drive."""
+    raw = copy.deepcopy(config.model_dump(by_alias=True))
+    raw["agents"]["ResearchAgent"]["critic"] = True
+    with pytest.raises(Exception, match="critic"):
+        SystemConfig.model_validate(raw)
 
 
 def test_build_for_mode_init(monkeypatch):
@@ -389,8 +477,12 @@ def test_knowledge_graph_switch_drops_graph_tools_and_prompt(monkeypatch, config
     assert "### KNOWLEDGE GRAPH" not in off.agent("OrchestratorAgent").instruction
 
 
-def test_knowledge_graph_on_by_default(config, system):
-    orchestrator = system.agent("OrchestratorAgent")
+def test_knowledge_graph_switch_on_attaches_graph_tools_and_prompt(monkeypatch, config):
+    """The other half of the switch, pinned for the same reason as the coder's:
+    a GRAPH__ENABLED=false in someone's .env must not fail this."""
+    on = _build_with(monkeypatch, config, knowledge_graph_enabled=True)
+
+    orchestrator = on.agent("OrchestratorAgent")
     assert "GraphReaderToolset" in _tool_names(orchestrator)
     assert "### KNOWLEDGE GRAPH" in orchestrator.instruction
 
@@ -424,7 +516,12 @@ def test_coder_local_tools_switch_leaves_only_the_sandbox(monkeypatch, config):
             assert "run_sandbox_task" in agent.instruction
 
 
-def test_coder_local_tools_on_by_default(config, system):
-    coder = system.agent("CoderAgent")
+def test_coder_local_tools_switch_on_attaches_the_local_toolset(monkeypatch, config):
+    """The other half of the switch. Pinned rather than read off the ambient
+    settings: CODER__LOCAL_TOOLS_ENABLED=False in a developer's .env would
+    otherwise turn this into a failure about their environment."""
+    on = _build_with(monkeypatch, config, coder_local_tools_enabled=True)
+
+    coder = on.agent("CoderAgent")
     assert "execute_bash" in _tool_names(coder)
     assert "execute_bash" in coder.instruction

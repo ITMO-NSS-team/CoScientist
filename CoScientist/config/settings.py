@@ -239,6 +239,17 @@ class WebSettings(BaseModel):
     # so the planner writes the roadmap without MCP discovery / graph reads.
     planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
     planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
+    # Plan critic (system.yaml -> PlannerAgent.critic): an LLM reviews the
+    # registered roadmap and the planner rewrites it once if the critic objects.
+    # Off by default — it costs an extra LLM call plus, when it objects, a whole
+    # planning round. Independent of the orchestrator's pre/post-action critics.
+    planner_critic_enabled: bool = _os.getenv("PLANNER__CRITIC_ENABLED", "false").lower() in ("true", "1", "yes")
+    # How many times the critic may send the roadmap back (SessionAgent's
+    # critic_max_rounds). One by default: the critic gets a single say and the
+    # rewrite then stands — a reviewer that never tires would otherwise keep
+    # the planner replanning. Raise it only for a deliberately slower, more
+    # deliberative planning loop; every round is a full replan.
+    planner_critic_rounds: int = int(_os.getenv("PLANNER__CRITIC_ROUNDS", "1"))
     # Knowledge graph (graph/) master switch. When off the `graph` reader
     # toolset drops out of every agent (and out of their prompts) and the
     # GraphMemoryPlugin stops recording, so the whole feature vanishes.
@@ -252,6 +263,10 @@ class WebSettings(BaseModel):
     # file ops, git) drops out of the coder family, leaving the OpenHands
     # `sandbox` tools as the only way those agents run anything.
     coder_local_tools_enabled: bool = _os.getenv("CODER__LOCAL_TOOLS_ENABLED", "true").lower() in ("true", "1", "yes")
+    # When True (the default), create_plan merges consecutive tasks assigned to
+    # the same executor (CoderAgent / TaskExecutorAgent) into a single task.
+    # Turn off to keep every task the planner wrote as a separate unit of work.
+    merge_tasks_enabled: bool = _os.getenv("PLANNER__MERGE_TASKS", "true").lower() in ("true", "1", "yes")
     opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
     auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
     coscientist_username: _Optional[str] = _os.getenv("COSCIENTIST_USERNAME") or _os.getenv("DEFAULT_USERNAME")

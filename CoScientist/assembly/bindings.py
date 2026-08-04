@@ -667,15 +667,15 @@ def _sandbox_docs():
             "This is your ONLY way to run anything: you have no local shell, "
             "so every command, script, clone and install happens here. Data "
             "goes in via `dataset_url`; results come back as the summary.",
+            "`task` is the task you were given, forwarded as it is — the agent "
+            "on the other side plans and writes the code itself.",
             "It is bound to your session: the first call creates it, later "
             "calls continue in the SAME sandbox with its files and memory "
-            "intact — so build the work up over several calls.",
+            "intact — so successive tasks build on each other.",
             "Pass `new_sandbox=True` ONLY for an independent experiment on a "
             "clean machine; everything the previous one produced is lost.",
-            "Say exactly what the deliverable is and where to write it — you "
-            "cannot watch it work, you only get its report back.",
-            "Give it a WHOLE self-contained unit of work per call, not a "
-            "single shell command — each call spins up a full coding agent.",
+            "Send the WHOLE task in one call — each call spins up a full "
+            "coding agent; you cannot watch it work, you only get its report.",
         )
     return (
         ToolDoc(
@@ -785,6 +785,9 @@ def _before_get_task():
     from CoScientist.agents.callbacks import before_get_task
     return before_get_task
 
+def _inject_original_query():
+    from CoScientist.agents.callbacks import inject_original_query
+    return inject_original_query
 
 def _inject_graph_root():
     from CoScientist.agents.callbacks import inject_graph_root
@@ -853,6 +856,11 @@ def _guard_unknown_tools(ctx):
     return make_unknown_tool_guard(names)
 
 
+def _finish_after_plan_registered():
+    from CoScientist.agents.callbacks import make_plan_registration_guard
+    return make_plan_registration_guard()
+
+
 def _pre_action_critique(ctx):
     from CoScientist.agents.callbacks import make_pre_action_critique
     return make_pre_action_critique(REGISTRY.prompt("pre_action_critic")(ctx))
@@ -861,6 +869,19 @@ def _pre_action_critique(ctx):
 def _post_action_critique(ctx):
     from CoScientist.agents.callbacks import make_post_action_critique
     return make_post_action_critique(REGISTRY.prompt("post_action_critic")(ctx))
+
+
+def make_plan_critic(ctx):
+    """The planner's plan critic, for agents declaring ``critic:`` in the YAML.
+
+    Not an ADK callback (no callback can make the planner redo its roadmap):
+    the assembler passes it to the session agent, which owns the review loop.
+    Built here anyway so the assembler keeps looking things up instead of
+    importing agent internals — and so the critic's prompt is rendered from the
+    same PromptContext that wires the agents its plans may assign work to.
+    """
+    from CoScientist.agents.callbacks import make_plan_critique
+    return make_plan_critique(REGISTRY.prompt("plan_critic")(ctx))
 
 
 def _hitl_before_model():
@@ -885,6 +906,7 @@ _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranke
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+_cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
 # Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
 # Seed state['research_context'] from the research blackboard (role-dependent).
@@ -899,6 +921,10 @@ _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model(
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
+# End the planner's turn once its plan is registered, so it cannot loop
+# re-registering to undo create_plan's own normalisation.
+_cb("finish_after_plan_registered", "after_model",
+    factory=lambda ctx: _finish_after_plan_registered())
 # Trim prose/fences/trailing text around a JSON answer BEFORE strict
 # output_schema validation (providers don't always honour response_format).
 _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())

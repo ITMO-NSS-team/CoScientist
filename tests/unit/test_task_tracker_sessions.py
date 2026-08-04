@@ -161,7 +161,81 @@ def test_before_get_task_initializes_list_without_overwriting_plan():
     assert empty.state["active_tasks"] == []
 
     existing = _context()
-    tasks = [{"id": "TASK-1", "title": "keep me"}]
+    tasks = [{"id": "TASK-1", "title": "keep me", "assignee": "OrchestratorAgent"}]
     existing.state["active_tasks"] = tasks
     before_get_task(existing)
-    assert existing.state["active_tasks"] is tasks
+    assert existing.state["active_tasks"] == [{"id": "TASK-1", "title": "keep me", "assignee": "OrchestratorAgent"}]
+
+
+def test_task_context_omits_descriptions_for_other_assignees():
+    from CoScientist.tools.task_tracker import clean_tasks_for_agent
+
+    tasks = [
+        {
+            "id": "TASK-1",
+            "title": "Public Dataset Compatibility",
+            "description": "Long detailed description for HypothesesAgent",
+            "assignee": "HypothesesAgent",
+            "status": "TODO",
+            "parent_id": None,
+            "notes": "",
+            "created_at": "2026-07-31T16:00:00",
+            "updated_at": "2026-07-31T16:00:00",
+        },
+        {
+            "id": "TASK-2",
+            "title": "Train YOLO Model",
+            "description": "Long detailed description for TaskExecutorAgent",
+            "assignee": "TaskExecutorAgent",
+            "status": "TODO",
+            "parent_id": "TASK-1",
+            "notes": "",
+            "created_at": "2026-07-31T16:00:00",
+            "updated_at": "2026-07-31T16:00:00",
+        },
+    ]
+
+    # For TaskExecutorAgent: TASK-1 has NO description; TASK-2 HAS description
+    for_executor = clean_tasks_for_agent(tasks, "TaskExecutorAgent")
+    assert "description" not in for_executor[0]
+    assert "created_at" not in for_executor[0]
+    assert "updated_at" not in for_executor[0]
+    assert "notes" not in for_executor[0]
+    assert for_executor[1]["description"] == "Long detailed description for TaskExecutorAgent"
+
+    # For HypothesesAgent: TASK-1 HAS description; TASK-2 has NO description
+    for_hypotheses = clean_tasks_for_agent(tasks, "HypothesesAgent")
+    assert for_hypotheses[0]["description"] == "Long detailed description for HypothesesAgent"
+    assert "description" not in for_hypotheses[1]
+
+    # For OrchestratorAgent: BOTH have descriptions
+    for_orchestrator = clean_tasks_for_agent(tasks, "OrchestratorAgent")
+    assert for_orchestrator[0]["description"] == "Long detailed description for HypothesesAgent"
+    assert for_orchestrator[1]["description"] == "Long detailed description for TaskExecutorAgent"
+
+
+def test_before_get_task_filters_active_tasks_per_agent():
+    tracker = TaskTrackerToolset()
+    ctx = _context("OrchestratorAgent")
+
+    tracker.create_plan([
+        {"title": "Task A", "description": "Desc A", "assignee": "HypothesesAgent"},
+        {"title": "Task B", "description": "Desc B", "assignee": "TaskExecutorAgent", "parent_id": "TASK-1"},
+    ], ctx)
+
+    # Invoke before_get_task for HypothesesAgent
+    hypo_ctx = _context("HypothesesAgent")
+    hypo_ctx.state = ctx.state
+    before_get_task(hypo_ctx)
+
+    assert hypo_ctx.state["active_tasks"][0]["description"] == "Desc A"
+    assert "description" not in hypo_ctx.state["active_tasks"][1]
+
+    # Invoke before_get_task for TaskExecutorAgent: master descriptions preserved!
+    exec_ctx = _context("TaskExecutorAgent")
+    exec_ctx.state = ctx.state
+    before_get_task(exec_ctx)
+
+    assert "description" not in exec_ctx.state["active_tasks"][0]
+    assert exec_ctx.state["active_tasks"][1]["description"] == "Desc B"
+

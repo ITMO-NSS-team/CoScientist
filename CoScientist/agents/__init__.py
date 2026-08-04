@@ -102,6 +102,12 @@ def build_for_mode():
         if "InitAgent" in patched.agents:
             patched.agents["InitAgent"].root = True
             patched.agents["OrchestratorAgent"].root = False
+            # In Init mode the PlannerAgent runs first and its output replaces
+            # the original user query; inject_original_query restores it so the
+            # OrchestratorAgent sees the original request.
+            orch_cb = patched.agents["OrchestratorAgent"].callbacks.before_model
+            if "inject_original_query" not in orch_cb:
+                orch_cb.append("inject_original_query")
             system = build_system(config=patched)
         else:
             logger.warning(

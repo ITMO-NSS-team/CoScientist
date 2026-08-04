@@ -28,6 +28,8 @@
 #   hitl:         I use human-in-the-loop (llm: approval/selection tools +
 #                 prompt section; custom:session: review-loop handler).
 #                 Takes effect only when HITL__ENABLED is on globally.
+#   critic:       an LLM critic reviews my output in that same review loop and
+#                 I rewrite once if it objects (custom:session agents only)
 #   report_output: my final answer is a deliverable of its own (hypotheses, a
 #                 research summary, an execution report) — post it to the chat
 #                 as MY message instead of leaving it inside the caller's
@@ -147,8 +149,25 @@ agents:
     report_output: true
     callbacks:
       before_agent: [inject_graph_root]
-      after_model: [guard_unknown_tools]
+      # finish_after_plan_registered: create_plan normalises what it is given
+      # (renumbers, merges consecutive executor tasks), so a planner told to
+      # check the returned plan can loop re-registering to undo that. Once a
+      # plan is registered the turn ends instead.
+      after_model: [guard_unknown_tools, finish_after_plan_registered]
     hitl: true
+    # Plan critic (Settings -> PlannerAgent in the web UI, PLANNER__CRITIC_ENABLED
+    # in .env). An LLM reviews the REGISTERED roadmap before it is accepted and
+    # the planner rewrites it once if the critic objects — at most one round, no
+    # second review. Wired separately from the orchestrator's pre/post-action
+    # critics (they judge delegations, this judges the plan) and from HITL: it
+    # runs on autonomous runs too, before the human sees anything. The planner
+    # prompt's PLAN REVIEW section appears only while this is on.
+    critic: ${web.planner_critic_enabled}
+    options:
+      # How many times the critic may send the roadmap back. Follows the same
+      # web setting (Revision rounds), so the budget is tunable without a code
+      # change; 1 keeps the critic to a single say.
+      critic_max_rounds: ${web.planner_critic_rounds}
     a2a:
       key: planner
       port: 8001
