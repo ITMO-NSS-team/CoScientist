@@ -426,6 +426,26 @@ def test_build_for_mode_orchestrator(monkeypatch):
     assert system.root.name == "OrchestratorAgent"
 
 
+def test_build_for_mode_orchestrator_planner(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.agents import build_for_mode
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.web, "start_mode", "orchestrator_planner")
+
+    system = build_for_mode()
+    assert system is not None
+    assert system.root.name == "OrchestratorAgent"
+    # PlannerAgent is disabled and removed from OrchestratorAgent's subordinates
+    subs = [s.name for s in system.config.enabled_subordinates("OrchestratorAgent")]
+    assert "PlannerAgent" not in subs
+
+    # OrchestratorAgent has create_plan tool
+    tools = _tool_names(system.root)
+    assert "create_plan" in tools
+
+
+
 
 # ── web UI feature switches ──────────────────────────────────────────────────
 # Knowledge Graph / Research Graph / Local Coder Tools each drop a tool entry
