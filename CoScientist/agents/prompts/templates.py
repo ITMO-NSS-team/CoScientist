@@ -181,13 +181,20 @@ def render_research_protocol(ctx: PromptContext) -> str:
 
 @_register("hypotheses")
 def hypotheses(ctx: PromptContext) -> str:
+    # How many hypotheses may be active simultaneously (formulated, not
+    # postponed) — configurable from the web UI, default 1.
+    from CoScientist.config import get_settings
+    max_active: int = max(1, min(5, get_settings().web.max_active_hypotheses))
+    single = max_active == 1
+
     # The "one active hypothesis" rule is the same either way; only HOW the
     # selection is recorded differs — with the research graph it is a status on
     # the committed nodes, without it, it is just the shape of the answer. Naming
     # graph tools when the graph is off would make the model call a tool it does
     # not have.
     if ctx.has_tool("research_graph"):
-        selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
+        if single:
+            selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
 The research verifies ONE hypothesis at a time — verifying several at once burns
 the budget and lets the evidence of one branch contaminate the verdict of another.
 So, in your single `research_commit`:
@@ -205,26 +212,74 @@ So, in your single `research_commit`:
 If you commit several hypotheses as active anyway, the graph keeps only the
 highest-priority one active and postpones the others automatically, and tells you
 so in the commit warnings — better to make the choice yourself, deliberately.'''
-        answer_head = ("Start with exactly this line (real ids from your commit, "
-                       "one hypothesis):\n\nSELECTED HYPOTHESIS: <H-id> — "
-                       "<formulation in one sentence>")
-        answer_backlog = ("- BACKLOG (postponed): the alternatives as a ranked "
-                          "one-line list, explicitly\n  marked as NOT to be "
-                          "started now.")
+            answer_head = ("Start with exactly this line (real ids from your commit, "
+                           "one hypothesis):\n\nSELECTED HYPOTHESIS: <H-id> — "
+                           "<formulation in one sentence>")
+            answer_backlog = ("- BACKLOG (postponed): the alternatives as a ranked "
+                              "one-line list, explicitly\n  marked as NOT to be "
+                              "started now.")
+        else:
+            selection = f'''### UP TO {max_active} ACTIVE HYPOTHESES
+The research verifies UP TO {max_active} hypotheses in parallel. Select the
+{max_active} most promising ones to verify simultaneously.
+So, in your single `research_commit`:
+
+- the SELECTED hypotheses (up to {max_active}) are created with the default status
+  (`formulated`) plus `"selected": "true"` and a `"priority"` in their attrs —
+  these are the ones the orchestrator will verify in parallel;
+- EVERY alternative beyond {max_active} is created with `"status": "postponed"` and
+  its own `"priority"` — it stays in the graph as a ranked backlog and the
+  orchestrator can revive it (postponed→formulated) once an active branch has a
+  verdict;
+- build the full verification frame (VerificationMethod + ConfirmationCriteria +
+  any Tool it needs) for EACH selected hypothesis. For the postponed alternatives
+  a formulation + rationale is enough — do not equip branches nobody will run yet.
+
+If you commit more than {max_active} hypotheses as active, the graph keeps only the
+top {max_active} by priority and postpones the others automatically, and tells you
+so in the commit warnings — better to make the choice yourself, deliberately.'''
+            answer_head = (f"Start with exactly these lines (real ids from your commit, "
+                           f"up to {max_active} hypotheses):\n\n"
+                           + "\n".join(f"SELECTED HYPOTHESIS {i+1}: <H-id> — "
+                                      "<formulation in one sentence>"
+                                      for i in range(max_active)))
+            answer_backlog = ("- BACKLOG (postponed): the alternatives as a ranked "
+                              "one-line list, explicitly\n  marked as NOT to be "
+                              "started now.")
     else:
-        selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
+        if single:
+            selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
 The research verifies ONE hypothesis at a time — verifying several at once burns
 the budget and lets the evidence of one branch contaminate the verdict of another.
 So hand over exactly one hypothesis to test now, and keep the alternatives as an
 explicitly ranked backlog for later.'''
-        answer_head = ("Start with exactly this line (one hypothesis):\n\n"
-                       "SELECTED HYPOTHESIS: <formulation in one sentence>")
-        answer_backlog = ("- BACKLOG: the alternatives as a ranked one-line list, "
-                          "explicitly marked as\n  NOT to be started now.")
+            answer_head = ("Start with exactly this line (one hypothesis):\n\n"
+                           "SELECTED HYPOTHESIS: <formulation in one sentence>")
+            answer_backlog = ("- BACKLOG: the alternatives as a ranked one-line list, "
+                              "explicitly marked as\n  NOT to be started now.")
+        else:
+            selection = f'''### UP TO {max_active} ACTIVE HYPOTHESES
+The research verifies up to {max_active} hypotheses in parallel. Select the
+{max_active} most promising ones to verify simultaneously, and keep the rest as an
+explicitly ranked backlog for later.'''
+            answer_head = ("Start with exactly these lines "
+                           f"(up to {max_active} hypotheses):\n\n"
+                           + "\n".join(f"SELECTED HYPOTHESIS {i+1}: "
+                                      "<formulation in one sentence>"
+                                      for i in range(max_active)))
+            answer_backlog = ("- BACKLOG: the alternatives as a ranked one-line list, "
+                              "explicitly marked as\n  NOT to be started now.")
 
-    return render_template('''
+    select_word = "ONE" if single else f"up to {max_active}"
+    hand_rule = (f"hand it ONE hypothesis, unambiguously" if single
+                 else f"hand it up to {max_active} hypotheses, unambiguously")
+    backlog_rule = ("one hypothesis goes forward, the rest wait their turn"
+                    if single
+                    else f"up to {max_active} hypotheses go forward, the rest wait their turn")
+
+    return render_template('''\
 Your role is to generate plausible, scientifically grounded hypotheses that can be
-validated for a given task — and to hand the orchestrator exactly ONE of them to test.
+validated for a given task — and to hand the orchestrator exactly <<SELECT_WORD>> of them to test.
 
 ### Instructions:
 
@@ -233,7 +288,7 @@ validated for a given task — and to hand the orchestrator exactly ONE of them 
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
 5. If relevant, briefly note assumptions or required conditions.
-6. SELECT exactly ONE — the single most relevant hypothesis to verify FIRST —
+6. SELECT exactly <<SELECT_WORD>> — the most relevant hypothesis(es) to verify FIRST —
    and say why. Judge relevance by: how directly it answers the user's actual
    question, how testable it is with the tools/resources at hand, and how much
    the outcome would change what we do next. The rest are the BACKLOG, not work
@@ -243,7 +298,7 @@ Do not perform experiments or retrieve external information — focus only on ge
 
 <<SELECTION>>
 
-For the selected hypothesis, propose HOW it would be verified: a
+For the selected hypothesis(es), propose HOW each would be verified: a
 VerificationMethod (what procedure yields evidence) and ConfirmationCriteria
 (when the evidence is sufficient). Record all of this in the research graph so
 the orchestrator can schedule verification.
@@ -257,7 +312,7 @@ nodes that already exist (declared at init); do not invent resource ids.
 <<RESEARCH>>
 
 ### YOUR ANSWER
-The orchestrator acts on your text, so hand it ONE hypothesis, unambiguously.
+The orchestrator acts on your text, so <<HAND_RULE>>.
 <<ANSWER_HEAD>>
 
 Then, briefly:
@@ -267,7 +322,7 @@ Then, briefly:
 <<ANSWER_BACKLOG>>
 
 Never present the alternatives as a set of parallel tasks and never ask for all
-of them to be tested — one hypothesis goes forward, the rest wait their turn.
+of them to be tested — <<BACKLOG_RULE>>.
 
 ### TASK_MANAGEMENT
 Context of tasks:
@@ -276,7 +331,8 @@ Context of tasks:
 Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
 Update task status to "done" immediately upon completion of each work item.
 ''', SELECTION=selection, ANSWER_HEAD=answer_head,
-        ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx))
+        ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
+        SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule)
 
 
 # NOTE: hypothesis validation (verdict + Conclusion) is a fully-async BACKGROUND
@@ -1604,16 +1660,34 @@ def orchestrator(ctx: PromptContext) -> str:
             "- EMPTY graph + a research task ⇒ call `research_init(question=…)` "
             "first (include known tools / resources / constraints / empirical "
             "bases), then delegate.\n"
-            "- ONE HYPOTHESIS AT A TIME. The hypothesis generator hands you a "
-            "single SELECTED hypothesis; its alternatives sit in the graph as "
-            "`postponed` backlog. Verify the selected one to a verdict "
-            "(confirmed/refuted) before starting any other — never set focus on "
-            "several hypotheses in a row, never delegate a batch of them, and "
-            "never ask a worker to \"check these hypotheses\". The trigger digest "
-            "names exactly ONE READY hypothesis; QUEUED/BACKLOG entries are "
-            "information, not work. When the active branch closes and the user's "
-            "question still needs an answer, revive the next backlog hypothesis "
-            "(postponed→formulated) and verify that one.\n"
+        )
+        # Dynamic hypothesis-count rule
+        from CoScientist.config import get_settings as _gs
+        _max_h = max(1, min(5, _gs().web.max_active_hypotheses))
+        if _max_h == 1:
+            research_graph_section += (
+                "- ONE HYPOTHESIS AT A TIME. The hypothesis generator hands you a "
+                "single SELECTED hypothesis; its alternatives sit in the graph as "
+                "`postponed` backlog. Verify the selected one to a verdict "
+                "(confirmed/refuted) before starting any other — never set focus on "
+                "several hypotheses in a row, never delegate a batch of them, and "
+                "never ask a worker to \"check these hypotheses\". The trigger digest "
+                "names exactly ONE READY hypothesis; QUEUED/BACKLOG entries are "
+                "information, not work. When the active branch closes and the user's "
+                "question still needs an answer, revive the next backlog hypothesis "
+                "(postponed→formulated) and verify that one.\n"
+            )
+        else:
+            research_graph_section += (
+                f"- UP TO {_max_h} HYPOTHESES IN PARALLEL. The hypothesis generator "
+                f"hands you up to {_max_h} SELECTED hypotheses; the rest sit in the "
+                "graph as `postponed` backlog. Verify the selected ones — you may "
+                "set focus and gather evidence for several in parallel. QUEUED/BACKLOG "
+                "entries are information, not work. When active branches close and the "
+                "user's question still needs an answer, revive backlog hypotheses "
+                "(postponed→formulated) and verify those.\n"
+            )
+        research_graph_section += (
             "- Consult `research_triggers` before each step and act on them:\n"
             "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
             "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "

@@ -158,6 +158,12 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "abstainScore" in task_exec:
         web.executor_tool_abstain_score = float(task_exec["abstainScore"])
 
+    hypotheses = frontend.get("hypothesesAgent", {})
+    if "maxActiveHypotheses" in hypotheses:
+        val = int(hypotheses["maxActiveHypotheses"])
+        if 1 <= val <= 5:
+            web.max_active_hypotheses = val
+
     coder = frontend.get("coderAgent", {})
     if "sandboxUrl" in coder:
         web.sandbox_url = coder["sandboxUrl"]
@@ -197,6 +203,9 @@ def _settings_payload() -> dict:
             "mergeTasksEnabled": web.merge_tasks_enabled,
         },
         "researchAgent": {"maxSearches": web.max_searches},
+        "hypothesesAgent": {
+            "maxActiveHypotheses": web.max_active_hypotheses,
+        },
         "taskExecutorAgent": {
             "keepScore": web.executor_tool_keep_score,
             "abstainScore": web.executor_tool_abstain_score,

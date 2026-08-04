@@ -234,39 +234,18 @@ class WebSettings(BaseModel):
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
     use_planner: bool = _os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
-    # PlannerAgent tool surface. When off, the tool entry drops out of the agent
-    # AND out of its prompt (assembler + prompt render from the same entries),
-    # so the planner writes the roadmap without MCP discovery / graph reads.
     planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
     planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
-    # Plan critic (system.yaml -> PlannerAgent.critic): an LLM reviews the
-    # registered roadmap and the planner rewrites it once if the critic objects.
-    # Off by default — it costs an extra LLM call plus, when it objects, a whole
-    # planning round. Independent of the orchestrator's pre/post-action critics.
     planner_critic_enabled: bool = _os.getenv("PLANNER__CRITIC_ENABLED", "false").lower() in ("true", "1", "yes")
-    # How many times the critic may send the roadmap back (SessionAgent's
-    # critic_max_rounds). One by default: the critic gets a single say and the
-    # rewrite then stands — a reviewer that never tires would otherwise keep
-    # the planner replanning. Raise it only for a deliberately slower, more
-    # deliberative planning loop; every round is a full replan.
     planner_critic_rounds: int = int(_os.getenv("PLANNER__CRITIC_ROUNDS", "1"))
-    # Knowledge graph (graph/) master switch. When off the `graph` reader
-    # toolset drops out of every agent (and out of their prompts) and the
-    # GraphMemoryPlugin stops recording, so the whole feature vanishes.
-    # The research blackboard is a separate switch — see ResearchGraphSettings.
     knowledge_graph_enabled: bool = _os.getenv("GRAPH__ENABLED", "true").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
     sandbox_url: str = _os.getenv("SANDBOX_URL", "")
     coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")
-    # CoderAgent tool surface. When off the local coder toolset (execute_bash,
-    # file ops, git) drops out of the coder family, leaving the OpenHands
-    # `sandbox` tools as the only way those agents run anything.
     coder_local_tools_enabled: bool = _os.getenv("CODER__LOCAL_TOOLS_ENABLED", "true").lower() in ("true", "1", "yes")
-    # When True (the default), create_plan merges consecutive tasks assigned to
-    # the same executor (CoderAgent / TaskExecutorAgent) into a single task.
-    # Turn off to keep every task the planner wrote as a separate unit of work.
     merge_tasks_enabled: bool = _os.getenv("PLANNER__MERGE_TASKS", "true").lower() in ("true", "1", "yes")
+    max_active_hypotheses: int = int(_os.getenv("HYPOTHESES__MAX_ACTIVE", "1"))
     opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
     auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
     coscientist_username: _Optional[str] = _os.getenv("COSCIENTIST_USERNAME") or _os.getenv("DEFAULT_USERNAME")
