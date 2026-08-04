@@ -407,7 +407,7 @@
 
     const appSettings = {
       general: {
-        startMode: 'init',   // 'init' | 'orchestrator'
+        startMode: 'init',   // 'init' | 'orchestrator' | 'orchestrator_planner'
         maxRetries: 3,
         hitlEnabled: false,
         usePlanner: true,
@@ -1128,7 +1128,7 @@
       const plannerCheckbox = document.getElementById('use-planner-checkbox');
       const plannerNote = document.getElementById('use-planner-note');
 
-      if (startMode === 'init') {
+      if (startMode === 'init' || startMode === 'orchestrator_planner') {
         plannerCheckbox.disabled = true;
         plannerCheckbox.checked = false;
         if (plannerNote) plannerNote.classList.remove('hidden');
@@ -1231,7 +1231,7 @@
       appSettings.general.startMode = document.getElementById('start-mode-select').value;
       appSettings.general.maxRetries = parseInt(document.getElementById('max-retries-input').value, 10) || 3;
       appSettings.general.hitlEnabled = document.getElementById('hitl-enabled-checkbox').checked;
-      if (appSettings.general.startMode !== 'init') {
+      if (appSettings.general.startMode === 'orchestrator') {
         appSettings.general.usePlanner = document.getElementById('use-planner-checkbox').checked;
       }
       appSettings.general.opikEnabled = document.getElementById('opik-enabled-checkbox').checked;
@@ -3084,12 +3084,14 @@
                 <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Choose which agent starts the
                   session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent.
                   <strong>OrchestratorAgent</strong> starts directly with the orchestrator.
+                  <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.
                 </p>
               </div>
               <select id="start-mode-select" onchange="updateStartModeUI()"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
                 <option value="init">PlannerAgent</option>
                 <option value="orchestrator">OrchestratorAgent</option>
+                <option value="orchestrator_planner">Orchestrator as a planner</option>
               </select>
             </div>
             <hr class="border-outline-variant/10" />

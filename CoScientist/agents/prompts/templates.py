@@ -1463,7 +1463,15 @@ def orchestrator(ctx: PromptContext) -> str:
     # programmatically — no brittle hardcoded "3."/"5." around conditional ones.
     steps: list[str] = []
 
-    if settings.orchestrator.use_planner or settings.web.start_mode=='init':
+    if ctx.has_tool("create_plan_tool"):
+        steps.append(
+            "### TASK_MANAGEMENT\n"
+            "If the task is complex or multi-step, call `create_plan` first to define and register\n"
+            "   the roadmap of sub-tasks before executing them.\n"
+            "Context of tasks:\n"
+            "{active_tasks}\n"
+        )
+    elif settings.orchestrator.use_planner or settings.web.start_mode in ("init", "orchestrator_planner", "orchestrator_plan"):
         steps.append(
             "### TASK_MANAGEMENT\n"
             "Context of tasks:\n"

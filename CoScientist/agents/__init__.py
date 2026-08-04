@@ -86,6 +86,8 @@ def build_for_mode():
         OrchestratorAgent).
       * ``"orchestrator"`` — OrchestratorAgent is root, with PlannerAgent
         added to its subordinates so it can be invoked on demand.
+      * ``"orchestrator_planner"`` — OrchestratorAgent is root, provided with
+        create_plan_tool directly, while PlannerAgent is disabled.
 
     Other runtime-tunable parameters (e.g. ``max_searches``) are read from
     ``settings.web`` by individual components at build time.
@@ -122,8 +124,41 @@ def build_for_mode():
             track_adk_agent_recursive(system.root, _tracer)
         return system
 
+    if start_mode in ("orchestrator_planner", "orchestrator_plan"):
+        raw_config = load_config()
+        patched = copy.deepcopy(raw_config)
+
+        # Make OrchestratorAgent the root.
+        patched.agents["OrchestratorAgent"].root = True
+        for name in ("PlanningPipelineAgent", "InitAgent"):
+            if name in patched.agents:
+                patched.agents[name].root = False
+                patched.agents[name].enabled = False
+
+        # Disable PlannerAgent and remove from Orchestrator's subordinates.
+        if "PlannerAgent" in patched.agents:
+            patched.agents["PlannerAgent"].root = False
+            patched.agents["PlannerAgent"].enabled = False
+
+        orch_subs = patched.agents["OrchestratorAgent"].subordinates
+        if "PlannerAgent" in orch_subs:
+            orch_subs.remove("PlannerAgent")
+
+        # Give OrchestratorAgent the tool for creating/registering plans directly.
+        orch_tools = patched.agents["OrchestratorAgent"].tools
+        if "create_plan_tool" not in orch_tools:
+            orch_tools.append("create_plan_tool")
+
+        system = build_system(config=patched)
+        _tracer = get_multi_agent_tracer()
+        if _tracer is not None:
+            track_adk_agent_recursive(system.root, _tracer)
+        return system
+
     if start_mode != "orchestrator":
-        raise ValueError(f"Unknown start_mode {start_mode!r}; expected 'init' or 'orchestrator'")
+        raise ValueError(
+            f"Unknown start_mode {start_mode!r}; expected 'init', 'orchestrator', or 'orchestrator_planner'"
+        )
 
     # Load a fresh config and patch it for orchestrator-as-root mode.
     raw_config = load_config()

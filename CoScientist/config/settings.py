@@ -229,7 +229,7 @@ class WebSettings(BaseModel):
     singleton is the single source of truth — all components read from it
     directly.
     """
-    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "init" | "orchestrator"
+    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "init" | "orchestrator" | "orchestrator_planner"
     max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
