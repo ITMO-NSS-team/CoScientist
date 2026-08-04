@@ -37,9 +37,16 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         attr_docs={
             "formulation": "the question itself",
             "domain": "subject area",
+            "specificity": "how narrow/precise the question is",
             "gap": "the knowledge gap it addresses",
+            "decomposition": "sub-questions it breaks into",
             "target_setting": "целевая постановка (what kind of answer is sought)",
-            "research_form": "fundamental / exploratory / applied (+ TRL)",
+            "research_form": "fundamental / exploratory / applied",
+            "trl": "УГТ — technology readiness level",
+            "completion_criteria": "when the research is done: exhaustive / "
+                                   "pragmatic / resource / economic",
+            "ai_application_model": "autonomy level: lab-assistant / assistant / "
+                                    "copilot / architect",
         },
     ),
     NodeTypeSpec(
@@ -357,7 +364,8 @@ def _transitions(*specs) -> FrozenSet[Tuple[str, str, str]]:
 # seeding — the agent is not choosing types freely, the tool constructs them), so
 # they are absent from the orchestrator's mid-run create-set above.
 INIT_SEED_TYPES = frozenset({"ResearchQuestion", "Tool", "Resource",
-                             "EmpiricalBase", "Constraint"})
+                             "EmpiricalBase", "Constraint",
+                             "ConfirmationCriteria", "CostModel"})
 
 
 # Spec §2 roles mapped onto the agents that actually exist in system.yaml:
@@ -449,6 +457,18 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("uses", "consumes", "supports", "refutes", "refines",
                      "relates_to", "derived_from",
                      ("produces", "VerificationMethod", "Evidence")),
+    ),
+    # The pre-stage context-initialization agent seeds the framing frame at the
+    # start of a run. It writes the whole context star through the PRIVILEGED
+    # init path (store.init_research, enforce_permissions=False), so these rights
+    # matter only if it ever writes through research_commit directly; they are
+    # kept aligned with INIT_SEED_TYPES for clarity and for schema tests.
+    "ContextInitAgent": AgentPerm(
+        create=frozenset({"ResearchQuestion", "Constraint", "Tool", "Resource",
+                          "EmpiricalBase", "ConfirmationCriteria", "CostModel"}),
+        update_attrs=frozenset({"ResearchQuestion"}),
+        transitions=frozenset(),
+        edges=_edges("contextualizes", "defines_scope", "applies_to"),
     ),
     # The human writes through the HITL bridge (web endpoint / approval flow),
     # never through an LLM toolset.
