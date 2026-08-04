@@ -105,23 +105,22 @@ agents:
         name: Orchestrate
         description: Coordinate scientific research agents to solve complex tasks
         tags: [orchestration, science, multi-agent]
-
-  InitAgent:
+  PlanningPipelineAgent:
     class: sequential
     root: false
     children:
       - PlannerAgent
       - OrchestratorAgent
-    enabled: true
+    enabled: false
     hitl: true
-    description: Initialize the CoScientist system
+    description: Initial planning pipeline (PlannerAgent -> OrchestratorAgent)
     a2a:
       key: init
       port: 8008
       skill:
         id: init
         name: Init
-        description: Initialize the CoScientist system
+        description: Initialize the CoScientist planning pipeline
         tags: [init, science, multi-agent]
 
   # ── Direct subordinates ────────────────────────────────────────────────────

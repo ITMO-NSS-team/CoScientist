@@ -291,10 +291,11 @@ def build_system(
             agent = _build_llm_agent(cfg, config, built, remote_subagents)
         elif cfg.cls in ("sequential", "parallel"):
             cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
+            sub_agents = [built[c] for c in cfg.children] if cfg.is_enabled() else []
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,
-                sub_agents=[built[c] for c in cfg.children],
+                sub_agents=sub_agents,
                 **cfg.resolved_options(),
             )
         else:  # custom:<key>
