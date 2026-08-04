@@ -1705,7 +1705,7 @@ with the graph tools (read_research_graph / get_graph_history / get_agents_info)
         INSTRUCTIONS=instructions,
         DIRECT_TOOLS='',#direct_tools_section,
         TRUST_INTRO='', #trust_intro,
-        KNOWLEDGE_GRAPH='',#knowledge_graph_section,
+        KNOWLEDGE_GRAPH=knowledge_graph_section,
         RESEARCH_GRAPH=research_graph_section,
         CRITIC_PROTOCOL=render_critic_protocol(ctx),
     )
