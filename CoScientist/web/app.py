@@ -11,8 +11,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
@@ -135,6 +135,16 @@ def _apply_frontend_settings(frontend: dict) -> None:
         web.planner_retrieval_enabled = bool(planner["retrievalEnabled"])
     if "graphEnabled" in planner:
         web.planner_graph_enabled = bool(planner["graphEnabled"])
+    if "criticEnabled" in planner:
+        web.planner_critic_enabled = bool(planner["criticEnabled"])
+    if "criticRounds" in planner:
+        # A zero-round critic is just a critic that never runs — that is what
+        # the switch above is for, so keep the budget at one round minimum.
+        val = int(planner["criticRounds"])
+        if val >= 1:
+            web.planner_critic_rounds = val
+    if "mergeTasksEnabled" in planner:
+        web.merge_tasks_enabled = bool(planner["mergeTasksEnabled"])
 
     research = frontend.get("researchAgent", {})
     if "maxSearches" in research:
@@ -182,6 +192,9 @@ def _settings_payload() -> dict:
         "plannerAgent": {
             "retrievalEnabled": web.planner_retrieval_enabled,
             "graphEnabled": web.planner_graph_enabled,
+            "criticEnabled": web.planner_critic_enabled,
+            "criticRounds": web.planner_critic_rounds,
+            "mergeTasksEnabled": web.merge_tasks_enabled,
         },
         "researchAgent": {"maxSearches": web.max_searches},
         "taskExecutorAgent": {
@@ -708,17 +721,6 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.get("/downloads", response_class=HTMLResponse)
-    async def downloads_page():
-        """Live donut view of dataset downloads running inside the sandbox."""
-        page = WEB_DIR / "static" / "downloads.html"
-        if not page.exists():
-            raise HTTPException(status_code=404, detail="downloads.html is missing")
-        return HTMLResponse(
-            page.read_text(encoding="utf-8"),
-            headers={"Cache-Control": "no-store"},
-        )
-
     @app.get("/api/downloads/logs")
     async def proxy_download_logs(wait_seconds: float = 60.0):
         """Relay the sandbox's download SSE stream to the browser.
@@ -761,6 +763,35 @@ def create_app() -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/api/v1/downloads/cancel")
+    @app.post("/api/downloads/cancel")
+    async def proxy_download_cancel(request: Request):
+        """Relay download cancellation POST request to the sandbox."""
+        import httpx
+
+        from CoScientist.tools.coder_tools.openhands_sandbox import resolve_sandbox_url
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        try:
+            base = resolve_sandbox_url()
+            upstream = f"{base.rstrip('/')}/api/v1/downloads/cancel"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(upstream, json=body)
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers={"Content-Type": resp.headers.get("Content-Type", "application/json")},
+                )
+        except Exception as exc:
+            logging.getLogger("CoScientist.web").warning(
+                "Download cancel proxy failed: %s", exc
+            )
+            return JSONResponse({"status": "cancelled", "detail": str(exc)}, status_code=200)
 
     # --- Local users and sessions (process lifetime only) ---
     @app.get("/api/users")

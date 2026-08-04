@@ -85,7 +85,7 @@ class TaskTrackerToolset(BaseToolset):
                 redirect[sid] = self._first_dependency(t)
                 continue
 
-            if t.get("assignee") == "CoderAgent" and coder_source_id is not None:
+            if self._should_merge_tasks() and t.get("assignee") in ("CoderAgent", "TaskExecutorAgent") and coder_source_id is not None:
                 coder_task = by_source_id[coder_source_id]
                 coder_task["title"] += f" - {t.get('title')}"
                 coder_task["description"] += f" - {t.get('description')}"
@@ -109,7 +109,7 @@ class TaskTrackerToolset(BaseToolset):
                 "_deps": self._dependencies(t),
             }
             by_source_id[sid] = task
-            if t.get("assignee") == "CoderAgent":
+            if t.get("assignee") in ("CoderAgent", "TaskExecutorAgent"):
                 coder_source_id = sid
 
         if not by_source_id:
@@ -158,7 +158,9 @@ class TaskTrackerToolset(BaseToolset):
                 "updated_at": datetime.now().isoformat(),
             })
 
-        tool_context.state["active_tasks"] = new_tasks
+        tool_context.state["_master_active_tasks"] = new_tasks
+        current_agent = getattr(tool_context, "agent_name", None)
+        tool_context.state["active_tasks"] = clean_tasks_for_agent(new_tasks, current_agent)
 
         result = {
             "result": "success",
@@ -193,6 +195,15 @@ class TaskTrackerToolset(BaseToolset):
             source_ids.append(sid)
             taken.add(sid)
         return source_ids
+
+    @staticmethod
+    def _should_merge_tasks() -> bool:
+        """Check whether consecutive executor tasks should be merged."""
+        try:
+            from CoScientist.config import get_settings
+            return get_settings().web.merge_tasks_enabled
+        except Exception:
+            return True  # safe default — merge as before
 
     @staticmethod
     def _dependencies(task: Dict[str, Any]) -> set:
@@ -291,31 +302,40 @@ class TaskTrackerToolset(BaseToolset):
         task_id: str,
         status: str,
         tool_context: ToolContext,
-        notes: Optional[str] = None,
+        notes: str = None
     ) -> Dict[str, Any]:
-        """Use this tool REGULARLY to provide clear progress updates. Never forget to update the task status. 
-        
+
+        """Update the status of a specific task.
         Args:
-            task_id: The ID of the task to update (e.g., TASK-1).
-            status: The new status (IN_PROGRESS, DONE, FAILED).
-            notes: Optional notes or results from the task execution.
-            
+            task_id: The ID of the task to update (e.g. TASK-1).
+            status: The new status (e.g., TODO, IN_PROGRESS, DONE).
+            tool_context: ToolContext provided by ADK.
+            notes: Optional notes or updates about the task.
         Returns:
             A dictionary indicating success or failure.
         """
-        tasks = list(tool_context.state.get("active_tasks", []))
-        for task in tasks:
-            if task["id"] == task_id:
+        master_tasks = list(
+            tool_context.state.get("_master_active_tasks")
+            or tool_context.state.get("active_tasks", [])
+        )
+        found_task = None
+        for task in master_tasks:
+            if task.get("id") == task_id:
                 task["status"] = status
                 task["updated_at"] = datetime.now().isoformat()
                 if notes:
                     task["notes"] = task.get("notes", "") + (
                         f"\n[{datetime.now().isoformat()}] {notes}"
                     )
-                # Re-assign so ADK records a state delta for persistent and
-                # in-memory session services alike.
-                tool_context.state["active_tasks"] = tasks
-                return {"result": "success", "task": task}
+                found_task = task
+                break
+
+        if found_task:
+            tool_context.state["_master_active_tasks"] = master_tasks
+            current_agent = getattr(tool_context, "agent_name", None)
+            tool_context.state["active_tasks"] = clean_tasks_for_agent(master_tasks, current_agent)
+            return {"result": "success", "task": found_task}
+
         return {"result": "error", "message": f"Task {task_id} not found."}
 
     def get_active_tasks(self, tool_context: ToolContext) -> Dict[str, Any]:
@@ -323,24 +343,48 @@ class TaskTrackerToolset(BaseToolset):
             Returns:
                 A dictionary containing the matching tasks.
         """
-        tasks = tool_context.state.get("active_tasks", [])
+        master_tasks = (
+            tool_context.state.get("_master_active_tasks")
+            or tool_context.state.get("active_tasks", [])
+        )
         current_agent = getattr(tool_context, "agent_name", None)
-
-        cleaned_tasks = []
-        for task in tasks:
-            cleaned_task = {k: v for k, v in task.items() if k not in ("created_at", "updated_at")}
-            if task.get("assignee") != current_agent:
-                cleaned_task.pop("description", None)
-
-            if task.get("assignee") == current_agent:
-                cleaned_task.pop("description", None)
-
-            if task.get("assignee") != current_agent and current_agent != "OrchestratorAgent":
-                cleaned_task.pop("notes", None)
-
-            cleaned_tasks.append(cleaned_task)
-            
+        cleaned_tasks = clean_tasks_for_agent(master_tasks, current_agent)
         return {"tasks": cleaned_tasks}
+
+
+def clean_tasks_for_agent(
+    tasks: List[Dict[str, Any]], current_agent: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Clean and filter tasks based on the accessing agent's role.
+
+    - Internal timestamps (created_at, updated_at) are omitted.
+    - Empty notes are omitted.
+    - OrchestratorAgent, PlannerAgent, or unspecified agents (None) retain full task descriptions.
+    - Worker agents retain full descriptions and notes ONLY for tasks assigned to current_agent.
+    """
+    if not isinstance(tasks, list):
+        return []
+
+    cleaned_tasks = []
+    is_management = current_agent in ("OrchestratorAgent", "PlannerAgent", None)
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        cleaned = {k: v for k, v in task.items() if k not in ("created_at", "updated_at")}
+
+        if not cleaned.get("notes"):
+            cleaned.pop("notes", None)
+
+        is_assigned = task.get("assignee") == current_agent
+
+        if not is_management and not is_assigned:
+            cleaned.pop("description", None)
+            cleaned.pop("notes", None)
+
+        cleaned_tasks.append(cleaned)
+
+    return cleaned_tasks
 
 # A global tool definition is safe: all mutable data lives in ToolContext.state.
 task_tracker_instance = TaskTrackerToolset()

@@ -50,7 +50,7 @@ _settings = get_settings()
 #: Seconds ``run_sandbox_task`` waits inline before handing back "running".
 RUN_WAIT = int(os.getenv("SANDBOX_RUN_WAIT", "600"))
 #: Seconds one ``check_sandbox_task`` call waits inline before returning.
-CHECK_WAIT = int(os.getenv("SANDBOX_CHECK_WAIT", "900"))
+CHECK_WAIT = int(os.getenv("SANDBOX_CHECK_WAIT", "2400"))
 #: Seconds between status polls (the sandbox reports coarse-grained progress).
 POLL_INTERVAL = float(os.getenv("SANDBOX_POLL_INTERVAL", "10"))
 
@@ -261,7 +261,56 @@ async def run_sandbox_task(
         "run_sandbox_task -> %s (sandbox=%s, reused=%s)",
         result.get("status"), result.get("sandbox_id"), result.get("reused"),
     )
+    result = await _handle_cancellation_hitl(result, tool_context)
     return _shape(result, waited=RUN_WAIT)
+
+
+async def _handle_cancellation_hitl(result: Dict[str, Any], tool_context: Optional[ToolContext]) -> Dict[str, Any]:
+    """If sandbox task/download was cancelled, pause the agent with a HITL request."""
+    if not isinstance(result, dict):
+        return result
+    err_str = str(result.get("error") or "").lower()
+    status_str = str(result.get("status") or "").lower()
+    is_cancelled = "cancelled" in err_str or "499" in err_str or status_str == "cancelled"
+
+    if is_cancelled and _settings.web.hitl_enabled:
+        from CoScientist.agents.common import hitl_handler
+        from CoScientist.hitl.models import HITLAction, HITLRequest
+
+        host_key = _host_session(tool_context)
+        user_id, session_id = host_key if host_key else (None, None)
+
+        hitl_req = HITLRequest(
+            agent_name="DatasetCollectorAgent",
+            action_type=HITLAction.PROVIDE_INPUT,
+            message="Dataset download was cancelled. What should I do next?",
+            options=[],
+            context={
+                "download_id": result.get("download_id"),
+                "reason": "Download cancelled by user",
+                "_session": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                } if user_id and session_id else None,
+            },
+            invoked_via="sandbox_download_cancel",
+        )
+        try:
+            response = await hitl_handler.handle_request(hitl_req)
+            user_input = (
+                response.instructions
+                or response.free_input
+                or response.selected_option
+                or ""
+            )
+            result["status"] = "cancelled"
+            result["summary"] = f"Dataset download was cancelled by user. User instructions: {user_input}"
+            result["user_instructions"] = user_input
+            result["next_step"] = f"Follow user instructions: {user_input}"
+        except Exception as exc:
+            logger.warning("HITL request for cancelled download failed: %s", exc)
+
+    return result
 
 
 async def check_sandbox_task(tool_context: ToolContext = None) -> Dict[str, Any]:

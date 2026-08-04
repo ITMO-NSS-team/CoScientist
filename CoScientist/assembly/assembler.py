@@ -9,7 +9,8 @@ constructs every declared agent:
   * ``sequential``  -> SequentialAgent over ``children``
   * ``parallel``    -> ParallelAgent over ``children``
   * ``custom:<x>``  -> the registered class (e.g. SessionAgent), passing
-                       ``options`` through as constructor kwargs
+                       ``options`` through as constructor kwargs; ``critic:``
+                       hands it a plan critic for its review loop
 
 Disabled agents are still BUILT (so they can be served standalone over A2A);
 ``enabled`` only controls whether parents attach/advertise them.
@@ -37,7 +38,7 @@ from google.adk.tools.agent_tool import AgentTool
 import CoScientist.assembly.bindings  # noqa: F401  (registration side effect)
 import CoScientist.agents.prompts.templates  # noqa: F401  (registration side effect)
 
-from CoScientist.assembly.bindings import HITL_TOOL_DOCS
+from CoScientist.assembly.bindings import HITL_TOOL_DOCS, make_plan_critic
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, ToolEntry
 from CoScientist.assembly.schema import (
@@ -212,7 +213,7 @@ def _build_llm_agent(
         kwargs["output_schema"] = REGISTRY.output_schema(cfg.output_schema)
     if cfg.planner:
         kwargs["planner"] = REGISTRY.planner(cfg.planner)()
-    kwargs.update(cfg.options)
+    kwargs.update(cfg.resolved_options())
     return LlmAgent(**kwargs)
 
 
@@ -256,7 +257,20 @@ def _build_custom_agent(
             # Session-style agents take a review-loop handler instead of tools.
             from CoScientist.agents.common import hitl_handler
             kwargs["hitl_handler"] = hitl_handler
-    kwargs.update(cfg.options)
+        if cfg.uses_critic():
+            # An LLM critic reviews the agent's output inside that same loop,
+            # independently of HITL (see agents/callbacks/critic.py).
+            if "plan_critic" not in getattr(cls, "model_fields", {}):
+                raise ValueError(
+                    f"{cfg.name}: class {cls.__name__} declares no `plan_critic` "
+                    f"field — it cannot run a critic review loop"
+                )
+            kwargs["plan_critic"] = make_plan_critic(ctx)
+    elif cfg.uses_critic():
+        raise ValueError(
+            f"{cfg.name}: critic: needs an LlmAgent-based class, got {cls.__name__}"
+        )
+    kwargs.update(cfg.resolved_options())
     return cls(**kwargs)
 
 
@@ -281,7 +295,7 @@ def build_system(
                 name=cfg.name,
                 description=cfg.description,
                 sub_agents=[built[c] for c in cfg.children],
-                **cfg.options,
+                **cfg.resolved_options(),
             )
         else:  # custom:<key>
             agent = _build_custom_agent(cfg, config, cfg.cls.split(":", 1)[1])
@@ -318,6 +332,8 @@ def load_config_cli() -> None:  # pragma: no cover — `python -m` helper
             bits.append(f"children={cfg.children}")
         if cfg.hitl:
             bits.append("hitl")
+        if cfg.uses_critic():
+            bits.append("critic")
         if cfg.a2a:
             bits.append(f"a2a={cfg.a2a.key}:{cfg.a2a.port}")
         print(f"  {name}: " + ", ".join(bits))

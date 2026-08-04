@@ -846,35 +846,26 @@ _CODER_LOCAL_MANUAL = '''## Be efficient — minimize round-trips
   read it from the result — do not deduce results from incidental output.
 '''
 
-# Used when the local coder toolset is switched off: the agent drives the remote
-# OpenHands sandbox instead, so the prompt instructs the agent to pass through
-# tasks to the sandbox agent and relay its response without over-complicating or
-# requesting file contents.
-_CODER_SANDBOX_MANUAL = '''## Driving the Sandbox Agent
-- An autonomous coding agent runs inside the remote sandbox workspace (`run_sandbox_task`).
-- It performs all code writing, file reading/editing, debugging, shell operations, and execution.
-- DO NOT try to solve coding problems or debug code yourself — the sandbox agent handles all of that.
-- DO NOT demand or request that the sandbox agent send back the contents of all files or output raw source code.
-- DO NOT overcomplicate or over-analyze: simply convey the goal clearly.
-- Give `run_sandbox_task` a clear, self-contained task description.
-- The workspace PERSISTS between calls: later tasks land in the same sandbox with the files earlier ones produced.
-- Once finished, simply RELAY (pass through) the exact response, report, and results written by the sandbox agent to the caller.
-'''
-
 
 @_register("coder")
 def coder(ctx: PromptContext) -> str:
-    # The MCP-tools boundary only makes sense while a sibling agent actually
-    # offers ready-made tool execution — under the router that sibling is the
-    # tool pipeline, standalone under the orchestrator it was the executor.
-    boundary = ""
-    ready_tools_path = next(
-        (s.name for s in ctx.siblings()
-         if s.name in ("ToolPipelineAgent", "TaskExecutorAgent")),
-        "",
-    )
-    if ready_tools_path:
-        boundary = f'''
+    # Two different agents share this slot. With the local toolset the coder
+    # engineers things itself and needs the full manual; without it (web UI
+    # switch) it only has the OpenHands `sandbox` tools and its whole job is to
+    # relay tasks into the sandbox agent — so it gets a short, mechanical prompt
+    # instead, with no engineering guidance to tempt it into doing the work.
+    if ctx.has_tool("coder"):
+        # The MCP-tools boundary only makes sense while a sibling agent actually
+        # offers ready-made tool execution — under the router that sibling is the
+        # tool pipeline, standalone under the orchestrator it was the executor.
+        boundary = ""
+        ready_tools_path = next(
+            (s.name for s in ctx.siblings()
+             if s.name in ("ToolPipelineAgent", "TaskExecutorAgent")),
+            "",
+        )
+        if ready_tools_path:
+            boundary = f'''
 ## Scope boundary
 - You BUILD and RUN things. If a task is just to invoke an already-available
   service or compute a value for which a ready MCP tool exists (e.g. a molecular
@@ -882,10 +873,6 @@ def coder(ctx: PromptContext) -> str:
   {ready_tools_path} — say so instead of re-implementing it from scratch.
 '''
 
-    # The operating manual is tool-specific: with the local coder toolset off
-    # (web UI switch) the agent only has the OpenHands `sandbox` tools, and the
-    # execute_bash/check_job drilling below would name tools it cannot call.
-    if ctx.has_tool("coder"):
         shell_note = '''
 Shell programs are NOT tools. `find`, `grep`, `ls`, `cat`, `wc`, `git`, `sed`,
 `awk`, `python`, `pip`, etc. are commands you pass to `execute_bash` — e.g.
@@ -966,31 +953,45 @@ Retrying the same broken approach until the budget is gone is a failure mode.
         RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
 
     else:
-        shell_note = '''
-Everything runs on the remote sandbox through `run_sandbox_task` — describe the work in plain English and the sandbox agent writes and runs the code for it.
-'''
+        # Relay mode: the agent has no local shell at all, so it must not think
+        # about HOW the work gets done — an autonomous coding agent in the
+        # sandbox already does that. Everything this prompt asks for is
+        # mechanical: forward the task text, attach the dataset, pick the
+        # sandbox, pass the answer back.
         return render_template('''
-You are a CODER / SANDBOX RELAY agent. An autonomous coding agent operates inside the remote sandbox workspace and performs all engineering, coding, debugging, file editing, shell commands, and execution.
+You are a SANDBOX RELAY. An autonomous coding agent inside the remote sandbox does ALL the engineering — writing code, editing files, shell commands, debugging, installs, execution, long jobs.
 
-Your role is strictly to interface with the sandbox agent:
-1. Describe the task clearly to `run_sandbox_task`.
-2. If `run_sandbox_task` returns status "running", poll with `check_sandbox_task()` until finished.
-3. Relay (pass through) what the sandbox agent writes and returns back to the caller.
+You do not plan, design, split or reason about the work. You are a pipe:
+
+1. Take the task you were given and pass its text to `run_sandbox_task` AS IS.
+2. Attach `dataset_url` when the task needs the session's dataset, and set `new_sandbox=True` when it must start on a clean machine.
+3. If the call returns status "running", call `check_sandbox_task()` until it finishes.
+4. Return the sandbox agent's report to the caller unchanged.
 
 <<TOOLS>>
-<<SHELL_NOTE>>
 {dataset_context?}
+## Forwarding the task
+- Forward the task VERBATIM — same wording, same requirements, same numbers, same file/repo names. Copying it over is the whole job.
+- Do NOT write instructions for the sandbox agent: no plans, no steps, no methods, no libraries, no code, no "first do X then Y". It works that out itself and knows its workspace better than you do.
+- Do NOT add, drop, reword, summarise or "clarify" anything, and never invent details the task did not state.
+- ONE call per task you receive: send it whole, do not slice it into several calls.
+- The only thing you may append is context you were given but the sandbox agent cannot see — e.g. what an earlier step produced or where a file was left.
 
-## Key Rules
-- DO NOT try to solve coding problems, debug code, or rewrite files yourself — the sandbox agent does all the work.
-- DO NOT ask the sandbox agent to send back the contents of all files or output raw source code.
-- DO NOT overcomplicate or over-analyze: simply pass through what the sandbox agent in the sandbox returns.
-- Deliver the final report and output exactly as returned by the sandbox agent.
+## Choosing the sandbox
+- The sandbox is bound to the session: the first call creates it, later calls continue in the SAME one, with earlier files and state intact. This is the default — just call `run_sandbox_task`.
+- Pass `new_sandbox=True` only for work that must start clean and independent of what is already there; everything the previous sandbox produced is then lost.
 
-<<MANUAL>><<BOUNDARY>>
+## Passing the dataset
+- The dataset lives outside the sandbox: it gets there ONLY as the `dataset_url` argument.
+- Send it whenever the task works with the user's attached data, and never substitute any other dataset for it.
+
+## Returning the answer
+- Relay the sandbox agent's report as it is: its findings, numbers, paths, and its failures too. Never rewrite, embellish, shorten or "fix" it, and never add results of your own.
+- If it reports a blocker or an error, pass that through as the answer — an honest failure is a valid result.
+- Do NOT try to solve, debug or second-guess the work yourself, and do NOT ask it to dump file contents or raw source back to you.
 
 <<HITL>>
-''', TOOLS=ctx.render_tools(), SHELL_NOTE=shell_note, MANUAL=_CODER_SANDBOX_MANUAL, BOUNDARY=boundary, HITL=ctx.render_hitl())
+''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
 
 
 # ── DatasetCollectorAgent ────────────────────────────────────────────────────
@@ -1217,16 +1218,6 @@ DO NOT CALL MCP TOOLS YOURSELF — the orchestrator delegates execution.'''
 
 # Without `retrieve_tools` the planner cannot know which MCP tools exist, so it
 # must plan from capabilities alone and never name a tool or server id.
-_PLANNER_NO_DISCOVERY_BLOCK = '''\
-### NO TOOL DISCOVERY
-You cannot inspect the MCP registry. Plan in terms of OUTCOMES and the agent
-that owns them — never name a concrete MCP tool or server id, and never assume
-a particular tool exists. The executing agent discovers the tools it needs.
-Do not create plan tasks for tool discovery, MCP selection/deployment, argument
-preparation, format conversion, generic validation, or report writing; these are
-execution details unless the user explicitly requested them as deliverables.
-
-DO NOT CALL MCP TOOLS YOURSELF — the orchestrator delegates execution.'''
 
 # What the planner must NOT assume the executor can do. It depends on the
 # wiring: a plain TaskExecutorAgent only runs ready-made MCP tools, whereas the
@@ -1252,6 +1243,26 @@ it (don't re-plan finished work); re-read it any time with the graph tools.
 {graph_root?}'''
 
 
+# Only rendered when a plan critic is actually wired (system.yaml ->
+# PlannerAgent.critic), so the prompt never announces a review that cannot run.
+_PLANNER_CRITIC_BLOCK = '''\
+### PLAN REVIEW
+A plan critic reviews the roadmap you register — ONCE. If it approves, you are
+done. If it asks for changes you get its feedback as a message, and you must:
+
+- fix exactly what it names (it does not judge your science, only whether the
+  roadmap is executable and covers the task) — do not otherwise re-litigate the
+  plan or grow it;
+- call `create_plan` ONCE more with the COMPLETE corrected task list; the
+  earlier registration is discarded, so anything you leave out is gone.
+
+Then finish your turn. `create_plan` normalises what you send it — it renumbers
+the ids and merges adjacent steps that share one executor assignee — so the plan
+it hands back will not match your input verbatim. That is expected and final:
+never call `create_plan` again to undo it. There is no second review either;
+your rewrite is executed as-is.'''
+
+
 @_register("planner")
 def planner(ctx: PromptContext) -> str:
     # Both blocks follow the tools that are actually attached: the web UI can
@@ -1265,10 +1276,10 @@ def planner(ctx: PromptContext) -> str:
             _PLANNER_EXEC_LIMITS_ROUTER if _executor_routes_to_coder(ctx)
             else _PLANNER_EXEC_LIMITS_TOOLS_ONLY,
         )
-        if ctx.has_tool("planner_retrieval")
-        else _PLANNER_NO_DISCOVERY_BLOCK
+        if ctx.has_tool("planner_retrieval") else ""
     )
     graph = _PLANNER_GRAPH_BLOCK if ctx.has_tool("planner_graph") else ""
+    critic = _PLANNER_CRITIC_BLOCK if ctx.config.uses_critic() else ""
     return render_template('''
 You are the "PlannerAgent". Your goal is to decompose the task and create a roadmap by registering tasks using the `create_plan` tool.
 You only define procedural steps and references agents.
@@ -1307,7 +1318,10 @@ Plan tasks are delegation units, not a narration of your reasoning.
   one task). More steps are a cost, not a sign of plan quality.
 - You MUST use the `create_plan` tool to register ALL steps of your plan in one go.
 - Once you have successfully registered all tasks using `create_plan`, you can finish your turn.
+
+<<CRITIC>>
 ''', ROSTER=ctx.render_sibling_roster(), DISCOVERY=discovery, GRAPH=graph,
+     CRITIC=critic,
      TASK_DESC_MCP=_PLANNER_TASK_DESC_MCP if ctx.has_tool("planner_retrieval") else "")
 
 
@@ -1375,8 +1389,7 @@ _PLANNING_STEP_WITH_PLANNER = (
     "2. Follow the plan to delegate the task to the appropriate agents: {active_tasks}"
 )
 _PLANNING_STEP_NO_PLANNER = (
-    "2. If the task is complex, break it into a short ordered list of sub-steps\n"
-    "   yourself, then carry them out. There is NO planner tool — do not call one."
+    "2. Follow the plan to delegate the task to the appropriate agents: {active_tasks}"
 )
 
 
@@ -1394,7 +1407,7 @@ def orchestrator(ctx: PromptContext) -> str:
     # programmatically — no brittle hardcoded "3."/"5." around conditional ones.
     steps: list[str] = []
 
-    if settings.orchestrator.use_planner:
+    if settings.orchestrator.use_planner or settings.web.start_mode=='init':
         steps.append(
             "### TASK_MANAGEMENT\n"
             "Context of tasks:\n"
@@ -1690,9 +1703,9 @@ with the graph tools (read_research_graph / get_graph_history / get_agents_info)
         template,
         AGENTS=ctx.render_agents(),
         INSTRUCTIONS=instructions,
-        DIRECT_TOOLS=direct_tools_section,
-        TRUST_INTRO=trust_intro,
-        KNOWLEDGE_GRAPH=knowledge_graph_section,
+        DIRECT_TOOLS='',#direct_tools_section,
+        TRUST_INTRO='', #trust_intro,
+        KNOWLEDGE_GRAPH='',#knowledge_graph_section,
         RESEARCH_GRAPH=research_graph_section,
         CRITIC_PROTOCOL=render_critic_protocol(ctx),
     )
@@ -2026,6 +2039,77 @@ A starting digest of the graph:
 
 Output the complete Markdown report as your final message.
 ''')
+
+
+# ── Plan critic ──────────────────────────────────────────────────────────────
+# Used by SessionAgent.plan_critic (system.yaml -> PlannerAgent.critic), not by
+# an agent directly. Rendered with the PLANNER's PromptContext, so the roster is
+# exactly the agents a plan may assign work to (the planner's siblings).
+
+@_register("plan_critic")
+def plan_critic(ctx: PromptContext) -> str:
+    template = '''
+You are the PLAN CRITIC for a scientific multi-agent system.
+
+A planner has just decomposed the user's task into a roadmap of delegation
+steps. The roadmap is executed IN THE LISTED ORDER by an orchestrator, which
+hands each step to the named assignee and reports on the results at the end.
+
+Work may only be assigned to these agents:
+<<AGENTS>>
+
+You are given the ORIGINAL TASK and the PROPOSED PLAN as registered.
+
+### Verdicts
+
+- "approve" — the plan is executable and covers the task. Nothing to add.
+- "revise"  — the plan has a concrete defect that will make execution fail or
+              miss a deliverable. Name it; the planner rewrites the whole plan.
+
+You get exactly ONE review. There is no second round: after the rewrite the
+plan is executed as-is. So spend the round only on a defect worth a rewrite.
+
+### Trigger REVISE when
+
+  - A step is assigned to an agent that is not on the roster above, or to one
+    that plainly cannot do that kind of work.
+  - A deliverable the user explicitly asked for has no step that produces it.
+  - A step consumes the result of another step but the dependency is not
+    expressed (wrong or missing parent, or it is ordered before its producer).
+  - A step's description is too vague to execute: no concrete outcome, or no
+    way to tell whether it succeeded.
+  - Two or more steps are the same work assigned to the same agent, or a step
+    plans work the task never asked for.
+
+### Do NOT trigger REVISE for
+
+  - Step COUNT, unless the redundancy is concrete. A short plan is the goal,
+    not a defect — never ask for more steps, more detail, or extra
+    "validation"/"review"/"reporting" steps. The orchestrator already verifies
+    and reports after the plan runs.
+  - How the work is SPLIT INTO STEPS. You are reading the plan as the tracker
+    stored it: it renumbers the ids and merges adjacent steps that share one
+    executor assignee. "Make X its own step" is therefore a demand the planner
+    cannot satisfy — the merge happens again on every rewrite. If X genuinely
+    is not covered, say the work is missing and let the planner place it.
+  - The scientific approach, method choice, or whether the plan will actually
+    succeed. You judge the roadmap as a delegation contract, not the science.
+  - Wording, formatting, or ordering that is merely not how you would write it.
+  - How an assignee will do its step internally — that is its own decision.
+
+When in doubt, APPROVE. An unjustified rewrite costs a full planning round and
+usually returns a worse plan.
+
+### Output (strict JSON, no prose, no markdown fences)
+
+{
+  "verdict": "approve" | "revise",
+  "feedback": "<empty for approve. For revise: one to three sentences naming
+                each defect and what to change — the planner sees only this
+                text, so be specific about which step and which fix.>"
+}
+'''
+    return render_template(template, AGENTS=ctx.render_critic_roster(ctx.siblings()))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
