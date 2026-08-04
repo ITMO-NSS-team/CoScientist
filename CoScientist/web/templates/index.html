@@ -436,7 +436,9 @@
         criticRounds: 1,
         mergeTasksEnabled: true,
       },
-      hypothesesAgent: {},
+      hypothesesAgent: {
+        maxActiveHypotheses: 1,
+      },
       medicalAgent: {},
       experimentAgent: {},
     };
@@ -1060,6 +1062,9 @@
             appSettings.plannerAgent.criticRounds = data.plannerAgent.criticRounds ?? 1;
             appSettings.plannerAgent.mergeTasksEnabled = data.plannerAgent.mergeTasksEnabled ?? true;
           }
+          if (data.hypothesesAgent) {
+            appSettings.hypothesesAgent.maxActiveHypotheses = data.hypothesesAgent.maxActiveHypotheses ?? 1;
+          }
           if (data.researchAgent) {
             appSettings.researchAgent.maxSearches = data.researchAgent.maxSearches ?? 2;
           }
@@ -1101,6 +1106,7 @@
       document.getElementById('planner-critic-checkbox').checked = appSettings.plannerAgent.criticEnabled;
       document.getElementById('planner-critic-rounds').value = appSettings.plannerAgent.criticRounds;
       document.getElementById('planner-merge-tasks-checkbox').checked = appSettings.plannerAgent.mergeTasksEnabled;
+      document.getElementById('hypotheses-max-active').value = appSettings.hypothesesAgent.maxActiveHypotheses;
       document.getElementById('research-max-searches').value = appSettings.researchAgent.maxSearches;
       document.getElementById('task-exec-keep-score').value = appSettings.taskExecutorAgent.keepScore;
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
@@ -1247,6 +1253,11 @@
       }
 
       appSettings.plannerAgent.mergeTasksEnabled = document.getElementById('planner-merge-tasks-checkbox').checked;
+
+      const maxActive = parseInt(document.getElementById('hypotheses-max-active').value, 10);
+      if (!isNaN(maxActive) && maxActive >= 1 && maxActive <= 5) {
+        appSettings.hypothesesAgent.maxActiveHypotheses = maxActive;
+      }
 
       const maxSearches = parseInt(document.getElementById('research-max-searches').value, 10);
       if (!isNaN(maxSearches) && maxSearches >= 0) {
@@ -3320,7 +3331,18 @@
             </h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
-            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label class="text-xs font-bold text-on-surface">Max Active Hypotheses</label>
+                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many hypotheses are kept
+                  as active (<span class="font-mono">formulated</span>) simultaneously for parallel verification.
+                  <span class="font-mono">1</span> — the classic "one at a time" mode: the agent picks the single
+                  best hypothesis and postpones the rest. Higher values let the orchestrator verify several
+                  branches in parallel.</p>
+              </div>
+              <input id="hypotheses-max-active" type="number" min="1" max="5" value="1"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-20 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+            </div>
           </div>
         </div>
 

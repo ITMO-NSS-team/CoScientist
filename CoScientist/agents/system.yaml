@@ -66,15 +66,7 @@ agents:
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
-    # retrieval lets the orchestrator check which ready-made MCP tools exist
-    # BEFORE routing a step — prefer TaskExecutorAgent over research when a
-    # relevant tool is already available.
-    # No task_tracker: with the PlannerAgent disabled nothing calls create_plan,
-    # so the tracker is always empty and the orchestrator only ever hallucinated
-    # update_task_status on phantom task ids. Dropped so it coordinates directly.
     tools: [retrieval, graph, research_graph_orchestrator]
-    # No CoderAgent here: execution (ready-made tools AND engineering) goes
-    # through TaskExecutorAgent, which routes to the right path itself.
     subordinates:
       - PlannerAgent
       - HypothesesAgent
@@ -135,37 +127,15 @@ agents:
       for a complex multi-step task, call this FIRST to produce a roadmap,
       then follow it step by step.
     prompt: planner
-    # retrieval lets the planner inspect which ready-made MCP tools exist (and
-    # what they accept/return) BEFORE writing the roadmap, so the plan reflects
-    # real tool capabilities instead of guessing from priors.
-    # planner_retrieval / planner_graph are the plain retrieval / graph toolsets
-    # behind a per-planner switch (Settings -> PlannerAgent in the web UI): when
-    # a switch is off the tool drops out of BOTH the agent and its prompt.
     tools: [planner_retrieval, create_plan_tool, planner_graph]
     output_key: planner_roadmap
-    # The roadmap is what the user asked for — post it, don't leave it to the
-    # orchestrator's summary of it.
     report_output: true
     callbacks:
       before_agent: [inject_graph_root]
-      # finish_after_plan_registered: create_plan normalises what it is given
-      # (renumbers, merges consecutive executor tasks), so a planner told to
-      # check the returned plan can loop re-registering to undo that. Once a
-      # plan is registered the turn ends instead.
       after_model: [guard_unknown_tools, finish_after_plan_registered]
     hitl: true
-    # Plan critic (Settings -> PlannerAgent in the web UI, PLANNER__CRITIC_ENABLED
-    # in .env). An LLM reviews the REGISTERED roadmap before it is accepted and
-    # the planner rewrites it once if the critic objects — at most one round, no
-    # second review. Wired separately from the orchestrator's pre/post-action
-    # critics (they judge delegations, this judges the plan) and from HITL: it
-    # runs on autonomous runs too, before the human sees anything. The planner
-    # prompt's PLAN REVIEW section appears only while this is on.
     critic: ${web.planner_critic_enabled}
     options:
-      # How many times the critic may send the roadmap back. Follows the same
-      # web setting (Revision rounds), so the budget is tunable without a code
-      # change; 1 keeps the critic to a single say.
       critic_max_rounds: ${web.planner_critic_rounds}
     a2a:
       key: planner
@@ -199,19 +169,18 @@ agents:
   HypothesesAgent:
     class: llm
     description: >-
-      generates candidate hypotheses and returns ONE selected hypothesis to
-      verify next (the alternatives stay in the graph as postponed backlog).
+      generates candidate hypotheses and returns the selected hypothesis(es) to verify next 
+      the alternatives stay in the graph as postponed backlog).
     routing: >-
       when the direction is unclear or approaches need to be proposed. It comes
-      back with a single SELECTED hypothesis — verify that one; do not start its
-      alternatives in parallel.
+      back with selected hypothesis(es) — verify those; do not start the
+      alternatives in parallel unless they are among the selected set.
     planning: |-
       Use this to generate hypotheses when the solution is unclear or approaches need to be proposed.
       It picks the single most relevant hypothesis to test first, so plan ONE verification branch after it.
       Decision-making and compatibility assessment based on gathered facts.
     prompt: hypotheses
     output_key: hypotheses
-    # The hypotheses themselves are the deliverable — show them in the chat.
     report_output: true
     tools: [task_tracker, graph, research_graph]
     callbacks:
@@ -251,8 +220,6 @@ agents:
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
     output_key: search_results
-    # What it found (sources, findings) is the answer to the user's question —
-    # not a step the orchestrator should have to re-tell.
     report_output: true
     callbacks:
       before_agent: [before_get_task, inject_research_context]
@@ -270,13 +237,6 @@ agents:
         description: Search scientific literature and the web to answer research questions
         tags: [research, literature, web-search, knowledge]
 
-  # The system's EXECUTION ROUTER. It executes nothing itself: it picks between
-  # the two execution paths and delegates —
-  #   ToolPipelineAgent — the usual discover→deploy→run MCP pipeline
-  #   CoderAgent        — engineering in the sandbox when no ready tool fits
-  # so the orchestrator no longer has to guess whether a ready tool exists, and
-  # the pipeline's NO_MATCHING_TOOL abstention is caught one level down (the
-  # router re-issues the step to the coder) instead of bouncing to the root.
   TaskExecutorAgent:
     class: llm
     description: >-
@@ -299,19 +259,13 @@ agents:
     prompt: task_router
     subordinates: [ToolPipelineAgent, CoderAgent]
     output_key: executor_results
-    # The execution report (what ran, what came out) is the deliverable of the
-    # whole execution branch — its own subordinates stay quiet in the chat.
     report_output: true
     callbacks:
-      # Catch hallucinated tool calls (the router inventing a sub-agent's
-      # `execute_bash`) and correct them instead of crashing the run.
       after_model: [guard_unknown_tools]
     a2a:
       key: task_execution
       port: 8004
       env:
-        # Served standalone the router still owns the coder: pin one shared
-        # sandbox workspace so multi-step work persists across A2A calls.
         CODER_WORKSPACE_ID: a2a_shared
         GIT_HTTP_LOW_SPEED_LIMIT: "1000"
         GIT_HTTP_LOW_SPEED_TIME: "20"
@@ -321,8 +275,6 @@ agents:
         description: Run a task via ready-made MCP tools or by writing and running code
         tags: [experiment, mcp, computation, ml, code]
 
-  # The "usual pipeline" path of the router: discover/deploy MCP tools, then run
-  # them. Not exposed over A2A — it is reached only through TaskExecutorAgent.
   ToolPipelineAgent:
     class: sequential
     description: >-
@@ -335,8 +287,6 @@ agents:
       Hallmark: "compute/run X using tools we already have."
     children: [ToolPreparerAgent, ExperimentAgent]
 
-  # The engineering path of TaskExecutorAgent (its second subordinate). Still a
-  # standalone A2A service, so it can also be driven directly.
   CoderAgent:
     class: llm
     # Dedicated (stronger) model — multi-step engineering benefits from it.
@@ -364,17 +314,10 @@ agents:
           → Use whenever no existing tool covers the objective and the step requires
             doing software/data engineering rather than calling a ready service
     prompt: coder
-    # Both are optional: `sandbox` drops out when SANDBOX_URL is unset, `coder`
-    # when the web UI switches the local coder tools off — leaving the sandbox
-    # as the only way to run anything. The prompt only ever advertises what
-    # actually got attached.
     tools: [coder, sandbox, research_graph]
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
-      # inject_dataset_context: the .zip the user attached in the web UI becomes
-      # a prompt section, so the agent can pass it as `dataset_url` on the calls
-      # that actually need the data.
       before_agent: [inject_research_context, inject_dataset_context]
       #before_model: [hitl_before_model]
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
@@ -414,13 +357,9 @@ agents:
       building or training on it (e.g. "collect a dataset of BTK inhibitors with
       IC50"). It downloads into the shared workspace and writes a MANIFEST.
     prompt: dataset_collector
-    # `sandbox` mirrors the parent: when the local coder tools are switched off
-    # the collector still has somewhere to download into (the same workspace).
     tools: [coder, sandbox, websearch, research_graph]
     output_key: dataset_results
     callbacks:
-      # Works in the coder's sandbox, so it should know about the attached
-      # archive too and can send it when a download step needs it.
       before_agent: [inject_research_context, inject_dataset_context]
       after_model: [guard_unknown_tools]
 

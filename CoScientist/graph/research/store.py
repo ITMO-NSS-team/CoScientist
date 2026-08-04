@@ -609,40 +609,51 @@ class ResearchGraphStore:
 
     def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
                                         warnings: List[str]) -> None:
-        """Store invariant: ONE hypothesis enters the run as active per commit.
+        """Store invariant: at most N hypotheses enter the run as active per commit.
+
+        N = ``settings.web.max_active_hypotheses`` (default 1).
 
         A generator agent naturally proposes several hypotheses at once; if they
-        all land as `formulated`, every one of them shows up as READY and the
-        orchestrator starts verifying them in parallel — which is what we do not
-        want. So exactly one (the agent's own pick: `attrs.selected`, else the
-        highest `attrs.priority`, else the first) stays `formulated` and the rest
-        are created as `postponed`: they remain in the graph as the ranked
+        all land as ``formulated``, every one of them shows up as READY and the
+        orchestrator starts verifying them — which may not be desired. So
+        exactly N (the agent's own picks: ``attrs.selected``, else the highest
+        ``attrs.priority``, else the first N) stay ``formulated`` and the rest
+        are created as ``postponed``: they remain in the graph as the ranked
         backlog, invisible to the READY trigger, and the orchestrator can revive
-        one (postponed→formulated) once the active branch has a verdict.
+        one (postponed→formulated) once an active branch has a verdict.
 
         Deterministic and mechanical — it never drops or rewrites a hypothesis,
-        only decides which single one is offered for verification next.
+        only decides which ones are offered for verification next.
         """
+        from CoScientist.config import get_settings
+        max_active = max(1, min(5, get_settings().web.max_active_hypotheses))
+
         active = [c for c in creates
                   if c["type"] == "Hypothesis" and c["status"] == "formulated"]
-        if len(active) < 2:
+        if len(active) <= max_active:
             return
-        primary = min(active, key=lambda c: priority_rank(c["attrs"]))
+        # Sort by priority_rank (lower = higher priority) and keep top N.
+        ranked = sorted(active, key=lambda c: priority_rank(c["attrs"]))
+        primary_set = set(id(c) for c in ranked[:max_active])
         for c in active:
-            if c is primary:
+            if id(c) in primary_set:
                 continue
             c["status"] = "postponed"
             c["attrs"].setdefault(
                 "postponed_reason",
-                "alternative hypothesis — kept as backlog while the selected one "
-                "is verified")
-        label = self._label(primary, 80) or primary.get("ref") or "?"
+                "alternative hypothesis — kept as backlog while the selected "
+                "ones are verified")
+        kept_labels = ", ".join(
+            f'"{self._label(c, 60) or c.get("ref") or "?"}"'
+            for c in ranked[:max_active])
         warnings.append(
-            f"{len(active)} hypotheses were proposed as active at once; only ONE is "
-            f"verified at a time, so \"{label}\" stays 'formulated' and the other "
-            f"{len(active) - 1} were created as 'postponed' (backlog). To choose "
-            f"which one is verified, mark it with attrs.selected=true or a higher "
-            f"attrs.priority; the orchestrator can revive a postponed one later.")
+            f"{len(active)} hypotheses were proposed as active at once; only "
+            f"{max_active} may be verified at a time, so {kept_labels} "
+            f"stay 'formulated' and the other "
+            f"{len(active) - max_active} were created as 'postponed' (backlog). "
+            f"To choose which ones are verified, mark them with "
+            f"attrs.selected=true or a higher attrs.priority; the orchestrator "
+            f"can revive a postponed one later.")
 
     def _stage_merge(self, source: str, i: int, draft: Dict[str, Any],
                      merges: List[Dict[str, Any]]) -> List[str]:

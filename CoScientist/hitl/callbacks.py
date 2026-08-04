@@ -45,7 +45,6 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
             return None
 
         agent_name = callback_context.agent_name
-        agent_name = callback_context.agent_name
         # In ADK Context, agent is accessible via _invocation_context.agent
         agent = getattr(callback_context, "_invocation_context", None).agent if hasattr(callback_context, "_invocation_context") else None
         
