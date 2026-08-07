@@ -133,6 +133,12 @@ def make_a2a_app(
         checkpoint_plugin = CheckpointPlugin()
         plugins.insert(0, checkpoint_plugin)
 
+    if get_settings().synapse.enabled:
+        # Synapse v1: hang our steps under the platform's incoming traceparent.
+        from CoScientist.checkpoints.synapse import SynapseTracePlugin
+
+        plugins.insert(0, SynapseTracePlugin())
+
     runner = Runner(
         agent=agent,
         app_name=app_name,
