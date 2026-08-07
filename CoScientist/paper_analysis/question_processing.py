@@ -86,7 +86,7 @@ class QueryFilters(BaseModel):
     domains: list[ResearchDomainFilter] | None = Field(
         description=(
             "Up to two research-domain selections. Each selection keeps its "
-            "sub-domains paired with its domain."
+            "fields paired with its domain."
         ),
         default=None,
         max_length=2,
