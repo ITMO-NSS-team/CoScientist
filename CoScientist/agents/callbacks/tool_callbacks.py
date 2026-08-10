@@ -33,20 +33,22 @@ FEDOT_DELIVERABLE_READY_TOKEN = "FEDOT_DELIVERABLE_READY"
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
-    """Skips ToolRetriever context"""
+    """Drop ToolRetriever/ToolReranker dumps from the next LLM request.
 
-    new_contents = []
-
-    for content in llm_request.contents:
-        # A content may have empty parts or a non-text first part (function
-        # call/response) — guard before reading .text.
-        first_text = content.parts[0].text if content.parts else None
-        if first_text == 'For context:':
+    ADK often prefixes sibling output as ``For context:[Agent] …`` (one part),
+    so an exact ``== 'For context:'`` match never fired and the planner saw the
+    full retrieve_tools novels — then invented tools absent from inventory.
+    """
+    kept: List[Any] = []
+    for content in llm_request.contents or []:
+        parts = list(getattr(content, "parts", None) or [])
+        blob = "\n".join(str(getattr(p, "text", None) or "") for p in parts).lstrip()
+        if blob.startswith("For context:"):
             continue
-        new_contents.append(content)
-
-    llm_request.contents = new_contents
-    return
+        if "[ToolRetrieverAgent]" in blob or "[ToolReranker]" in blob:
+            continue
+        kept.append(content)
+    llm_request.contents = kept
 
 
 # Set when ToolReranker scores were applied from after_model (skip after_agent).
@@ -120,10 +122,27 @@ def apply_tool_rerank_scores(state: Any, score_items: List[Dict[str, Any]]) -> N
     rerank_map: Dict[int, float] = {int(t["index"]): float(t["score"]) for t in score_items}
     acc_tools: List[Dict[str, Any]] = list(state.get("accumulated_tools") or [])
 
+    def _tool_rank_key(tool: Dict[str, Any]) -> int:
+        # Prefer explicit tool_index; fall back to 1-based list position.
+        raw = tool.get("tool_index", tool.get("index"))
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return -1
+
     filtered_tools: List[Dict[str, Any]] = [
         tool for tool in acc_tools
-        if rerank_map.get(tool.get('tool_index', -1), 0) >= _TOOL_KEEP_SCORE
+        if rerank_map.get(_tool_rank_key(tool), 0) >= _TOOL_KEEP_SCORE
     ]
+    # Some models emit 0-based indices while tool_index is 1-based (or vice versa).
+    if not filtered_tools and rerank_map and acc_tools:
+        shifted = {
+            tool for tool in acc_tools
+            if rerank_map.get(_tool_rank_key(tool) - 1, 0) >= _TOOL_KEEP_SCORE
+            or rerank_map.get(_tool_rank_key(tool) + 1, 0) >= _TOOL_KEEP_SCORE
+        }
+        if shifted:
+            filtered_tools = list(shifted)
 
     best_score = max(rerank_map.values(), default=0.0)
     matched = bool(filtered_tools)
@@ -136,7 +155,12 @@ def apply_tool_rerank_scores(state: Any, score_items: List[Dict[str, Any]]) -> N
                 rerank_map.items(), key=lambda x: x[1], reverse=True
             )[:2]
         }
-        filtered_tools = [t for t in acc_tools if t.get('tool_index', -1) in top_ids]
+        filtered_tools = [t for t in acc_tools if _tool_rank_key(t) in top_ids]
+        if not filtered_tools:
+            filtered_tools = [
+                t for t in acc_tools
+                if (_tool_rank_key(t) - 1) in top_ids or (_tool_rank_key(t) + 1) in top_ids
+            ]
         matched = bool(filtered_tools)
     # else (best < _ABSTAIN): ABSTAIN — leave filtered_tools empty so the
     # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
@@ -155,6 +179,13 @@ def apply_tool_rerank_scores(state: Any, score_items: List[Dict[str, Any]]) -> N
     state['accumulated_tools'] = []
     state['retrieval_queries'] = []
     state[_TOOL_RERANK_APPLIED_KEY] = True
+    # Drop process-global buffer so the next discovery pass starts clean.
+    try:
+        from CoScientist.tools.retrieval_tools import clear_session_accumulated_tools
+
+        clear_session_accumulated_tools()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def after_tool_reranker_model(
@@ -185,7 +216,12 @@ def after_tool_reranker_model(
 def after_tool_reranker_agent(
     callback_context: CallbackContext
 ) -> None:
-    """Fallback: apply scores from ``output_key`` state if after_model did not."""
+    """Apply scores from ``output_key`` if sanitize_json_output did not already.
+
+    Preferred path: ``sanitize_json_output`` (after_model) applies ToolRanking
+    scores when the JSON is parsed — avoids ADK output_key timing races.
+    This after_agent hook is the upstream-compatible fallback.
+    """
 
     current_state = callback_context.state
     if current_state.get(_TOOL_RERANK_APPLIED_KEY):
@@ -323,14 +359,17 @@ def _artifact_urls(artifacts: Any) -> List[str]:
 def refuse_when_fedot_deliverable(
     callback_context: CallbackContext,
 ) -> Optional[types.Content]:
-    """before_agent: hard-stop Fedot/Coder once the ask's deliverable is done.
+    """before_agent: hard-stop route agents once the ask's deliverable is done.
 
     Soft prompt STOP alone does not prevent ADK re-entry after a successful
-    ``fedot_tool``. Uses ``should_hard_stop_fedot``, which is deliberately
-    conservative: it does NOT fire when the current step's tool-match verdict
-    abstained or names a new tool, i.e. whenever the orchestrator genuinely
-    still needs another agent call (a gen→dock handoff, or a distinct step
-    routed to CoderAgent) this returns None and lets the agent run normally.
+    compute/MCP capture. Uses ``should_hard_stop_fedot`` (conservative predicate
+    shared with the FEDOT tool path): it does NOT fire when the current step's
+    tool-match verdict abstained or names a new tool — e.g. gen→dock handoff or
+    a distinct Coder step — so retries for *new* work still run.
+
+    Also useful under Experiment Module retries: re-entering Fedot/Coder for the
+    same already-captured tool set is refused; ``retry_task`` / new attempt with
+    a different tool match still proceeds.
     """
     from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
 
@@ -338,7 +377,17 @@ def refuse_when_fedot_deliverable(
     if not should_hard_stop_fedot(state):
         return None
     urls = _artifact_urls(state.get("fedot_artifacts"))
-    body = "\n".join(urls) if urls else "(see session state fedot_artifacts)"
+    if not urls:
+        # EM managed captures may live outside fedot_artifacts.
+        manifest = state.get("experiment_artifacts_manifest") or []
+        if isinstance(manifest, list):
+            for item in manifest:
+                if isinstance(item, dict):
+                    for key in ("presigned_url", "url", "resolved_url"):
+                        val = item.get(key)
+                        if isinstance(val, str) and val.strip():
+                            urls.append(val.strip())
+    body = "\n".join(urls) if urls else "(see session artifact state)"
     message = (
         f"{FEDOT_DELIVERABLE_READY_TOKEN}: S3/artifacts already captured. "
         "Do NOT call fedot_tool, CoderAgent, or retrieve again. "
@@ -346,12 +395,13 @@ def refuse_when_fedot_deliverable(
         f"{body}"
     )
     logger.info(
-        "[%s] refusing re-entry — fedot deliverable already ready (%s url(s))",
+        "[%s] refusing re-entry — deliverable already ready (%s url(s))",
         _agent_name(callback_context),
         len(urls),
     )
     state["fedot_results"] = message
     return types.Content(role="model", parts=[types.Part(text=message)])
+
 
 
 def make_unknown_tool_guard(valid_names: Iterable[str]) -> Callable:

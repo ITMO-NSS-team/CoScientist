@@ -4,7 +4,7 @@ Application configuration using Pydantic Settings.
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_tools.config import Settings as ToolRAGSettings
@@ -256,6 +256,45 @@ class ResearchGraphSettings(BaseModel):
 
 
 # =========================
+# EXPERIMENT MODULE (v0)
+# =========================
+class ExperimentsSettings(BaseModel):
+    """Settings for the isolated Experiment Module profile.
+
+    Values are read through the main ``Settings`` object, so the canonical
+    environment names use the nested ``EXPERIMENTS__*`` form.
+    """
+
+    route_fedot: bool = True
+    route_coder_mcp: bool = False
+    route_alembic: bool = False
+    task_max_attempts: int = Field(default=2, ge=1, le=2)
+    max_plan_tasks: int = Field(default=8, ge=1, le=8)
+    require_task_design: bool = True
+    # When True (default), schema invents baselines/metrics for weak planners so
+    # completeness majors for unspecified/empty design cannot fire. Set False
+    # (EXPERIMENTS__LENIENT_PLANNER=false) to preserve unspecified* sentinels.
+    lenient_planner: bool = True
+    # Route fallback chains after a failed attempt. Default: fedot → react → coder.
+    # Override via EXPERIMENTS__FALLBACK_*.
+    fallback_fedot_mas: list[str] = Field(
+        default_factory=lambda: ["fedot_mas", "react_tools", "coder"]
+    )
+    fallback_react_tools: list[str] = Field(default_factory=lambda: ["react_tools", "coder"])
+    fallback_coder: list[str] = Field(default_factory=lambda: ["coder"])
+    fallback_alembic_build: list[str] = Field(
+        default_factory=lambda: ["alembic_build", "coder"]
+    )
+
+    fedot_timeout_s: float = Field(default=600.0, gt=0)
+    react_timeout_s: float = Field(default=600.0, gt=0)
+    coder_timeout_s: float = Field(default=7200.0, gt=0)
+    plan_review_timeout_s: float = Field(default=300.0, gt=0)
+    result_review_timeout_s: float = Field(default=300.0, gt=0)
+    complexity_warning_tasks: int = Field(default=6, ge=1, le=8)
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -276,6 +315,7 @@ class Settings(BaseSettings):
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
+    experiments: ExperimentsSettings = ExperimentsSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

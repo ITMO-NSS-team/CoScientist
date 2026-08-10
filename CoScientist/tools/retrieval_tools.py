@@ -26,6 +26,67 @@ _logger = logging.getLogger(__name__)
 # unbounded context bloat (and the schema-validation pressure it puts on the
 # structured-output rerankers).
 _ACCUM_DESC_CAP = 600
+# Parallel retrieve_tools calls race on read-modify-write of accumulated_tools
+# when ADK clones state per parallel tool invocation. Serialize merges via a
+# process-global session buffer so no retrieved (server_id, tool) pair is dropped.
+_ACCUM_LOCK = asyncio.Lock()
+_SESSION_ACCUMULATED: dict[str, list] = {}
+
+
+def _retrieval_session_key(tool_context: Optional[ToolContext]) -> str:
+    if tool_context is None:
+        return "no-session"
+    sid = getattr(tool_context, "session_id", None)
+    if sid:
+        return str(sid)
+    inv = getattr(tool_context, "_invocation_context", None)
+    session = getattr(inv, "session", None) if inv is not None else None
+    sid = getattr(session, "id", None) if session is not None else None
+    return str(sid or id(tool_context))
+
+
+def clear_session_accumulated_tools(session_key: str | None = None) -> None:
+    """Drop process-global retrieval buffer (called when rerank clears state)."""
+    if session_key is None:
+        _SESSION_ACCUMULATED.clear()
+        return
+    _SESSION_ACCUMULATED.pop(str(session_key), None)
+
+
+def _merge_accumulated_tools(
+    accumulated: list,
+    results: List[RetrievalToolResult],
+    *,
+    query: str,
+) -> list:
+    """Merge retrieval hits by (server_id, tool); preserve existing tool_index."""
+    by_key = {
+        (str(t.get("server_id") or ""), str(t.get("tool") or "")): t
+        for t in accumulated
+        if isinstance(t, dict) and t.get("tool") and t.get("server_id")
+    }
+    last_idx = max((int(t.get("tool_index") or 0) for t in by_key.values()), default=0) + 1
+    for tool_result in results:
+        key = (str(tool_result.server_id or ""), str(tool_result.tool or ""))
+        if not key[0] or not key[1]:
+            continue
+        existing = by_key.get(key)
+        if existing is None:
+            row = {
+                "tool": tool_result.tool,
+                "server_id": tool_result.server_id,
+                "description": (tool_result.description or "")[:_ACCUM_DESC_CAP],
+                "input_schema": tool_result.input_schema,
+                "score": tool_result.score,
+                "tool_index": last_idx,
+                "retrieval_query": query,
+            }
+            by_key[key] = row
+            last_idx += 1
+        elif not existing.get("input_schema") and tool_result.input_schema:
+            existing["input_schema"] = tool_result.input_schema
+    # Stable order by tool_index for reranker index alignment.
+    return sorted(by_key.values(), key=lambda t: int(t.get("tool_index") or 0))
 
 
 async def _fetch_full_tool_meta(server_ids) -> Dict[tuple, Dict[str, Any]]:
@@ -162,34 +223,36 @@ class RetrievalToolSet(BaseToolset):
                 "message": f"Retrieved {len(results)} tools (no session accumulation).",
             }
 
-        # ACCUMULATE into state
-        accumulated = tool_context.state.get('accumulated_tools', [])
-        existing_by_name = {t['tool']: t for t in accumulated}
-        last_idx = len(accumulated) + 1
+        # ACCUMULATE into process-global session buffer then state (locked:
+        # parallel retrieve_tools must not clobber each other's merges when ADK
+        # hands each call a forked state snapshot).
+        async with _ACCUM_LOCK:
+            session_key = _retrieval_session_key(tool_context)
+            prior = list(
+                _SESSION_ACCUMULATED.get(session_key)
+                or tool_context.state.get("accumulated_tools")
+                or []
+            )
+            accumulated = _merge_accumulated_tools(prior, results, query=query)
+            _SESSION_ACCUMULATED[session_key] = accumulated
+            tool_context.state["accumulated_tools"] = list(accumulated)
+            tool_context.state["retrieval_queries"] = list(
+                tool_context.state.get("retrieval_queries") or []
+            ) + [query]
+            # Durable experiment inventory — survives rerank clearing accumulated_tools.
+            try:
+                from CoScientist.experiments.context.builder import (
+                    RETRIEVED_CAPABILITIES_KEY,
+                    _merge_capabilities,
+                    _normalize_capabilities,
+                )
 
-        for tool_result in results:
-            existing = existing_by_name.get(tool_result.tool)
-            if existing is None:
-                accumulated.append({
-                    'tool': tool_result.tool,
-                    'server_id': tool_result.server_id,
-                    # Capped here (not in the inline response) — this dict is
-                    # re-injected into the rerankers' prompts every turn.
-                    'description': (tool_result.description or "")[:_ACCUM_DESC_CAP],
-                    # Needed downstream to project upstream artifact columns
-                    # onto this tool's argument names (see fedot_artifact_handoff).
-                    'input_schema': tool_result.input_schema,
-                    'score': tool_result.score,
-                    'tool_index': last_idx,
-                    'retrieval_query': query,  # Track which query found this
-                })
-                existing_by_name[tool_result.tool] = accumulated[-1]
-                last_idx += 1
-            elif not existing.get('input_schema') and tool_result.input_schema:
-                existing['input_schema'] = tool_result.input_schema
-        
-        tool_context.state['accumulated_tools'] = accumulated
-        tool_context.state['retrieval_queries'] = tool_context.state.get('retrieval_queries', []) + [query]
+                tool_context.state[RETRIEVED_CAPABILITIES_KEY] = _merge_capabilities(
+                    tool_context.state.get(RETRIEVED_CAPABILITIES_KEY),
+                    _normalize_capabilities(accumulated),
+                )
+            except Exception:  # noqa: BLE001 — inventory is best-effort
+                pass
 
         return {
             "status": "success",

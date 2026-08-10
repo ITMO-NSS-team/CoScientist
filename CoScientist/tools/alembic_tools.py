@@ -7,9 +7,9 @@ host-side background subprocess and returns a ``job_id``; ``check_mcp_build``
 reports progress (current pipeline stage, log tail) and, once the serve
 container is up, the resulting MCP endpoint URL.
 
-Jobs are process-wide (like the coder's local job registry), so over A2A —
-where every orchestrator delegation is a fresh session — a later delegation can
-find and continue an earlier build via ``list_mcp_builds``.
+Job metadata is atomically persisted, so over A2A — where every orchestrator
+delegation may be a fresh process — a later delegation can find and continue an
+earlier build via ``list_mcp_builds``.
 """
 from __future__ import annotations
 
@@ -21,8 +21,14 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback for local development
+    fcntl = None  # type: ignore[assignment]
 
 from google.adk.tools import ToolContext
 
@@ -31,10 +37,38 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 START_CHAIN = PROJECT_ROOT / "CoScientist" / "alembic" / "start_chain.py"
 # Host-side stdout logs of the build subprocesses (the pipeline's own logs live
 # inside the build container; this is the start_chain wrapper output).
-LOG_DIR = PROJECT_ROOT / ".alembic" / "a2a_builds"
+LOG_DIR = Path(
+    os.environ.get(
+        "COSCIENTIST_ALEMBIC_LOG_DIR",
+        str(PROJECT_ROOT / ".alembic" / "a2a_builds"),
+    )
+)
+JOB_METADATA_DIR = Path(
+    os.environ.get("COSCIENTIST_ALEMBIC_JOB_DIR", str(LOG_DIR / "jobs"))
+)
 
 _LOG_TAIL_LINES = 15
-_MAX_JOBS = 200  # cap registry size; evict oldest finished jobs past this
+_METADATA_VERSION = 1
+_RECORD_FIELDS = frozenset(
+    {
+        "job_id",
+        "repo_url",
+        "status",
+        "started_at",
+        "finished_at",
+        "log_file",
+        "pid",
+        "returncode",
+        "mcp_url",
+        "image",
+        "container",
+        "error",
+        "idempotency_key",
+        "run_id",
+        "task_id",
+        "attempt_id",
+    }
+)
 # Base for the absolute, clickable build-page link handed back to the agent.
 _WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "http://localhost:8000").rstrip("/")
 
@@ -46,6 +80,125 @@ _URL_RE = re.compile(r"url\s*:\s*(http://\S+/mcp)")
 _IMAGE_RE = re.compile(r"image\s*:\s*(\S+)")
 _CONTAINER_RE = re.compile(r"container\s*:\s*(\S+)")
 _STAGE_RE = re.compile(r"STAGE (\d) — (\S+)")
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+@contextmanager
+def _registry_file_lock() -> Iterator[None]:
+    """Serialize read-check-create across processes sharing the registry."""
+    JOB_METADATA_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = JOB_METADATA_DIR / ".registry.lock"
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _metadata_file(job_id: str) -> Path:
+    return JOB_METADATA_DIR / f"{job_id}.json"
+
+
+def _record_for_disk(rec: Dict[str, Any]) -> Dict[str, Any]:
+    out = {
+        key: value
+        for key, value in rec.items()
+        if key in _RECORD_FIELDS and value is not None
+    }
+    out["metadata_version"] = _METADATA_VERSION
+    return out
+
+
+def _persist_job(rec: Dict[str, Any]) -> None:
+    """Atomically replace one job's durable JSON record."""
+    JOB_METADATA_DIR.mkdir(parents=True, exist_ok=True)
+    target = _metadata_file(rec["job_id"])
+    temporary = JOB_METADATA_DIR / (
+        f".{rec['job_id']}.{os.getpid()}.{threading.get_ident()}."
+        f"{secrets.token_hex(4)}.tmp"
+    )
+    try:
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(
+                _record_for_disk(rec),
+                stream,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+        try:
+            directory_fd = os.open(JOB_METADATA_DIR, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _delete_job_metadata(job_id: str) -> None:
+    try:
+        _metadata_file(job_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _valid_disk_record(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("metadata_version") == _METADATA_VERSION
+        and isinstance(value.get("job_id"), str)
+        and _JOB_ID_RE.fullmatch(value["job_id"]) is not None
+        and isinstance(value.get("repo_url"), str)
+        and isinstance(value.get("log_file"), str)
+        and value.get("status") in {"running", "done", "failed"}
+        and isinstance(value.get("started_at"), (int, float))
+    )
+
+
+def _load_jobs_from_disk(*, merge: bool = False) -> int:
+    """Load valid records, skipping torn, malformed, and future-version files."""
+    loaded: list[Dict[str, Any]] = []
+    if JOB_METADATA_DIR.exists():
+        for path in JOB_METADATA_DIR.glob("*.json"):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not _valid_disk_record(value):
+                continue
+            rec = {key: value[key] for key in _RECORD_FIELDS if key in value}
+            rec["_recovered"] = True
+            loaded.append(rec)
+    loaded.sort(key=lambda item: (item["started_at"], item["job_id"]))
+    if not merge:
+        _JOBS.clear()
+    for rec in loaded:
+        existing = _JOBS.get(rec["job_id"])
+        if existing is None:
+            _JOBS[rec["job_id"]] = rec
+    return len(loaded)
+
+
+def reload_mcp_builds() -> int:
+    """Reconstruct the in-memory adapter from durable metadata.
+
+    This is primarily useful to long-lived coordinators that replace workers.
+    Normal process startup performs the same load automatically.
+    """
+    with _LOCK:
+        return _load_jobs_from_disk()
 
 
 def _repo_name(repo_url: str) -> str:
@@ -55,14 +208,28 @@ def _repo_name(repo_url: str) -> str:
     return re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1])
 
 
-def _evict_finished_jobs() -> None:
-    if len(_JOBS) <= _MAX_JOBS:
-        return
-    for job_id, rec in list(_JOBS.items()):
-        if rec["status"] != "running":
-            del _JOBS[job_id]
-        if len(_JOBS) <= _MAX_JOBS:
-            return
+def _repo_identity(repo_url: str) -> str:
+    return re.sub(r"\.git$", "", repo_url.strip().rstrip("/")).lower()
+
+
+def _reuse_snapshot(rec: Dict[str, Any], *, idempotent: bool = False) -> Dict[str, Any]:
+    snap = _snapshot(rec, with_log_tail=rec["status"] != "running")
+    if idempotent:
+        snap["note"] = (
+            "The idempotency key already identifies this repository build — "
+            f"reusing job {rec['job_id']}."
+        )
+    elif rec["status"] == "running":
+        snap["note"] = (
+            "A build for this repository is already running — reusing it. "
+            f"Track it with check_mcp_build('{rec['job_id']}')."
+        )
+    elif rec["status"] == "done":
+        snap["note"] = (
+            "This repository was already built — reusing the result. "
+            "Pass force_rebuild=true to rebuild."
+        )
+    return snap
 
 
 def _read_log(rec: Dict[str, Any]) -> str:
@@ -87,25 +254,115 @@ def _finalize(rec: Dict[str, Any], returncode: int) -> None:
         rec["container"] = container.group(1) if container else None
     else:
         rec["status"] = "failed"
+    if _JOBS.get(rec["job_id"]) is rec:
+        try:
+            _persist_job(rec)
+        except OSError:
+            # The terminal state remains visible in this process. A later
+            # recovered snapshot can derive it from the durable log and retry.
+            pass
+
+
+def _pid_is_alive(pid: Any) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _refresh_recovered_job(rec: Dict[str, Any]) -> None:
+    """Reconcile a running record whose original watcher no longer exists."""
+    if not rec.get("_recovered") or rec.get("status") != "running":
+        return
+    text = _read_log(rec)
+    inferred = _status_from_log(text)
+    if inferred == "done":
+        _finalize(rec, returncode=0)
+        return
+    if inferred == "failed":
+        _finalize(rec, returncode=1)
+        return
+    if _pid_is_alive(rec.get("pid")):
+        return
+    rec["status"] = "failed"
+    rec["finished_at"] = time.time()
+    rec["error"] = (
+        "build process is no longer running after registry recovery; "
+        "inspect the persisted log before retrying"
+    )
+    try:
+        _persist_job(rec)
+    except OSError:
+        pass
+
+
+def _resolve_env_file() -> Optional[Path]:
+    override = os.environ.get("COSCIENTIST_ALEMBIC_ENV_FILE")
+    if override:
+        path = Path(override)
+        return path if path.exists() else None
+    for candidate in (
+        PROJECT_ROOT / "CoScientist" / ".env",
+        PROJECT_ROOT / ".env",
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _start_chain_env() -> Dict[str, str]:
+    """Host env for start_chain, with a usable MODEL when OpenRouter is absent."""
+    env = os.environ.copy()
+    if not env.get("MODEL") and not env.get("OPENROUTER_API_KEY"):
+        env["MODEL"] = (
+            env.get("LLM__CODER_MODEL")
+            or env.get("LLM__MAIN_MODEL")
+            or "openai/gpt-4o-mini"
+        )
+    return env
+
+
+def _start_chain_cmd(repo_url: str) -> list[str]:
+    cmd = [sys.executable, str(START_CHAIN), repo_url]
+    env_file = _resolve_env_file()
+    if env_file is not None:
+        cmd += ["--env-file", str(env_file)]
+    return cmd
 
 
 def _runner(rec: Dict[str, Any]) -> None:
     log_path = Path(rec["log_file"])
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(
-                [sys.executable, str(START_CHAIN), rec["repo_url"]],
-                stdout=log, stderr=subprocess.STDOUT, cwd=PROJECT_ROOT,
+                _start_chain_cmd(rec["repo_url"]),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                cwd=PROJECT_ROOT,
+                env=_start_chain_env(),
             )
             with _LOCK:
                 rec["pid"] = proc.pid
+                try:
+                    _persist_job(rec)
+                except OSError:
+                    pass
             returncode = proc.wait()
     except OSError as exc:  # docker/python missing, log dir unwritable, ...
         with _LOCK:
             rec["status"] = "failed"
             rec["error"] = f"could not launch the build subprocess: {exc}"
             rec["finished_at"] = time.time()
+            try:
+                _persist_job(rec)
+            except OSError:
+                pass
         return
     with _LOCK:
         _finalize(rec, returncode)
@@ -113,6 +370,7 @@ def _runner(rec: Dict[str, Any]) -> None:
 
 def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]:
     """The tool-facing view of one job record (call under _LOCK)."""
+    _refresh_recovered_job(rec)
     out = {
         "job_id": rec["job_id"],
         "repo_url": rec["repo_url"],
@@ -125,6 +383,9 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
         "progress_page": f"/builds/{rec['job_id']}",
         "progress_url": f"{_WEB_BASE_URL}/builds/{rec['job_id']}",
     }
+    for key in ("idempotency_key", "run_id", "task_id", "attempt_id", "pid"):
+        if rec.get(key) is not None:
+            out[key] = rec[key]
     text = _read_log(rec) if (with_log_tail or rec["status"] != "running") else ""
     stages = _STAGE_RE.findall(text)
     if stages:
@@ -153,6 +414,10 @@ async def build_mcp_server(
     repo_url: str,
     force_rebuild: bool = False,
     tool_context: Optional[ToolContext] = None,
+    idempotency_key: Optional[str] = None,
+    run_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    attempt_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Start an Alembic build: turn a GitHub repository into a served MCP tool
     server (clone → env → generated+validated tools → FastMCP server in Docker).
@@ -164,6 +429,11 @@ async def build_mcp_server(
         repo_url: GitHub repository URL, e.g. "https://github.com/whitead/synspace".
         force_rebuild: Start a fresh build even if this repo already has a
             finished (or running) build in this process.
+        idempotency_key: Coordinator-supplied operation key. Repeating the same
+            key for the same repository always returns the original job.
+        run_id: Optional experiment run associated with this build.
+        task_id: Optional experiment task associated with this build.
+        attempt_id: Optional task attempt associated with this build.
 
     Returns:
         status "running" with the job_id to check later; or the existing job for
@@ -173,45 +443,91 @@ async def build_mcp_server(
     if not re.match(r"^(https?://|git@)\S+/\S+", repo_url):
         return {"status": "error",
                 "error": f"repo_url does not look like a git repository URL: {repo_url!r}"}
+    idempotency_key = (idempotency_key or "").strip() or None
+    associations = {
+        "idempotency_key": idempotency_key,
+        "run_id": (run_id or "").strip() or None,
+        "task_id": (task_id or "").strip() or None,
+        "attempt_id": (attempt_id or "").strip() or None,
+    }
 
-    with _LOCK:
-        if not force_rebuild:
-            # Prefer a live build; else the most recent finished one.
-            same = [r for r in _JOBS.values() if r["repo_url"] == repo_url]
-            for rec in reversed(same):
-                if rec["status"] == "running":
-                    snap = _snapshot(rec, with_log_tail=False)
-                    snap["note"] = ("A build for this repository is already running — "
-                                    f"reusing it. Track it with check_mcp_build('{rec['job_id']}').")
-                    return snap
-            for rec in reversed(same):
-                if rec["status"] == "done":
-                    snap = _snapshot(rec)
-                    snap["note"] = ("This repository was already built in this process — "
-                                    "reusing the result. Pass force_rebuild=true to rebuild.")
-                    return snap
+    try:
+        with _LOCK:
+            with _registry_file_lock():
+                if idempotency_key is not None:
+                    # Refresh only for coordinator-keyed requests. This makes
+                    # idempotency work across worker processes while preserving
+                    # the legacy process-local reuse behavior for unkeyed calls.
+                    _load_jobs_from_disk(merge=True)
+                    keyed = [
+                        value
+                        for value in _JOBS.values()
+                        if value.get("idempotency_key") == idempotency_key
+                    ]
+                    for existing in reversed(keyed):
+                        if _repo_identity(existing["repo_url"]) != _repo_identity(repo_url):
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"idempotency_key {idempotency_key!r} is already "
+                                    "associated with a different repository"
+                                ),
+                            }
+                        return _reuse_snapshot(existing, idempotent=True)
 
-        job_id = f"{_repo_name(repo_url)}-{secrets.token_hex(3)}"
-        rec: Dict[str, Any] = {
-            "job_id": job_id,
-            "repo_url": repo_url,
-            "status": "running",
-            "started_at": time.time(),
-            "log_file": str(LOG_DIR / f"{job_id}.log"),
+                if idempotency_key is None and not force_rebuild:
+                    # Preserve the original API: prefer a live build, then the
+                    # most recent successful build for this repository.
+                    same = [
+                        value
+                        for value in _JOBS.values()
+                        if _repo_identity(value["repo_url"]) == _repo_identity(repo_url)
+                    ]
+                    for existing in same:
+                        _refresh_recovered_job(existing)
+                    for existing in reversed(same):
+                        if existing["status"] == "running":
+                            return _reuse_snapshot(existing)
+                    for existing in reversed(same):
+                        if existing["status"] == "done":
+                            return _reuse_snapshot(existing)
+
+                repo_prefix = re.sub(r"[^A-Za-z0-9._-]", "-", _repo_name(repo_url))
+                job_id = f"{repo_prefix}-{secrets.token_hex(3)}"
+                rec: Dict[str, Any] = {
+                    "job_id": job_id,
+                    "repo_url": repo_url,
+                    "status": "running",
+                    "started_at": time.time(),
+                    "log_file": str(LOG_DIR / f"{job_id}.log"),
+                    **{
+                        key: value
+                        for key, value in associations.items()
+                        if value is not None
+                    },
+                }
+                _JOBS[job_id] = rec
+                try:
+                    _persist_job(rec)
+                except OSError:
+                    del _JOBS[job_id]
+                    raise
+    except OSError as exc:
+        return {
+            "status": "error",
+            "error": f"could not persist Alembic build metadata: {exc}",
         }
-        _evict_finished_jobs()
-        _JOBS[job_id] = rec
 
     threading.Thread(target=_runner, args=(rec,), daemon=True,
                      name=f"alembic-build-{job_id}").start()
-    return {
-        "status": "running",
-        "job_id": job_id,
-        "repo_url": repo_url,
-        "note": ("Build started (base image → pipeline → docker commit → serve). "
-                 "A full build takes tens of minutes: report the job_id back, do "
-                 f"other work, and call check_mcp_build('{job_id}') later."),
-    }
+    with _LOCK:
+        result = _snapshot(rec, with_log_tail=False)
+    result["note"] = (
+        "Build started (base image → pipeline → docker commit → serve). "
+        "A full build takes tens of minutes: report the job_id back, do "
+        f"other work, and call check_mcp_build('{job_id}') later."
+    )
+    return result
 
 
 async def check_mcp_build(
@@ -232,12 +548,12 @@ async def check_mcp_build(
         if rec is None:
             return {"status": "error",
                     "error": f"unknown job_id {job_id!r} — use list_mcp_builds() "
-                             "to see the builds known to this process."}
+                             "to see the builds known to this registry."}
         return _snapshot(rec)
 
 
 async def list_mcp_builds(tool_context: Optional[ToolContext] = None) -> Dict[str, Any]:
-    """List every Alembic build known to this process (running and finished).
+    """List every durable Alembic build known to this worker.
 
     Use this to recover a lost job_id or to find an MCP server that was already
     built for a repository in an earlier delegation/session.
@@ -349,6 +665,15 @@ def parse_event_line(line: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+try:
+    _load_jobs_from_disk()
+except OSError:
+    # Tool import must remain available even if a mounted metadata directory is
+    # temporarily unreadable. New builds fail explicitly when persistence is
+    # attempted, rather than breaking unrelated agent assembly.
+    pass
+
+
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
            "web_build_log_file", "web_build_snapshot", "web_list_builds",
-           "parse_event_line"]
+           "parse_event_line", "reload_mcp_builds"]

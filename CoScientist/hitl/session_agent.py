@@ -105,6 +105,7 @@ class SessionAgent(LlmAgent):
         while True:
             output_text = ""
             final_event = None
+            last_model_text = ""
 
             # Never review a stale plan from an earlier attempt/session turn if
             # the current planner run fails before create_plan succeeds.
@@ -124,35 +125,78 @@ class SessionAgent(LlmAgent):
 
             async with Aclosing(super()._run_async_impl(ctx)) as agen:
                 async for event in agen:
+                    event_text = "".join(
+                        part.text or ""
+                        for part in (event.content.parts if event.content else [])
+                    )
+                    if event_text.strip():
+                        last_model_text = event_text
                     if event.is_final_response():
                         final_event = event
                         # Earlier text events contain reasoning and tool-call
-                        # narration. Only the final response may reach HITL.
-                        output_text = "".join(
-                            part.text or ""
-                            for part in (event.content.parts if event.content else [])
-                        )
+                        # narration. Prefer the final response for HITL when present.
+                        output_text = event_text
                     else:
                         yield event
 
-            if not self.hitl_handler or final_event is None:
-                # No HITL or not a final event (e.g. tool call): just pass and exit
-                if not self.hitl_handler:
-                    logger.info(
-                        "%s: no HITL handler wired (HITL__ENABLED off?) — "
-                        "output passed through without human review", self.name,
-                    )
+            if self.output_key:
+                # ADK State cannot delete keys; clearers set them to None. Treat
+                # None as "missing" so we keep the live final-event text.
+                # Structured-output planners may also land the payload only in
+                # state (no is_final_response event) — still review that value.
+                stored = ctx.session.state.get(self.output_key)
+                if stored is not None:
+                    if isinstance(stored, (dict, list)):
+                        output_text = json.dumps(stored, ensure_ascii=False)
+                    else:
+                        output_text = str(stored)
+
+            if not output_text.strip() and last_model_text.strip():
+                # Some providers emit the structured plan as a non-final text
+                # event; still feed it to deterministic review.
+                output_text = last_model_text
+
+            usable = (output_text or "").strip()
+
+            if not self.hitl_handler:
+                # No HITL wired (HITL__ENABLED off?) — output passed through.
+                logger.info(
+                    "%s: no HITL handler wired (HITL__ENABLED off?) — "
+                    "output passed through without human review", self.name,
+                )
                 if final_event is not None:
                     yield final_event
                     for extra in self._post_final_events(ctx, output_text):
                         yield extra
                 break
 
-            if self.output_key:
-                output_text = ctx.session.state.get(self.output_key, output_text)
+            if not usable:
+                # Empty final / failed structured output — do not invent a review turn.
+                if final_event is not None:
+                    yield final_event
+                break
+
+            if final_event is None:
+                final_event = Event(
+                    invocation_id=ctx.invocation_id,
+                    author=self.name,
+                    branch=ctx.branch,
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part(text=usable)],
+                    ),
+                )
 
             # Perform HITL check (subclasses may run a multi-step dialogue).
-            response = await self._review_decision(ctx, output_text)
+            response = await self._review_decision(ctx, usable)
+
+            if response.timed_out or response.stop_review_loop:
+                # A specialised review agent has recorded a pause or terminal
+                # decision in its runtime. Stop instead of silently approving
+                # or regenerating forever.
+                if final_event is not None:
+                    yield final_event
+                break
 
             if response.approved:
                 if response.instructions and response.action != HITLAction.EDIT:

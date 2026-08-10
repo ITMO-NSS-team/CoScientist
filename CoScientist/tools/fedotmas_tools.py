@@ -61,10 +61,10 @@ class FedotMASToolset(BaseToolset):
         """
         state = tool_context.state if tool_context is not None else {}
         filtered_tools = state.get('filtered_tools', [])
-        # Hard-stop after deliverable — unless a new consumer tool was retrieved
-        # (gen→dock handoff), see fedot_artifact_handoff.should_hard_stop_fedot.
-        # Kill-switch: COSCIENTIST_FEDOT_HARD_STOP=0.
-        if should_hard_stop_fedot(state):
+        # The Experiment Module owns anti-duplication through its task/attempt
+        # state machine and AgentTool route guard.  Its path must not consult
+        # the legacy session-scoped FEDOT deliverable flag.
+        if not state.get("experiment_runtime") and should_hard_stop_fedot(state):
             arts = list(state.get("fedot_artifacts") or [])
             return {
                 "status": "success",
@@ -128,7 +128,13 @@ class FedotMASToolset(BaseToolset):
         # Cap runaway MAS/MCP hangs (e.g. an MCP server stuck retrying a dead
         # connection). Artifacts already captured before the timeout are still
         # returned below — a link produced before a failure/timeout is never lost.
-        fedot_timeout_s = float(os.getenv("COSCIENTIST_FEDOT_TIMEOUT_S", "600"))
+        if state.get("experiment_runtime"):
+            from CoScientist.config import get_settings as get_app_settings
+            fedot_timeout_s = float(
+                get_app_settings().experiments.fedot_timeout_s
+            )
+        else:
+            fedot_timeout_s = float(os.getenv("COSCIENTIST_FEDOT_TIMEOUT_S", "600"))
         web_search_limit = int(os.getenv("COSCIENTIST_FEDOT_WEB_SEARCH_LIMIT", "4"))
         result = None
         status, err = "success", None
@@ -169,6 +175,58 @@ class FedotMASToolset(BaseToolset):
             if scanned:
                 cap.captured = merge_artifacts(cap.captured, scanned)
 
+        # Alembic/inline MCP tools return molecules in structuredContent. The
+        # worker LLM paraphrases them away; materialize from the plugin's
+        # pre-paraphrase capture onto the *experiment* tool_context (Fedot's
+        # inner ADK session does not carry experiment_runtime).
+        if (
+            getattr(cap, "inline_molecule_payloads", None)
+            and tool_context is not None
+            and state.get("experiment_runtime")
+        ):
+            from CoScientist.tools.fedot_artifact_plugin import (
+                molecules_to_csv,
+                _write_molecule_csv,
+            )
+
+            for item in cap.inline_molecule_payloads:
+                payload = item.get("payload") if isinstance(item, dict) else None
+                if not isinstance(payload, dict):
+                    continue
+                art = _write_molecule_csv(
+                    payload,
+                    tool_name=item.get("tool") if isinstance(item, dict) else None,
+                    tool_context=tool_context,
+                )
+                if art is not None:
+                    cap.captured = merge_artifacts(cap.captured, [art])
+                else:
+                    # Last resort: keep CSV text on the plugin payload for callers.
+                    item["csv"] = molecules_to_csv(payload)
+
+        # Some MCPs return a real CSV/JSON payload inline rather than uploading
+        # it to S3.  In the experiment path, preserve that exact payload as the
+        # single expected workspace artifact instead of weakening evidence
+        # requirements or claiming success from prose alone. Prefer this even
+        # when a URL scan found transient links: durable workspace evidence
+        # beats a signed URL that may not download.
+        if (
+            result is not None
+            and tool_context is not None
+            and state.get("experiment_runtime")
+            and not any(
+                item.get("s3_key") or item.get("workspace_path")
+                for item in cap.captured
+                if isinstance(item, dict)
+            )
+        ):
+            from CoScientist.experiments.runtime.inline_artifacts import (
+                materialize_inline_result,
+            )
+
+            inline = materialize_inline_result(tool_context.state, result)
+            cap.captured = merge_artifacts(cap.captured, inline)
+
         # Surface the REAL artifacts in the return value AND shared session state — so the
         # link survives even when FEDOT.MAS timed out AFTER generation (F015 Mode B fix).
         # Merge with artifacts from any prior fedot_tool call in this session.
@@ -195,12 +253,27 @@ class FedotMASToolset(BaseToolset):
             ret["result"] = result
         if err:
             ret["error"] = err
+        if getattr(cap, "inline_molecule_payloads", None):
+            ret["inline_molecule_tools"] = [
+                {
+                    "tool": item.get("tool"),
+                    "n_molecules": len((item.get("payload") or {}).get("molecules") or []),
+                    "tool_args": item.get("tool_args"),
+                }
+                for item in cap.inline_molecule_payloads
+                if isinstance(item, dict)
+            ]
+            # Keep raw payloads for callers that need durable CSV without S3.
+            ret["inline_molecule_payloads"] = [
+                item.get("payload")
+                for item in cap.inline_molecule_payloads
+                if isinstance(item, dict) and isinstance(item.get("payload"), dict)
+            ]
         # Success without a captured S3 artifact is a soft signal for retry —
         # never invent molecule payloads here.
         if status == "success" and not cap.captured:
             ret["empty_artifacts"] = True
         return ret
-
     
 fedot_toolset = FedotMASToolset()
 fedot_toolset_instance = fedot_toolset.get_tools(None)

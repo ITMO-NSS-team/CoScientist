@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
 _log = logging.getLogger(__name__)
@@ -358,6 +359,79 @@ def tables_from_state(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Load tables from the dedicated key or embedded ``fedot_artifacts[].table``."""
     tables = [dict(t) for t in (state.get("fedot_artifact_tables") or []) if isinstance(t, Mapping)]
     return tables or materialize_tables_from_artifacts(state.get("fedot_artifacts") or [], [])
+
+
+def tables_from_resolved_inputs(
+    resolved_inputs: Sequence[Mapping[str, Any]] | None,
+    *,
+    max_rows: int = _MAX_ROWS,
+    max_bytes: int = _MAX_BYTES,
+) -> List[Dict[str, Any]]:
+    """Materialize EM ``resolved_inputs`` URLs/workspace paths into handoff tables.
+
+    Prefer Experiment Module lineage over ambient session artifacts so tox /
+    property steps consume generated molecules, not placeholders.
+    """
+    tables: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in resolved_inputs or []:
+        if not isinstance(item, Mapping):
+            continue
+        url = item.get("resolved_url")
+        if isinstance(url, str) and url.strip():
+            key = url.strip()
+            if key in seen:
+                continue
+            table = fetch_artifact_table(key, max_rows=max_rows, max_bytes=max_bytes)
+            if table is None:
+                continue
+            seen.add(key)
+            tables.append(table)
+            continue
+        path = item.get("resolved_workspace_path")
+        if not isinstance(path, str) or not path.strip():
+            continue
+        key = path.strip()
+        if key in seen:
+            continue
+        try:
+            raw = Path(key).read_bytes()[:max_bytes].decode("utf-8", "replace")
+        except OSError as exc:
+            _log.info("artifact handoff: workspace read failed for %s (%s)", key, exc)
+            continue
+        table = parse_artifact_table(raw, max_rows=max_rows, path_hint=key)
+        if table is None:
+            continue
+        table["workspace_path"] = key
+        seen.add(key)
+        tables.append(table)
+    return tables
+
+
+def seed_upstream_from_resolved_inputs(
+    state: MutableMapping[str, Any],
+    resolved_inputs: Sequence[Mapping[str, Any]] | None,
+    filtered_tools: Sequence[Mapping[str, Any]] | None = None,
+) -> Dict[str, List[str]]:
+    """Write EM resolved tables into state and return projected schema bindings.
+
+    When lineage tables exist they replace ambient ``fedot_artifact_tables`` for
+    projection so Fedot/React cannot invent placeholders from stale session CSVs.
+    """
+    em_tables = tables_from_resolved_inputs(resolved_inputs)
+    if not em_tables:
+        return {}
+    state["fedot_artifact_tables"] = em_tables
+    tools = list(filtered_tools if filtered_tools is not None else state.get("filtered_tools") or [])
+    projected = project_tables_to_schema_args(em_tables, _projection_arg_names(em_tables, tools))
+    block = format_upstream_inputs(projected)
+    state["upstream_artifact_inputs"] = block
+    if projected:
+        _log.info(
+            "artifact handoff: seeded from resolved_inputs args=%s",
+            {k: len(v) for k, v in projected.items()},
+        )
+    return projected
 
 
 def inject_upstream_artifacts(callback_context) -> None:

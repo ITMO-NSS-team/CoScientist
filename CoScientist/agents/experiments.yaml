@@ -1,0 +1,469 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CoScientist experiments — system.yaml + Experiment Module control-plane.
+#
+# Goal: minimal delta vs system.yaml while keeping EM plan/execute/review quality.
+# Route agents (Coder/Fedot/Experiment/McpBuilder/ToolPreparer) are the SYSTEM
+# definitions; only the EM control-plane is added, plus a few quality callbacks.
+#
+# Run:
+#   COSCIENTIST_CONFIG=CoScientist/agents/experiments.yaml python -m CoScientist
+# Validate:
+#   COSCIENTIST_CONFIG=CoScientist/agents/experiments.yaml python -m CoScientist.assembly
+#
+# Compact legacy profile (kept for reference): agents/experiments_old.yaml
+#
+# Diff vs system.yaml (intentional):
+#   1. Orchestrator subordinate TaskExecutorAgent → ExperimentModuleAgent
+#   2. New agents: ExperimentModuleAgent, ExperimentPlannerAgent,
+#      ExperimentExecutorAgent, ExperimentResultReviewAgent
+#   3. HypothesesAgent is EM sequential child (not orch subordinate) — same
+#      system agent/prompt; graph+research_graph; seed ask + refs bridge
+#      (no task_tracker: EXP tasks do not exist yet at hyp step)
+#   4. ToolRetriever/ToolReranker: EM inventory stash/snapshot callbacks
+#   5. ExperimentAgent: force_molecule_generator_s3_upload (no inject_upstream —
+#      EM seeds lineage at start_task via seed_upstream_from_resolved_inputs)
+#   6. FedotAgent/Coder: refuse_when_fedot_deliverable (deliverable hard-stop)
+#   7. ToolReranker: sanitize_json_output applies scores; collect_reranked_tools
+#      is after_agent fallback (no separate *_from_model callback)
+#   8. TaskExecutorAgent removed (cannot share ToolPreparerAgent with EM)
+# ─────────────────────────────────────────────────────────────────────────────
+
+defaults:
+  model: main
+
+pipeline:
+  pre: []
+  post: [ResultAggregatorAgent]
+
+agents:
+  # ── Root orchestrator ───────────────────────────────────────────────────────
+  OrchestratorAgent:
+    class: llm
+    root: true
+    include_contents: none
+    description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
+    prompt: orchestrator
+    tools: [retrieval, graph, research_graph_orchestrator]
+    subordinates:
+      - PlannerAgent
+      - ResearchAgent
+      - ExperimentModuleAgent
+      - CoderAgent
+      - MedicalAgent
+      - McpBuilderAgent
+    callbacks:
+      before_model: [save_uploaded_artifacts, seed_coder_workspace]
+      before_agent: [before_get_task, inject_graph_root, inject_research_context]
+      after_model:
+        - redirect_research_to_experiment_module
+        - coalesce_experiment_module_calls
+        - guard_unknown_tools
+    hitl: true
+    a2a:
+      key: orchestrator
+      port: 8000
+      skill:
+        id: orchestrate
+        name: Orchestrate
+        description: Coordinate scientific research agents to solve complex tasks
+        tags: [orchestration, science, multi-agent]
+
+  # ── Direct subordinates ────────────────────────────────────────────────────
+  PlannerAgent:
+    class: custom:session
+    root: false
+    enabled: false
+    description: >-
+      produces a step-by-step roadmap for a complex, multi-step task;
+      call it first, then execute the roadmap by delegating each step.
+    routing: >-
+      for a complex multi-step task, call this FIRST to produce a roadmap,
+      then follow it step by step.
+    prompt: planner
+    tools: [retrieval, create_plan_tool, graph]
+    output_key: planner_roadmap
+    callbacks:
+      before_agent: [inject_graph_root]
+      after_model: [guard_unknown_tools]
+    hitl: true
+    a2a:
+      key: planner
+      port: 8001
+      skill:
+        id: plan
+        name: Plan
+        description: Produce a research roadmap for a scientific task
+        tags: [planning, roadmap, science]
+
+  ResultAggregatorAgent:
+    class: llm
+    description: >-
+      Reads the finished Research Context Graph (conclusions, evidence,
+      hypotheses with their status), Experiment Module TaskResults when present,
+      and the run's figures/tables, and synthesizes a single, complete,
+      visually-rich Markdown report grounded in those sources.
+    # Prefer EM terminal report when experiment_summary/TaskResults exist;
+    # otherwise the system graph-primary aggregator prompt still applies via
+    # shared formatter + research_graph_readonly.
+    prompt: experiment_result_aggregator
+    tools: [result_formatter, research_graph_readonly]
+    include_contents: none
+    callbacks:
+      before_agent: [inject_research_context]
+    output_key: final_report
+
+  # Same system HypothesesAgent — owned by ExperimentModuleAgent (ADK: one parent).
+  # EM wiring: seed ask + refs bridge. Graph tools restored; no task_tracker
+  # (EXP tasks do not exist yet at this step — empty tracker only distracts).
+  HypothesesAgent:
+    class: llm
+    model: openai/glm-4.7
+    include_contents: none
+    description: generates ideas and hypotheses.
+    routing: when the direction is unclear or multiple approaches need to be proposed.
+    planning: |-
+      Use this to generate and test hypotheses.
+    prompt: hypotheses
+    output_key: hypotheses
+    tools: [graph, research_graph]
+    callbacks:
+      before_agent: [bootstrap_research_question_if_empty, inject_research_context]
+      before_model: [seed_hypotheses_from_em_request]
+      after_model: [enforce_hypothesis_research_commit, normalize_em_hypothesis_commit, guard_unknown_tools]
+      after_tool: [capture_hypotheses_after_research_commit]
+      after_agent: [commit_experiment_hypotheses]
+
+  ResearchAgent:
+    class: llm
+    description: >-
+      retrieves scientific knowledge and searches/downloads literature
+      (web, RAG, paper search). Open-ended search only — it cannot read
+      a specific code repository.
+    routing: >-
+      when OPEN-ENDED external knowledge or literature is required, the problem
+      cannot be solved computationally, or claims need literature validation. If
+      it returns no/empty/insufficient results, escalate by reformulating into
+      "find and download papers about <expanded topic>". Do NOT use it to read a
+      specific repository or URL the user named — that goes to CoderAgent.
+    planning: |-
+      Use this ONLY when information cannot be computed or retrieved via tools, and specifically 
+      requires searching information from the web or literature.  
+    prompt: research
+    tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
+    output_key: search_results
+    callbacks:
+      before_agent: [before_get_task, inject_research_context]
+      before_model: [inject_uploaded_papers]
+      before_tool: [WebSearchLimiter]
+      after_tool: [log_research_tool_calls]
+      after_model: [guard_unknown_tools]
+    hitl: true
+    a2a:
+      key: research
+      port: 8003
+      skill:
+        id: research
+        name: Research
+        description: Search scientific literature and the web to answer research questions
+        tags: [research, literature, web-search, knowledge]
+
+  # ── Experiment Module control-plane (replaces TaskExecutor in the roster) ───
+  ExperimentModuleAgent:
+    class: sequential
+    description: >-
+      Plans, reviews, executes and reports one computational experiment with
+      task/attempt state, finite fallback and artifact lineage. Primary choice
+      for ANY task that can be calculated with existing MCP tools/services
+      (property estimation, docking, simulations) or scoped sandbox code.
+    routing: >-
+      when the result can be obtained by RUNNING AN EXISTING tool/service or a
+      scoped computational experiment. Call ONCE per computational stage with the
+      FULL self-contained brief — do not fan out one ask into multiple
+      ExperimentModuleAgent calls; the module plans and orders tasks internally.
+      Hallmark: "compute/run X using tools we already have" or "run a planned
+      experiment with MCP/FEDOT/coder fallback."
+    planning: |-
+      Use this as your primary choice for ANY task that can be calculated. 
+      This agent has comprehensive capabilities and must be prioritized over searching whenever possible: 
+        - Any computational task requiring tools
+        - Solves all tasks involving chemistry
+    children:
+      - ToolPreparerAgent
+      - HypothesesAgent
+      - ExperimentPlannerAgent
+      - ExperimentExecutorAgent
+      - ExperimentResultReviewAgent
+    a2a:
+      key: task_execution
+      port: 8004
+      skill:
+        id: execute_task
+        name: Execute experiment
+        description: Plan, approve and run a computational experiment
+        tags: [experiment, mcp, fedot, coder]
+
+  ExperimentPlannerAgent:
+    class: custom:experiment_review
+    model: openai/glm-4.7
+    include_contents: none
+    description: Build a strict ExperimentPlan and obtain explicit human approval.
+    prompt: experiment_planner
+    output_key: experiment_plan
+    hitl: true
+    callbacks:
+      before_agent: [build_experiment_context]
+      before_model: [skip_retriever_context]
+      after_model: [sanitize_json_output]
+    options:
+      review_kind: plan
+
+  ExperimentExecutorAgent:
+    class: llm
+    include_contents: none
+    description: >-
+      Thin control-plane executor; delegates one route per attempt while all
+      lifecycle state is enforced by deterministic experiment control tools.
+    prompt: experiment_executor
+    tools: [experiment_control]
+    subordinates:
+      - FedotAgent
+      - ExperimentAgent
+      - CoderAgent
+      - McpBuilderAgent
+    output_key: experiment_execution_summary
+    callbacks:
+      before_agent: [skip_executor_without_runtime]
+      before_tool: [guard_experiment_route]
+      after_tool: [mark_experiment_route_returned]
+      after_model: [enforce_pending_record_result, rewrite_mismatched_control_action, enforce_continue_until_reporting]
+
+  ExperimentResultReviewAgent:
+    class: custom:experiment_review
+    model: main
+    description: Summarize typed TaskResults and require explicit result acceptance.
+    prompt: experiment_result_summary
+    output_key: experiment_summary
+    hitl: true
+    options:
+      review_kind: result
+
+  # TaskExecutorAgent intentionally omitted: ADK forbids sharing ToolPreparerAgent
+  # between two parents. ExperimentModuleAgent owns that pipeline here.
+
+  CoderAgent:
+    class: llm
+    model: coder
+    description: >-
+      general-purpose coder/sandbox engineer: writes and runs code, shell
+      and git commands (clone/commit/push), manages files, installs
+      dependencies, processes data, and runs long jobs in an isolated
+      workspace. Also serves as ExperimentExecutorAgent route when
+      start_task returns route_agent=CoderAgent.
+    routing: >-
+      when the task requires DOING engineering work: writing/running code,
+      shell/git operations, building or processing data, environment setup, or
+      any multi-step build/run no existing tool provides. ALSO when the user
+      names a specific repository or URL to inspect — clone/read it here rather
+      than web-searching for it. Hallmark: "write code / run a script / clone
+      and read repo X / assemble a dataset."
+    planning: |-
+      choose for steps that require ENGINEERING work in a sandbox:
+          * writing and running code or scripts
+          * shell and git operations (cloning repos, committing, pushing)
+          * collecting, parsing, or transforming data
+          * environment setup and running long jobs
+          → Use whenever no existing tool covers the objective and the step requires
+            doing software/data engineering rather than calling a ready service
+    # Attempt-envelope anti-fabrication when used under ExperimentExecutor;
+    # still adequate as a direct orchestrator subordinate.
+    prompt: coder
+    tools: [coder, research_graph]
+    subordinates: [DatasetCollectorAgent]
+    output_key: coder_results
+    callbacks:
+      before_agent: [refuse_when_fedot_deliverable, inject_research_context]
+      before_model: [seed_coder_workspace]
+      after_model: [guard_unknown_tools]
+    a2a:
+      key: coder
+      port: 8006
+      env:
+        CODER_WORKSPACE_ID: a2a_shared
+        GIT_HTTP_LOW_SPEED_LIMIT: "1000"
+        GIT_HTTP_LOW_SPEED_TIME: "20"
+      skill:
+        id: code
+        name: Code & Run
+        description: Write/run code, shell & git operations, build and process data in a sandbox
+        tags: [code, sandbox, git, data]
+
+  DatasetCollectorAgent:
+    class: llm
+    model: coder
+    description: >-
+      collects and assembles a dataset for a task from multiple sources
+      (HuggingFace Datasets, scientific APIs like ChEMBL/PubChem/OpenAlex, and
+      direct web/URL downloads), materialising it as files in the shared sandbox.
+    routing: >-
+      when a step needs raw data gathered/assembled from external sources before
+      building or training on it (e.g. "collect a dataset of BTK inhibitors with
+      IC50"). It downloads into the shared workspace and writes a MANIFEST.
+    prompt: dataset_collector
+    tools: [coder, websearch, research_graph]
+    output_key: dataset_results
+    callbacks:
+      before_agent: [inject_research_context]
+      after_model: [guard_unknown_tools]
+
+  MedicalAgent:
+    class: llm
+    description: >-
+      answers medical/clinical questions: PubMed literature search, PICO
+      extraction, study taxonomy, and DICOM image analysis.
+    routing: >-
+      when the task involves clinical questions, medical literature, or patient
+      data; if the user uploaded a medical image (DICOM/scan), pass its artifact_id.
+    planning: |-
+      use when:
+          - the step involves clinical or biomedical questions
+          - medical literature evidence (PubMed, PICO, study taxonomy) is required
+          - an uploaded medical image (DICOM/scan) must be analyzed
+    prompt: medical
+    tools: [medical, task_tracker, graph, research_graph]
+    output_key: medical_results
+    callbacks:
+      before_agent: [before_get_task, inject_research_context]
+      before_model: [inject_medical_artifacts]
+      after_model: [guard_unknown_tools]
+    a2a:
+      key: medical
+      port: 8005
+      skill:
+        id: medical_research
+        name: Medical Research
+        description: PubMed search, PICO extraction, study taxonomy, and DICOM analysis
+        tags: [medical, pubmed, dicom, clinical]
+
+  McpBuilderAgent:
+    class: llm
+    description: >-
+      builds a validated MCP tool server from a scientific GitHub repository
+      (the Alembic pipeline): clones the repo, sets up its environment,
+      generates and validates tools from its code, and serves a FastMCP
+      server in Docker.
+    routing: >-
+      when the needed capability exists only as CODE in a repository and must
+      be turned into a reusable MCP tool/service. NOT for a one-off run of
+      that code (that is CoderAgent) and NOT for calling an MCP tool that
+      already exists (that is ExperimentModuleAgent). Hallmark: "turn repo X into
+      an MCP server / tool we can call."
+    planning: |-
+      choose when a repository's capability needs to become a callable MCP
+      tool server rather than a one-off run:
+          * building/serving a new MCP tool from a scientific GitHub repo
+          → Use ONLY to produce a reusable tool server; a single run of the
+            code belongs to CoderAgent, and calling an already-built MCP tool
+            belongs to ExperimentModuleAgent.
+    prompt: mcp_builder
+    tools: [alembic]
+    output_key: mcp_build_results
+    callbacks:
+      after_model: [guard_unknown_tools]
+    a2a:
+      key: mcp_builder
+      port: 8007
+      skill:
+        id: build_mcp_server
+        name: Build MCP Server
+        description: Turn a scientific GitHub repository into a validated, served MCP tool server
+        tags: [mcp, codegen, docker, tools]
+
+  # ── Tool discovery (system pipeline + EM durable inventory) ─────────────────
+  ToolPreparerAgent:
+    class: sequential
+    description: Agent to find and prepare relevant mcp servers for current task
+    children: [ParallelToolSearcherAgent, FullSetToolReranker, WebToolsDeployerAgent]
+
+  ParallelToolSearcherAgent:
+    class: parallel
+    description: Runs multiple search agents in parallel to gather relevant MCP servers.
+    children: [LocalToolsExtractorAgent, ToolWebSearcherAgent]
+
+  LocalToolsExtractorAgent:
+    class: sequential
+    description: Agent to extract relevant ready-to-use tools from local storage
+    children: [ToolRetrieverAgent, ToolReranker]
+
+  ToolRetrieverAgent:
+    class: llm
+    description: Agent to retrieve relevant MCP servers from RAG database of MCP tools for given task.
+    prompt: tool_retriever
+    tools: [retrieval]
+    output_key: retrieved_tools
+    callbacks:
+      # Capture EM scientific ask before tool-prep siblings overwrite user_content.
+      before_agent: [persist_experiment_em_request]
+      # Durable EM inventory: persist full retrieval before rerank clears it.
+      after_agent: [persist_experiment_retrieved_capabilities]
+
+  ToolReranker:
+    class: llm
+    description: Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.
+    prompt: tool_reranker
+    output_key: reranked_tools
+    output_schema: tool_ranking
+    callbacks:
+      before_agent: [stash_experiment_retrieved_capabilities]
+      before_model: [skip_retriever_context]
+      # sanitize_json_output also applies ToolRanking scores (race-safe).
+      after_model: [sanitize_json_output]
+      after_agent: [collect_reranked_tools, snapshot_experiment_discovered_capabilities]
+
+  ToolWebSearcherAgent:
+    class: llm
+    description: Agent to web-search relevant MCP servers from public web storages.
+    prompt: tool_websearcher
+    tools: [mcp_server_search]
+    output_key: retrieved_web_tools
+
+  FullSetToolReranker:
+    class: llm
+    description: Agent to score found web MCP servers given already available local MCP servers for given task.
+    prompt: tool_scoring
+    output_key: reranked_web_servers
+    output_schema: mcp_ranking
+    callbacks:
+      after_model: [sanitize_json_output]
+      after_agent: [collect_reranked_mcps]
+
+  WebToolsDeployerAgent:
+    class: custom:web_tools_deployer
+    description: Agent to deploy found web mcp servers
+
+  ExperimentAgent:
+    class: llm
+    description: >-
+      Runs computational/experimental sub-tasks by directly using the
+      dynamically-provisioned MCP tools (ReAct: think → call tool → observe).
+      Also ExperimentExecutorAgent route when start_task returns
+      route_agent=ExperimentAgent.
+    prompt: experiment_react
+    tools: [dynamic_tools, task_tracker, graph, research_graph]
+    output_key: fedot_results
+    callbacks:
+      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
+      before_tool: [force_molecule_generator_s3_upload]
+      after_tool: [capture_mcp_artifacts]
+
+  FedotAgent:
+    class: llm
+    enabled: true
+    description: >-
+      Agent to invoke FEDOT.MAS for solving given task. Uses MCP tools.
+      Also ExperimentExecutorAgent route when start_task returns
+      route_agent=FedotAgent.
+    prompt: fedot
+    tools: [fedot, task_tracker, graph]
+    output_key: fedot_results
+    callbacks:
+      before_agent: [redirect_when_no_tools, refuse_when_fedot_deliverable, before_get_task, inject_research_context]

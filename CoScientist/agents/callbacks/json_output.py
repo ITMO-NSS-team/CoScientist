@@ -107,6 +107,36 @@ def _extract_json(text: str) -> Optional[Any]:
     return None
 
 
+def _maybe_apply_tool_rerank(callback_context: CallbackContext, payload: Any) -> None:
+    """Fold ToolReranker score apply into sanitize (avoids a separate after_model cb).
+
+    ``collect_reranked_tools`` (after_agent) remains the fallback when scores only
+    land in ``output_key`` state. Lazy import avoids a cycle with tool_callbacks.
+    """
+    if not isinstance(payload, dict) or payload.get("tools") is None:
+        return
+    try:
+        from CoScientist.agents.callbacks.tool_callbacks import (
+            _TOOL_RERANK_APPLIED_KEY,
+            _score_items_from_reranked_state,
+            apply_tool_rerank_scores,
+        )
+    except Exception:  # noqa: BLE001
+        return
+    state = callback_context.state
+    if state.get(_TOOL_RERANK_APPLIED_KEY):
+        return
+    items = _score_items_from_reranked_state(payload)
+    if not items:
+        return
+    apply_tool_rerank_scores(state, items)
+    logger.info(
+        "[%s] applied tool rerank during sanitize (%d scores)",
+        getattr(callback_context, "agent_name", "?"),
+        len(items),
+    )
+
+
 def sanitize_json_output(
     callback_context: CallbackContext, llm_response: LlmResponse
 ) -> Optional[LlmResponse]:
@@ -123,14 +153,25 @@ def sanitize_json_output(
         p.text for p in parts
         if getattr(p, "text", None) and not getattr(p, "thought", False)
     )
-    if not text.strip():
-        return None
+    thought_text = "".join(
+        p.text for p in parts
+        if getattr(p, "text", None) and getattr(p, "thought", False)
+    )
 
-    extracted = _extract_json(text)
+    extracted = _extract_json(text) if text.strip() else None
+    if extracted is None and thought_text.strip():
+        # GLM often parks ToolRanking JSON in a thought part.
+        extracted = _extract_json(thought_text)
     if extracted is None:
         return None  # nothing to fix — let schema validation report it
 
-    clean = json.dumps(_normalize_ranking_payload(extracted), ensure_ascii=False)
+    normalized = _normalize_ranking_payload(extracted)
+    _maybe_apply_tool_rerank(callback_context, normalized)
+
+    if not text.strip():
+        return None
+
+    clean = json.dumps(normalized, ensure_ascii=False)
     if clean == text.strip():
         return None
 

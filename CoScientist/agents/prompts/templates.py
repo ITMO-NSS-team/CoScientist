@@ -658,18 +658,37 @@ Use update_task_status REGULARLY; set a task to DONE immediately on completion.
 
 # ── CoderAgent ───────────────────────────────────────────────────────────────
 
+# Compute-executor roster name: Experiment Module replaces TaskExecutor when present.
+_COMPUTE_EXECUTOR_NAMES = ("ExperimentModuleAgent", "TaskExecutorAgent")
+
+
+def _compute_executor_name(ctx: PromptContext) -> str | None:
+    for name in _COMPUTE_EXECUTOR_NAMES:
+        if ctx.has_subordinate(name):
+            return name
+    return None
+
+
+def _sibling_compute_executor_name(ctx: PromptContext) -> str | None:
+    sibling_names = {s.name for s in ctx.siblings()}
+    for name in _COMPUTE_EXECUTOR_NAMES:
+        if name in sibling_names:
+            return name
+    return None
+
+
 @_register("coder")
 def coder(ctx: PromptContext) -> str:
     # The MCP-tools boundary only makes sense while a sibling agent actually
     # offers ready-made tool execution.
     boundary = ""
-    if any(s.name == "TaskExecutorAgent" for s in ctx.siblings()):
-        boundary = '''
+    if exec_name := _sibling_compute_executor_name(ctx):
+        boundary = f'''
 ## Scope boundary
 - You BUILD and RUN things. If a task is just to invoke an already-available
   service or compute a value for which a ready MCP tool exists (e.g. a molecular
   property or docking calculation via the chemistry tools), that belongs to the
-  TaskExecutorAgent — say so instead of re-implementing it from scratch.
+  {exec_name} — say so instead of re-implementing it from scratch.
 '''
 
     # Subordinate agents the coder can delegate to. They run in the SAME sandbox
@@ -1154,7 +1173,8 @@ _PLANNING_STEP_NO_PLANNER = (
 @_register("orchestrator")
 def orchestrator(ctx: PromptContext) -> str:
     # Which agents are on the roster decides which guidance lines appear.
-    has_exec = ctx.has_subordinate("TaskExecutorAgent")
+    exec_name = _compute_executor_name(ctx)
+    has_exec = exec_name is not None
     has_coder = ctx.has_subordinate("CoderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
     has_retrieval = ctx.has_tool("retrieval")
@@ -1181,7 +1201,7 @@ def orchestrator(ctx: PromptContext) -> str:
     # thing>" straight to ResearchAgent and fans out research calls.
     if has_retrieval:
         prefer = (
-            "delegate it to TaskExecutorAgent and NAME the retrieved tools in your\n"
+            f"delegate it to {exec_name} and NAME the retrieved tools in your\n"
             "   request"
             if has_exec else
             "route it to the agent that can run those tools"
@@ -1194,10 +1214,10 @@ def orchestrator(ctx: PromptContext) -> str:
         )
         discovery_clause = (
             "\n   Discovering WHICH tools exist is YOUR job — call `retrieve_tools`"
-            " yourself.\n   Do NOT delegate \"check if a tool exists\" to "
-            "TaskExecutorAgent: delegating to it\n   runs the full discover→deploy"
-            "→FEDOT pipeline (which executes even when nothing\n   matches). "
-            "Delegate to TaskExecutorAgent only to RUN a computation you have\n"
+            f" yourself.\n   Do NOT delegate \"check if a tool exists\" to "
+            f"{exec_name}: delegating to it\n   runs the full discover→plan"
+            "→execute pipeline (which executes even when nothing\n   matches). "
+            f"Delegate to {exec_name} only to RUN a computation you have\n"
             "   already confirmed a tool covers."
             if has_exec else ""
         )
@@ -1219,7 +1239,7 @@ def orchestrator(ctx: PromptContext) -> str:
     if has_research and (has_exec or has_coder):
         alternatives = []
         if has_exec:
-            alternatives.append("computed (TaskExecutorAgent)")
+            alternatives.append(f"computed ({exec_name})")
         if has_coder:
             alternatives.append("produced by writing/running code (CoderAgent)")
         steps.append(
@@ -1235,16 +1255,30 @@ def orchestrator(ctx: PromptContext) -> str:
     # deterministically by ExperimentAgent; the orchestrator must honour it.
     if has_exec and has_coder:
         steps.append(
-            "Distinguish TaskExecutorAgent from CoderAgent by whether an EXISTING tool\n"
+            f"Distinguish {exec_name} from CoderAgent by whether an EXISTING tool\n"
             "   does EXACTLY the asked operation — not merely something similar. A tool\n"
             "   that shares only the verb but not the object is NOT a match (e.g. a\n"
             "   \"train a GAN\" tool does NOT satisfy \"train a transformer\"). Route to\n"
             "   CoderAgent when the task names a specific repository / URL / example code,\n"
             "   requires a specific architecture or method no retrieved tool implements,\n"
             "   or otherwise needs custom code — even if a superficially-similar tool\n"
-            "   exists. If TaskExecutorAgent returns NO_MATCHING_TOOL (or recommends\n"
+            f"   exists. If {exec_name} returns NO_MATCHING_TOOL (or recommends\n"
             "   CoderAgent), re-route that step to CoderAgent — do NOT re-delegate it to\n"
-            "   TaskExecutorAgent."
+            f"   {exec_name}."
+        )
+
+    # Experiment Module owns detailed tasking: never fan-out one stage into N calls.
+    if exec_name == "ExperimentModuleAgent":
+        steps.append(
+            "ExperimentModuleAgent is ONE computational-experiment stage, not a\n"
+            "   per-bullet worker. For a multi-step compute/analysis ask, call it\n"
+            "   EXACTLY ONCE with the FULL self-contained brief (goal, hypotheses/\n"
+            "   literature context, constraints, data refs, required outcomes).\n"
+            "   Do NOT split the stage into several ExperimentModuleAgent calls in\n"
+            "   the same turn or as a parallel fan-out — the module builds the\n"
+            "   detailed ExperimentPlan and runs tasks in order internally.\n"
+            "   A second call is allowed only for a later, separate scientific stage\n"
+            "   after the previous experiment result was accepted."
         )
 
     if has_research_graph:
@@ -1290,7 +1324,7 @@ def orchestrator(ctx: PromptContext) -> str:
     if has_coder:
         trust_examples.append("CoderAgent runs real commands in a real\nsandbox")
     if has_exec:
-        trust_examples.append("TaskExecutorAgent runs real tools")
+        trust_examples.append(f"{exec_name} runs real tools")
     trust_intro = "Sub-agents really execute their work" + (
         " — " + ", ".join(trust_examples) if trust_examples else ""
     )
@@ -1429,7 +1463,9 @@ authoritative.
 
 @_register("pre_action_critic")
 def pre_action_critic(ctx: PromptContext) -> str:
-    has_exec = ctx.has_subordinate("TaskExecutorAgent")
+    exec_name = _compute_executor_name(ctx)
+    has_exec = exec_name is not None
+    exec_label = exec_name or "TaskExecutorAgent"
     has_coder = ctx.has_subordinate("CoderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
 
@@ -1437,7 +1473,7 @@ def pre_action_critic(ctx: PromptContext) -> str:
     if has_research and (has_exec or has_coder):
         alternatives = []
         if has_exec:
-            alternatives.append("TaskExecutorAgent (ready tool exists)")
+            alternatives.append(f"{exec_label} (ready tool exists)")
         if has_coder:
             alternatives.append("CoderAgent")
         revise_compute_line = (
@@ -1447,16 +1483,16 @@ def pre_action_critic(ctx: PromptContext) -> str:
 
     boundary_section = ""
     if has_exec and has_coder:
-        boundary_section = '''
+        boundary_section = f'''
 ### Experiment vs Coder boundary
   Do NOT reject a call merely because it is "computational". The two compute
   agents serve different needs:
-  - TaskExecutorAgent fits when an EXISTING MCP tool can produce the result
+  - {exec_label} fits when an EXISTING MCP tool can produce the result
     (e.g. compute a standard property, run docking).
   - CoderAgent fits when the work requires engineering: writing/running code,
     shell or git operations, collecting/processing data, environment setup.
   A CoderAgent call for code/shell/git/data work is correct — do not reject it
-  in favor of TaskExecutorAgent. Conversely, only revise toward CoderAgent if
+  in favor of {exec_label}. Conversely, only revise toward CoderAgent if
   the task plainly needs custom engineering rather than an existing tool.
 
   Tool-MATCH check (use the RETRIEVED TOOLS block below when present):
@@ -1464,12 +1500,12 @@ def pre_action_critic(ctx: PromptContext) -> str:
     same object. A tool sharing only the verb is NOT a match (a "train a GAN"
     tool does NOT satisfy "train a transformer"; "generate images" does NOT
     satisfy "generate molecules").
-  - REJECT a TaskExecutorAgent call when the task names a specific repository /
+  - REJECT a {exec_label} call when the task names a specific repository /
     URL / example code, or requires a specific architecture or method that no
     retrieved tool implements — that work belongs to CoderAgent even if a
     superficially-similar tool was retrieved. Tell the orchestrator to use
     CoderAgent.
-  - Symmetrically, REVISE a CoderAgent call toward TaskExecutorAgent only when a
+  - Symmetrically, REVISE a CoderAgent call toward {exec_label} only when a
     retrieved tool does EXACTLY the asked operation.
 '''
 

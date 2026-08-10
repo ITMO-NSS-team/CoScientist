@@ -1,0 +1,423 @@
+"""Fail-closed plan/result review agents."""
+from __future__ import annotations
+
+import functools
+import json
+import logging
+import os
+from typing import Any, AsyncGenerator, Literal
+
+from google.adk.agents.invocation_context import InvocationContext
+from google.adk.events.event import Event
+from google.genai import types
+
+from CoScientist.config import get_settings
+from CoScientist.experiments.critique import PlanValidationError, validate_and_critique_plan
+from CoScientist.experiments.runtime import approve_plan, initialize_runtime, mark_result_review
+from CoScientist.experiments.runtime.shared import audit
+from CoScientist.experiments.schemas import ExperimentPlan
+from CoScientist.graph.session_scope import session_key
+from CoScientist.hitl.handler import AbstractHITLHandler, DelegatingHITLHandler
+from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.hitl.session_agent import SessionAgent
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+_AUTO_APPROVE_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_OK_TASK_STATUSES = frozenset({"done", "done_with_warnings", "skipped"})
+
+
+_audit = functools.partial(audit, logger)
+
+
+class FailClosedExperimentHITLHandler(AbstractHITLHandler):
+    """Pause review when no interactive reviewer is connected."""
+
+    async def handle_request(self, request: HITLRequest) -> HITLResponse:
+        return HITLResponse(
+            action=HITLAction.REJECT, approved=False, timed_out=True,
+            instructions="No interactive reviewer is connected; experiment remains paused.",
+        )
+
+
+def fail_closed_handler() -> DelegatingHITLHandler:
+    """Delegating handler so Web runtime can attach its UI handler."""
+    return DelegatingHITLHandler(FailClosedExperimentHITLHandler())
+
+
+def _headless_auto_approve() -> bool:
+    return os.getenv("COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE", "").strip().lower() in _AUTO_APPROVE_TRUTHY
+
+
+def _auto_approve_response() -> HITLResponse:
+    # Empty instructions: SessionAgent overwrites output_key when approved+instructions are both set.
+    return HITLResponse(action=HITLAction.APPROVE, approved=True, instructions="")
+
+
+def _context_invariant_errors(plan: ExperimentPlan, context: dict[str, Any]) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    if (rid := context.get("experiment_run_id")) and plan.experiment_run_id != rid:
+        errors.append({
+            "type": "context_invariant", "loc": ["experiment_run_id"], "input": plan.experiment_run_id,
+            "msg": f"experiment_run_id must equal experiment_context.experiment_run_id ({rid!r})",
+        })
+    if (req := context.get("source_request")) and plan.source_request != req:
+        errors.append({
+            "type": "context_invariant", "loc": ["source_request"], "input": plan.source_request,
+            "msg": "source_request must equal experiment_context.source_request",
+        })
+    return errors
+
+
+def _json_payload(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = lines[1:-1] if lines and lines[-1].strip().startswith("```") else lines[1:]
+        text = "\n".join(lines).strip()
+    decoder = json.JSONDecoder()
+    try:
+        return decoder.raw_decode(text)[0]
+    except json.JSONDecodeError:
+        start = text.find("{")
+        if start < 0:
+            raise
+        return decoder.raw_decode(text[start:])[0]
+
+
+def _stamp_context_invariants(payload: Any, context: dict[str, Any]) -> Any:
+    """Authoritative context wins for run-id / source_request."""
+    if not isinstance(payload, dict) or not context:
+        return payload
+    stamped = dict(payload)
+    if run_id := context.get("experiment_run_id"):
+        stamped["experiment_run_id"] = run_id
+    if request := context.get("source_request"):
+        stamped["source_request"] = request
+    return stamped
+
+
+def _esc(text: str, n: int | None = None) -> str:
+    out = text.replace("|", "/")
+    return out[:n] if n is not None else out
+
+
+def render_experiment_plan(plan: ExperimentPlan) -> str:
+    L = [
+        f"# Experiment plan · revision {plan.revision}", f"Goal: {plan.goal}",
+        f"Hypothesis summary: {plan.hypothesis or 'not specified'}",
+        f"Methods: {', '.join(plan.methods)}", f"Total duration: {plan.total_est_duration_min} min",
+    ]
+    if plan.hypotheses:
+        L += ["", "## Hypotheses"] + [f"- `{h.hypothesis_id}`: {h.statement}" for h in plan.hypotheses]
+    L += [
+        "", "## Design matrix (hypothesis → experiment → data → baseline → metrics)",
+        "| Task | Hypothesis | Question | Dataset | Baselines | Metrics | Analysis artifacts | Route |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for t in plan.tasks:
+        d = t.design
+        bl = "; ".join(f"{b.name} ({b.kind})" for b in d.baselines)
+        mt = "; ".join(f"{m.name}/{m.direction}" + (f" [{m.test}]" if m.test else "") for m in d.metrics)
+        ar = "; ".join(f"{a.name} ({a.role}/{a.prepare_via})" for a in d.analysis_artifacts)
+        q = _esc(d.experiment_question.replace("\n", " "), 120)
+        L.append(
+            f"| {t.id} | `{d.hypothesis_ref}` | {q} | {_esc(d.dataset.name)} "
+            f"| {_esc(bl, 100)} | {_esc(mt, 100)} | {_esc(ar, 100)} | `{t.route.value}` |"
+        )
+    for t in plan.tasks:
+        d = t.design
+        tools = [f"{s.name}: {', '.join(x.name for x in s.tools)}" for s in t.mcp_servers]
+        criteria = "; ".join(f"{c.criterion_id}: {c.description}" for c in t.success_criteria)
+        arts = "; ".join(f"{a.name} ({a.role})" for a in t.expected_artifacts)
+        also = f" (+{', '.join(d.also_tests)})" if d.also_tests else ""
+        notes = f" — {d.dataset.notes}" if d.dataset.notes else ""
+        L += ["", f"## {t.id} · {t.name}", f"Route: `{t.route.value}`"]
+        if t.route.value == "alembic_build":
+            L += [f"Repo URL: {t.repo_url}", f"Post-build route: `{t.post_build_route}`"]
+        L += [
+            f"Hypothesis: `{d.hypothesis_ref}`{also}", f"Question: {d.experiment_question}",
+            f"Dataset: {d.dataset.name}{notes}",
+            f"Baselines: {'; '.join(f'{b.name} ({b.kind})' for b in d.baselines)}",
+            f"Metrics: {'; '.join(f'{m.name} ({m.direction})' for m in d.metrics)}",
+            f"Analysis artifacts: {'; '.join(f'{a.name} [{a.role}]' for a in d.analysis_artifacts)}",
+            f"Task: {t.description}", f"MCP/tools: {'; '.join(tools) if tools else 'none'}",
+            f"Inputs: {len(t.input_data)}", f"Success criteria: {criteria}",
+            f"Expected artifacts: {arts}", f"Duration: {t.est_duration_min} min",
+            f"Warnings: {'; '.join(t.warnings) if t.warnings else 'none'}",
+        ]
+    if plan.risks:
+        L += ["", "## Risks"] + [f"- {r}" for r in plan.risks]
+    return "\n".join(L)
+
+
+def _artifact_canonical_location(a: dict[str, Any]) -> str:
+    """Prefer real http(s) URL, then s3://bucket/key, then workspace path."""
+    url = str(a.get("external_url") or "").strip()
+    if url.startswith(("http://", "https://")):
+        return url
+    bucket, key = a.get("bucket"), a.get("s3_key")
+    if bucket and key:
+        return f"s3://{bucket}/{key}"
+    if wp := a.get("workspace_path"):
+        return str(wp)
+    if url:
+        return url
+    return "(location missing)"
+
+
+def build_experiment_artifacts_manifest(state: Any) -> list[dict[str, str]]:
+    """Flat list of real ArtifactRef locations for prompts / reports."""
+    rows: list[dict[str, str]] = []
+    for r in state.get("experiment_task_results") or []:
+        if not isinstance(r, dict):
+            continue
+        tid = str(r.get("task_id") or "")
+        for a in r.get("artifacts") or []:
+            if not isinstance(a, dict):
+                continue
+            rows.append({
+                "task_id": tid,
+                "artifact_id": str(a.get("artifact_id") or ""),
+                "name": str(a.get("name") or ""),
+                "location": _artifact_canonical_location(a),
+                "media_type": str(a.get("media_type") or ""),
+            })
+    return rows
+
+
+def render_experiment_results(state: Any) -> str:
+    results = state.get("experiment_task_results") or []
+    manifest = build_experiment_artifacts_manifest(state)
+    if isinstance(state, dict):
+        state["experiment_artifacts_manifest"] = manifest
+    L = [
+        "# Experiment results",
+        f"Task results: {len(results)}",
+        "",
+        "## Canonical artifact locations (do not invent URLs)",
+    ]
+    if manifest:
+        for m in manifest:
+            L.append(
+                f"- `{m['task_id']}` / `{m['name']}` (`{m['artifact_id']}`): `{m['location']}`"
+            )
+    else:
+        L.append("- (none captured)")
+    for r in results:
+        L += [
+            "",
+            f"## {r.get('task_id')} · {r.get('status')}",
+            str(r.get("summary") or ""),
+            f"Route: `{r.get('route_used')}`",
+        ]
+        for a in r.get("artifacts") or []:
+            if not isinstance(a, dict):
+                continue
+            L.append(
+                f"- Artifact `{a.get('artifact_id')}` ({a.get('name')}): "
+                f"`{_artifact_canonical_location(a)}`"
+            )
+    if summary := state.get("experiment_summary"):
+        L += ["", "## Summary", str(summary)]
+    return "\n".join(L)
+
+
+class ExperimentReviewSessionAgent(SessionAgent):
+    """LLM plan/summary stage with deterministic validation and mandatory HITL."""
+
+    review_kind: Literal["plan", "result"]
+    max_deterministic_revisions: int = 8
+    max_inventory_blocker_hits: int = 2  # same inventory-absence blocker twice → pause
+
+    def __init__(self, **data: Any):
+        if data.get("hitl_handler") is None:
+            data["hitl_handler"] = fail_closed_handler()
+        super().__init__(**data)
+        self._deterministic_revisions = 0
+        self._inventory_blocker_hits = 0
+
+    def _review_output(self, output_text: Any) -> str:
+        if self.review_kind != "plan":
+            return str(output_text)
+        try:
+            return render_experiment_plan(ExperimentPlan.model_validate(_json_payload(output_text)))
+        except Exception:
+            return str(output_text)
+
+    def _revise(
+        self, *, ctx: InvocationContext, detail: Any, pause_prefix: str, edit_prefix: str,
+        inventory_blocker: bool = False, **_kwargs: Any,
+    ) -> HITLResponse:
+        self._deterministic_revisions += 1
+        if inventory_blocker:
+            self._inventory_blocker_hits += 1
+        if not (
+            self._deterministic_revisions >= self.max_deterministic_revisions
+            or self._inventory_blocker_hits >= self.max_inventory_blocker_hits
+        ):
+            return HITLResponse(action=HITLAction.EDIT, approved=False, instructions=f"{edit_prefix} {detail}")
+        ctx.session.state["experiment_plan_review_paused"] = True
+        reason = (
+            "inventory_blocker_repeated"
+            if self._inventory_blocker_hits >= self.max_inventory_blocker_hits
+            else "max_deterministic_revisions"
+        )
+        _audit(f"EXPERIMENT_PLAN_REVIEW_PAUSED reason={reason}")
+        return HITLResponse(
+            action=HITLAction.REJECT, approved=False, stop_review_loop=True,
+            instructions=f"{pause_prefix} {detail}",
+        )
+
+    def _hitl(
+        self, *, message: str, kind: str, plan_id: Any, output: str,
+        user_id: str, session_id: str, timeout_seconds: float,
+    ) -> HITLRequest:
+        return HITLRequest(
+            agent_name=self.name, action_type=HITLAction.APPROVE, message=message,
+            context={
+                "output": output, "experiment_review_kind": kind, "experiment_plan_id": plan_id,
+                "_session": {"user_id": user_id, "session_id": session_id},
+            },
+            invoked_via="internal_loop", timeout_seconds=timeout_seconds,
+        )
+
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        if self.review_kind == "result":
+            runtime = ctx.session.state.get("experiment_runtime") or {}
+            if runtime.get("phase") not in {"reporting", "awaiting_result_review"}:
+                _audit(f"EXPERIMENT_REVIEW_PAUSED kind=result phase={runtime.get('phase') or 'missing'}")
+                yield Event(
+                    invocation_id=ctx.invocation_id, author=self.name, branch=ctx.branch,
+                    content=types.Content(role="model", parts=[types.Part(
+                        text="Experiment result review is paused because execution has not reached reporting.",
+                    )]),
+                )
+                return
+        async for event in super()._run_async_impl(ctx):
+            yield event
+
+    async def _review_plan(self, ctx: InvocationContext, output_text: Any) -> HITLResponse:
+        state, cfg = ctx.session.state, get_settings().experiments
+        user_id, session_id = session_key(ctx)
+        try:
+            context = state.get("experiment_context") or {}
+            payload = _stamp_context_invariants(_json_payload(output_text), context)
+            runtime = state.get("experiment_runtime") or {}
+            previous = ExperimentPlan.model_validate(runtime["plan"]) if runtime.get("plan") else None
+            plan, critique = validate_and_critique_plan(
+                payload, settings=cfg,
+                available_tools=(
+                    context.get("critique_mcp_capabilities")
+                    or context.get("available_mcp_capabilities") or []
+                ),
+                preferred_tools=context.get("preferred_mcp_capabilities"), previous_plan=previous,
+                hypothesis_refs=context.get("hypothesis_refs") or [],
+                repo_candidates=context.get("repo_candidates") or [],
+            )
+            if errs := _context_invariant_errors(plan, context):
+                raise PlanValidationError("ExperimentPlan context invariants failed", errors=errs)
+        except (PlanValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            errors = getattr(exc, "errors", None) or [str(exc)]
+            state["experiment_plan_validation_errors"] = errors
+            _audit("EXPERIMENT_PLAN_REVISE reason=schema errors=" + json.dumps(errors, default=str, ensure_ascii=True))
+            return self._revise(
+                ctx=ctx, detail=errors,
+                pause_prefix="Plan validation failed repeatedly; experiment remains paused. Last errors:",
+                edit_prefix="Deterministic schema validation failed. Return a complete corrected ExperimentPlan JSON. Errors:",
+            )
+
+        critique_json = critique.model_dump(mode="json")
+        state["experiment_plan_critique"] = critique_json
+        if critique.verdict != "approve":
+            issue_text = "; ".join(
+                f"{i.severity}/{i.category}: {i.message} Suggestion: {i.suggestion}"
+                for i in critique.issues if i.is_blocking
+            )
+            inv = any("absent from the capability inventory" in (i.message or "") for i in critique.issues)
+            _audit("EXPERIMENT_PLAN_REVISE reason=critique issues=" + json.dumps(critique_json["issues"], ensure_ascii=True))
+            return self._revise(
+                ctx=ctx, detail=issue_text,
+                pause_prefix="PlanCritique kept rejecting the plan; experiment remains paused. Last issues:",
+                edit_prefix=(
+                    "Deterministic PlanCritique requires revision. "
+                    "Use ONLY tools from available_mcp_capabilities, or route=coder "
+                    "(or alembic_build when a repo_candidate fits). Issues:"
+                    if inv else "Deterministic PlanCritique requires revision:"
+                ),
+                inventory_blocker=inv,
+            )
+
+        state["experiment_plan_review_paused"] = False
+        state["experiment_plan_validation_errors"] = None
+        initialize_runtime(state, plan, critique=critique_json)
+        if _headless_auto_approve():
+            approve_plan(state)
+            _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=headless_auto plan_id={plan.plan_id} phase=execution")
+            return _auto_approve_response()
+
+        response = await self.hitl_handler.handle_request(self._hitl(
+            message="Review and explicitly approve the experiment plan.", kind="plan",
+            plan_id=plan.plan_id, output=render_experiment_plan(plan),
+            user_id=user_id, session_id=session_id, timeout_seconds=cfg.plan_review_timeout_s,
+        ))
+        if response.approved:
+            approve_plan(state)
+            _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=human plan_id={plan.plan_id} phase=execution")
+        return response
+
+    async def _review_result(self, ctx: InvocationContext, _output_text: Any) -> HITLResponse:
+        state, cfg = ctx.session.state, get_settings().experiments
+        user_id, session_id = session_key(ctx)
+        runtime = state.get("experiment_runtime") or {}
+        runtime["phase"] = "awaiting_result_review"
+        statuses = [str(t.get("status")) for t in (runtime.get("tasks") or {}).values() if isinstance(t, dict)]
+        tasks_ok = bool(statuses) and all(s in _OK_TASK_STATUSES for s in statuses)
+        # Materialize canonical ArtifactRef locations before HITL / auto-approve.
+        rendered = render_experiment_results(state)
+
+        if _headless_auto_approve():
+            result = mark_result_review(state, approved=True)
+            _audit(
+                f"EXPERIMENT_REVIEW_APPROVED kind=result mode=headless_auto "
+                f"plan_id={runtime.get('plan_id')} phase={result['phase']} tasks_ok={str(tasks_ok).lower()}"
+            )
+            return _auto_approve_response()
+
+        response = await self.hitl_handler.handle_request(self._hitl(
+            message="Accept the experiment results, or reject with feedback to request a redesigned experiment.",
+            kind="result", plan_id=runtime.get("plan_id"), output=rendered,
+            user_id=user_id, session_id=session_id, timeout_seconds=cfg.result_review_timeout_s,
+        ))
+        if response.timed_out:
+            return response
+        if response.approved:
+            result = mark_result_review(state, approved=True)
+            _audit(
+                f"EXPERIMENT_REVIEW_APPROVED kind=result mode=human "
+                f"plan_id={runtime.get('plan_id')} phase={result['phase']} tasks_ok={str(tasks_ok).lower()}"
+            )
+            return response
+        feedback = response.instructions or response.free_input or "Human requested experiment redesign."
+        mark_result_review(state, approved=False, feedback=feedback)
+        return response.model_copy(update={"stop_review_loop": True})
+
+    async def _review_decision(self, ctx: InvocationContext, output_text: Any) -> HITLResponse:
+        if self.review_kind == "plan":
+            return await self._review_plan(ctx, output_text)
+        return await self._review_result(ctx, output_text)
+
+
+__all__ = [
+    "ExperimentReviewSessionAgent",
+    "FailClosedExperimentHITLHandler",
+    "build_experiment_artifacts_manifest",
+    "fail_closed_handler",
+    "render_experiment_plan",
+    "render_experiment_results",
+]

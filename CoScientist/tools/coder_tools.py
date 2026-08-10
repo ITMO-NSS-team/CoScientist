@@ -599,33 +599,50 @@ class CoderToolset(BaseToolset):
         Returns:
             Dict with status and bytes_written.
         """
+        raw_path = str(file_path or "")
+        # LLMs sometimes pass markdown/body as file_path → ENAMETOOLONG / crash.
+        if (
+            not raw_path.strip()
+            or len(raw_path) > 180
+            or "\n" in raw_path
+            or "\r" in raw_path
+            or raw_path.lstrip().startswith("#")
+        ):
+            return {
+                "status": "error",
+                "error": (
+                    "Invalid file_path: use a short relative basename "
+                    "(e.g. analysis_report.md), not markdown/body content."
+                ),
+            }
+
         # In remote-exec mode, write via the sandbox using a base64 payload.
         if _CFG.url:
             import base64
             b64 = base64.b64encode(content.encode()).decode()
-            qpath = shlex.quote(file_path)
+            qpath = shlex.quote(raw_path)
             cmd = (
                 f"mkdir -p \"$(dirname {qpath})\" && "
                 f"echo {b64} | base64 -d > {qpath}"
             )
             res = await self._run_sync(cmd, self._workspace_id(tool_context))
             if res["status"] == "success":
-                return {"status": "success", "file_path": file_path,
+                return {"status": "success", "file_path": raw_path,
                         "bytes_written": len(content.encode())}
             return {"status": "error", "error": res.get("stderr", "write failed")}
 
         ws = self._local_workspace(tool_context)
 
         def _write() -> Dict[str, Any]:
-            path = Path(file_path)
+            path = Path(raw_path)
             if not path.is_absolute():
                 path = ws / path
-            if path.exists() and not overwrite:
-                return {
-                    "status": "skipped",
-                    "message": f"{file_path} already exists and overwrite=False.",
-                }
             try:
+                if path.exists() and not overwrite:
+                    return {
+                        "status": "skipped",
+                        "message": f"{raw_path} already exists and overwrite=False.",
+                    }
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content)
                 return {

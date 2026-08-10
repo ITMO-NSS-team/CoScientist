@@ -36,6 +36,7 @@ from google.adk.tools.agent_tool import AgentTool
 # Populate the registry (tools/callbacks/classes + prompt templates).
 import CoScientist.assembly.bindings  # noqa: F401  (registration side effect)
 import CoScientist.agents.prompts.templates  # noqa: F401  (registration side effect)
+import CoScientist.experiments.prompts.templates  # noqa: F401  (profile prompts)
 
 from CoScientist.assembly.bindings import HITL_TOOL_DOCS
 from CoScientist.assembly.prompting import PromptContext
@@ -246,6 +247,12 @@ def _build_custom_agent(
             kwargs["instruction"] = _render_instruction(cfg, ctx)
         if cfg.output_key:
             kwargs["output_key"] = cfg.output_key
+        # Same wiring as plain LlmAgent — SessionAgent/custom planners honor
+        # include_contents: none so ToolRetriever dumps do not pollute the prompt.
+        if cfg.include_contents:
+            kwargs["include_contents"] = cfg.include_contents
+        if cfg.mode:
+            kwargs["mode"] = cfg.mode
         if cfg.output_schema:
             kwargs["output_schema"] = REGISTRY.output_schema(cfg.output_schema)
         if cfg.planner:

@@ -12,6 +12,8 @@ does not construct MCP sessions or read service settings.
 """
 from __future__ import annotations
 
+from importlib import import_module
+
 from CoScientist.assembly.registry import (
     REGISTRY,
     CallbackEntry,
@@ -78,6 +80,12 @@ def _alembic():
 def _task_tracker():
     from CoScientist.tools import task_tracker_instance
     return task_tracker_instance
+
+
+def _experiment_control():
+    from CoScientist.experiments.runtime import experiment_control_toolset
+    return experiment_control_toolset
+
 
 def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
@@ -215,6 +223,49 @@ REGISTRY.register_tool(ToolEntry(
             name="update_task_status",
             signature="update_task_status(task_id, status, notes=None)",
             purpose="Set task status to DONE/FAILED/IN_PROGRESS",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="experiment_control",
+    factory=_experiment_control,
+    runtime_resolved=True,
+    docs=(
+        ToolDoc(
+            name="get_experiment_plan",
+            signature="get_experiment_plan()",
+            purpose="Read the approved experiment plan and task/attempt runtime.",
+        ),
+        ToolDoc(
+            name="start_task",
+            signature="start_task(task_id)",
+            purpose="Create one fresh attempt and immutable scoped route envelope.",
+        ),
+        ToolDoc(
+            name="record_result",
+            signature="record_result(task_id, attempt_id, result)",
+            purpose="Validate and persist the attempt's only terminal TaskResult.",
+        ),
+        ToolDoc(
+            name="retry_task",
+            signature="retry_task(task_id)",
+            purpose="Authorize a retryable failure to use a new attempt.",
+        ),
+        ToolDoc(
+            name="fallback_task",
+            signature="fallback_task(task_id, reason)",
+            purpose="Advance to the next route in the finite acyclic fallback chain.",
+        ),
+        ToolDoc(
+            name="skip_task",
+            signature="skip_task(task_id, reason)",
+            purpose="Skip an optional task and persist a skipped TaskResult.",
+        ),
+        ToolDoc(
+            name="amend_task",
+            signature="amend_task(task_id, patch, reason)",
+            purpose="Amend an unstarted runtime task; material changes return to review.",
         ),
     ),
 ))
@@ -648,6 +699,8 @@ def _before_get_task():
 
 
 def _inject_upstream_artifacts():
+    # Kept for default system.yaml / non-EM profiles. EM uses
+    # seed_upstream_from_resolved_inputs at start_task instead.
     from CoScientist.tools.fedot_artifact_handoff import inject_upstream_artifacts
     return inject_upstream_artifacts
 
@@ -742,7 +795,7 @@ _cb(
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
-# Hard-stop Fedot/Coder re-entry once S3 artifacts are already captured (never
+# Hard-stop route-agent re-entry once S3 artifacts are already captured (never
 # fires while a genuinely new/different tool is pending — see should_hard_stop_fedot).
 _cb(
     "refuse_when_fedot_deliverable",
@@ -752,6 +805,7 @@ _cb(
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 # Project prior MCP CSV columns onto the current tools' input_schema arg names.
+# EM profile omits this — start_task seeds via seed_upstream_from_resolved_inputs.
 _cb(
     "inject_upstream_artifacts",
     "before_agent",
@@ -772,6 +826,48 @@ _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_ou
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
 # Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
 _cb("export_tz_and_queries", "after_agent", factory=lambda ctx: _export_tz_and_queries())
+# ── Experiment Module callbacks ──────────────────────────────────────────────
+# Every EM callback is a plain (context-independent) function, so they are
+# registered table-driven: (registry key, hook, "package:attr"), one lazy
+# import per resolve. Keys and hooks must stay in sync with experiments.yaml.
+_EM = "CoScientist.experiments"
+_EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
+    # Bounded planner context plus hard AgentTool route guard.
+    ("build_experiment_context", "before_agent", f"{_EM}.context:build_experiment_context"),
+    ("commit_experiment_hypotheses", "after_agent", f"{_EM}.hypotheses:commit_experiment_hypotheses"),
+    ("persist_experiment_em_request", "before_agent", f"{_EM}.hypotheses:persist_experiment_em_request"),
+    ("bootstrap_research_question_if_empty", "before_agent", f"{_EM}.hypotheses:bootstrap_research_question_if_empty"),
+    ("seed_hypotheses_from_em_request", "before_model", f"{_EM}.hypotheses:seed_hypotheses_from_em_request"),
+    ("enforce_hypothesis_research_commit", "after_model", f"{_EM}.hypotheses:enforce_hypothesis_research_commit"),
+    ("normalize_em_hypothesis_commit", "after_model", f"{_EM}.hypotheses:normalize_em_hypothesis_commit"),
+    ("capture_hypotheses_after_research_commit", "after_tool", f"{_EM}.hypotheses:capture_hypotheses_after_research_commit"),
+    ("reset_experiment_retrieval_budget", "before_agent", f"{_EM}.context:reset_experiment_retrieval_budget"),
+    ("enforce_experiment_retrieval_budget", "after_model", f"{_EM}.context:enforce_experiment_retrieval_budget"),
+    ("snapshot_experiment_discovered_capabilities", "after_agent", f"{_EM}.context:snapshot_experiment_discovered_capabilities"),
+    ("stash_experiment_retrieved_capabilities", "before_agent", f"{_EM}.context:stash_experiment_retrieved_capabilities"),
+    # Same snapshot, after ToolRetriever finishes (reranker clears accumulated_tools).
+    ("persist_experiment_retrieved_capabilities", "after_agent", f"{_EM}.context:stash_experiment_retrieved_capabilities"),
+    ("skip_executor_without_runtime", "before_agent", f"{_EM}.context:skip_executor_without_runtime"),
+    ("guard_experiment_route", "before_tool", f"{_EM}.runtime:guard_route_agent_tool"),
+    ("force_molecule_generator_s3_upload", "before_tool", f"{_EM}.runtime:force_molecule_generator_s3_upload"),
+    ("mark_experiment_route_returned", "after_tool", f"{_EM}.runtime:on_route_agent_returned"),
+    ("enforce_pending_record_result", "after_model", f"{_EM}.runtime:enforce_pending_record_result"),
+    ("enforce_continue_until_reporting", "after_model", f"{_EM}.runtime:enforce_continue_until_reporting"),
+    ("rewrite_mismatched_control_action", "after_model", f"{_EM}.runtime:rewrite_mismatched_control_action"),
+    # Collapse parallel ExperimentModuleAgent fan-out into one merged request.
+    ("coalesce_experiment_module_calls", "after_model", f"{_EM}.runtime:coalesce_experiment_module_calls"),
+    ("redirect_research_to_experiment_module", "after_model", f"{_EM}.runtime:redirect_research_to_experiment_module"),
+)
+
+
+def _em_lazy_factory(path: str):
+    module_name, attr = path.split(":", 1)
+    return lambda ctx: getattr(import_module(module_name), attr)
+
+
+for _key, _hook, _path in _EM_CALLBACKS:
+    _cb(_key, _hook, factory=_em_lazy_factory(_path))
+
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
@@ -784,6 +880,7 @@ def _register_classes() -> None:
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
+    from CoScientist.experiments.review import ExperimentReviewSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
@@ -792,12 +889,19 @@ def _register_classes() -> None:
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
     # and seeds the confirmed frame into the research graph.
     REGISTRY.register_agent_class("context_init_session", ContextInitSessionAgent)
+    REGISTRY.register_agent_class("experiment_review", ExperimentReviewSessionAgent)
 
 
 def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
     from CoScientist.microfluidics.models import LiteratureQueries, StructuredTZ
     from CoScientist.context_init.models import ResearchFrame
+    from CoScientist.experiments.schemas import (
+        ExperimentPlan,
+        ExperimentTask,
+        PlanCritique,
+        TaskResult,
+    )
 
     REGISTRY.register_output_schema("tool_ranking", ToolRanking)
     REGISTRY.register_output_schema("mcp_ranking", MCPRanking)
@@ -807,6 +911,10 @@ def _register_schemas() -> None:
     REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
     # Framing entities of the meta-model, filled per run (context_init pre-stage).
     REGISTRY.register_output_schema("research_frame", ResearchFrame)
+    REGISTRY.register_output_schema("experiment_plan", ExperimentPlan)
+    REGISTRY.register_output_schema("experiment_task", ExperimentTask)
+    REGISTRY.register_output_schema("task_result", TaskResult)
+    REGISTRY.register_output_schema("plan_critique", PlanCritique)
 
 
 def _register_planners() -> None:
