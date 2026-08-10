@@ -26,6 +26,10 @@ _TOOL_ABSTAIN_SCORE = float(os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
 # State key carrying the executor's tool-match verdict for the redirect guard.
 TOOL_MATCH_STATE_KEY = "executor_tool_match"
 
+# Set after a successful fedot_tool capture so Fedot/Coder cannot re-enter.
+FEDOT_DELIVERABLE_READY_KEY = "fedot_deliverable_ready"
+FEDOT_DELIVERABLE_READY_TOKEN = "FEDOT_DELIVERABLE_READY"
+
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
@@ -45,16 +49,76 @@ def before_tool_reranker_model(
     return
 
 
-def after_tool_reranker_agent(
-    callback_context: CallbackContext
-) -> None:
-    """Adds ToolReranker output to state"""
+# Set when ToolReranker scores were applied from after_model (skip after_agent).
+_TOOL_RERANK_APPLIED_KEY = "_tool_rerank_applied"
 
-    current_state = callback_context.state
-    reranked_tools: Dict[str, float] = (current_state.get('reranked_tools') or {}).get('tools', [])
 
-    rerank_map: Dict[int, float] = {t['index']: t['score'] for t in reranked_tools}
-    acc_tools: List[Dict[str, Any]] = current_state.get('accumulated_tools', [])
+def _score_items_from_reranked_state(raw: Any) -> List[Dict[str, Any]]:
+    """Normalize ``reranked_tools`` state (dict / model / list) to score dicts."""
+    if raw is None:
+        return []
+    if hasattr(raw, "model_dump"):
+        raw = raw.model_dump()
+    if isinstance(raw, dict):
+        tools = raw.get("tools") or []
+    elif isinstance(raw, list):
+        tools = raw
+    else:
+        return []
+    out: List[Dict[str, Any]] = []
+    for t in tools:
+        if hasattr(t, "model_dump"):
+            t = t.model_dump()
+        if not isinstance(t, dict):
+            continue
+        try:
+            out.append({"index": int(t["index"]), "score": float(t["score"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _llm_response_text(llm_response: LlmResponse, *, include_thoughts: bool) -> str:
+    content = getattr(llm_response, "content", None)
+    parts = getattr(content, "parts", None) if content is not None else None
+    if not parts:
+        return ""
+    chunks: List[str] = []
+    for p in parts:
+        text = getattr(p, "text", None)
+        if not text:
+            continue
+        if not include_thoughts and getattr(p, "thought", False):
+            continue
+        chunks.append(text)
+    return "".join(chunks)
+
+
+def _score_items_from_llm_response(llm_response: LlmResponse) -> Optional[List[Dict[str, Any]]]:
+    """Parse ToolRanking scores from the model response (not from output_key state).
+
+    Prefer non-thought text (post-sanitize path); fall back to thoughts — GLM often
+    parks the JSON ranking in a thought part while the logger shows the plain text empty.
+    """
+    from CoScientist.agents.callbacks.json_output import _extract_json, _normalize_ranking_payload
+
+    for include_thoughts in (False, True):
+        text = _llm_response_text(llm_response, include_thoughts=include_thoughts)
+        if not text.strip():
+            continue
+        extracted = _extract_json(text)
+        if extracted is None:
+            continue
+        items = _score_items_from_reranked_state(_normalize_ranking_payload(extracted))
+        if items:
+            return items
+    return None
+
+
+def apply_tool_rerank_scores(state: Any, score_items: List[Dict[str, Any]]) -> None:
+    """Filter ``accumulated_tools`` by rerank scores; set match verdict + filtered_tools."""
+    rerank_map: Dict[int, float] = {int(t["index"]): float(t["score"]) for t in score_items}
+    acc_tools: List[Dict[str, Any]] = list(state.get("accumulated_tools") or [])
 
     filtered_tools: List[Dict[str, Any]] = [
         tool for tool in acc_tools
@@ -78,16 +142,64 @@ def after_tool_reranker_agent(
     # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
     # running an unrelated tool.
 
-    # Record the verdict for the redirect guard / the orchestrator's critic.
-    callback_context.state[TOOL_MATCH_STATE_KEY] = {
+    # Record the verdict for the redirect guard / the orchestrator's critic /
+    # the FEDOT hard-stop (a False "matched" here means a DIFFERENT capability
+    # is being asked for, so fedot_artifact_handoff.should_hard_stop_fedot must
+    # let this step through even if a prior deliverable is already captured).
+    state[TOOL_MATCH_STATE_KEY] = {
         "matched": matched,
         "best_score": round(best_score, 3),
         "kept": len(filtered_tools),
     }
-    callback_context.state['filtered_tools'] = filtered_tools
-    callback_context.state['accumulated_tools'] = []
-    callback_context.state['retrieval_queries'] = []
-    return
+    state['filtered_tools'] = filtered_tools
+    state['accumulated_tools'] = []
+    state['retrieval_queries'] = []
+    state[_TOOL_RERANK_APPLIED_KEY] = True
+
+
+def after_tool_reranker_model(
+    callback_context: CallbackContext, llm_response: LlmResponse
+) -> Optional[LlmResponse]:
+    """after_model: apply ToolReranker scores from the response body.
+
+    ``output_key`` is often invisible in ``after_agent`` (ADK state-delta timing),
+    which produced false ``best_score=0.0`` / empty ``filtered_tools``. Reading the
+    ranking JSON here (after ``sanitize_json_output``) avoids that race.
+    """
+    if any(
+        getattr(p, "function_call", None)
+        for p in (getattr(getattr(llm_response, "content", None), "parts", None) or [])
+    ):
+        return None
+    items = _score_items_from_llm_response(llm_response)
+    if not items:
+        logger.warning(
+            "[%s] after_model tool rerank: no parseable scores in response",
+            _agent_name(callback_context),
+        )
+        return None
+    apply_tool_rerank_scores(callback_context.state, items)
+    return None
+
+
+def after_tool_reranker_agent(
+    callback_context: CallbackContext
+) -> None:
+    """Fallback: apply scores from ``output_key`` state if after_model did not."""
+
+    current_state = callback_context.state
+    if current_state.get(_TOOL_RERANK_APPLIED_KEY):
+        return None
+
+    score_items = _score_items_from_reranked_state(current_state.get("reranked_tools"))
+    if not score_items:
+        # Still record an empty verdict so redirect_when_no_tools sees best_score=0
+        # rather than a stale prior-turn match.
+        apply_tool_rerank_scores(current_state, [])
+        return None
+
+    apply_tool_rerank_scores(current_state, score_items)
+    return None
 
 
 def after_fullset_reranker_agent(
@@ -190,6 +302,54 @@ def redirect_when_no_tools(
         "CoderAgent."
     )
     logger.info("[ExperimentAgent] abstaining (no matching tool, best=%s) → CoderAgent", best)
+    state["fedot_results"] = message
+    return types.Content(role="model", parts=[types.Part(text=message)])
+
+
+def _artifact_urls(artifacts: Any) -> List[str]:
+    urls: List[str] = []
+    for art in artifacts or []:
+        if isinstance(art, dict):
+            for key in ("results_presigned_url", "url", "presigned_url"):
+                val = art.get(key)
+                if val:
+                    urls.append(str(val))
+                    break
+        elif isinstance(art, str) and art.strip():
+            urls.append(art.strip())
+    return urls
+
+
+def refuse_when_fedot_deliverable(
+    callback_context: CallbackContext,
+) -> Optional[types.Content]:
+    """before_agent: hard-stop Fedot/Coder once the ask's deliverable is done.
+
+    Soft prompt STOP alone does not prevent ADK re-entry after a successful
+    ``fedot_tool``. Uses ``should_hard_stop_fedot``, which is deliberately
+    conservative: it does NOT fire when the current step's tool-match verdict
+    abstained or names a new tool, i.e. whenever the orchestrator genuinely
+    still needs another agent call (a gen→dock handoff, or a distinct step
+    routed to CoderAgent) this returns None and lets the agent run normally.
+    """
+    from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
+
+    state = callback_context.state
+    if not should_hard_stop_fedot(state):
+        return None
+    urls = _artifact_urls(state.get("fedot_artifacts"))
+    body = "\n".join(urls) if urls else "(see session state fedot_artifacts)"
+    message = (
+        f"{FEDOT_DELIVERABLE_READY_TOKEN}: S3/artifacts already captured. "
+        "Do NOT call fedot_tool, CoderAgent, or retrieve again. "
+        "Hand these URLs to the orchestrator for Final Response:\n"
+        f"{body}"
+    )
+    logger.info(
+        "[%s] refusing re-entry — fedot deliverable already ready (%s url(s))",
+        _agent_name(callback_context),
+        len(urls),
+    )
     state["fedot_results"] = message
     return types.Content(role="model", parts=[types.Part(text=message)])
 

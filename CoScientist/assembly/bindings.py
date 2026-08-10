@@ -622,6 +622,11 @@ def _collect_reranked_tools():
     return after_tool_reranker_agent
 
 
+def _collect_reranked_tools_from_model():
+    from CoScientist.agents.callbacks import after_tool_reranker_model
+    return after_tool_reranker_model
+
+
 def _collect_reranked_mcps():
     from CoScientist.agents.callbacks import after_fullset_reranker_agent
     return after_fullset_reranker_agent
@@ -632,9 +637,19 @@ def _redirect_when_no_tools():
     return redirect_when_no_tools
 
 
+def _refuse_when_fedot_deliverable():
+    from CoScientist.agents.callbacks import refuse_when_fedot_deliverable
+    return refuse_when_fedot_deliverable
+
+
 def _before_get_task():
     from CoScientist.agents.callbacks import before_get_task
     return before_get_task
+
+
+def _inject_upstream_artifacts():
+    from CoScientist.tools.fedot_artifact_handoff import inject_upstream_artifacts
+    return inject_upstream_artifacts
 
 
 def _inject_graph_root():
@@ -719,11 +734,29 @@ _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_t
 _cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
+_cb(
+    "collect_reranked_tools_from_model",
+    "after_model",
+    factory=lambda ctx: _collect_reranked_tools_from_model(),
+)
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
+# Hard-stop Fedot/Coder re-entry once S3 artifacts are already captured (never
+# fires while a genuinely new/different tool is pending — see should_hard_stop_fedot).
+_cb(
+    "refuse_when_fedot_deliverable",
+    "before_agent",
+    factory=lambda ctx: _refuse_when_fedot_deliverable(),
+)
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+# Project prior MCP CSV columns onto the current tools' input_schema arg names.
+_cb(
+    "inject_upstream_artifacts",
+    "before_agent",
+    factory=lambda ctx: _inject_upstream_artifacts(),
+)
 # Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
 # Seed state['research_context'] from the research blackboard (role-dependent).

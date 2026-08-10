@@ -24,9 +24,32 @@ strings on the way down.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Iterable
 
 from google.adk.plugins import BasePlugin
+
+
+def _dedup_key(art: dict) -> tuple:
+    return (art.get("tool"), art.get("s3_key") or art.get("url"))
+
+
+def merge_artifacts(existing: list[dict], new: Iterable[dict]) -> list[dict]:
+    """Single source of artifact de-duplication (by ``tool`` + ``s3_key``/``url``).
+
+    Shared between the plugin (within one FEDOT run) and ``fedotmas_tools``
+    (across sequential ``fedot_tool`` calls in the same session) so both use
+    the exact same identity rule.
+    """
+    merged = list(existing)
+    seen = {_dedup_key(a) for a in merged}
+    for art in new:
+        if not art.get("url"):
+            continue
+        key = _dedup_key(art)
+        if key not in seen:
+            merged.append(art)
+            seen.add(key)
+    return merged
 
 
 def _is_artifact_dict(d: dict) -> bool:
@@ -75,11 +98,7 @@ class ArtifactCapturePlugin(BasePlugin):
         self.captured: list[dict] = []
 
     def _add(self, art: dict) -> None:
-        key = (art.get("tool"), art.get("s3_key") or art.get("url"))
-        if art.get("url") and key not in {
-            (a.get("tool"), a.get("s3_key") or a.get("url")) for a in self.captured
-        }:
-            self.captured.append(art)
+        self.captured = merge_artifacts(self.captured, [art])
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result):  # noqa: ANN001
         tool_name = getattr(tool, "name", None)

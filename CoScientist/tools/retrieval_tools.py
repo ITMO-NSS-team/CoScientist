@@ -164,22 +164,29 @@ class RetrievalToolSet(BaseToolset):
 
         # ACCUMULATE into state
         accumulated = tool_context.state.get('accumulated_tools', [])
-        existing_tools = {t['tool'] for t in accumulated}
+        existing_by_name = {t['tool']: t for t in accumulated}
         last_idx = len(accumulated) + 1
 
         for tool_result in results:
-            if tool_result.tool not in existing_tools:
+            existing = existing_by_name.get(tool_result.tool)
+            if existing is None:
                 accumulated.append({
                     'tool': tool_result.tool,
                     'server_id': tool_result.server_id,
                     # Capped here (not in the inline response) — this dict is
                     # re-injected into the rerankers' prompts every turn.
                     'description': (tool_result.description or "")[:_ACCUM_DESC_CAP],
+                    # Needed downstream to project upstream artifact columns
+                    # onto this tool's argument names (see fedot_artifact_handoff).
+                    'input_schema': tool_result.input_schema,
                     'score': tool_result.score,
                     'tool_index': last_idx,
                     'retrieval_query': query,  # Track which query found this
                 })
+                existing_by_name[tool_result.tool] = accumulated[-1]
                 last_idx += 1
+            elif not existing.get('input_schema') and tool_result.input_schema:
+                existing['input_schema'] = tool_result.input_schema
         
         tool_context.state['accumulated_tools'] = accumulated
         tool_context.state['retrieval_queries'] = tool_context.state.get('retrieval_queries', []) + [query]

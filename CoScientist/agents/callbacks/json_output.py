@@ -34,6 +34,46 @@ def _try_loads(text: str) -> Optional[Any]:
     return parsed if isinstance(parsed, (dict, list)) else None
 
 
+def _unwrap_completion_state(obj: Any) -> Any:
+    """Flatten GLM/OpenRouter ``completionState``/``entries`` envelopes.
+
+    Some providers emit list items as JSON *strings* like
+    ``{"completionState":"complete","entries":[["index",{"value":1}], ...],
+    "type":"Object"}`` instead of a plain ``{"index": 1, ...}``. Schema
+    validation (ToolRanking/MCPRanking, FEDOT MASConfig) then fails.
+    """
+    if isinstance(obj, str):
+        parsed = _try_loads(obj)
+        if parsed is None:
+            return obj
+        obj = parsed
+    if not isinstance(obj, dict):
+        return obj
+    if obj.get("type") == "Object" and isinstance(obj.get("entries"), list):
+        out: dict[str, Any] = {}
+        for entry in obj["entries"]:
+            if not (isinstance(entry, (list, tuple)) and len(entry) == 2):
+                continue
+            key, val = entry
+            out[str(key)] = _unwrap_completion_state(
+                val["value"] if isinstance(val, dict) and "value" in val else val
+            )
+        return out
+    return {k: _unwrap_completion_state(v) for k, v in obj.items()}
+
+
+def _normalize_ranking_payload(data: Any) -> Any:
+    """Coerce ranking list items that arrived as completionState strings."""
+    if not isinstance(data, dict):
+        return data
+    out = dict(data)
+    for key in ("tools", "mcp_scores"):
+        items = out.get(key)
+        if isinstance(items, list):
+            out[key] = [_unwrap_completion_state(item) for item in items]
+    return out
+
+
 def _extract_json(text: str) -> Optional[Any]:
     """First JSON object/array in the text: fenced block, whole text, or the
     first balanced ``{...}`` candidate that parses."""
@@ -90,7 +130,7 @@ def sanitize_json_output(
     if extracted is None:
         return None  # nothing to fix — let schema validation report it
 
-    clean = json.dumps(extracted, ensure_ascii=False)
+    clean = json.dumps(_normalize_ranking_payload(extracted), ensure_ascii=False)
     if clean == text.strip():
         return None
 
