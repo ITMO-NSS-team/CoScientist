@@ -893,6 +893,13 @@ Shell programs (python, pip, curl, wget, git, …) are NOT tools — pass them t
 <<RESEARCH>>
 
 <<HITL>>
+
+## When the data must be GENERATED, not found
+If the dataset can only be produced by RUNNING something (a simulation, an
+evolutionary optimizer, a model) rather than downloaded, do NOT search the web
+for it: say so in one sentence and hand it back — the CoderAgent runs the code.
+Searching for a substitute dataset is how a run silently drifts off the task.
+Never repeat the same query: if two searches did not find it, it is not there.
 ''', TOOLS=ctx.render_tools(), RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
 
 

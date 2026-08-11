@@ -188,6 +188,7 @@ class CoScientistManager:
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
             from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
             from CoScientist.verify.gate_plugin import ArtifactGatePlugin
+            from CoScientist.agents.loop_guard_plugin import RepeatCallGuardPlugin
 
             # `run_root` is the whole lifecycle as ONE SequentialAgent
             # (orchestrator → Result Aggregator). A single run_async over it is one
@@ -199,6 +200,9 @@ class CoScientistManager:
                     # First: deterministically refuse training on a fabricated
                     # dataset (before_tool gate) — fabrication buys nothing.
                     ArtifactGatePlugin(),
+                    # Refuse the Nth identical tool call: any agent can fall into a
+                    # tight loop (a collector once repeated one web search 39 times).
+                    RepeatCallGuardPlugin(),
                     EventLoggerPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
