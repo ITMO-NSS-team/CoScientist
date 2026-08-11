@@ -1,5 +1,6 @@
 """HITL Toolset — tools that agents call to request human input."""
 
+import os
 from typing import Any, Dict, List, Optional
 
 from google.adk.tools import BaseTool, FunctionTool
@@ -14,7 +15,20 @@ from CoScientist.graph.session_scope import session_key
 
 settings = get_settings()
 
+def a2a_mode() -> bool:
+    """True when this process serves agents over A2A (set by a2a/serve.py).
+
+    Over A2A there is no console/websocket to the human, so the blocking tools
+    below would hang the server; the A2A-native long-running variants are used
+    instead (see CoScientist/hitl/a2a_tools.py).
+    """
+    return os.getenv("COSCIENTIST_A2A_MODE", "") not in ("", "0", "false", "False")
+
+
 def get_hitl_tools() -> list:
+    if a2a_mode():
+        from CoScientist.hitl.a2a_tools import get_a2a_hitl_tools
+        return get_a2a_hitl_tools()
     return [
         FunctionTool(hitl_toolset.request_approval),
         FunctionTool(hitl_toolset.request_selection)
