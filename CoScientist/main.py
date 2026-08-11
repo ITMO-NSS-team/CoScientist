@@ -161,7 +161,6 @@ class CoScientistManager:
 
             if self.session_service is None:
                 self.session_service = InMemorySessionService()
-
             session = await self.session_service.get_session(
                 app_name=self.app_name,
                 user_id=self.user_id,
@@ -370,6 +369,20 @@ class CoScientistManager:
                     "I couldn't complete this request within the available steps — the orchestrator "
                     "did not reach a tool that produced a result. Please retry or narrow the request."
                 )
+
+        # Index this research so LATER runs can find and reuse it. The graph is
+        # already persisted per session, but nothing ever read it back — without
+        # an index every run rediscovers what the system already settled. Derived
+        # and best-effort: indexing must never affect the answer.
+        try:
+            from CoScientist.graph.research.index import index_research
+            from CoScientist.graph.research.store import get_research_graph
+
+            rg = get_research_graph(user_id=self.user_id, session_id=self.session_id)
+            index_research(rg.full(), path=str(getattr(rg, "_path", "")),
+                           user_id=self.user_id, session_id=self.session_id)
+        except Exception:  # noqa: BLE001
+            pass
 
         # Package the deliverable: report.md + LaTeX (per config) + MANIFEST.json.
         return await asyncio.to_thread(

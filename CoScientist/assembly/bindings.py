@@ -305,6 +305,14 @@ _RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
                  "context star. Call once at the start; archives any active graph."),
     ),
     ToolDoc(
+        name="research_prior",
+        signature="research_prior(query, limit)",
+        purpose=("Search PAST researches (previous runs) related to a question: "
+                 "their hypotheses with verdicts, the methods/tools used and the "
+                 "conclusions. Consult BEFORE planning so settled work is reused "
+                 "instead of re-derived; each hit reports why it matched."),
+    ),
+    ToolDoc(
         name="research_triggers",
         signature="research_triggers()",
         purpose=("Evaluate the decision triggers (READY / BLOCKED / REFUTE / "

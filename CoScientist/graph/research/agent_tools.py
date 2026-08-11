@@ -169,6 +169,7 @@ class ResearchGraphToolset(BaseToolset):
                 FunctionTool(self.research_init),
                 FunctionTool(self.research_triggers),
                 FunctionTool(self.research_set_focus),
+                FunctionTool(self.research_prior),
             ]
         return tools
 
@@ -295,6 +296,36 @@ class ResearchGraphToolset(BaseToolset):
         status and label (no attribute detail). Use it to find node ids."""
         return get_research_graph(tool_context).overview()
 
+    def research_prior(self, tool_context: ToolContext, query: str,
+                       limit: int = 3) -> Dict[str, Any]:
+        """Search PAST researches (previous runs) for work related to `query`.
+
+        Use before planning: a hypothesis this system already confirmed or
+        refuted, and the method/tools it used, should be reused rather than
+        re-derived. Matching is deterministic token overlap, and every hit
+        reports the tokens that matched so you can judge relevance yourself.
+
+        Args:
+            query: the current question or topic, in your own words.
+            limit: how many prior researches to return (default 3).
+
+        Returns:
+            {"found": n, "priors": [{question, score, matched_tokens, counts,
+             hypotheses[{status, formulation}], methods, conclusions, tools}]}.
+        """
+        try:
+            from CoScientist.graph.research.index import get_research_index
+            graph = get_research_graph(tool_context)
+            hits = get_research_index().search(
+                query, limit=max(1, min(int(limit or 3), 10)),
+                exclude_id=getattr(graph, "_research_id", "") or "")
+        except Exception as exc:  # noqa: BLE001 — never break a run on the index
+            return {"found": 0, "priors": [], "error": str(exc)[:200]}
+        slim = [{k: h.get(k) for k in ("question", "score", "matched_tokens", "counts",
+                                       "hypotheses", "methods", "conclusions", "tools",
+                                       "research_id")} for h in hits]
+        return {"found": len(slim), "priors": slim}
+
     def research_provenance(self, tool_context: ToolContext, node_id: str) -> Dict[str, Any]:
         """Trace a node back to the root research question: the chain of nodes,
         edges and their sources (who produced each step)."""
@@ -314,6 +345,36 @@ class ResearchGraphToolset(BaseToolset):
 
 # ── before_agent injection callback ────────────────────────────────────────────
 
+def _prior_research_digest(callback_context, research_graph) -> str:
+    """Digest of related PAST researches, appended to the orchestrator context."""
+    try:
+        from CoScientist.graph.research.index import format_priors, get_research_index
+        question = ""
+        try:
+            root = research_graph.root_id()
+            if root:
+                node = research_graph.full()["nodes"]
+                question = next((( n.get("attrs") or {}).get("formulation", "")
+                                 for n in node if n.get("id") == root), "")
+        except Exception:  # noqa: BLE001
+            question = ""
+        if not question:
+            # Before the graph is seeded, match on the user's request itself.
+            question = str(callback_context.state.get("user_query", ""))[:500]
+        if not question:
+            return ""
+        hits = get_research_index().search(
+            question, limit=3,
+            exclude_id=getattr(research_graph, "_research_id", "") or "")
+        if not hits:
+            return ""
+        return ("\n\nПРОШЛЫЕ ИССЛЕДОВАНИЯ (переиспользуй, не переоткрывай; "
+                "проверь актуальность прежде чем опираться):\n"
+                + format_priors(hits))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def make_inject_research_context(is_root: bool):
     """Build the before_agent callback that seeds state['research_context'] for
     the {research_context?} prompt placeholder. Orchestrator gets the overview +
@@ -330,9 +391,13 @@ def make_inject_research_context(is_root: bool):
         try:
             research_graph = get_research_graph(callback_context)
             if is_root:
-                callback_context.state[CONTEXT_STATE_KEY] = _orchestrator_digest(
-                    research_graph
-                )
+                digest = _orchestrator_digest(research_graph)
+                # Cross-run reuse: surface what PAST runs already settled about
+                # this question, so the orchestrator builds on them instead of
+                # re-deriving. Best-effort and capped; absent priors change
+                # nothing.
+                digest += _prior_research_digest(callback_context, research_graph)
+                callback_context.state[CONTEXT_STATE_KEY] = digest
             else:
                 callback_context.state[CONTEXT_STATE_KEY] = _worker_context(
                     research_graph,
