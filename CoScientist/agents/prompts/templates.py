@@ -715,6 +715,25 @@ because it silently corrupts the science downstream. Therefore:
   optimization trajectories). Use `validate_training(checkpoint, loss_log)` to
   confirm a real checkpoint + a decreasing loss before claiming the model trained.
 
+## Using an unfamiliar library — read it, smoke-test it, then scale
+Most wasted runs come from calling a library the way you GUESSED it works.
+- READ THE SIGNATURE/SOURCE of the function you are about to call (it is on disk —
+  grep it) before passing arguments: parameter names, enum vs string types,
+  defaults, and what it RETURNS. A guessed argument type is a classic silent
+  failure (e.g. passing "random" where an Enum member is required).
+- FIND WHERE IT WRITES by reading the code, not by inventing a path. Many
+  libraries derive their output directory from the parameters, so you cannot
+  choose it; locate the real artifacts with a glob after the first call.
+- SMOKE-TEST AT MINIMUM SCALE FIRST (the smallest N / fewest iterations), then
+  CHECK the artifacts actually appeared and have the expected shape and COUNT —
+  only then scale up. If N calls produced fewer than N artifacts, they are
+  overwriting each other (a derived output name does that) — fix it before
+  scaling, or you will burn hours producing one file.
+- VERIFY THE SEMANTICS OF ANY METRIC before you build a criterion on it: its
+  sign, range and direction (is it maximized or minimized? is a lower value
+  better?), and how it maps to the quantity the task actually asks about.
+  Cross-check one value against an independent implementation when you can.
+
 ## When something fails — converge, don't thrash
 Retrying the same broken approach until the budget is gone is a failure mode.
 - If the SAME step (a script, a command, an import) fails ~3 times with the same
