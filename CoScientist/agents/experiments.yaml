@@ -26,6 +26,15 @@
 #   7. ToolReranker: sanitize_json_output applies scores; collect_reranked_tools
 #      is after_agent fallback (no separate *_from_model callback)
 #   8. TaskExecutorAgent removed (cannot share ToolPreparerAgent with EM)
+#   9. Target orch (three lanes, no keyword rewrites):
+#      - Science/compute → ExperimentModuleAgent ONLY (Coder is EM-internal
+#        route; no orchestrator→Coder bypass = no shadow science).
+#      - Infrastructure (repo→reusable MCP server) → McpBuilderAgent top-level
+#        (not an experiment; does not need hypotheses/plan-HITL/TaskResult).
+#      - Literature/knowledge → ResearchAgent; clinical → MedicalAgent.
+#      Orch has NO retrieval (single inventory lives in ToolPreparer) and does
+#      NOT keyword-rewrite briefs: research-vs-compute is decided by the module
+#      from its own inventory (NO_MATCHING_TOOL → orch falls back to Research).
 # ─────────────────────────────────────────────────────────────────────────────
 
 defaults:
@@ -43,20 +52,28 @@ agents:
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
-    tools: [retrieval, graph, research_graph_orchestrator]
+    # No retrieval: EM ToolPreparer owns the only inventory for compute.
+    # No CoderAgent lane: Coder is an EM-internal Executor route (no shadow science).
+    # McpBuilderAgent stays top-level: repo→MCP is infrastructure, not an experiment.
+    tools: [graph, research_graph_orchestrator]
     subordinates:
       - PlannerAgent
       - ResearchAgent
       - ExperimentModuleAgent
-      - CoderAgent
-      - MedicalAgent
       - McpBuilderAgent
+      - MedicalAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
       before_agent: [before_get_task, inject_graph_root, inject_research_context]
+      # Structural safety nets only — both keyed on shape/state, never on request
+      # keywords. coalesce merges accidental EM fan-out into one brief;
+      # enforce_experiment_module_first gives the module the FIRST shot before
+      # literature research (state-keyed), so research-vs-compute stays a
+      # data-driven contract decided by the module's inventory (NO_MATCHING_TOOL
+      # → orch falls back to Research on the next turn).
       after_model:
-        - redirect_research_to_experiment_module
         - coalesce_experiment_module_calls
+        - enforce_experiment_module_first
         - guard_unknown_tools
     hitl: true
     a2a:
@@ -144,7 +161,8 @@ agents:
       cannot be solved computationally, or claims need literature validation. If
       it returns no/empty/insufficient results, escalate by reformulating into
       "find and download papers about <expanded topic>". Do NOT use it to read a
-      specific repository or URL the user named — that goes to CoderAgent.
+      specific repository or URL the user named — that goes to ExperimentModuleAgent
+      (Coder route inside the module).
     planning: |-
       Use this ONLY when information cannot be computed or retrieved via tools, and specifically 
       requires searching information from the web or literature.  
@@ -172,21 +190,22 @@ agents:
     class: sequential
     description: >-
       Plans, reviews, executes and reports one computational experiment with
-      task/attempt state, finite fallback and artifact lineage. Primary choice
-      for ANY task that can be calculated with existing MCP tools/services
-      (property estimation, docking, simulations) or scoped sandbox code.
+      task/attempt state, finite fallback and artifact lineage. Owns tool
+      discovery (ToolPreparer), hypotheses, plan HITL, MCP/FEDOT/Coder/McpBuilder
+      routing, and result HITL. Primary choice for ANY computational ask.
     routing: >-
-      when the result can be obtained by RUNNING AN EXISTING tool/service or a
-      scoped computational experiment. Call ONCE per computational stage with the
-      FULL self-contained brief — do not fan out one ask into multiple
-      ExperimentModuleAgent calls; the module plans and orders tasks internally.
-      Hallmark: "compute/run X using tools we already have" or "run a planned
-      experiment with MCP/FEDOT/coder fallback."
+      for ANY computational / engineering stage: molecules, docking, properties,
+      simulations, custom code, named repos/URLs, FEDOT loops, or MCP gaps.
+      Call ONCE per stage with the FULL self-contained brief (goal, constraints,
+      data refs, required outcomes). Do not retrieve tools yourself and do not
+      fan out into multiple ExperimentModuleAgent calls — inventory + plan +
+      route fallbacks live inside the module.
     planning: |-
-      Use this as your primary choice for ANY task that can be calculated. 
-      This agent has comprehensive capabilities and must be prioritized over searching whenever possible: 
-        - Any computational task requiring tools
-        - Solves all tasks involving chemistry
+      Use this as your ONLY choice for computational or engineering work.
+      Prefer over Research whenever the ask can be computed or coded:
+        - chemistry / molecule / docking / property tasks
+        - custom code, sandbox, or named repository work
+        - tool discovery + execution + coder/FEDOT fallback
     children:
       - ToolPreparerAgent
       - HypothesesAgent
@@ -274,8 +293,8 @@ agents:
           * environment setup and running long jobs
           → Use whenever no existing tool covers the objective and the step requires
             doing software/data engineering rather than calling a ready service
-    # Attempt-envelope anti-fabrication when used under ExperimentExecutor;
-    # still adequate as a direct orchestrator subordinate.
+    # Attempt-envelope anti-fabrication when used under ExperimentExecutor.
+    # Not an orchestrator subordinate on this profile (elegant EM path).
     prompt: coder
     tools: [coder, research_graph]
     subordinates: [DatasetCollectorAgent]

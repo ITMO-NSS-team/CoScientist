@@ -360,6 +360,22 @@ def critique_plan(
                            "is absent from the capability inventory.",
                            "Use an exact retrieved tool/server pair, or switch to coder.")
 
+        if task.route in _MCP:
+            demo_tools = sorted({
+                tool.name
+                for server in task.mcp_servers
+                for tool in server.tools
+                if is_paper_demo_tool(tool.name, str(getattr(tool, "description", "") or ""))
+            })
+            wants_custom_inputs = bool(task.input_data) or bool(task.launch_params)
+            if demo_tools and wants_custom_inputs:
+                fe(tid, "blocker",
+                   f"{tid} binds paper-demo tool(s) {', '.join(demo_tools)} but supplies "
+                   "input_data/launch_params — these tools only reproduce their paper's "
+                   "hardcoded examples and ignore caller-provided molecules/datasets.",
+                   "Bind a general inventory tool whose input_schema accepts these inputs, "
+                   "or use route=coder; do not route arbitrary inputs to a paper-demo tool.")
+
         if task.route in _MCP and "image/" not in _tool_output_blob(task):
             for art in task.expected_artifacts:
                 if art.required and _is_image_artifact(art):

@@ -856,7 +856,8 @@ _EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
     ("rewrite_mismatched_control_action", "after_model", f"{_EM}.runtime:rewrite_mismatched_control_action"),
     # Collapse parallel ExperimentModuleAgent fan-out into one merged request.
     ("coalesce_experiment_module_calls", "after_model", f"{_EM}.runtime:coalesce_experiment_module_calls"),
-    ("redirect_research_to_experiment_module", "after_model", f"{_EM}.runtime:redirect_research_to_experiment_module"),
+    # Give the module the first shot before literature research (state-keyed, not keyword-keyed).
+    ("enforce_experiment_module_first", "after_model", f"{_EM}.runtime:enforce_experiment_module_first"),
 )
 
 

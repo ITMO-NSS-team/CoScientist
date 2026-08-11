@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 FOCUS_STATE_KEY = "research_focus"
 CONTEXT_STATE_KEY = "research_context"
+# Canonical top-level goal the orchestrator declared via research_init. The
+# module-first gate prefers it over a downstream (possibly reworded) delegation
+# brief, so the Experiment Module receives the real intent, not "find literature".
+ROOT_GOAL_STATE_KEY = "orchestrator_root_goal"
 
 
 def _agent(tool_context: Optional[ToolContext]) -> str:
@@ -215,6 +219,11 @@ class ResearchGraphToolset(BaseToolset):
             empirical_bases=empirical_bases,
         )
         if out.get("ok"):
+            if self._is_root and isinstance(question, str) and question.strip():
+                try:
+                    tool_context.state[ROOT_GOAL_STATE_KEY] = question.strip()
+                except Exception:  # noqa: BLE001
+                    pass
             _refresh_context_state(tool_context, self._is_root)
         return out
 

@@ -1176,6 +1176,7 @@ def orchestrator(ctx: PromptContext) -> str:
     exec_name = _compute_executor_name(ctx)
     has_exec = exec_name is not None
     has_coder = ctx.has_subordinate("CoderAgent")
+    has_mcp_builder = ctx.has_subordinate("McpBuilderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
     has_retrieval = ctx.has_tool("retrieval")
     has_research_graph = ctx.has_tool("research_graph_orchestrator")
@@ -1280,6 +1281,43 @@ def orchestrator(ctx: PromptContext) -> str:
             "   A second call is allowed only for a later, separate scientific stage\n"
             "   after the previous experiment result was accepted."
         )
+        if not has_retrieval:
+            steps.append(
+                "You do NOT discover MCP tools yourself — ExperimentModuleAgent's\n"
+                "   ToolPreparer owns retrieve/rerank inventory. Delegate the brief to\n"
+                "   ExperimentModuleAgent immediately; do not call retrieve_tools or\n"
+                "   invent tool/server ids, and do NOT try to decide up-front whether a\n"
+                "   tool exists — the module decides that from its own inventory."
+            )
+        if not has_coder:
+            # Compute/engineering is EM-only (no shadow-science bypass): custom
+            # code, sandbox shells, named repos/URLs to RUN, and FEDOT loops are
+            # Executor routes INSIDE the module, not orchestrator lanes.
+            infra_clause = (
+                "\n   The ONE exception is turning a repository into a REUSABLE MCP\n"
+                "   tool server (infrastructure, not an experiment): that goes to\n"
+                "   McpBuilderAgent directly. A one-off RUN of repo code is still\n"
+                "   ExperimentModuleAgent."
+                if has_mcp_builder else ""
+            )
+            steps.append(
+                "You have no direct CoderAgent lane. Custom code, sandbox shells,\n"
+                "   named repos/URLs to run, data assembly, and FEDOT loops are handled\n"
+                "   INSIDE ExperimentModuleAgent (Executor routes). Never write/run code\n"
+                "   yourself — pass those asks as one ExperimentModuleAgent brief."
+                + infra_clause
+            )
+        # Data-driven research fallback: the module — not a keyword rule — decides
+        # whether a computational path exists. Honour its verdict.
+        if has_research:
+            steps.append(
+                "Send every computable/engineering ask to ExperimentModuleAgent FIRST;\n"
+                "   do not pre-judge it as literature. Only if ExperimentModuleAgent\n"
+                "   returns NO_MATCHING_TOOL or explicitly recommends literature/research\n"
+                "   (its inventory covers nothing) do you then call ResearchAgent with the\n"
+                "   ORIGINAL ask. Do not loop back into ExperimentModuleAgent for the same\n"
+                "   stage after such a verdict."
+            )
 
     if has_research_graph:
         steps.append(

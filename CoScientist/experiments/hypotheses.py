@@ -509,10 +509,45 @@ def _shrink_commit_args(args: dict[str, Any]) -> tuple[dict[str, Any], list[dict
     return shrunk, refs, True
 
 
+def _coerce_commit_arg_lists(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Force nodes/edges/status_updates to list type before the FC is dispatched.
+
+    GLM occasionally emits ``research_commit`` with a JSON-encoded STRING for
+    ``nodes`` (or edges/status_updates) instead of an array. The tool signature
+    types those as ``List[Dict]``, so a string argument makes the provider
+    reject the whole turn (``Input should be a valid list``) and kills the run.
+    Parsing the string back into a list at the model boundary keeps the typed
+    contract without guessing content.
+    """
+    out = dict(args)
+    changed = False
+    for key in ("nodes", "edges", "status_updates"):
+        val = out.get(key)
+        if not isinstance(val, str):
+            continue
+        parsed = _parse_payload(val)
+        if isinstance(parsed, list):
+            out[key] = parsed
+        elif isinstance(parsed, dict):
+            inner = parsed.get(key)
+            out[key] = inner if isinstance(inner, list) else [parsed]
+        else:
+            # Unparseable string for a list field → drop it rather than ship a
+            # malformed FC (empty/omitted is valid; a bare string is not).
+            out.pop(key, None)
+        changed = True
+    return out, changed
+
+
 def normalize_em_hypothesis_commit(
     callback_context: CallbackContext, llm_response: LlmResponse,
 ) -> Optional[LlmResponse]:
-    """after_model: stash H formulations; shrink fat research_commit to Hypothesis-only."""
+    """after_model: stash H formulations; shrink fat research_commit to Hypothesis-only.
+
+    Also coerces string-typed list args (nodes/edges/status_updates) so a
+    research_commit FC is never dispatched with a JSON string where the tool
+    expects an array.
+    """
     content = getattr(llm_response, "content", None)
     parts = list(getattr(content, "parts", None) or [])
     if not parts:
@@ -527,6 +562,7 @@ def normalize_em_hypothesis_commit(
             new_parts.append(part)
             continue
         args = dict(getattr(fc, "args", None) or {})
+        args, coerced = _coerce_commit_arg_lists(args)
         shrunk, refs, changed = _shrink_commit_args(args)
         if refs:
             state[_PENDING_FC_KEY] = _merge_refs(state.get(_PENDING_FC_KEY), refs)
@@ -546,6 +582,18 @@ def normalize_em_hypothesis_commit(
                 f"EXPERIMENT_HYPOTHESES_COMMIT_SHRUNK nodes={len(shrunk['nodes'])} "
                 f"chars≈{_estimate_commit_chars(shrunk)}",
                 stdout=f"EXPERIMENT_HYPOTHESES_COMMIT_SHRUNK nodes={len(shrunk['nodes'])}",
+            )
+        elif coerced:
+            # Not shrunk (e.g. edges/status-only or non-Hypothesis nodes) but a
+            # string list arg was repaired — ship the coerced, dispatchable form.
+            mutated = True
+            new_parts.append(
+                types.Part.from_function_call(name="research_commit", args=args)
+            )
+            audit(
+                logger,
+                "EXPERIMENT_HYPOTHESES_COMMIT_ARGS_COERCED "
+                f"keys={[k for k in ('nodes', 'edges', 'status_updates') if k in args]}",
             )
         else:
             new_parts.append(part)

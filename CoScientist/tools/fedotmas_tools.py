@@ -17,6 +17,7 @@ from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin, merge
 from CoScientist.tools.fedot_artifact_handoff import (
     bind_upstream_inputs_to_task,
     materialize_tables_from_artifacts,
+    record_fedot_deliverable_attempt,
     record_fedot_producer_tools,
     should_hard_stop_fedot,
     tables_from_state,
@@ -247,6 +248,7 @@ class FedotMASToolset(BaseToolset):
             # Even on timeout: if we already have S3 links, treat as delivered.
             tool_context.state[_FEDOT_DELIVERABLE_READY_KEY] = True
             record_fedot_producer_tools(tool_context.state, filtered_tools)
+            record_fedot_deliverable_attempt(tool_context.state)
 
         ret = {"status": status, "artifacts": cap.captured}
         if result is not None:

@@ -265,8 +265,16 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert orch.children == []
     assert "ExperimentModuleAgent" in orch.subordinates
     assert "TaskExecutorAgent" not in orch.subordinates
-    assert "redirect_research_to_experiment_module" in orch.callbacks.after_model
+    # Target contract: no keyword-rewrite callbacks. Structural fan-out merge +
+    # state-keyed module-first gate survive; research-vs-compute is decided by
+    # the module's inventory, never by matching words in the request.
     assert "coalesce_experiment_module_calls" in orch.callbacks.after_model
+    assert "enforce_experiment_module_first" in orch.callbacks.after_model
+    assert orch.callbacks.after_model.index("coalesce_experiment_module_calls") < (
+        orch.callbacks.after_model.index("enforce_experiment_module_first")
+    )
+    assert "redirect_research_to_experiment_module" not in orch.callbacks.after_model
+    assert "normalize_experiment_module_brief" not in orch.callbacks.after_model
     assert "inject_upstream_artifacts" not in orch.callbacks.before_agent
 
     module = config.agent("ExperimentModuleAgent")
@@ -296,8 +304,14 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert hyp.callbacks.before_agent.index("bootstrap_research_question_if_empty") < (
         hyp.callbacks.before_agent.index("inject_research_context")
     )
-    assert "CoderAgent" in orch.subordinates
+    # Three-lane target: science/compute → EM only (no orch→Coder shadow science);
+    # infra (repo→MCP) → McpBuilder top-level; single inventory (orch has no retrieval).
+    assert "CoderAgent" not in orch.subordinates
+    assert "McpBuilderAgent" in orch.subordinates
+    assert "retrieval" not in (orch.tools or [])
     assert "McpBuilderAgent" in config.agents
+    # Coder + McpBuilder remain EM-internal Executor routes as well.
+    assert "CoderAgent" in config.agent("ExperimentExecutorAgent").subordinates
     assert "McpBuilderAgent" in config.agent("ExperimentExecutorAgent").subordinates
     fedot_before = config.agent("FedotAgent").callbacks.before_agent
     assert "refuse_when_fedot_deliverable" in fedot_before
@@ -411,6 +425,289 @@ def test_experiment_retrieval_budget_stops_repeated_llm_tool_calls():
     assert stopped is not None
     assert "EXPERIMENT_RETRIEVAL_BUDGET_EXHAUSTED" in stopped.content.parts[0].text
     assert context.state["experiment_retrieval_budget_exhausted"] is True
+
+
+def test_coalesce_merges_parallel_experiment_module_calls():
+    from google.adk.models import LlmResponse
+    from google.genai import types
+
+    from CoScientist.experiments.runtime.coalesce import (
+        coalesce_experiment_module_calls,
+    )
+
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="ExperimentModuleAgent",
+                        args={"request": "Generate KRAS G12C inhibitors."},
+                    )
+                ),
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="ExperimentModuleAgent",
+                        args={"request": "Dock the generated molecules."},
+                    )
+                ),
+            ],
+        )
+    )
+    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
+
+    assert coalesce_experiment_module_calls(ctx, response) is None
+    parts = response.content.parts
+    assert len(parts) == 1
+    merged = parts[0].function_call.args["request"]
+    assert "Generate KRAS G12C inhibitors." in merged
+    assert "Dock the generated molecules." in merged
+
+
+def _research_call_response(request: str):
+    from google.adk.models import LlmResponse
+    from google.genai import types
+
+    return LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="ResearchAgent",
+                        args={"request": request},
+                    )
+                )
+            ],
+        )
+    )
+
+
+def test_module_first_gate_reroutes_research_before_module_ran():
+    from CoScientist.experiments.runtime.coalesce import (
+        enforce_experiment_module_first,
+    )
+
+    response = _research_call_response("Dock aspirin against COX-2 and report affinity.")
+    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
+
+    assert enforce_experiment_module_first(ctx, response) is None
+    fc = response.content.parts[0].function_call
+    # State-keyed rewrite: the module gets the first shot with the same brief.
+    assert fc.name == "ExperimentModuleAgent"
+    assert fc.args["request"] == "Dock aspirin against COX-2 and report affinity."
+
+
+def test_module_first_gate_prefers_root_goal_over_reworded_brief():
+    from CoScientist.experiments.runtime.coalesce import (
+        enforce_experiment_module_first,
+    )
+
+    # Orchestrator declared a compute goal via research_init, then delegated a
+    # reworded "find literature" brief. The gate must reroute to the module with
+    # the real goal, not the literature rewording (otherwise EM plans a lit search).
+    response = _research_call_response(
+        "Find literature on non-covalent BTK inhibitors and their BBB permeability."
+    )
+    ctx = SimpleNamespace(
+        state={
+            "orchestrator_root_goal": (
+                "Generate highly potent non-covalent BTK inhibitors with "
+                "increased blood-brain barrier permeability."
+            )
+        },
+        user_content=None,
+        agent_name="OrchestratorAgent",
+    )
+
+    assert enforce_experiment_module_first(ctx, response) is None
+    fc = response.content.parts[0].function_call
+    assert fc.name == "ExperimentModuleAgent"
+    assert fc.args["request"].startswith("Generate highly potent non-covalent BTK")
+    assert "Find literature" not in fc.args["request"]
+
+
+def test_module_first_gate_falls_back_to_brief_without_root_goal():
+    from CoScientist.experiments.runtime.coalesce import (
+        enforce_experiment_module_first,
+    )
+
+    response = _research_call_response("Dock aspirin against COX-2 and report affinity.")
+    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
+
+    assert enforce_experiment_module_first(ctx, response) is None
+    fc = response.content.parts[0].function_call
+    assert fc.name == "ExperimentModuleAgent"
+    assert fc.args["request"] == "Dock aspirin against COX-2 and report affinity."
+
+
+def test_module_first_gate_no_op_after_module_attempted():
+    from CoScientist.experiments.runtime.coalesce import (
+        enforce_experiment_module_first,
+    )
+
+    response = _research_call_response("Find review papers on COX-2 selectivity.")
+    # Module already ran (and may have emitted NO_MATCHING_TOOL) → Research stands.
+    ctx = SimpleNamespace(
+        state={"experiment_source_request": "prior compute ask"},
+        user_content=None,
+        agent_name="OrchestratorAgent",
+    )
+
+    assert enforce_experiment_module_first(ctx, response) is None
+    assert response.content.parts[0].function_call.name == "ResearchAgent"
+
+
+def test_module_first_gate_leaves_explicit_module_call_untouched():
+    from google.adk.models import LlmResponse
+    from google.genai import types
+
+    from CoScientist.experiments.runtime.coalesce import (
+        enforce_experiment_module_first,
+    )
+
+    # Turn already delegates to the module (plus a Research call) → do not rewrite.
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="ExperimentModuleAgent",
+                        args={"request": "Generate candidates."},
+                    )
+                ),
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="ResearchAgent",
+                        args={"request": "Background on the target."},
+                    )
+                ),
+            ],
+        )
+    )
+    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
+
+    assert enforce_experiment_module_first(ctx, response) is None
+    names = [p.function_call.name for p in response.content.parts]
+    assert names == ["ExperimentModuleAgent", "ResearchAgent"]
+
+
+def test_critique_blocks_paper_demo_tool_on_custom_input_task():
+    demo_server = {
+        "name": "paper-demo",
+        "server_id": "srv-demo",
+        "tools": [
+            {
+                "name": "reproduce_figure8_examples",
+                "description": "Reproduce the six characterised molecules from Figure 8.",
+                "input_schema": {},
+            }
+        ],
+        "source": "registry",
+    }
+    task = _task("EXP-1", route="react_tools")
+    task["mcp_servers"] = [demo_server]
+    task["input_data"] = [
+        {
+            "data_id": "user_mols",
+            "kind": "workspace",
+            "description": "Caller-provided molecules to dock.",
+            "workspace_path": "mols.csv",
+        }
+    ]
+    task["launch_params"] = {"smiles_list": "path/mols.csv"}
+    plan = _plan(task)
+
+    critique = critique_plan(
+        plan,
+        settings=ExperimentsSettings(),
+        available_tools=[
+            {
+                "tool": "reproduce_figure8_examples",
+                "server_id": "srv-demo",
+                "description": "Reproduce the six characterised molecules from Figure 8.",
+                "input_schema": {},
+            }
+        ],
+    )
+    assert critique.verdict == "revise"
+    assert any(
+        i.category == "feasibility" and "paper-demo" in i.message
+        for i in critique.issues
+    )
+
+
+def test_normalize_commit_coerces_string_nodes_arg():
+    from google.adk.models import LlmResponse
+    from google.genai import types
+
+    from CoScientist.experiments.hypotheses import normalize_em_hypothesis_commit
+
+    nodes_json = json.dumps(
+        [
+            {
+                "type": "Hypothesis",
+                "ref": "h1",
+                "attrs": {"formulation": "Compound X inhibits target Y."},
+            }
+        ]
+    )
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="research_commit",
+                        args={"nodes": nodes_json},
+                    )
+                )
+            ],
+        )
+    )
+    out = normalize_em_hypothesis_commit(SimpleNamespace(state={}), response)
+    assert out is not None
+    fc = out.content.parts[0].function_call
+    assert fc.name == "research_commit"
+    # The JSON string must be repaired into a real list before dispatch.
+    assert isinstance(fc.args["nodes"], list)
+    assert fc.args["nodes"][0]["attrs"]["formulation"] == "Compound X inhibits target Y."
+
+
+def test_normalize_commit_drops_unparseable_string_list_arg():
+    from google.adk.models import LlmResponse
+    from google.genai import types
+
+    from CoScientist.experiments.hypotheses import normalize_em_hypothesis_commit
+
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="research_commit",
+                        args={
+                            "nodes": [
+                                {
+                                    "type": "Hypothesis",
+                                    "ref": "h1",
+                                    "attrs": {"formulation": "Valid hypothesis statement here."},
+                                }
+                            ],
+                            "status_updates": "not-json-at-all",
+                        },
+                    )
+                )
+            ],
+        )
+    )
+    out = normalize_em_hypothesis_commit(SimpleNamespace(state={}), response)
+    assert out is not None
+    fc = out.content.parts[0].function_call
+    # Unparseable list-typed arg is dropped, never shipped as a bare string.
+    assert not isinstance(fc.args.get("status_updates"), str)
 
 
 def test_four_experiment_contracts_are_registered():
@@ -4106,3 +4403,36 @@ def test_capture_hypotheses_after_research_commit_silent_on_non_hypothesis_ok_co
         )
     assert "EXPERIMENT_HYPOTHESES_COMMIT_FAILED" not in caplog.text
     assert state == {}
+
+
+def test_hard_stop_scoped_to_delivering_attempt():
+    """A report/synthesis task (new attempt) must not inherit a prior task's stop."""
+    from CoScientist.tools.fedot_artifact_handoff import (
+        record_fedot_deliverable_attempt,
+        should_hard_stop_fedot,
+    )
+
+    # Compute task EXP-4 delivered under ATT-4; the stale matched verdict + the
+    # deliverable-ready flag persist into EXP-5 (coder report, no tools) on ATT-5.
+    state = {
+        "experiment_active_envelope": {"attempt_id": "ATT-4"},
+        "fedot_deliverable_ready": True,
+    }
+    record_fedot_deliverable_attempt(state)
+    assert state["fedot_deliverable_attempt"] == "ATT-4"
+
+    # Same attempt still looping → stop as before.
+    state["executor_tool_match"] = {"matched": True}
+    assert should_hard_stop_fedot(state) is True
+
+    # New attempt (report task) → must NOT be blocked by the prior delivery.
+    state["experiment_active_envelope"] = {"attempt_id": "ATT-5"}
+    assert should_hard_stop_fedot(state) is False
+
+
+def test_hard_stop_unchanged_without_experiment_runtime():
+    """Non-EM flows keep the legacy (attempt-agnostic) behavior."""
+    from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
+
+    state = {"fedot_deliverable_ready": True, "executor_tool_match": {"matched": True}}
+    assert should_hard_stop_fedot(state) is True

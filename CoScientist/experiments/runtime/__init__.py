@@ -1,9 +1,6 @@
 """Experiment Module v0 control plane."""
 
-from .coalesce import (
-    coalesce_experiment_module_calls,
-    redirect_research_to_experiment_module,
-)
+from .coalesce import coalesce_experiment_module_calls, enforce_experiment_module_first
 from .guards import (
     RECORD_REQUIRED_MESSAGE,
     ROUTE_ALREADY_RETURNED_MESSAGE,
@@ -39,6 +36,7 @@ __all__ = [
     "amend_task",
     "approve_plan",
     "coalesce_experiment_module_calls",
+    "enforce_experiment_module_first",
     "enforce_continue_until_reporting",
     "enforce_pending_record_result",
     "experiment_control_toolset",
@@ -52,7 +50,6 @@ __all__ = [
     "mark_route_returned",
     "on_route_agent_returned",
     "record_result",
-    "redirect_research_to_experiment_module",
     "retry_task",
     "rewrite_mismatched_control_action",
     "skip_task",
