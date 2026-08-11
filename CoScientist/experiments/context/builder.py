@@ -24,6 +24,7 @@ _CLEAR_ON_NEW_RUN = (
     "experiment_artifacts_manifest",
     "experiment_last_route_response", "experiment_active_envelope",
     "experiment_plan_validation_errors", "experiment_plan_review_paused",
+    "experiment_no_matching_tool", "experiment_execution_summary",
 )
 DISCOVERED_CAPABILITIES_KEY = "experiment_discovered_capabilities"  # survives attempt clears
 RETRIEVED_CAPABILITIES_KEY = "experiment_retrieved_capabilities"  # pre-rerank full set

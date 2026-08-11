@@ -35,6 +35,13 @@
 #      Orch has NO retrieval (single inventory lives in ToolPreparer) and does
 #      NOT keyword-rewrite briefs: research-vs-compute is decided by the module
 #      from its own inventory (NO_MATCHING_TOOL → orch falls back to Research).
+#  10. After ToolPreparer, assess_experiment_inventory_feasibility early-exits
+#      with NO_MATCHING_TOOL when the ask has no compute signal (chem capability /
+#      repo / engineering cue), so unrelated inventory cannot drag Hypotheses→
+#      Plan→Coder; remaining EM children skip via skip_when_experiment_not_feasible.
+#      Only applies to asks that enforce_experiment_module_first structurally
+#      rerouted from ResearchAgent (flagged via GATE_ROUTED_STATE_KEY) — an
+#      orchestrator call to the module made on purpose is always trusted.
 # ─────────────────────────────────────────────────────────────────────────────
 
 defaults:
@@ -144,7 +151,7 @@ agents:
     output_key: hypotheses
     tools: [graph, research_graph]
     callbacks:
-      before_agent: [bootstrap_research_question_if_empty, inject_research_context]
+      before_agent: [skip_when_experiment_not_feasible, bootstrap_research_question_if_empty, inject_research_context]
       before_model: [seed_hypotheses_from_em_request]
       after_model: [enforce_hypothesis_research_commit, normalize_em_hypothesis_commit, guard_unknown_tools]
       after_tool: [capture_hypotheses_after_research_commit]
@@ -230,7 +237,7 @@ agents:
     output_key: experiment_plan
     hitl: true
     callbacks:
-      before_agent: [build_experiment_context]
+      before_agent: [skip_when_experiment_not_feasible, build_experiment_context]
       before_model: [skip_retriever_context]
       after_model: [sanitize_json_output]
     options:
@@ -251,7 +258,7 @@ agents:
       - McpBuilderAgent
     output_key: experiment_execution_summary
     callbacks:
-      before_agent: [skip_executor_without_runtime]
+      before_agent: [skip_when_experiment_not_feasible, skip_executor_without_runtime]
       before_tool: [guard_experiment_route]
       after_tool: [mark_experiment_route_returned]
       after_model: [enforce_pending_record_result, rewrite_mismatched_control_action, enforce_continue_until_reporting]
@@ -263,6 +270,8 @@ agents:
     prompt: experiment_result_summary
     output_key: experiment_summary
     hitl: true
+    callbacks:
+      before_agent: [skip_when_experiment_not_feasible]
     options:
       review_kind: result
 
@@ -402,6 +411,9 @@ agents:
     class: sequential
     description: Agent to find and prepare relevant mcp servers for current task
     children: [ParallelToolSearcherAgent, FullSetToolReranker, WebToolsDeployerAgent]
+    callbacks:
+      # Early NO_MATCHING_TOOL when ask has no compute signal (avoids lit→hypotheses).
+      after_agent: [assess_experiment_inventory_feasibility]
 
   ParallelToolSearcherAgent:
     class: parallel

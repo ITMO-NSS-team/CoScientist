@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from google.adk.models import LlmResponse
 from google.adk.tools.base_tool import BaseTool
@@ -17,7 +17,7 @@ from .state_machine import (
     active_attempt,
     mark_route_returned,
 )
-from .shared import MOLECULE_GENERATOR_TOOLS, audit
+from .shared import GATE_ROUTED_STATE_KEY, MOLECULE_GENERATOR_TOOLS, audit
 
 logger = logging.getLogger(__name__)
 ROUTE_AGENT_NAMES = frozenset(ROUTE_AGENT_BY_ROUTE.values())
@@ -373,14 +373,103 @@ def rewrite_mismatched_control_action(
     )
 
 
+# ── EM inventory feasibility (early NO_MATCHING_TOOL) ───────────────────────
+# After ToolPreparer, decide whether a structurally-gated ask (see
+# GATE_ROUTED_STATE_KEY) can be treated as compute. Explicit orchestrator
+# choices of the module are always trusted and never checked here — only asks
+# that arrived because enforce_experiment_module_first rewrote a Research call
+# are eligible for an early NO_MATCHING_TOOL, so unrelated retrieved tools
+# cannot drag a literature ask into Hypotheses→Plan→Coder.
+NO_MATCHING_TOOL_STATE_KEY = "experiment_no_matching_tool"
+_NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
+
+
+def _inventory_rows(state: Any) -> list[dict[str, Any]]:
+    from CoScientist.experiments.context.builder import (
+        DISCOVERED_CAPABILITIES_KEY,
+        RETRIEVED_CAPABILITIES_KEY,
+    )
+
+    rows: list[dict[str, Any]] = []
+    getter = getattr(state, "get", None)
+    if not callable(getter):
+        return rows
+    for key in (RETRIEVED_CAPABILITIES_KEY, DISCOVERED_CAPABILITIES_KEY, "filtered_tools"):
+        blob = getter(key)
+        if isinstance(blob, list):
+            rows.extend(item for item in blob if isinstance(item, dict))
+    return rows
+
+
+def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
+    """after_agent(ToolPreparer): set/clear an early NO_MATCHING_TOOL verdict.
+
+    Only applies when this EM entry was a structural reroute (gate-routed);
+    an explicit orchestrator call to the module is never second-guessed.
+    """
+    from CoScientist.experiments.capabilities.inventory import (
+        ask_has_computational_signal,
+        index_inventory_tools,
+    )
+
+    state = callback_context.state
+    getter = getattr(state, "get", None)
+    request = str(getter("experiment_source_request") or "").strip() if callable(getter) else ""
+    gate_routed = bool(getter(GATE_ROUTED_STATE_KEY)) if callable(getter) else False
+    if hasattr(state, "__setitem__"):
+        # Consume: relevant only for the one ask that triggered the reroute.
+        state[GATE_ROUTED_STATE_KEY] = None
+    by_tool = index_inventory_tools(_inventory_rows(state))
+
+    if not gate_routed or ask_has_computational_signal(request):
+        if hasattr(state, "__setitem__"):
+            state[NO_MATCHING_TOOL_STATE_KEY] = None
+        audit(
+            logger,
+            f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} inventory={len(by_tool)}",
+            stdout=f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} inventory={len(by_tool)}",
+        )
+        return
+
+    message = (
+        f"{_NO_MATCHING_TOOL_TOKEN}: inventory has no tool relevant to this request "
+        f"(no computational capability signal in the ask; retrieved={len(by_tool)} "
+        "tool(s) were unrelated). Recommend ResearchAgent with the original ask."
+    )
+    state[NO_MATCHING_TOOL_STATE_KEY] = message
+    audit(
+        logger,
+        f"EXPERIMENT_NO_MATCHING_TOOL early inventory={len(by_tool)}",
+        stdout=f"EXPERIMENT_NO_MATCHING_TOOL early inventory={len(by_tool)}",
+    )
+
+
+def skip_when_experiment_not_feasible(callback_context: Any) -> Optional[types.Content]:
+    """before_agent: short-circuit EM children after an early NO_MATCHING_TOOL."""
+    state = callback_context.state
+    message = state.get(NO_MATCHING_TOOL_STATE_KEY) if hasattr(state, "get") else None
+    if not isinstance(message, str) or not message.strip():
+        return None
+    # Surface on common EM output keys so the sequential module's last skip
+    # still leaves a readable summary for the orchestrator / aggregator.
+    state["experiment_execution_summary"] = message
+    state["experiment_summary"] = message
+    state["hypotheses"] = message
+    audit(logger, "EXPERIMENT_SKIP_NOT_FEASIBLE")
+    return types.Content(role="model", parts=[types.Part(text=message)])
+
+
 __all__ = [
     "ROUTE_AGENT_NAMES",
     "ROUTE_ALREADY_RETURNED_MESSAGE",
     "RECORD_REQUIRED_MESSAGE",
+    "NO_MATCHING_TOOL_STATE_KEY",
+    "assess_experiment_inventory_feasibility",
     "force_molecule_generator_s3_upload",
     "guard_route_agent_tool",
     "on_route_agent_returned",
     "enforce_pending_record_result",
     "enforce_continue_until_reporting",
     "rewrite_mismatched_control_action",
+    "skip_when_experiment_not_feasible",
 ]

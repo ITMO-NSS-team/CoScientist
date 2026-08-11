@@ -282,10 +282,14 @@ def build_system(
             agent = _build_llm_agent(cfg, config, built, remote_subagents)
         elif cfg.cls in ("sequential", "parallel"):
             cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
+            # Workflow agents also honor before/after_agent callbacks (e.g. EM
+            # ToolPreparer → assess_experiment_inventory_feasibility).
+            ctx = PromptContext(config=cfg, system=config, tool_entries=[])
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,
                 sub_agents=[built[c] for c in cfg.children],
+                **_callback_kwargs(cfg, ctx),
                 **cfg.options,
             )
         else:  # custom:<key>

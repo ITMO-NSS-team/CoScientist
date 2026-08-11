@@ -301,9 +301,21 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert "capture_hypotheses_after_research_commit" in hyp.callbacks.after_tool
     # Root must be bootstrapped before inject_research_context renders the
     # {research_context?} placeholder, so a fresh graph never reads EMPTY.
+    assert hyp.callbacks.before_agent[0] == "skip_when_experiment_not_feasible"
     assert hyp.callbacks.before_agent.index("bootstrap_research_question_if_empty") < (
         hyp.callbacks.before_agent.index("inject_research_context")
     )
+    preparer = config.agent("ToolPreparerAgent")
+    assert "assess_experiment_inventory_feasibility" in preparer.callbacks.after_agent
+    assert config.agent("ExperimentPlannerAgent").callbacks.before_agent[0] == (
+        "skip_when_experiment_not_feasible"
+    )
+    assert config.agent("ExperimentExecutorAgent").callbacks.before_agent[0] == (
+        "skip_when_experiment_not_feasible"
+    )
+    assert config.agent("ExperimentResultReviewAgent").callbacks.before_agent == [
+        "skip_when_experiment_not_feasible"
+    ]
     # Three-lane target: science/compute → EM only (no orch→Coder shadow science);
     # infra (repo→MCP) → McpBuilder top-level; single inventory (orch has no retrieval).
     assert "CoderAgent" not in orch.subordinates
@@ -487,15 +499,19 @@ def test_module_first_gate_reroutes_research_before_module_ran():
     from CoScientist.experiments.runtime.coalesce import (
         enforce_experiment_module_first,
     )
+    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
 
+    state: dict = {}
     response = _research_call_response("Dock aspirin against COX-2 and report affinity.")
-    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
+    ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
 
     assert enforce_experiment_module_first(ctx, response) is None
     fc = response.content.parts[0].function_call
     # State-keyed rewrite: the module gets the first shot with the same brief.
     assert fc.name == "ExperimentModuleAgent"
     assert fc.args["request"] == "Dock aspirin against COX-2 and report affinity."
+    # Flagged as a structural reroute so the early feasibility gate may apply.
+    assert state[GATE_ROUTED_STATE_KEY] is True
 
 
 def test_module_first_gate_prefers_root_goal_over_reworded_brief():
@@ -565,6 +581,7 @@ def test_module_first_gate_leaves_explicit_module_call_untouched():
     from CoScientist.experiments.runtime.coalesce import (
         enforce_experiment_module_first,
     )
+    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
 
     # Turn already delegates to the module (plus a Research call) → do not rewrite.
     response = LlmResponse(
@@ -586,11 +603,151 @@ def test_module_first_gate_leaves_explicit_module_call_untouched():
             ],
         )
     )
-    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
+    state: dict = {}
+    ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
 
     assert enforce_experiment_module_first(ctx, response) is None
     names = [p.function_call.name for p in response.content.parts]
     assert names == ["ExperimentModuleAgent", "ResearchAgent"]
+    # No rewrite happened → not flagged; the explicit module call is trusted as-is.
+    assert GATE_ROUTED_STATE_KEY not in state
+
+
+def test_ask_has_computational_signal_for_chem_repo_and_code():
+    from CoScientist.experiments.capabilities.inventory import ask_has_computational_signal
+
+    assert ask_has_computational_signal(
+        "Dock aspirin against COX-2 and report affinity."
+    )
+    assert ask_has_computational_signal(
+        "Clone https://github.com/org/repo and run the demo."
+    )
+    assert ask_has_computational_signal("Implement a python script to parse the CSV.")
+    assert not ask_has_computational_signal(
+        "Сделай обзор литературы по роли гиппокампа в консолидации памяти."
+    )
+
+
+def test_early_feasibility_exits_lit_ask_despite_junk_inventory():
+    from CoScientist.experiments.context.builder import RETRIEVED_CAPABILITIES_KEY
+    from CoScientist.experiments.runtime.guards import (
+        NO_MATCHING_TOOL_STATE_KEY,
+        assess_experiment_inventory_feasibility,
+        skip_when_experiment_not_feasible,
+    )
+    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
+
+    state = {
+        "experiment_source_request": (
+            "Сделай обзор литературы по теме: роль гиппокампа в консолидации памяти. "
+            "Ничего не вычисляй."
+        ),
+        # Only a structurally-gated ask (Research → EM reroute) is eligible for
+        # an early NO_MATCHING_TOOL; see test below for the explicit-call path.
+        GATE_ROUTED_STATE_KEY: True,
+        RETRIEVED_CAPABILITIES_KEY: [
+            {
+                "tool": "reproduce_figure8_examples",
+                "server_id": "c0fc",
+                "description": "Reproduce paper figure 8 characterised molecules.",
+            },
+            {
+                "tool": "generate_case_mols",
+                "server_id": "d36e",
+                "description": "Generate case molecules with a GAN.",
+            },
+            {
+                "tool": "health_check",
+                "server_id": "d6da",
+                "description": "Liveness probe.",
+            },
+        ],
+    }
+    ctx = SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
+    assess_experiment_inventory_feasibility(ctx)
+    msg = state[NO_MATCHING_TOOL_STATE_KEY]
+    assert isinstance(msg, str)
+    assert msg.startswith("NO_MATCHING_TOOL:")
+    assert "ResearchAgent" in msg
+    # Consumed: irrelevant to any later EM entry this session.
+    assert state[GATE_ROUTED_STATE_KEY] is None
+
+    skipped = skip_when_experiment_not_feasible(
+        SimpleNamespace(state=state, agent_name="HypothesesAgent")
+    )
+    assert skipped is not None
+    assert skipped.parts[0].text.startswith("NO_MATCHING_TOOL:")
+    assert state["experiment_execution_summary"].startswith("NO_MATCHING_TOOL:")
+
+
+def test_early_feasibility_skips_check_for_explicit_module_call():
+    """An orchestrator-chosen EM call (not gate-routed) is never second-guessed,
+    even for a lit-only ask with junk inventory — only the structural reroute
+    path (enforce_experiment_module_first) is eligible for NO_MATCHING_TOOL."""
+    from CoScientist.experiments.context.builder import RETRIEVED_CAPABILITIES_KEY
+    from CoScientist.experiments.runtime.guards import (
+        NO_MATCHING_TOOL_STATE_KEY,
+        assess_experiment_inventory_feasibility,
+    )
+
+    state = {
+        "experiment_source_request": (
+            "Сделай обзор литературы по роли гиппокампа в консолидации памяти."
+        ),
+        RETRIEVED_CAPABILITIES_KEY: [
+            {
+                "tool": "generate_case_mols",
+                "server_id": "d36e",
+                "description": "Generate case molecules with a GAN.",
+            },
+        ],
+    }
+    assess_experiment_inventory_feasibility(
+        SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
+    )
+    assert state.get(NO_MATCHING_TOOL_STATE_KEY) in (None, "")
+
+
+def test_early_feasibility_passes_compute_ask_even_with_empty_inventory():
+    from CoScientist.experiments.runtime.guards import (
+        NO_MATCHING_TOOL_STATE_KEY,
+        assess_experiment_inventory_feasibility,
+        skip_when_experiment_not_feasible,
+    )
+    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
+
+    state = {
+        "experiment_source_request": "Dock aspirin against COX-2 and report affinity.",
+        "experiment_retrieved_capabilities": [],
+        GATE_ROUTED_STATE_KEY: True,
+    }
+    assess_experiment_inventory_feasibility(
+        SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
+    )
+    assert state.get(NO_MATCHING_TOOL_STATE_KEY) in (None, "")
+    assert skip_when_experiment_not_feasible(
+        SimpleNamespace(state=state, agent_name="HypothesesAgent")
+    ) is None
+
+
+def test_early_feasibility_clears_stale_verdict_on_compute_rerun():
+    from CoScientist.experiments.runtime.guards import (
+        NO_MATCHING_TOOL_STATE_KEY,
+        assess_experiment_inventory_feasibility,
+    )
+    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
+
+    state = {
+        "experiment_source_request": (
+            "Generate small molecules that inhibit GSK-3beta with high activity."
+        ),
+        GATE_ROUTED_STATE_KEY: True,
+        NO_MATCHING_TOOL_STATE_KEY: "NO_MATCHING_TOOL: stale from prior lit ask",
+    }
+    assess_experiment_inventory_feasibility(
+        SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
+    )
+    assert state[NO_MATCHING_TOOL_STATE_KEY] is None
 
 
 def test_critique_blocks_paper_demo_tool_on_custom_input_task():

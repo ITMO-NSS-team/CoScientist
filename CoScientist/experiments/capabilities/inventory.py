@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import re
 from typing import Any, Iterable
-
 # request ↔ inventory tool text. Order docs-only; repair uses PRIMARY_CAP_PRIORITY.
 CAPABILITY_SPECS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
     (
@@ -97,6 +96,36 @@ def request_capabilities(request: str) -> set[str]:
     return {name for name, req_re, _ in CAPABILITY_SPECS if req_re.search(text)}
 
 
+# Lightweight engineering cue so pure coding asks (no chem family, no git URL)
+# still count as computable — EM must not early-exit those into Research.
+_ENGINEERING_ASK_RE = re.compile(
+    r"(?:"
+    r"\b(?:implement|sandbox|jupyter|notebook|git\s+clone|repository)\b|"
+    r"\bwrite\s+(?:a\s+)?(?:python\s+)?(?:script|code|program)\b|"
+    r"\b(?:python|bash)\s+script\b|"
+    r"напиши\s+код|реализуй\s+код|репозитор"
+    r")",
+    re.I,
+)
+
+
+def ask_has_computational_signal(request: str) -> bool:
+    """True when the ask is in EM's compute/engineering lane (chem family, repo
+    URL, or an engineering cue) — used to decide an early NO_MATCHING_TOOL
+    verdict when the module was routed here structurally (see
+    ``runtime.guards.assess_experiment_inventory_feasibility``)."""
+    from CoScientist.experiments.context.builder import extract_repo_candidates
+
+    text = (request or "").strip()
+    if not text:
+        return False
+    if request_capabilities(text):
+        return True
+    if extract_repo_candidates(text):
+        return True
+    return bool(_ENGINEERING_ASK_RE.search(text))
+
+
 def tool_capabilities(tool_name: str, description: str = "") -> set[str]:
     blob = f"{str(tool_name or '').replace('_', ' ')} {description}"
     return {name for name, _, tool_re in CAPABILITY_SPECS if tool_re.search(blob)}
@@ -158,7 +187,8 @@ def match_inventory_tool(
 
 
 __all__ = [
-    "CAPABILITY_SPECS", "PRIMARY_CAP_PRIORITY", "index_inventory_tools",
-    "inventory_covers_capabilities", "inventory_pairs", "is_paper_demo_tool",
-    "match_inventory_tool", "request_capabilities", "tool_capabilities",
+    "CAPABILITY_SPECS", "PRIMARY_CAP_PRIORITY", "ask_has_computational_signal",
+    "index_inventory_tools", "inventory_covers_capabilities", "inventory_pairs",
+    "is_paper_demo_tool", "match_inventory_tool", "request_capabilities",
+    "tool_capabilities",
 ]

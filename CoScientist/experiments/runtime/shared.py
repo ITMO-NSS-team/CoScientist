@@ -10,6 +10,13 @@ MOLECULE_GENERATOR_TOOLS = frozenset(
     {"generate_case_mols", "generate_mols", "generate_molecules"}
 )
 
+# Set by enforce_experiment_module_first when it rewrites a first-shot Research
+# call into the module (structural reroute, not an explicit orchestrator pick).
+# assess_experiment_inventory_feasibility consumes this once: only an ask that
+# arrived via that structural reroute is eligible for an early NO_MATCHING_TOOL;
+# an orchestrator call to the module made on purpose is always trusted.
+GATE_ROUTED_STATE_KEY = "_em_entered_via_gate"
+
 # Admissions that a "success" was built on fake/proxy evidence → force partial.
 FABRICATION_MARKERS = re.compile(
     r"(?i)\b("
@@ -50,6 +57,7 @@ def audit(
 
 __all__ = [
     "FABRICATION_MARKERS",
+    "GATE_ROUTED_STATE_KEY",
     "MOLECULE_GENERATOR_TOOLS",
     "artifact_name_key",
     "audit",

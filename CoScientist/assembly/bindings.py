@@ -848,6 +848,10 @@ _EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
     # Same snapshot, after ToolRetriever finishes (reranker clears accumulated_tools).
     ("persist_experiment_retrieved_capabilities", "after_agent", f"{_EM}.context:stash_experiment_retrieved_capabilities"),
     ("skip_executor_without_runtime", "before_agent", f"{_EM}.context:skip_executor_without_runtime"),
+    # After ToolPreparer: lit/knowledge asks with no compute signal → NO_MATCHING_TOOL
+    # before Hypotheses/Plan/Coder burn budget on unrelated inventory.
+    ("assess_experiment_inventory_feasibility", "after_agent", f"{_EM}.runtime:assess_experiment_inventory_feasibility"),
+    ("skip_when_experiment_not_feasible", "before_agent", f"{_EM}.runtime:skip_when_experiment_not_feasible"),
     ("guard_experiment_route", "before_tool", f"{_EM}.runtime:guard_route_agent_tool"),
     ("force_molecule_generator_s3_upload", "before_tool", f"{_EM}.runtime:force_molecule_generator_s3_upload"),
     ("mark_experiment_route_returned", "after_tool", f"{_EM}.runtime:on_route_agent_returned"),

@@ -11,7 +11,12 @@ Two structural (never keyword-based) safety nets live here:
    the module run this session?), never by matching words in the request. The
    module then decides research-vs-compute from its own inventory: on a
    NO_MATCHING_TOOL verdict the module has already run, so this gate no longer
-   fires and the orchestrator's ResearchAgent fallback proceeds normally.
+   fires and the orchestrator's ResearchAgent fallback proceeds normally. Each
+   rewrite here also flags the ask via ``GATE_ROUTED_STATE_KEY`` so
+   ``runtime.guards.assess_experiment_inventory_feasibility`` knows this
+   particular EM entry was structural (not an explicit orchestrator pick) and
+   may fast-track an early NO_MATCHING_TOOL when the inventory has no
+   compute signal for it.
 """
 
 from __future__ import annotations
@@ -21,6 +26,8 @@ from typing import Optional
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmResponse
+
+from .shared import GATE_ROUTED_STATE_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +108,11 @@ def enforce_experiment_module_first(
         if chosen:
             args["request"] = chosen
         fc.args = args
+    if hasattr(state, "__setitem__"):
+        # Mark this ask as structurally rerouted (not an explicit orchestrator
+        # pick) so assess_experiment_inventory_feasibility may early-exit it
+        # with NO_MATCHING_TOOL if the module's inventory has no compute signal.
+        state[GATE_ROUTED_STATE_KEY] = True
     logger.warning(
         "[%s] routed first-shot ResearchAgent call(s) → ExperimentModuleAgent "
         "(module decides compute-vs-research from inventory)",
