@@ -25,8 +25,20 @@ def a2a_mode() -> bool:
     return os.getenv("COSCIENTIST_A2A_MODE", "") not in ("", "0", "false", "False")
 
 
-def get_hitl_tools() -> list:
-    if a2a_mode():
+def get_hitl_tools(a2a_root: Optional[bool] = None) -> list:
+    """HITL tools for an agent, picking the transport that actually reaches a human.
+
+    - in-process / web: the handler-driven (blocking) tools — unchanged.
+    - A2A **root** (the agent the client talks to): the native long-running tools,
+      which pause the run and put the task into `input-required` for the caller.
+    - A2A **non-root** (reached through the orchestrator's AgentTool): a pause
+      cannot reach the caller. AgentTool runs the sub-agent and returns its final
+      text; a paused sub-agent produces none, so the parent gets an EMPTY result
+      and carries on — the human review silently vanishes. Keep the handler path
+      there; the headless guard in ConsoleHITLHandler answers explicitly instead
+      of hanging.
+    """
+    if a2a_mode() and a2a_root:
         from CoScientist.hitl.a2a_tools import get_a2a_hitl_tools
         return get_a2a_hitl_tools()
     return [

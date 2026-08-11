@@ -11,7 +11,7 @@ from CoScientist.hitl.handler import ConsoleHITLHandler
 from CoScientist.hitl.models import HITLAction, HITLRequest
 
 
-def _tools(a2a: bool):
+def _tools(a2a: bool, root: bool = True):
     prev = os.environ.get("COSCIENTIST_A2A_MODE")
     if a2a:
         os.environ["COSCIENTIST_A2A_MODE"] = "1"
@@ -20,7 +20,7 @@ def _tools(a2a: bool):
     try:
         import CoScientist.hitl.tool as tool_mod
         importlib.reload(tool_mod)
-        return tool_mod.get_hitl_tools()
+        return tool_mod.get_hitl_tools(a2a_root=root)
     finally:
         if prev is None:
             os.environ.pop("COSCIENTIST_A2A_MODE", None)
@@ -39,6 +39,28 @@ def test_a2a_mode_attaches_long_running_hitl_tools():
     assert all(getattr(t, "is_long_running", False) for t in tools)
 
 
+def test_a2a_non_root_keeps_handler_tools():
+    """A pause inside a sub-agent does not reach the caller: the parent wraps it
+    in an AgentTool that simply returns the sub-run's final text, so a paused
+    sub-agent yields an EMPTY result and the parent carries on — the human review
+    silently vanishes. Non-root A2A agents therefore keep the handler path."""
+    tools = _tools(a2a=True, root=False)
+    assert {t.name for t in tools} == {"request_approval", "request_selection"}
+    assert not any(getattr(t, "is_long_running", False) for t in tools)
+
+
+def test_agent_tool_does_not_propagate_a_pause():
+    """The ADK fact the rule above depends on: the AgentTool our assembler uses
+    for sub-agents is neither long-running nor response-deferring, so a sub-agent
+    pause cannot be surfaced to the caller as `input-required`."""
+    from google.adk.agents.llm_agent import LlmAgent
+    from google.adk.tools.agent_tool import AgentTool
+
+    tool = AgentTool(agent=LlmAgent(name="Sub"))
+    assert getattr(tool, "is_long_running", False) is False
+    assert getattr(tool, "_defers_response", False) is False
+
+
 def test_in_process_mode_keeps_blocking_tools():
     """The in-process/web path is unchanged (handler-driven, not long-running)."""
     tools = _tools(a2a=False)
@@ -54,15 +76,28 @@ def test_tool_names_match_docs_so_the_guard_accepts_them():
     assert {t.name for t in _tools(a2a=False)} == doc_names
 
 
-def test_a2a_tools_return_immediately_without_blocking():
+def test_a2a_tools_return_nothing_so_the_run_actually_pauses():
+    """ADK only skips the auto-FunctionResponse when a long-running tool returns a
+    FALSY value (flows/llm_flows/functions.py:
+    `if (tool.is_long_running or tool._defers_response) and not function_response`).
+    A tool that returns a "pending" dict does NOT pause — the model would receive
+    it and invent the human's answer. So these must return nothing, fast."""
     from CoScientist.hitl.a2a_tools import request_approval, request_selection
 
-    approval = asyncio.run(asyncio.wait_for(request_approval("A", "Approve?"), timeout=5))
-    assert approval["status"] == "pending_human_input"
+    assert asyncio.run(asyncio.wait_for(request_approval("A", "Approve?"), timeout=5)) is None
+    assert asyncio.run(
+        asyncio.wait_for(request_selection("A", "Pick", ["x", "y"]), timeout=5)) is None
 
-    selection = asyncio.run(
-        asyncio.wait_for(request_selection("A", "Pick", ["x", "y"]), timeout=5))
-    assert selection["options"] == ["x", "y"]
+
+def test_adk_pause_condition_still_holds():
+    """Guard against an ADK upgrade silently changing the contract above."""
+    import inspect
+
+    from google.adk.flows.llm_flows import functions as adk_functions
+
+    src = inspect.getsource(adk_functions)
+    assert "is_long_running or tool._defers_response" in src
+    assert "and not function_response" in src
 
 
 def test_console_handler_does_not_hang_without_a_tty():

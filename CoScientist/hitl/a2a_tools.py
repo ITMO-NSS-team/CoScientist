@@ -11,13 +11,22 @@ A2A has a native mechanism for exactly this, and ADK implements it: a call to a
 The run then yields instead of blocking; the client answers by sending back a
 FunctionResponse for that call id, and the run resumes with the human's answer.
 
-So these tools return IMMEDIATELY with a "pending" payload and are wrapped in
-``LongRunningFunctionTool``. Their names/signatures match the in-process tools
-(CoScientist/hitl/tool.py) so prompts, docs and the unknown-tool guard are
-unchanged — only the delivery mechanism differs.
+So these tools are wrapped in ``LongRunningFunctionTool`` and return NOTHING:
+ADK skips the auto-FunctionResponse only for a long-running tool that returns a
+falsy value, and that is precisely what makes the run yield instead of racing on
+with an invented answer (see ``_announce`` for the exact ADK condition). Their
+names/signatures match the in-process tools (CoScientist/hitl/tool.py) so
+prompts, docs and the unknown-tool guard are unchanged — only delivery differs.
+
+Scope: this native mechanism is for the agent the client talks to directly (the
+A2A ROOT). A pause inside a NON-root agent (reached through the orchestrator's
+AgentTool) never reaches the caller: AgentTool returns the sub-run's final text,
+and a paused sub-agent has none, so the parent sees an empty result and carries
+on. Non-root agents keep the handler path (see hitl/tool.get_hitl_tools).
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from google.adk.tools.long_running_tool import LongRunningFunctionTool
@@ -25,20 +34,25 @@ from google.adk.tools.tool_context import ToolContext
 
 from CoScientist.graph.session_scope import session_key
 
+logger = logging.getLogger(__name__)
 
-def _pending(agent_name: str, question: str, **extra: Any) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "status": "pending_human_input",
-        "agent_name": agent_name,
-        "question": question,
-        "message": (
-            "Sent to the human via A2A; this task is now 'input-required'. Do NOT "
-            "call this tool again and do not assume an answer — the human's reply "
-            "arrives as the response to this call, then continue from it."
-        ),
-    }
-    payload.update(extra)
-    return payload
+
+def _announce(agent_name: str, question: str, **extra: Any) -> None:
+    """Log the question and return NOTHING — returning nothing is what pauses the run.
+
+    ADK only skips synthesizing an immediate FunctionResponse when a long-running
+    tool returns a FALSY value (flows/llm_flows/functions.py):
+
+        if (tool.is_long_running or tool._defers_response) and not function_response:
+            return None   # no auto-FR -> the run yields, A2A task -> input-required
+
+    So a tool that returns a "pending" dict does NOT pause: ADK builds the FR at
+    once and the model happily continues — i.e. it would invent the human's answer.
+    The question still reaches the client: it travels in the function-call ARGS of
+    the emitted call, which A2A delivers in the task's status message.
+    """
+    logger.info("[HITL/A2A] %s asks the caller: %s | %s", agent_name, question[:300], extra)
+    return None
 
 
 async def request_approval(
@@ -46,7 +60,7 @@ async def request_approval(
     message: str,
     tool_context: ToolContext = None,
     context: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> None:
     """Ask the human to approve an action (yes / no, or a free-text answer).
 
     Use before expensive, outward-facing or hard-to-reverse actions, and whenever
@@ -59,16 +73,13 @@ async def request_approval(
         context: Optional extra context for the human.
 
     Returns:
-        The human's answer: {'approved': bool, 'feedback': str}.
+        Nothing directly — the run PAUSES here and the human's answer
+        ({'approved': bool, 'feedback': str}) arrives as this call's response.
+        Do not call again and do not assume an answer; continue from what arrives.
     """
     user_id, session_id = session_key(tool_context) if tool_context is not None else (None, None)
-    return _pending(
-        agent_name,
-        message,
-        expected_response={"approved": "bool", "feedback": "str (optional free-text answer)"},
-        context=dict(context or {}),
-        session={"user_id": user_id, "session_id": session_id},
-    )
+    return _announce(agent_name, message, context=dict(context or {}),
+                     session=(user_id, session_id))
 
 
 async def request_selection(
@@ -76,7 +87,7 @@ async def request_selection(
     message: str,
     options: List[str],
     tool_context: ToolContext = None,
-) -> Dict[str, Any]:
+) -> None:
     """Ask the human to choose among options you generated (or answer their own way).
 
     Use when several alternatives (hypotheses, plans, thresholds) need a human
@@ -89,17 +100,13 @@ async def request_selection(
         options: 2-4 concrete options.
 
     Returns:
-        The human's answer: {'selected': str, 'approved': bool, 'feedback': str}.
+        Nothing directly — the run PAUSES here and the human's choice
+        ({'selected': str, 'approved': bool, 'feedback': str}) arrives as this
+        call's response. Do not call again; continue from what arrives.
     """
     user_id, session_id = session_key(tool_context) if tool_context is not None else (None, None)
-    return _pending(
-        agent_name,
-        message,
-        options=list(options or []),
-        expected_response={"selected": "one of options (or the human's own answer)",
-                           "approved": "bool", "feedback": "str (optional)"},
-        session={"user_id": user_id, "session_id": session_id},
-    )
+    return _announce(agent_name, message, options=list(options or []),
+                     session=(user_id, session_id))
 
 
 def get_a2a_hitl_tools() -> list:
