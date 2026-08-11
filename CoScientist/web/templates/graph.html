@@ -92,6 +92,7 @@
     <label>view
       <select id="view">
         <option value="research">research</option>
+        <option value="slide">research · slide</option>
         <option value="execution">execution log</option>
         <option value="knowledge">knowledge (this session)</option>
         <option value="memory">knowledge memory</option>
@@ -111,6 +112,7 @@
   </div>
 
   <div id="net"></div>
+  <div id="slide" style="display:none;overflow:auto;padding:14px;background:#05070b;height:100%"></div>
   <div id="legend"></div>
   <div id="detail"></div>
 
@@ -190,6 +192,18 @@
       ? n.label : (n.executor_agent||n.label)) || n.id || "").slice(0,40);
 
     const isResearch = () => document.getElementById("view").value === "research";
+    const isSlide = () => document.getElementById("view").value === "slide";
+
+    // Slide mode renders server-side (same renderer as the CLI/report), so the
+    // live view and the exported deck are literally the same artifact.
+    async function pollSlide(userId, sessionId){
+      const box = document.getElementById("slide");
+      const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/graph.svg?t=${Date.now()}`;
+      const r = await fetch(url, { cache: "no-store" });
+      box.innerHTML = await r.text();
+      const svg = box.querySelector("svg");
+      if (svg) { svg.removeAttribute("height"); svg.style.width = "100%"; svg.style.height = "auto"; }
+    }
     const showProv = () => document.getElementById("prov").checked;
     function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
     function rText(n){ return String(n.output||n.label||"").replace(/\s+/g," ").trim(); }
@@ -264,6 +278,14 @@
         if (!userId || !sessionId) {
           throw new Error("Open the graph from an active CoScientist session.");
         }
+        // Slide view is a server-rendered SVG, not a node-link canvas.
+        const netBox = document.getElementById("net"), slideBox = document.getElementById("slide");
+        if (isSlide()) {
+          netBox.style.display = "none"; slideBox.style.display = "block";
+          await pollSlide(userId, sessionId);
+          return;
+        }
+        netBox.style.display = ""; slideBox.style.display = "none";
         const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/graph?view=${encodeURIComponent(document.getElementById("view").value)}`;
         const r = await fetch(url, { cache: "no-store" });
         const g = await r.json(); lastGraph = g;

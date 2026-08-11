@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -377,6 +377,11 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+def _esc(text: str) -> str:
+    """Minimal XML escape for text embedded in an SVG error card."""
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def create_app() -> FastAPI:
     os.environ["COSCIENTIST_WEB_MODE"] = "true"
     runtime = WebRuntime()
@@ -586,6 +591,32 @@ def create_app() -> FastAPI:
             else 200
         )
         return JSONResponse(payload, status_code=status_code)
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/graph.svg")
+    async def api_session_graph_svg(user_id: str, session_id: str):
+        """The research graph as a presentation slide (same renderer as the CLI).
+
+        Served as SVG so the live view and an exported deck are the same artifact
+        — what the operator watches during a run is what goes into the report.
+        """
+        runtime.registry.require_session(user_id, session_id)
+        try:
+            from CoScientist.graph.research.slide_render import render_slide
+            from CoScientist.graph.research.store import get_research_graph
+
+            data = get_research_graph(user_id=user_id, session_id=session_id).full()
+            svg = render_slide(data)
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never break the UI
+            svg = (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="80">'
+                '<rect width="600" height="80" fill="#0e1117"/>'
+                f'<text x="16" y="46" fill="#f0554d" font-family="Arial" font-size="13">'
+                f'slide render failed: {_esc(str(exc)[:90])}</text></svg>'
+            )
+        return Response(content=svg, media_type="image/svg+xml",
+                        headers={"Cache-Control": "no-store"})
 
     @app.get("/api/graph")
     async def api_graph(
