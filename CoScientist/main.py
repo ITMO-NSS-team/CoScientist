@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
-from typing import Optional
+from typing import Optional, Sequence
 import logging
 
 from google.adk.sessions import InMemorySessionService
@@ -45,6 +45,7 @@ class CoScientistManager:
         user_id: str = "user_1",
         session_id: str = "session_001",
         hitl_handler: Optional[AbstractHITLHandler] = None,
+        plugins: Optional[Sequence[object]] = None,
     ):
         self.app_name = app_name
         self.user_id = user_id
@@ -56,6 +57,7 @@ class CoScientistManager:
 
         # HITL setup
         self._hitl_handler = hitl_handler
+        self._plugins = list(plugins or [])
 
 
     async def initialize(self):
@@ -77,6 +79,7 @@ class CoScientistManager:
             agent=root_agent,
             app_name=self.app_name,
             session_service=self.session_service,
+            plugins=self._plugins,
         )
 
         if self._hitl_handler:

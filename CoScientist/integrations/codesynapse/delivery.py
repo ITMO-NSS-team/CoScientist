@@ -1,0 +1,52 @@
+"""HTTP delivery of durable trace batches to Codesynapse."""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+import httpx
+
+from CoScientist.integrations.codesynapse.models import TraceEvent
+from CoScientist.integrations.codesynapse.trace import batch_events
+
+PostCallable = Callable[..., Awaitable[Any]]
+
+
+class TraceDeliveryClient:
+    """Small injectable client; callers retain retry scheduling in the outbox worker."""
+
+    def __init__(self, *, callback_url: str, capability_token: str, post: PostCallable | None = None) -> None:
+        self._callback_url = callback_url
+        self._capability_token = capability_token
+        self._post = post
+
+    async def deliver(self, events: list[TraceEvent]) -> bool:
+        if not events:
+            return True
+        headers = {"Authorization": f"Bearer {self._capability_token}"}
+        payload = {"events": [event.model_dump(mode="json") for event in events]}
+        if self._post is not None:
+            response = await self._post(self._callback_url, headers=headers, json=payload)
+            return 200 <= response.status_code < 300
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(self._callback_url, headers=headers, json=payload)
+            return response.is_success
+
+
+class TraceOutboxDispatcher:
+    """Flush one run sequentially; retries are safe because delivery is at-least-once."""
+
+    def __init__(self, store, client: TraceDeliveryClient) -> None:
+        self._store = store
+        self._client = client
+
+    async def flush_run(self, run_id: str) -> int:
+        events = await self._store.pending_events(run_id)
+        delivered_count = 0
+        for batch in batch_events(events):
+            if not await self._client.deliver(batch):
+                break
+            await self._store.mark_events_delivered([event.event_id for event in batch])
+            delivered_count += len(batch)
+        return delivered_count
