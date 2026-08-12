@@ -54,13 +54,26 @@ E = lambda s: html.escape(str(s), quote=False)
 # ── text metrics (width-aware wrap; the deck is dense, so this must be tight) ─
 _NAR = set("iljtfI.,:;'|!()[]{} -·")
 _WID = set("mwMWШЩЮ—@%#")
+# Cyrillic runs materially wider than Latin at the same size (measured on
+# DejaVu Sans: lowercase 0.664 em vs 0.562, uppercase 0.765 vs 0.673). The
+# original table used the Latin figure for everything, so Russian text was
+# under-measured by ~24% and overflowed its cards. These are set a little below
+# the DejaVu measurements because the deck renders in Arial/Helvetica, whose
+# Cyrillic is narrower.
+_CYR_WID = set("щшжфюым")
+
+
+def _is_cyr(c: str) -> bool:
+    return "Ѐ" <= c <= "ӿ"
 
 
 def _cw(c: str, fs: float) -> float:
     if c in _NAR:
         return fs * 0.30
-    if c in _WID:
+    if c in _WID or c in _CYR_WID:
         return fs * 0.86
+    if _is_cyr(c):
+        return fs * (0.72 if c.isupper() else 0.60)
     if c.isupper():
         return fs * 0.66
     return fs * 0.535
@@ -188,7 +201,14 @@ def note(text: str, y: float, color: str = DIM, fs: float = 9.0) -> str:
             f'font-family="{FONT}">{E(text)}</text>')
 
 
-def chip(x: float, y: float, label: str, w: float = 0, fs: float = 8.6) -> str:
+def chip(x: float, y: float, label: str, w: float = 0, fs: float = 8.6,
+         max_w: float = 0) -> str:
+    # Tool names are free text ("RDKit Ertl sascorer (эталонный SA)") and used to
+    # run straight out of the method card and over the arrow label beside it.
+    if max_w and _tw(label, fs) + 16 > max_w:
+        while label and _tw(label + "…", fs) + 16 > max_w:
+            label = label[:-1]
+        label = (label + "…") if label else ""
     w = w or _tw(label, fs) + 16
     return (f'<g transform="translate({x:.0f},{y:.0f})">'
             f'<rect width="{w:.0f}" height="17" rx="8" fill="{NEUTRAL_FILL}" '
@@ -227,9 +247,27 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
                        types=("Evidence",))
     etext: List[str] = []
     for ev in evs[:2]:
-        etext += wrap(a(ev, "content", "finding", "summary") or "", 206, 9.4, 3)
+        # Evidence is written by the agents as metric/value/description, which the
+        # earlier key list missed entirely -- real measurements rendered as
+        # "not set". Lead with the number, since that is what a reader looks for.
+        txt = a(ev, "content", "finding", "summary", "description", "observation")
+        metric, value = a(ev, "metric"), a(ev, "value")
+        if metric and value:
+            txt = f"{metric} = {value}" + (f" — {txt}" if txt else "")
+        elif value:
+            txt = f"{value}" + (f" — {txt}" if txt else "")
+        etext += wrap(txt, 206, 9.4, 3)
     if not etext:
-        etext = wrap(NOT_SET, 206, 9.4, 2)
+        # NOT_SET ("уточнить у пользователя") is right for context the operator can
+        # supply, but wrong here: evidence is produced by running the method, not
+        # obtained by asking a human — inviting the operator to fill it in invites
+        # fabrication. Say what the method is actually doing instead.
+        etext = wrap({
+            "planned": "метод ещё не запускался — свидетельств нет",
+            "running": "метод выполняется — свидетельств пока нет",
+            "failed": "метод завершился ошибкой — свидетельств нет",
+            "done": "метод отработал, но свидетельство не записано",
+        }.get((vm or {}).get("status") or "", "свидетельств пока нет"), 206, 9.4, 2)
     eh = max(70, 38 + len(etext) * 12.0 + 14)
 
     cls: List[Dict[str, Any]] = []
@@ -238,7 +276,10 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
     if not cls and cc:
         cls = g.linked(cc[0]["id"], "determines_sufficiency", types=("Conclusion",))
     cl = cls[0] if cls else None
-    cltext = wrap(a(cl, "synthesis", "conclusion", "statement") or NOT_SET, 274, 9.4, 4)
+    cltext = wrap(a(cl, "synthesis", "conclusion", "statement")
+                  or ("свидетельств нет — выводить не из чего" if not evs
+                      else "свидетельства есть, вывод ещё не сформулирован"),
+                  274, 9.4, 4)
     ch = max(70, 38 + len(cltext) * 12.0 + 14)
 
     return dict(stroke=stroke, fill=fill, glyph=glyph, htext=htext, hh=hh,
@@ -310,13 +351,27 @@ def render_slide(data: Dict[str, Any]) -> str:
                note("🧑‍🔬 уточнена с пользователем (HITL)" if human_touched(q)
                     else "🧑‍🔬 не подтверждена пользователем", 131) + "</g>")
 
-    metric = a(q, "completion_criteria")
-    crits = g.by_type("ConfirmationCriteria")
-    if not metric and crits:
-        metric = a(crits[0], "success_metric", "threshold", "criterion")
+    # A card labelled "target metric" must show a measurable target. It used to
+    # show the question's `completion_criteria`, which is the STOPPING RULE
+    # ("прагматичный" / "исчерпывающий") — read as a metric it is nonsense. The
+    # real targets are the ConfirmationCriteria thresholds; the stopping rule
+    # goes to a footnote, labelled for what it is.
+    thresholds: List[str] = []
+    for c in g.by_type("ConfirmationCriteria"):
+        t = a(c, "success_metric", "threshold", "criterion")
+        if t and t not in thresholds:
+            thresholds.append(t)
+    metric = "; ".join(thresholds[:2])
+    rest = len(thresholds) - 2
+    if rest > 0:
+        metric += f" (+{rest} ещё)"
+    completion = a(q, "completion_criteria")
     out.append(card(1054, 100, 202, 108, AMBER_FILL, AMBER) +
                head("○", AMBER, "🎯", "Целевая метрика") +
-               body(wrap(metric or NOT_SET, 176, 9.4, 5), fs=9.4, lh=11.6) + "</g>")
+               body(wrap(metric or NOT_SET, 176, 9.4, 4 if completion else 5),
+                    fs=9.4, lh=11.6) +
+               (note(wrap(f"завершение: {completion}", 176, 8.8, 1)[0], 99, DIM, 8.8)
+                if completion else "") + "</g>")
 
     # ── one row per hypothesis ──
     for i, (h, r) in enumerate(zip(hyps, rows)):
@@ -337,7 +392,10 @@ def render_slide(data: Dict[str, Any]) -> str:
             cy += 14
         tx = 13
         for t in r["tools"][:3]:
-            markup, cw = chip(tx, cy - 9, a(t, "name") or t["id"])
+            avail = 246 - 13 - tx          # keep the chip row inside the 246px card
+            if avail < 46:                 # no room left for a legible chip
+                break
+            markup, cw = chip(tx, cy - 9, a(t, "name") or t["id"], max_w=avail)
             seg.append(markup)
             tx += cw + 6
         out.append("".join(seg) + "</g>")
@@ -368,7 +426,7 @@ def render_slide(data: Dict[str, Any]) -> str:
         a(c, "synthesis") for c in g.by_type("Conclusion")[:2]) or NOT_SET
     out.append(card(24, foot_y, 900, 61, "#131a27", BLUE) +
                head("○", BLUE, "▣", "Итог") +
-               body(wrap(summary, 874, 9.4, 2), y0=38, fs=9.4, lh=12.0) + "</g>")
+               body(wrap(summary, 858, 9.4, 2), y0=38, fs=9.4, lh=12.0) + "</g>")
     out.append(f'<text x="{24 + 900 - 6:.0f}" y="{foot_y + 21:.0f}" font-size="9" fill="{DIM}" '
                f'text-anchor="end" font-family="{FONT}">'
                f'{E(f"✓{conf} · ✗{refu} · ⧗{prog}")}</text>')
