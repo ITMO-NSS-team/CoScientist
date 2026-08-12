@@ -56,7 +56,7 @@ def validate_molecular_dataset(
     out: Dict[str, Any] = {
         "ok": False, "path": path, "reasons": [], "n_rows": 0,
         "n_valid_smiles": 0, "n_unique_valid": 0, "smiles_col": None,
-        "has_fitness": False, "sample": [],
+        "has_fitness": False, "property_cols": [], "sample": [],
     }
 
     if not os.path.exists(path):
@@ -107,8 +107,27 @@ def validate_molecular_dataset(
     out["n_unique_valid"] = len(set(valid_vals))
     out["sample"] = list(dict.fromkeys(valid_vals))[:10]
 
-    # 3) fitness / property column present?
-    out["has_fitness"] = any(c.lower() in _FITNESS_HINTS for c in cols)
+    # 3) fitness / property column present? Judge by CONTENT, not by an exact
+    #    name match: a real dataset names its property anything (norm_sa, raw_sa,
+    #    ic50, docking…), and rejecting it for the wrong spelling would block
+    #    training on perfectly good data. A numeric column that is not an
+    #    index/step counter is a property.
+    _STRUCTURAL = {"trajectory_id", "traj_id", "trial_id", "id", "index",
+                   "step", "generation", "gen", "iteration", "epoch"}
+    numeric_props = []
+    for c in cols:
+        if str(c).lower() in _STRUCTURAL:
+            continue
+        try:
+            series = pd.to_numeric(df[c], errors="coerce")
+        except Exception:  # noqa: BLE001
+            continue
+        if series.notna().mean() > 0.8:  # mostly numeric -> a measured property
+            numeric_props.append(str(c))
+    named = [str(c) for c in cols
+             if any(h in str(c).lower() for h in _FITNESS_HINTS)]
+    out["property_cols"] = sorted(set(numeric_props) | set(named))
+    out["has_fitness"] = bool(out["property_cols"])
 
     # 4) verdicts
     if out["n_valid_smiles"] < min_valid:
