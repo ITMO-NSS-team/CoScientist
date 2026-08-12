@@ -217,4 +217,4 @@ TZ_*.md
 .test
 benchmarks/alembic/runs/
 benchmarks/alembic/tmbench_salvage/
-benchmarks/alembic/pre_comparison
+benchmarks/alembic/pre_comparisongraph_runs/web_state/
