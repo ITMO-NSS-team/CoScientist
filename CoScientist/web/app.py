@@ -85,6 +85,16 @@ class WebRuntime:
         self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
         self.active_runs: dict[SessionKey, asyncio.Task] = {}
 
+    def record_event(self, key: SessionKey, event: dict[str, Any]) -> None:
+        """Append a UI event to memory and to the session's on-disk transcript,
+        so the conversation can be reopened after a restart."""
+        self.agent_events[key].append(event)
+        try:
+            from CoScientist.web.session_store import append_event
+            append_event(key[0], key[1], event)
+        except Exception:  # noqa: BLE001 — persistence must never break a run
+            pass
+
     def control_lock(self, key: SessionKey) -> asyncio.Lock:
         """Serialize start/stop ownership changes for one public session."""
         lock = self.control_locks.get(key)
@@ -815,7 +825,19 @@ def create_app() -> FastAPI:
             runtime.registry.require_session(user_id, session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse({"events": runtime.agent_events[(user_id, session_id)][-100:]})
+        key = (user_id, session_id)
+        events = runtime.agent_events.get(key) or []
+        if not events:
+            # Reopening a session from an earlier process: replay its transcript
+            # from disk and keep it in memory for subsequent requests.
+            try:
+                from CoScientist.web.session_store import load_events
+                events = load_events(user_id, session_id)
+                if events:
+                    runtime.agent_events[key] = list(events)
+            except Exception:  # noqa: BLE001
+                events = []
+        return JSONResponse({"events": events[-100:]})
 
     # --- WebSocket ---
     @app.websocket("/ws")
@@ -952,7 +974,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         "message": query,
         "timestamp": datetime.now().isoformat(),
     }
-    runtime.agent_events[key].append(user_event)
+    runtime.record_event(key, user_event)
     await runtime.send(key, user_event)
 
     try:
@@ -985,7 +1007,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
             "timestamp": datetime.now().isoformat(),
         }
         await runtime.send(key, error_event)
-        runtime.agent_events[key].append(error_event)
+        runtime.record_event(key, error_event)
 
 
 async def _run_chat_invocation(
@@ -1113,7 +1135,7 @@ async def _run_chat_invocation(
                         }
                     await runtime.send(key, hitl_payload)
 
-                runtime.agent_events[key].append(event_data)
+                runtime.record_event(key, event_data)
                 await runtime.send(key, event_data)
 
                 if not hitl_interrupt_event:
