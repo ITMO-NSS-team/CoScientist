@@ -20,6 +20,8 @@ class EmbeddingModel(ABC):
 class BatchedEmbeddingModel(EmbeddingModel):
 
     def __init__(self, batch_size: int = 32):
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive integer, got {batch_size}")
         self.batch_size = batch_size
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -36,7 +38,10 @@ class BatchedEmbeddingModel(EmbeddingModel):
         return all_embeddings
 
     def embed_query(self, text: str) -> List[float]:
-        return self._embed_batch([text])[0]
+        result = self._embed_batch([text])
+        if not result:
+            raise ValueError(f"Embedding call returned no result for query: {text!r}")
+        return result[0]
 
     @abstractmethod
     def _embed_batch(self, texts: List[str]) -> List[List[float]]:

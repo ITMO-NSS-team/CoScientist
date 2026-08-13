@@ -1,7 +1,12 @@
+import logging
+
 from ..base import ETLStep
 from ..context import ETLContext
 from ...domain.entities import ImageInfo
 from ...utils.html_processing.images import caption_image
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class ImageCaptioningStep(ETLStep):
@@ -13,10 +18,13 @@ class ImageCaptioningStep(ETLStep):
         article_id = ctx.article.id
         
         html = ctx.artifact_store.get_html(article_id, "image_filtering")
+        if not html:
+            raise RuntimeError(f"{self.name} step requires cleaned HTML")
+        
         manifest_data = ctx.artifact_store.get_metadata(article_id, "image_filtering")
         
         if not manifest_data:
-            print(f"[{self.name}] No images to caption for {article_id}")
+            logger.info(f"[{self.name}] No images to caption for {article_id}")
             ctx.artifact_store.put_html(article_id, self.name, html)
             return
         
@@ -29,7 +37,13 @@ class ImageCaptioningStep(ETLStep):
                 continue
             
             pil_img = ctx.artifact_store.get_image(article_id, "image_filtering", img_info.file_name)
-            if pil_img:
+            if not pil_img:
+                logger.warning(
+                    f"[{self.name}] Could not load image {img_info.file_name} from article "
+                    f"[{article_id}] for captioning, skipping"
+                )
+                continue
+            else:
                 img_info = caption_image(img_info, pil_img, ctx.llm)
                 updated_manifest.append(img_info)
                 images_to_save[img_info.file_name] = pil_img

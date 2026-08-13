@@ -1,3 +1,4 @@
+import ast
 from typing import Any, Dict, Optional
 
 import chromadb
@@ -18,6 +19,9 @@ class ChromaVectorStore(VectorStore):
     def upsert_chunks(self, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
         if not chunks:
             return
+        
+        if len(chunks) != len(embeddings):
+            raise ValueError("Chunks and embeddings must have same length")
         
         ids = [chunk.id for chunk in chunks]
         documents = [chunk.content for chunk in chunks]
@@ -43,7 +47,7 @@ class ChromaVectorStore(VectorStore):
             metadatas=metadatas
         )
     
-    def search(self, query_vector: list[float], limit: int = 5, filters: Optional[dict] = None) -> list[Chunk]:
+    def search(self, query_vector: list[float] | Dict[str, Any], limit: int = 5, filters: Optional[dict] = None) -> list[Chunk]:
         results = self.collection.query(
             query_embeddings=[query_vector],
             n_results=limit,
@@ -63,7 +67,7 @@ class ChromaVectorStore(VectorStore):
             meta = metas[i] or {}
             imgs_in_chunk = meta.pop("imgs_in_chunk", None)
             if imgs_in_chunk:
-                imgs_in_chunk = eval(imgs_in_chunk)
+                imgs_in_chunk = ast.literal_eval(imgs_in_chunk)
             meta["chroma_score"] = distances[i]
             chunks.append(
                 Chunk(

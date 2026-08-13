@@ -9,7 +9,7 @@ class APIReranker(BatchedReranker):
     def __init__(
         self,
         url: str,
-        timeout: int = 1000,
+        timeout: int = 120,
         batch_size: int = 16,
         headers: dict | None = None,
     ):
@@ -23,17 +23,17 @@ class APIReranker(BatchedReranker):
         self,
         pairs: List[Tuple[str, str]],
     ) -> List[float]:
-
-        response = requests.post(
-            self.url,
-            json=pairs,
-            headers=self.headers,
-            timeout=self.timeout,
-        )
-
-        response.raise_for_status()
-        data = response.json()
-
+        try:
+            response = requests.post(
+                self.url,
+                json=pairs,
+                headers=self.headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Reranking API request failed ({self.url}, {len(pairs)} pairs): {e}") from e
         # Expected:
         # { "scores": [...] }
         return data["scores"]

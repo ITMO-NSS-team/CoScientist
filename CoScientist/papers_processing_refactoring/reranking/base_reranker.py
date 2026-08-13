@@ -36,6 +36,12 @@ class Reranker(ABC):
 
         pairs = [(query, doc) for doc in documents]
         scores = self.score_pairs(pairs)
+        
+        if len(scores) != len(pairs):
+            raise RuntimeError(
+                "Number of input pairs and number of scores do not match: "
+                f"{len(scores)} != {len(pairs)}"
+            )
 
         ranked = list(zip(documents, scores))
         ranked.sort(key=lambda x: x[1], reverse=True)
@@ -52,6 +58,8 @@ class BatchedReranker(Reranker):
     """
 
     def __init__(self, batch_size: int = 32):
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive integer, got {batch_size}")
         self.batch_size = batch_size
 
     def score_pairs(

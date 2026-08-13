@@ -1,5 +1,10 @@
+import logging
+
 from ..base import ETLStep
 from ..context import ETLContext
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingStep(ETLStep):
@@ -17,7 +22,12 @@ class EmbeddingStep(ETLStep):
                 continue
             
             texts = [chunk.content for chunk in chunks]
-            vectors = ctx.embedding_model.embed_documents(texts)
+            
+            try:
+                vectors = ctx.embedding_model.embed_documents(texts)
+            except Exception as e:
+                logger.error(f"Embedding calculation failed {e}")
+                raise e
             
             ctx.embeddings[role] = {
                 "chunk_ids": [chunk.id for chunk in chunks],

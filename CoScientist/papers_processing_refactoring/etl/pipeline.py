@@ -8,7 +8,7 @@ class ETLPipeline:
     def __init__(self, steps: Sequence[ETLStep]):
         self.steps = steps
 
-    def run(self, ctx: ETLContext) -> ETLContext | str:
+    def run(self, ctx: ETLContext) -> ETLContext:
         for step in self.steps:
             step.execute(ctx)
         return ctx

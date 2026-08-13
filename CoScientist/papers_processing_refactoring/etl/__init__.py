@@ -12,6 +12,7 @@ from .steps.summarisation import PaperSummarisatonStep
 from .steps.parse import ParseStep
 from .steps.publish import PublishStep
 
+# TODO: set out the sequence of steps
 __all__ = [
     "ChunkingStep",
     "EmbeddingStep",

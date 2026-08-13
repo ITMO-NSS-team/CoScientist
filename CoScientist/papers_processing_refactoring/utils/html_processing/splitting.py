@@ -57,7 +57,7 @@ def chunk_html_to_chunks(
                 article_id=article_id,
                 domain=article_domain or "default",
                 field=article_field or "default",
-                role=ChunkRole.BODY.value,
+                role=ChunkRole.BODY,
                 modality="text",
                 content=text,
                 metadata={

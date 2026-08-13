@@ -1,3 +1,8 @@
+import logging
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
 from bs4 import BeautifulSoup
 
 from ..base import ETLStep
@@ -8,6 +13,9 @@ from ...utils.html_processing.images import (
     check_image_relevance,
     try_extract_table
 )
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class ImageFilteringStep(ETLStep):
@@ -20,7 +28,7 @@ class ImageFilteringStep(ETLStep):
         
         html = ctx.artifact_store.get_html(article_id, "html_cleaning")
         if not html:
-            raise ValueError("HTML not found from html_cleaning step")
+            raise RuntimeError(f"{self.name} step requires cleaned HTML")
         
         soup = BeautifulSoup(html, "lxml")
         
@@ -28,15 +36,17 @@ class ImageFilteringStep(ETLStep):
         images_to_save = {}
         
         for img_tag in soup.find_all('img'):
-            img_src = img_tag.get("src")
+            img_src: Any = img_tag.get("src")
             if not img_src:
                 continue
             
-            file_name = img_src.split("/")[-1]
+            file_name = Path(urlparse(img_src).path).name
             
             pil_img = ctx.artifact_store.get_image(article_id, "parsing", file_name)
             if not pil_img:
-                print(f"[{self.name}] Warning: Image {file_name} not found in store.")
+                logger.warning(
+                    f"[{self.name}] Image {file_name} from article [{article_id}] not found in store."
+                )
                 continue
             
             image_b64 = pil_to_base64(pil_img)

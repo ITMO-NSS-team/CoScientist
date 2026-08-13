@@ -26,6 +26,7 @@ class ETLStep(ABC):
         state_db = ctx.state_manager
         artifacts_db = ctx.artifact_store
         
+        # TODO: replace 'failed_steps' with persists_state for these steps
         # These steps don't save any artifacts so they always have to be called
         always_failed_steps = ["chunking", "embed"]
         

@@ -22,15 +22,15 @@ def create_embedding_model(config: Dict[str, Any]) -> EmbeddingModel:
     }
     """
 
-    model_type = config.get("type")
+    model_type = config.get("type", "unknown")
 
     if model_type == "api":
-        embedder_url = config.get("url")
+        embedder_url = config.get("url", "")
         if not embedder_url:
             raise ValueError("Embedder URL must be specified in the config")
         return APIEmbeddingModel(
             url=embedder_url,
-            timeout=config.get("timeout", 1000),
+            timeout=config.get("timeout", 120),
             batch_size=config.get("batch_size", 16),
             headers=config.get("headers"),
         )

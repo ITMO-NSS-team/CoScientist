@@ -1,11 +1,15 @@
 import json
+import logging
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import boto3
-from botocore.client import Config
+from botocore.client import Config, ClientError
 from PIL import Image
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class S3ETLArtifactStore:
@@ -48,9 +52,13 @@ class S3ETLArtifactStore:
             ContentType="text/html",
         )
 
-    def get_html(self, article_id: str, step: str) -> str:
+    def get_html(self, article_id: str, step: str) -> str | None:
         key = self._prefix(article_id, step) + "document.html"
-        obj = self.client.get_object(Bucket=self.bucket, Key=key)
+        try:
+            obj = self.client.get_object(Bucket=self.bucket, Key=key)
+        except ClientError as e:
+            logger.error(f"Error getting HTML for article {article_id}: {e}")
+            return None
         return obj["Body"].read().decode("utf-8")
 
     # ---------- Images ----------
@@ -83,9 +91,15 @@ class S3ETLArtifactStore:
         article_id: str,
         step: str,
         image_name: str,
-    ) -> Image.Image:
+    ) -> Image.Image | None:
         key = self._prefix(article_id, step) + f"images/{image_name}"
-        obj = self.client.get_object(Bucket=self.bucket, Key=key)
+        try:
+            obj = self.client.get_object(Bucket=self.bucket, Key=key)
+        except ClientError as e:
+            logger.error(
+                f"Error getting image {image_name} for article {article_id} on {step} step: {e}"
+            )
+            return None
         return Image.open(BytesIO(obj["Body"].read()))
 
     # ---------- Metadata ----------
@@ -104,9 +118,13 @@ class S3ETLArtifactStore:
             ContentType="application/json",
         )
 
-    def get_metadata(self, article_id: str, step: str) -> dict[str, Any]:
+    def get_metadata(self, article_id: str, step: str) -> dict[str, Any] | None:
         key = self._prefix(article_id, step) + "meta.json"
-        obj = self.client.get_object(Bucket=self.bucket, Key=key)
+        try:
+            obj = self.client.get_object(Bucket=self.bucket, Key=key)
+        except ClientError as e:
+            logger.error(f"Error getting metadata for article {article_id} on {step} step: {e}")
+            return None
         return json.loads(obj["Body"].read().decode("utf-8"))
     
     # ---------- Files ----------
@@ -119,9 +137,10 @@ class S3ETLArtifactStore:
         key = self._prefix(article_id, step) + file_name
         try:
             resp = self.client.get_object(Bucket=self.bucket, Key=key)
-            return resp["Body"].read()
-        except Exception:
+        except ClientError as e:
+            logger.error(f"Error getting file {file_name} for article {article_id} on {step} step: {e}")
             return None
+        return resp["Body"].read()
 
     # ---------- Delete ----------
 

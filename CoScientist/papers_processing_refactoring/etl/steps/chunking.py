@@ -13,12 +13,15 @@ class ChunkingStep(ETLStep):
         article_id = ctx.article.id
         
         html = ctx.artifact_store.get_html(article_id, "paper_summarisation")
+        if not html:
+            raise RuntimeError(f"{self.name} step requires cleaned HTML")
+        
         manifest_data = ctx.artifact_store.get_metadata(article_id, "paper_summarisation")
+        if not manifest_data:
+            raise RuntimeError(f"{self.name} step requires processing metadata")
+        
         summary_data = manifest_data["summary"]
         images_data = [ImageInfo(**data) for data in manifest_data["images"]]
-        
-        if not html:
-            raise RuntimeError("ChunkingStep requires cleaned HTML")
 
         body_chunks = chunk_html_to_chunks(
             html, article_id, summary_data["domain"], summary_data["field"]
@@ -46,7 +49,7 @@ class ChunkingStep(ETLStep):
                     article_id=article_id,
                     domain=summary_data["domain"] or "default",
                     field=summary_data["field"] or "default",
-                    role=ChunkRole.IMAGE_CAPTION.value,
+                    role=ChunkRole.IMAGE_CAPTION,
                     modality="text",
                     content=text,
                     metadata={
@@ -60,7 +63,7 @@ class ChunkingStep(ETLStep):
             article_id=article_id,
             domain=summary_data["domain"] or "default",
             field=summary_data["field"] or "default",
-            role=ChunkRole.SUMMARY.value,
+            role=ChunkRole.SUMMARY,
             modality="text",
             content=summary_data["paper_summary"],
             metadata={

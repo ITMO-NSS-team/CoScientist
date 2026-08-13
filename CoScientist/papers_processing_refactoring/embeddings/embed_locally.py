@@ -1,6 +1,10 @@
+import logging
 from typing import List
 
 from .base_embedder import BatchedEmbeddingModel
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class LocalEmbeddingModel(BatchedEmbeddingModel):
@@ -15,7 +19,11 @@ class LocalEmbeddingModel(BatchedEmbeddingModel):
                 "sentence-transformers must be installed for LocalEmbeddingModel"
             ) from e
 
-        self.model = SentenceTransformer(model_name)
+        try:
+            self.model = SentenceTransformer(model_name)
+        except Exception as e:
+            logger.error(f"Model initialization failed: {e}")
+            raise e
 
     def _embed_batch(self, texts: List[str]) -> List[List[float]]:
         embeddings = self.model.encode(

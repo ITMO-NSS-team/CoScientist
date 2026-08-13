@@ -41,6 +41,12 @@ class TwoStageRetriever:
         
         scores = self.reranker.score_pairs(pairs)
         
+        if len(scores) != len(pairs):
+            raise RuntimeError(
+                "Number of input pairs and number of scores do not match: "
+                f"{len(scores)} != {len(pairs)}"
+            )
+        
         scored_chunks = list(zip(initial_chunks, scores))
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
         

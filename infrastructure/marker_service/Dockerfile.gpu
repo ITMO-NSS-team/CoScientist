@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -16,7 +16,7 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
 RUN pip3 install --upgrade pip && \
-    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    pip3 install torch==2.7.0+cu126 torchvision==0.22.0+cu126 --index-url https://download.pytorch.org/whl/cu126
 
 RUN pip install \
     marker-pdf==1.8.2 \
@@ -31,6 +31,3 @@ ENV TORCH_DEVICE=cuda
 EXPOSE 8080
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--log-level", "info"]
-
-# docker build -t marker-api-gpu -f Dockerfile.gpu .
-# docker run --gpus all -p 8080:8080 marker-api-gpu

@@ -48,6 +48,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 MAX_WORKERS = 3
+SLEEP_TIME = 10
+POOLING_TIME_MINUTES = 1
 
 load_dotenv(CONFIG_PATH)
 settings = get_settings()
@@ -80,14 +82,14 @@ def build_artifacts_stores(etl_settings):
     etl_art_store = S3ETLArtifactStore(
         endpoint=etl_settings.s3.endpoint,
         access_key=etl_settings.s3.access_key,
-        secret_key=etl_settings.s3.secret_key,
+        secret_key=etl_settings.s3.secret_key.get_secret_value(),
         bucket=etl_settings.s3.etl_bucket
     )
     public_art_store = S3DomainArtifactStore(
         endpoint=etl_settings.s3.endpoint,
         access_key=etl_settings.s3.access_key,
-        secret_key=etl_settings.s3.secret_key,
-        bucket=etl_settings.s3.public_bucket  # Delete after testing
+        secret_key=etl_settings.s3.secret_key.get_secret_value(),
+        bucket=etl_settings.s3.public_bucket
     )
     return etl_art_store, public_art_store
 
@@ -100,10 +102,11 @@ def build_state_store(etl_settings):
     else:
         raise ValueError("State store configuration must be provided")
 
-
+# TODO: consider moving the initialisation of shared objects to the `main` function, taking thread safety into account
 def process_single_article(article, app_settings):
     logger.info(f"[{article.name}] Thread started...")
     
+    # TODO: wrap state manager in 'with' block
     state_manager = build_state_store(app_settings)
     
     if state_manager.get_status(article.id, "publish") == "done":
@@ -113,12 +116,13 @@ def process_single_article(article, app_settings):
         return f"[{article.name}] Processing is already running. Skipped."
     
     local_source = LocalSource(settings.files.directory)
+    # TODO: wrap functions in 'try...except' block
     vector_store = build_vector_store(settings)
     artifact_store, public_store = build_artifacts_stores(settings)
     llm_model = ChatOpenAI(
         model=settings.llm.llm_name,
         base_url=settings.llm.llm_base_url,
-        api_key=settings.llm.llm_api_key,  # noqa
+        api_key=settings.llm.llm_api_key.get_secret_value(),  # noqa
         temperature=0.1
     )
     embedding_model = build_services(settings)["embedding_model"]
@@ -155,7 +159,8 @@ def process_single_article(article, app_settings):
         return f"[{article.id}] Success in {end - start:.2f}s"
     except Exception as e:
         end = time.perf_counter()
-        return f"[{article.id}] Failed: {str(e)} in {end - start:.2f}s"
+        logger.error(f"[{article.id}] Failed: {str(e)}", exc_info=True)
+        return f"[{article.id}] Failed in {end - start:.2f}s"
 
 
 def handle_articles_batch(articles):
@@ -167,6 +172,7 @@ def handle_articles_batch(articles):
             for art in articles
         }
         
+        # TODO: wrap in 'try...except' block
         for future in as_completed(future_to_article):
             result_msg = future.result()
             logger.info(result_msg)
@@ -184,12 +190,12 @@ def main():
     scheduler = IngestionScheduler(
         on_batch=lambda batch: handle_articles_batch(batch)
     )
-    scheduler.register(local_source, Schedule(timedelta(minutes=1)))
+    scheduler.register(local_source, Schedule(timedelta(minutes=POOLING_TIME_MINUTES)))
     
     try:
         while True:
             scheduler.poll()
-            time.sleep(10)
+            time.sleep(SLEEP_TIME)
     except KeyboardInterrupt:
         logger.info("Shutting down daemon...")
 

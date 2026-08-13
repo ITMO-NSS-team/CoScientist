@@ -35,9 +35,9 @@ class S3DomainArtifactStore:
         article_id: str,
         paper_summary: str,
         html: str,
+        pdf_data: bytes,
         images: dict[str, Image.Image | None],
         metadata: dict[str, Any] | None = None,
-        pdf_data: bytes | None = None,
     ) -> None:
         # Paper summary
         self.client.put_object(

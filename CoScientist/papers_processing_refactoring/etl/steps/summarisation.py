@@ -15,7 +15,10 @@ class PaperSummarisatonStep(ETLStep):
         article_id = ctx.article.id
         
         html = ctx.artifact_store.get_html(article_id, "image_captioning")
-        manifest_data = ctx.artifact_store.get_metadata(article_id, "image_captioning")
+        if not html:
+            raise RuntimeError(f"{self.name} step requires cleaned HTML")
+        
+        manifest_data = ctx.artifact_store.get_metadata(article_id, "image_captioning") or dict()
         
         summary_llm = ctx.llm.with_structured_output(ExpandedSummary)
         expanded_summary: ExpandedSummary = summary_llm.invoke(  # noqa

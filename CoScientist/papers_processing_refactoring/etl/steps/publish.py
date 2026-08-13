@@ -17,6 +17,9 @@ class PublishStep(ETLStep):
         article_id = ctx.article.id
         
         manifest_data = ctx.artifact_store.get_metadata(article_id, "paper_summarisation")
+        if not manifest_data:
+            raise RuntimeError(f"{self.name} step requires processing metadata")
+        
         summary_data = manifest_data["summary"]
         
         chunks_to_upload = []
@@ -32,6 +35,11 @@ class PublishStep(ETLStep):
                 if len(chunks) == len(role_embeddings):
                     chunks_to_upload.extend(chunks)
                     vectors_to_upload.extend(role_embeddings)
+                else:
+                    raise RuntimeError(
+                        "Number of input texts and number of embeddings do not match: "
+                        f"{len(chunks)} != {len(role_embeddings)}"
+                    )
         
         try:
             if chunks_to_upload:
@@ -39,7 +47,13 @@ class PublishStep(ETLStep):
                 ctx.vector_store.upsert_chunks(chunks_to_upload, vectors_to_upload)
             
             pdf_data = ctx.artifact_store.get_file(article_id, "fetching", "source.pdf")
+            
+            if not pdf_data:
+                raise RuntimeError(f"{self.name} step requires source PDF file")
+            
             html = ctx.artifact_store.get_html(article_id, "paper_summarisation")
+            if not html:
+                raise RuntimeError(f"{self.name} step requires HTML")
             
             image_names = ctx.artifact_store.list_images(article_id, "image_captioning")
             images = {
@@ -60,25 +74,12 @@ class PublishStep(ETLStep):
             # Clean up artifacts and source file after successful publication
             ctx.artifact_store.delete_article(article_id)
             if ctx.article.source_type == "local":
-                # source_path = Path(ctx.article.source_ref)
-                # if source_path.exists():
-                #     try:
-                #         source_path.unlink()
-                #     except Exception as e:
-                #         logger.info(
-                #             f"[{self.name}] Warning: Failed to delete processed source file {source_path}: {e}"
-                #         )
-
                 source_path = Path(ctx.article.source_ref)
                 if source_path.exists():
-                    try:
-                        new_name = f"{article_id}_{source_path.name}"
-                        destination = ctx.processed_papers_path / new_name
-                        shutil.move(str(source_path), str(destination))
-                        logger.info(f"[{self.name}] Moved processed source file to {destination}")
-                    except Exception as e:
-                        logger.error(f"[{self.name}] Warning: Failed to move source file {source_path}: {e}")
-                        raise e
+                    new_name = f"{article_id}_{source_path.name}"
+                    destination = ctx.processed_papers_path / new_name
+                    shutil.move(str(source_path), str(destination))
+                    logger.info(f"[{self.name}] Moved processed source file to {destination}")
         
         except Exception as e:
             logger.error(f"[{self.name}] Error publishing {article_id}. Rolling back vector and artifact stores...")

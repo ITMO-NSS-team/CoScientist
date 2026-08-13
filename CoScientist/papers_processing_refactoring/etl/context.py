@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any, List
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ConfigDict, computed_field
 
-from ..domain.entities import Article, Chunk
+from ..domain.entities import Article, Chunk, ChunkRole
 from ..embeddings import *
 from ..storage.artifacts.domain_s3 import S3DomainArtifactStore
 from ..storage.artifacts.etl_s3 import S3ETLArtifactStore
@@ -19,8 +19,8 @@ class ETLContext(BaseModel):
 
     raw_data: Optional[bytes] = None
     parsed_representation: Optional[str] = None
-    chunks: Dict[str, List[Chunk]] = Field(default_factory=dict)
-    embeddings: Dict[str, Dict[str, List[List[float]] | List[str]]] = Field(default_factory=dict)
+    chunks: Dict[ChunkRole, List[Chunk]] = Field(default_factory=dict)
+    embeddings: Dict[ChunkRole, Dict[str, List[List[float]] | List[str]]] = Field(default_factory=dict)
     
     artifacts: Dict[str, Any] = Field(default_factory=dict)
     

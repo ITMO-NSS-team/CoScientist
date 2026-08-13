@@ -121,6 +121,7 @@ def combine_html(html_parts: list[str]) -> str:
     base_soup = BeautifulSoup(html_parts[0], "html.parser")
     base_body = base_soup.find("body")
     
+    # TODO: check whether there is any data loss if the chunk does not contain a body
     if not base_body:
         return html_parts[0]
     

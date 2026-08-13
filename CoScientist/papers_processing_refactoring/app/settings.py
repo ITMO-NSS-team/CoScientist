@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from CoScientist.papers_processing_refactoring.definitions import CONFIG_PATH
 
@@ -10,7 +10,7 @@ class LLMSettings(BaseSettings):
     
     llm_base_url: str
     llm_name: str
-    llm_api_key: str
+    llm_api_key: SecretStr
     
     model_config = SettingsConfigDict(
         env_prefix="ETL_",
@@ -54,17 +54,6 @@ class ChromaSettings(BaseSettings):
         env_prefix="CHROMADB_",
         extra="ignore",
     )
-    
-
-class QdrantSettings(BaseSettings):
-    host: str = "localhost"
-    port: int = 6333
-    collection: str = "articles"
-
-    model_config = SettingsConfigDict(
-        env_prefix="QDRANT_",
-        extra="ignore",
-    )
 
 
 class VectorDBSettings(BaseSettings):
@@ -72,7 +61,6 @@ class VectorDBSettings(BaseSettings):
     backend: str = Field(default="chromadb", alias="VECTOR_DB")
 
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
-    qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
 
     model_config = SettingsConfigDict(
         extra="ignore",
@@ -90,7 +78,7 @@ class S3Settings(BaseSettings):
 
     endpoint: str
     access_key: str
-    secret_key: str
+    secret_key: SecretStr
     etl_bucket: str
     public_bucket: str
 
@@ -105,10 +93,7 @@ class DatabaseSettings(BaseSettings):
     type: str = Field(default="sqlite", alias="DATABASE_TYPE")
     sqlite_path: str = Field(default="./data/db.sqlite", alias="SQLITE_PATH")
     
-    postgresql_dsn: str = Field(
-        default="postgresql://[user[:password]@]host[:port][/dbname][?options]",
-        alias="POSTGRESQL_DSN"
-    )
+    postgresql_dsn: str = Field(alias="POSTGRESQL_DSN")
 
     model_config = SettingsConfigDict(
         extra="ignore",

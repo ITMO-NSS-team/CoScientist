@@ -21,7 +21,7 @@ def clean_html(html: str) -> str:
             next_node = header.next_sibling
             elements_to_remove = []
 
-            while next_node and getattr(next_node, "name", None) not in ["h1", "h2"]:
+            while next_node and getattr(next_node, "name", None) not in ["h1", "h2", "h3"]:
                 elements_to_remove.append(next_node)
                 next_node = next_node.next_sibling
 

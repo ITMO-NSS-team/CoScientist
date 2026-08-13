@@ -2,12 +2,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Dict, Optional, Union, Mapping
 
-from pydantic import BaseModel
-
-# from CoScientist.papers.sources.base import ArticleSource
+from pydantic import BaseModel, model_validator
 
 
-# TODO: maybe add separate classes for source types (as Enum) and source references
 class Article(BaseModel):
     id: str
     source_type: Literal["local", "remote"]
@@ -15,8 +12,15 @@ class Article(BaseModel):
     name: str
     domain: str = "default"
     metadata: Optional[Dict[str, Any]] = None
-    # source: ArticleSource
     
+    @model_validator(mode="after")
+    def validate_source_pair(self):
+        if self.source_type == "local" and not isinstance(self.source_ref, Path):
+            raise ValueError("local articles must use a Path for source_ref")
+        if self.source_type == "remote" and isinstance(self.source_ref, Path):
+            raise ValueError("remote articles must use a string URL for source_ref")
+        return self
+
 
 class ChunkRole(str, Enum):
     BODY = "body"
@@ -45,7 +49,7 @@ class KnowledgeDomain(BaseModel):
 class ImageInfo(BaseModel):
     id: str
     file_name: str
-    original_src: str | Any
+    original_src: Any
     is_kept: bool = True
     caption: Optional[str] = None
     final_s3_url: Optional[str] = None

@@ -30,7 +30,7 @@ def create_reranker(config: Dict[str, Any]) -> Reranker:
             raise ValueError("Reranker URL must be specified in the config")
         return APIReranker(
             url=reranker_url,
-            timeout=config.get("timeout", 1000),
+            timeout=config.get("timeout", 120),
             batch_size=config.get("batch_size", 16),
             headers=config.get("headers"),
         )
