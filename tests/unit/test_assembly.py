@@ -406,16 +406,16 @@ def test_critic_on_a_plain_llm_agent_is_rejected(config):
         SystemConfig.model_validate(raw)
 
 
-def test_build_for_mode_init(monkeypatch):
+def test_build_for_mode_planner(monkeypatch):
     from CoScientist.config import get_settings
     from CoScientist.agents import build_for_mode
 
     settings = get_settings()
-    monkeypatch.setattr(settings.web, "start_mode", "init")
-
-    system = build_for_mode()
-    assert system is not None
-    assert system.root.name == "PlanningPipelineAgent"
+    for mode in ("planner"):
+        monkeypatch.setattr(settings.web, "start_mode", mode)
+        system = build_for_mode()
+        assert system is not None
+        assert system.root.name == "PlanningPipelineAgent"
 
 
 def test_build_for_mode_orchestrator(monkeypatch):
@@ -447,6 +447,47 @@ def test_build_for_mode_orchestrator_planner(monkeypatch):
     # OrchestratorAgent has create_plan tool
     tools = _tool_names(system.root)
     assert "create_plan" in tools
+
+
+def test_build_for_mode_run_root_includes_pipeline_pre_and_post(monkeypatch):
+    from google.adk.agents.sequential_agent import SequentialAgent
+    from CoScientist.config import get_settings
+    from CoScientist.agents import build_for_mode
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.web, "start_mode", "orchestrator")
+
+    system = build_for_mode()
+    run_root = system.run_root
+    assert isinstance(run_root, SequentialAgent)
+    names = [a.name for a in run_root.sub_agents]
+    assert names[0] == "ContextInitAgent"
+    assert names[-1] == "ResultAggregatorAgent"
+    assert "OrchestratorAgent" in names
+
+
+def test_build_for_mode_planner_run_root(monkeypatch):
+    from google.adk.agents.sequential_agent import SequentialAgent
+    from CoScientist.config import get_settings
+    from CoScientist.agents import build_for_mode
+
+    settings = get_settings()
+    for mode in ("planner"):
+        monkeypatch.setattr(settings.web, "start_mode", mode)
+
+        system = build_for_mode()
+        run_root = system.run_root
+        assert isinstance(run_root, SequentialAgent)
+        names = [a.name for a in run_root.sub_agents]
+        assert names[0] == "ContextInitAgent"
+        assert names[1] == "PlanningPipelineAgent"
+        assert names[-1] == "ResultAggregatorAgent"
+
+        planning_agent = run_root.sub_agents[1]
+        planning_children = [a.name for a in planning_agent.sub_agents]
+        assert planning_children == ["PlannerAgent", "OrchestratorAgent"]
+
+
 
 
 

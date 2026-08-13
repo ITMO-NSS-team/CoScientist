@@ -1473,7 +1473,7 @@ def orchestrator(ctx: PromptContext) -> str:
             "Context of tasks:\n"
             "{active_tasks}\n"
         )
-    elif settings.orchestrator.use_planner or settings.web.start_mode in ("init", "orchestrator_planner", "orchestrator_plan"):
+    elif settings.orchestrator.use_planner or settings.web.start_mode in ("planner", "orchestrator_planner", "orchestrator_plan"):
         steps.append(
             "### TASK_MANAGEMENT\n"
             "Context of tasks:\n"

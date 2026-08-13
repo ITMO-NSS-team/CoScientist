@@ -198,7 +198,7 @@ class CoScientistManager:
 
             app = App(
                 name=self.app_name,
-                root_agent=system.root,
+                root_agent=system.run_root,
                 plugins=[
                     EventLoggerPlugin(),
                     # Observer: reports tool use from nested AgentTool runners

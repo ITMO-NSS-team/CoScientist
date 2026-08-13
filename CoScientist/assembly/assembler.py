@@ -64,6 +64,31 @@ class AgentSystem:
     def root(self) -> BaseAgent:
         return self.agents[self.config.root.name]
 
+    @property
+    def run_root(self) -> BaseAgent:
+        pipeline_pre = [
+            self.agents[n]
+            for n in self.config.pipeline.pre
+            if self.config.agent(n).is_enabled()
+        ]
+        pipeline_post = [
+            self.agents[n]
+            for n in self.config.pipeline.post
+            if self.config.agent(n).is_enabled()
+        ]
+        if pipeline_pre or pipeline_post:
+            from google.adk.agents.sequential_agent import SequentialAgent
+
+            return SequentialAgent(
+                name="ResearchPipeline",
+                description=(
+                    "Full research lifecycle: orchestrator run then report"
+                    " synthesis."
+                ),
+                sub_agents=[*pipeline_pre, self.root, *pipeline_post],
+            )
+        return self.root
+
     def agent(self, name: str) -> BaseAgent:
         if name not in self.agents:
             raise KeyError(f"Unknown agent {name!r}. Known: {sorted(self.agents)}")

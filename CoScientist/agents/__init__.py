@@ -47,16 +47,7 @@ pipeline_post_agents = [_system.agent(n) for n in _system.config.pipeline.post i
 # = ONE trace, with the Result Aggregator as the terminal child (it reads the graph
 # the orchestrator populated and writes the report). When no pipeline stages are
 # declared, the orchestrator IS the run root (no needless wrapper).
-if pipeline_pre_agents or pipeline_post_agents:
-    from google.adk.agents.sequential_agent import SequentialAgent
-
-    run_root = SequentialAgent(
-        name="ResearchPipeline",
-        description="Full research lifecycle: orchestrator run then report synthesis.",
-        sub_agents=[*pipeline_pre_agents, orchestrator_agent, *pipeline_post_agents],
-    )
-else:
-    run_root = orchestrator_agent
+run_root = _system.run_root
 
 planner_agent = _system.agents.get("PlannerAgent")
 hypotheses_agent = _system.agents.get("HypothesesAgent")
@@ -82,7 +73,7 @@ def build_for_mode():
     """Build an AgentSystem configured for the current start mode from settings.
 
     Reads ``settings.web.start_mode``:
-      * ``"init"`` (default) — PlanningPipelineAgent is root (sequential: PlannerAgent →
+      * ``"planner"`` — PlanningPipelineAgent is root (sequential: PlannerAgent →
         OrchestratorAgent).
       * ``"orchestrator"`` — OrchestratorAgent is root, with PlannerAgent
         added to its subordinates so it can be invoked on demand.
@@ -98,7 +89,7 @@ def build_for_mode():
     from CoScientist.config import get_settings
     start_mode = get_settings().web.start_mode
 
-    if start_mode == "init":
+    if start_mode in ("planner"):
         raw_config = load_config()
         patched = copy.deepcopy(raw_config)
         pipeline_agent_name = "PlanningPipelineAgent" if "PlanningPipelineAgent" in patched.agents else "InitAgent"
@@ -106,7 +97,7 @@ def build_for_mode():
             patched.agents[pipeline_agent_name].root = True
             patched.agents[pipeline_agent_name].enabled = True
             patched.agents["OrchestratorAgent"].root = False
-            # In Init mode the PlannerAgent runs first and its output replaces
+            # In Planner mode the PlannerAgent runs first and its output replaces
             # the original user query; inject_original_query restores it so the
             # OrchestratorAgent sees the original request.
             orch_cb = patched.agents["OrchestratorAgent"].callbacks.before_model
@@ -115,8 +106,9 @@ def build_for_mode():
             system = build_system(config=patched)
         else:
             logger.warning(
-                "start_mode is set to 'init' but 'PlanningPipelineAgent' is not present in "
-                "the system config; falling back to default build_system()"
+                "start_mode is set to %r but 'PlanningPipelineAgent' is not present in "
+                "the system config; falling back to default build_system()",
+                start_mode,
             )
             system = build_system()
         _tracer = get_multi_agent_tracer()
@@ -157,7 +149,7 @@ def build_for_mode():
 
     if start_mode != "orchestrator":
         raise ValueError(
-            f"Unknown start_mode {start_mode!r}; expected 'init', 'orchestrator', or 'orchestrator_planner'"
+            f"Unknown start_mode {start_mode!r}; expected 'planner', 'orchestrator', or 'orchestrator_planner'"
         )
 
     # Load a fresh config and patch it for orchestrator-as-root mode.

@@ -188,7 +188,8 @@
             <button onclick="createNewSession()" title="New session" class="text-primary hover:brightness-125"><span
                 class="material-symbols-outlined text-sm">add_circle</span></button>
           </div>
-          <input type="file" id="import-session-input" accept=".cossession.zip,.zip" class="hidden" onchange="handleImportFile(this)">
+          <input type="file" id="import-session-input" accept=".cossession.zip,.zip" class="hidden"
+            onchange="handleImportFile(this)">
         </div>
         <select id="session-select" onchange="onSessionSelected(this.value)"
           class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
@@ -477,6 +478,7 @@
         en: 'Choose which agent starts the session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator. <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.',
         ru: 'Выберите, какой агент запускает сессию. <strong>PlannerAgent</strong> сначала запускает PlannerAgent, затем OrchestratorAgent. <strong>OrchestratorAgent</strong> запускает оркестратор напрямую. <strong>Orchestrator as a planner</strong> даёт оркестратору инструмент планирования и отключает PlannerAgent.'
       },
+      'settings.startMode.planner': { en: 'PlannerAgent', ru: 'PlannerAgent' },
       'settings.startMode.init': { en: 'PlannerAgent', ru: 'PlannerAgent' },
       'settings.startMode.orchestrator': { en: 'OrchestratorAgent', ru: 'OrchestratorAgent' },
       'settings.startMode.orchestratorPlanner': { en: 'Orchestrator as a planner', ru: 'Orchestrator в роли планировщика' },
@@ -508,10 +510,10 @@
         ru: 'Делегирует ли оркестратор декомпозицию задач компоненту PlannerAgent.'
       },
 
-      'settings.contextInit.label': { en: 'Context Initialization', ru: 'Инициализация контекста' },
+      'settings.contextInit.label': { en: 'Research Frame', ru: 'Рамка исследования' },
       'settings.contextInit.desc': {
-        en: 'Draft research frame and seed it into the research graph before the orchestrator runs (${context_init.enabled}).',
-        ru: 'Формировать фрейм исследования и засевать его в граф исследований до запуска оркестратора (${context_init.enabled}).'
+        en: 'Draft research frame and seed it into the research graph before the orchestrator runs.',
+        ru: 'Формировать фрейм исследования и добавлять его в граф исследований до запуска оркестратора.'
       },
 
       'settings.useProxy.label': { en: 'Use Corporate Proxy', ru: 'Корпоративный прокси' },
@@ -702,7 +704,7 @@
 
     const appSettings = {
       general: {
-        startMode: 'init',   // 'init' | 'orchestrator' | 'orchestrator_planner'
+        startMode: 'planner',   // 'planner' | 'orchestrator' | 'orchestrator_planner'
         maxRetries: 3,
         hitlEnabled: false,
         hitlAutoApproveTimeout: 300,
@@ -1515,7 +1517,7 @@
         if (resp.ok) {
           const data = await resp.json();
           if (data.general) {
-            appSettings.general.startMode = data.general.startMode || 'init';
+            appSettings.general.startMode = data.general.startMode || 'planner';
             appSettings.general.maxRetries = data.general.maxRetries ?? 3;
             appSettings.general.hitlEnabled = data.general.hitlEnabled ?? false;
             appSettings.general.hitlAutoApproveTimeout = data.general.hitlAutoApproveTimeout ?? 300;
@@ -1608,7 +1610,7 @@
       const plannerCheckbox = document.getElementById('use-planner-checkbox');
       const plannerNote = document.getElementById('use-planner-note');
 
-      if (startMode === 'init' || startMode === 'orchestrator_planner') {
+      if (startMode === 'planner' || startMode === 'orchestrator_planner') {
         plannerCheckbox.disabled = true;
         plannerCheckbox.checked = false;
         if (plannerNote) plannerNote.classList.remove('hidden');
@@ -3586,7 +3588,7 @@
               </div>
               <select id="start-mode-select" onchange="updateStartModeUI()"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
-                <option value="init" data-i18n="settings.startMode.init">PlannerAgent</option>
+                <option value="planner" data-i18n="settings.startMode.planner">PlannerAgent</option>
                 <option value="orchestrator" data-i18n="settings.startMode.orchestrator">OrchestratorAgent</option>
                 <option value="orchestrator_planner" data-i18n="settings.startMode.orchestratorPlanner">Orchestrator as
                   a planner</option>
@@ -3620,8 +3622,11 @@
             <!-- HITL Auto-Approve Timeout -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label data-i18n="settings.hitlTimeout.label" class="text-xs font-bold text-on-surface">HITL Auto-Approve Timeout (s)</label>
-                <p data-i18n="settings.hitlTimeout.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).</p>
+                <label data-i18n="settings.hitlTimeout.label" class="text-xs font-bold text-on-surface">HITL
+                  Auto-Approve Timeout (s)</label>
+                <p data-i18n="settings.hitlTimeout.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Seconds before auto-approving HITL
+                  requests (-1 for no timeout / wait for human).</p>
               </div>
               <input id="hitl-timeout-input" type="number" min="-1" step="1" value="300"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
@@ -3646,12 +3651,15 @@
                 class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
             </div>
             <hr class="border-outline-variant/10" />
-            <!-- Context Initialization -->
+            <!-- Research Frame -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label data-i18n="settings.contextInit.label" class="text-xs font-bold text-on-surface">Context Initialization</label>
-                <p data-i18n="settings.contextInit.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
-                  Draft research frame and seed it into the research graph before the orchestrator runs (${context_init.enabled}).
+                <label data-i18n="settings.contextInit.label" class="text-xs font-bold text-on-surface">Research
+                  Frame</label>
+                <p data-i18n="settings.contextInit.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Draft research frame and seed it into the research graph before the orchestrator runs
+                  (${context_init.enabled}).
                 </p>
               </div>
               <input id="context-init-enabled-checkbox" type="checkbox" checked
@@ -3761,12 +3769,17 @@
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <label data-i18n="settings.autoClearGraph.label" class="text-xs font-bold text-on-surface">Auto-clear Graph Before Session</label>
-                  <span id="auto-clear-graph-note" data-i18n="settings.autoClearGraph.note" class="text-[10px] text-warning/90 italic font-normal">(set only in env)</span>
+                  <label data-i18n="settings.autoClearGraph.label" class="text-xs font-bold text-on-surface">Auto-clear
+                    Graph Before Session</label>
+                  <span id="auto-clear-graph-note" data-i18n="settings.autoClearGraph.note"
+                    class="text-[10px] text-warning/90 italic font-normal">(set only in env)</span>
                 </div>
-                <p data-i18n="settings.autoClearGraph.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically clear graph data before each session starts.</p>
+                <p data-i18n="settings.autoClearGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically clear graph data before
+                  each session starts.</p>
               </div>
-              <input id="auto-clear-graph-checkbox" type="checkbox" disabled class="w-5 h-5 accent-primary cursor-not-allowed opacity-60" />
+              <input id="auto-clear-graph-checkbox" type="checkbox" disabled
+                class="w-5 h-5 accent-primary cursor-not-allowed opacity-60" />
             </div>
             <p data-i18n="settings.graphs.sessionNote" class="text-[10px] text-outline-variant/80 italic">Applies to new
               sessions — the agent system is built
@@ -4078,14 +4091,14 @@
   <!-- Saved Sessions Modal -->
   <div id="saved-sessions-modal"
     class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
-    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl p-6 mx-4 max-h-[80vh] flex flex-col">
+    <div
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl p-6 mx-4 max-h-[80vh] flex flex-col">
       <div class="flex items-center justify-between mb-5">
         <div>
           <h3 class="font-headline font-bold text-on-surface uppercase tracking-wider">Saved Sessions</h3>
           <p class="text-[10px] text-outline-variant mt-1">Restore or manage previously saved sessions</p>
         </div>
-        <button onclick="closeSavedSessionsModal()"
-          class="text-outline-variant hover:text-on-surface">
+        <button onclick="closeSavedSessionsModal()" class="text-outline-variant hover:text-on-surface">
           <span class="material-symbols-outlined">close</span>
         </button>
       </div>
@@ -4112,7 +4125,7 @@
         try {
           const text = await resp.text();
           if (text) return text.slice(0, 200);
-        } catch (_) {}
+        } catch (_) { }
       }
       return resp.statusText || `HTTP ${resp.status}`;
     }
@@ -4131,7 +4144,7 @@
         let filename = `session_${activeSession.id}.cossession.zip`;
         const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
         if (utf8Match) {
-          try { filename = decodeURIComponent(utf8Match[1]); } catch (_) {}
+          try { filename = decodeURIComponent(utf8Match[1]); } catch (_) { }
         } else {
           const match = disposition.match(/filename="([^"]+)"/);
           if (match) filename = match[1];
@@ -4278,7 +4291,7 @@
         let dlFilename = filename;
         const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
         if (utf8Match) {
-          try { dlFilename = decodeURIComponent(utf8Match[1]); } catch (_) {}
+          try { dlFilename = decodeURIComponent(utf8Match[1]); } catch (_) { }
         } else {
           const match = disposition.match(/filename="([^"]+)"/);
           if (match) dlFilename = match[1];
