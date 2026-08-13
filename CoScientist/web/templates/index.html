@@ -1435,6 +1435,78 @@
     }
 
     // =========================================================================
+    // Telemetry
+    // =========================================================================
+    function addTelemetry(text) {
+      const log = document.getElementById('telemetry-log');
+      const t = new Date().toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      log.innerHTML += `<div class="flex gap-2"><span class="text-outline-variant">[${t}]</span> ${escHtml(text)}</div>`;
+      log.scrollTop = log.scrollHeight;
+      eventCount++;
+      document.getElementById('event-count').textContent = 'Events: ' + eventCount;
+    }
+
+      panel.classList.remove('hidden');
+      panel.innerHTML = `
+        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">Рамка исследования</h3>
+          <p class="text-[11px] text-on-surface-variant">Заполните форму в чате. Пустые поля агент заполнит сам.</p>
+        </div>`;
+
+      feed.innerHTML += `
+        <div id="hitl-controls-${rid}" class="my-6 relative msg-enter">
+          <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+            <div class="flex items-center gap-3 mb-2">
+              <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
+                <span class="material-symbols-outlined text-on-primary text-sm">fact_check</span>
+              </div>
+              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(form.title || 'Рамка исследования')}</h3>
+            </div>
+            <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(form.intro || data.message || '')}</p>
+            ${blocksHtml}
+            <div class="flex flex-wrap gap-3 mt-4">
+              <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+                <span class="material-symbols-outlined text-base">check_circle</span> Сохранить рамку
+              </button>
+              <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+                <span class="material-symbols-outlined text-base">skip_next</span> Пропустить (агент решит)
+              </button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function respondHITLForm(requestId, collect) {
+      // collect=true: gather every non-empty field into form_values so the agent
+      // marks them operator-set; collect=false: submit nothing (soft gate — the
+      // run proceeds with the agent's drafted values).
+      let formValues = null;
+      if (collect) {
+        formValues = {};
+        document.querySelectorAll(`#hitl-controls-${requestId} textarea[data-field]`).forEach(el => {
+          const v = el.value.trim();
+          if (!v) return;
+          const block = el.getAttribute('data-block');
+          const field = el.getAttribute('data-field');
+          (formValues[block] = formValues[block] || {})[field] = v;
+        });
+      }
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'hitl_response',
+          request_id: requestId,
+          action: 'approve',
+          approved: true,
+          form_values: formValues,
+        }));
+      }
+      document.getElementById('hitl-panel').classList.add('hidden');
+      disableHitlControls(requestId);
+      const n = formValues ? Object.values(formValues).reduce((s, o) => s + Object.keys(o).length, 0) : 0;
+      addSystemMsg(collect ? `✓ Рамка сохранена (${n} поле(й) заданы оператором)` : '→ Рамка пропущена — агент подставит значения');
+    }
+
+    // =========================================================================
     // Settings Modal
     // =========================================================================
     async function loadSettings() {
