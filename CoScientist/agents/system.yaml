@@ -70,6 +70,7 @@ agents:
     subordinates:
       - PlannerAgent
       - HypothesesAgent
+      - EvolutionAgent
       - ResearchAgent
       - TaskExecutorAgent
       - CoderAgent
@@ -176,6 +177,39 @@ agents:
   # (graph/research/validator.py, source "ValidatorAgent"): when evidence lands on
   # a hypothesis it judges it off the main loop, so it neither depends on the
   # orchestrator delegating nor consumes the run's turn budget.
+  EvolutionAgent:
+    class: llm
+    description: >-
+      rescues ONE postponed hypothesis by finding a source for the SPECIFIC
+      gap the ValidatorAgent named (Conclusion.attrs.evolve_gap) and growing a
+      new, narrower/redirected hypothesis around it — never by reformulating
+      the same evidence the parent already had.
+    routing: >-
+      when the research_triggers digest lists an EVOLVABLE hypothesis
+      (a postponed hypothesis whose Conclusion named a concrete, closeable
+      gap). Do not use it for hypotheses that are postponed with no named gap
+      — those need more general research, not a targeted rescue.
+    planning: |-
+      Use this only after ValidatorAgent has postponed a hypothesis AND named
+      a specific gap. It searches for exactly that gap, honestly (not to
+      confirm the parent hypothesis), and grows a new child hypothesis from
+      whatever it finds.
+    prompt: evolution
+    tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
+    output_key: evolved_hypothesis
+    callbacks:
+      before_agent: [before_get_task, inject_research_context]
+      before_tool: [WebSearchLimiter]
+      after_model: [guard_unknown_tools]
+    a2a:
+      key: evolution
+      port: 8008
+      skill:
+        id: evolve_hypothesis
+        name: EvolveHypothesis
+        description: Rescue a postponed hypothesis by closing its named evidentiary gap
+        tags: [hypothesis, evolution, research]
+
   ResearchAgent:
     class: llm
     description: >-

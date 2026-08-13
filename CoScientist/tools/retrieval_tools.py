@@ -48,7 +48,8 @@ async def _fetch_full_tool_meta(server_ids) -> Dict[tuple, Dict[str, Any]]:
             except Exception as exc:
                 _logger.warning(
                     "retrieve_tools: could not fetch full metadata for server %r: %s",
-                    sid, exc,
+                    sid,
+                    exc,
                 )
                 continue
             for t in tools:
@@ -59,7 +60,9 @@ async def _fetch_full_tool_meta(server_ids) -> Dict[tuple, Dict[str, Any]]:
                 if schema is not None and not isinstance(schema, dict):
                     # pydantic model / other -> plain dict for JSON serialisation
                     dump = getattr(schema, "model_dump", None)
-                    schema = dump() if callable(dump) else getattr(schema, "__dict__", None)
+                    schema = (
+                        dump() if callable(dump) else getattr(schema, "__dict__", None)
+                    )
                 meta[(sid, name)] = {
                     "description": getattr(t, "description", None),
                     "input_schema": schema,
@@ -71,33 +74,30 @@ async def _fetch_full_tool_meta(server_ids) -> Dict[tuple, Dict[str, Any]]:
 
 class RetrievalToolSet(BaseToolset):
     """Toolset for rag tool usage"""
+
     def __init__(self, prefix: str = "rag_"):
         super().__init__()
         self.tool_name_prefix = prefix
         self.wrapper = None
 
-    def get_tools(
-        self,
-        readonly_context: Optional[ReadonlyContext]
-    ) -> List[BaseTool]:
+    def get_tools(self, readonly_context: Optional[ReadonlyContext]) -> List[BaseTool]:
 
         tools = [self.retrieve_tools, self.get_server_info]
 
         return tools
-        
+
     async def close(self) -> None:
         await asyncio.sleep(0)  # Placeholder for async cleanup if needed
 
-
-    async def retrieve_tools(self, query: str,
-                                    tool_context: ToolContext = None
-                                    ) -> Dict[str, Any]:
+    async def retrieve_tools(
+        self, query: str, tool_context: ToolContext = None
+    ) -> Dict[str, Any]:
         """
-        Tool for retrieving MCP tools from DB using RAG. 
-        
+        Tool for retrieving MCP tools from DB using RAG.
+
         Args:
             query: query to use for tools lookup in database using RAG.
-        
+
         Returns:
             List ot the most relevant tools in db which can be used to solve the task .
         """
@@ -106,7 +106,9 @@ class RetrievalToolSet(BaseToolset):
             embedder = APIEmbedder(settings.api_embedding)
             api_reranker = APIReranker(settings.api_reranker)
             bm2_reranker = BM25Reranker(settings.bm_reranker)
-            reranker = HybridReranker([api_reranker, bm2_reranker], settings.hybrid_reranker)
+            reranker = HybridReranker(
+                [api_reranker, bm2_reranker], settings.hybrid_reranker
+            )
             manager = await create_manager(settings, embedder, reranker)
 
             retrieved_tools: List[RetrievalResult] = await manager.retrieve_tools(
@@ -114,7 +116,8 @@ class RetrievalToolSet(BaseToolset):
                 top_k=settings.rag.default_top_k,
                 rerank=True,
                 rerank_top_k=settings.rag.rerank_top_k,
-                min_score=settings.rag.min_relevance_score)
+                min_score=settings.rag.min_relevance_score,
+            )
 
             # The RAG layer returns only a truncated (~chunk_size) chunk of each
             # tool's description and drops its argument schema — so the calling
@@ -128,8 +131,13 @@ class RetrievalToolSet(BaseToolset):
                 RetrievalToolResult(
                     tool=r.name,
                     server_id=r.server_id,
-                    description=full_meta.get((r.server_id, r.name), {}).get("description") or r.description,
-                    input_schema=full_meta.get((r.server_id, r.name), {}).get("input_schema"),
+                    description=full_meta.get((r.server_id, r.name), {}).get(
+                        "description"
+                    )
+                    or r.description,
+                    input_schema=full_meta.get((r.server_id, r.name), {}).get(
+                        "input_schema"
+                    ),
                     score=r.rerank_score,
                 )
                 for r in retrieved_tools
@@ -139,7 +147,11 @@ class RetrievalToolSet(BaseToolset):
             # NOT crash the whole run — return a graceful error so the agent can
             # proceed or abstain (e.g. NO_MATCHING_TOOL → CoderAgent).
             _logger.warning("retrieve_tools unavailable: %r", e)
-            acc = tool_context.state.get('accumulated_tools', []) if tool_context is not None else []
+            acc = (
+                tool_context.state.get("accumulated_tools", [])
+                if tool_context is not None
+                else []
+            )
             return {
                 "status": "error",
                 "result": [],
@@ -163,41 +175,47 @@ class RetrievalToolSet(BaseToolset):
             }
 
         # ACCUMULATE into state
-        accumulated = tool_context.state.get('accumulated_tools', [])
-        existing_tools = {t['tool'] for t in accumulated}
+        accumulated = tool_context.state.get("accumulated_tools", [])
+        existing_tools = {t["tool"] for t in accumulated}
         last_idx = len(accumulated) + 1
 
         for tool_result in results:
             if tool_result.tool not in existing_tools:
-                accumulated.append({
-                    'tool': tool_result.tool,
-                    'server_id': tool_result.server_id,
-                    # Capped here (not in the inline response) — this dict is
-                    # re-injected into the rerankers' prompts every turn.
-                    'description': (tool_result.description or "")[:_ACCUM_DESC_CAP],
-                    'score': tool_result.score,
-                    'tool_index': last_idx,
-                    'retrieval_query': query,  # Track which query found this
-                })
+                accumulated.append(
+                    {
+                        "tool": tool_result.tool,
+                        "server_id": tool_result.server_id,
+                        # Capped here (not in the inline response) — this dict is
+                        # re-injected into the rerankers' prompts every turn.
+                        "description": (tool_result.description or "")[
+                            :_ACCUM_DESC_CAP
+                        ],
+                        "score": tool_result.score,
+                        "tool_index": last_idx,
+                        "retrieval_query": query,  # Track which query found this
+                    }
+                )
                 last_idx += 1
-        
-        tool_context.state['accumulated_tools'] = accumulated
-        tool_context.state['retrieval_queries'] = tool_context.state.get('retrieval_queries', []) + [query]
+
+        tool_context.state["accumulated_tools"] = accumulated
+        tool_context.state["retrieval_queries"] = tool_context.state.get(
+            "retrieval_queries", []
+        ) + [query]
 
         return {
             "status": "success",
             "result": [r.model_dump() for r in results],
             "accumulated_count": len(accumulated),
-            "message": f"Retrieved {len(results)} tools. Total accumulated: {len(accumulated)}."
+            "message": f"Retrieved {len(results)} tools. Total accumulated: {len(accumulated)}.",
         }
 
     async def get_server_info(self, server_id: str) -> Dict[str, Any]:
         """
-        Returns MCP server metadata. 
-        
+        Returns MCP server metadata.
+
         Args:
             server_id: server id to look up for.
-        
+
         Returns:
             Server metadata.
         """
@@ -208,8 +226,11 @@ class RetrievalToolSet(BaseToolset):
             server: MCPServer = await postgres.get_server(server_id)
         except Exception as e:  # noqa: BLE001 — DB unreachable must not crash the run
             _logger.warning("get_server_info unavailable: %r", e)
-            return {"status": "error", "result": None,
-                    "message": f"Server lookup unavailable (tool index/DB unreachable): {e}"}
+            return {
+                "status": "error",
+                "result": None,
+                "message": f"Server lookup unavailable (tool index/DB unreachable): {e}",
+            }
         finally:
             # Always release the DB connection, even if the lookup raises.
             try:
@@ -235,8 +256,5 @@ class RetrievalToolSet(BaseToolset):
         }
 
 
-
-    
 retrieval_toolset = RetrievalToolSet()
 retrieval_toolset_instance = retrieval_toolset.get_tools(None)
-

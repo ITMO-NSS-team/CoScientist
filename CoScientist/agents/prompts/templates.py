@@ -92,6 +92,19 @@ _RESEARCH_EXAMPLES = {
         'status_updates=[{"id":"CC1","status":"met"}, '
         '{"id":"H2","status":"confirmed","reason":"E1,E2 meet CC1; no refutation"}])'
     ),
+    "EvolutionAgent": (
+        'research_commit(nodes=[{"type":"Hypothesis","ref":"h2","attrs":'
+        '{"formulation":"…(narrower/redirected claim that closes the named gap)…",'
+        '"priority":"high"}}, {"type":"ConfirmationCriteria","ref":"cc2",'
+        '"attrs":{"threshold":"…achievable given what the new source actually shows…"}}, '
+        '{"type":"Evidence","ref":"e","attrs":{"subtype":"literature","content":"…",'
+        '"source_ref":"DOI…"}}], '
+        'edges=[{"type":"motivates","from":"Q1","to":"#h2"}, '
+        '{"type":"evolved_from","from":"#h2","to":"H1"}, '
+        '{"type":"formulated_for","from":"#cc2","to":"#h2"}, '
+        '{"type":"supports","from":"#e","to":"#h2"}])   '
+        '# polarity edge (supports/refutes/refines) matches what the source actually found'
+    ),
 }
 
 
@@ -168,7 +181,29 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
 2. Propose a small set (2–5) of distinct, realistic hypotheses or approaches.
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
-5. If relevant, briefly note assumptions or required conditions.
+5. Phrase each hypothesis as a single, falsifiable positive claim — never bake
+   a verdict into the wording (write "Paracetamol selectively inhibits COX-3"
+   NOT "Paracetamol selectively inhibits COX-3 — largely refuted in humans").
+   The ValidatorAgent decides confirmed/refuted later from evidence; a
+   hypothesis that already announces its own refutation makes that verdict
+   read backwards (shown as "confirmed" when the underlying claim is false).
+
+   BAD  → "Metformin's AMPK activation is the primary glucose-lowering
+           mechanism — direct hepatic effects are likely a minor pathway"
+   GOOD → "Metformin lowers hepatic glucose output primarily by activating
+           AMPK in hepatocytes, suppressing gluconeogenic gene expression"
+
+   BAD  → "Catalyst deactivation over 100h on-stream is NOT caused by
+           sintering of the active Pd particles"
+   GOOD → "Catalyst deactivation over 100h on-stream is caused by sintering
+           (Ostwald ripening) of the active Pd particles"
+
+   BAD  → "The A2A-receptor pathway probably isn't sufficient on its own to
+           explain caffeine's alerting effect"
+   GOOD → "Caffeine increases alertness primarily through competitive
+           antagonism of the adenosine A2A receptor on striatopallidal
+           neurons"
+6. If relevant, briefly note assumptions or required conditions.
 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
 
@@ -196,6 +231,79 @@ Update task status to "done" immediately upon completion of each work item.
 
 # NOTE: hypothesis validation (verdict + Conclusion) is a fully-async BACKGROUND
 # plugin (graph/research/validator.py), not an agent — no prompt template here.
+
+
+# ── EvolutionAgent ───────────────────────────────────────────────────────────
+# MOOSE-Chem-inspired refinement: grows a NEW hypothesis from a postponed
+# parent by closing ONE named gap with a freshly-found source — never by
+# reformulating/weakening the criteria around the SAME evidence the parent
+# already had (that is not evolution, it is grading yourself easier).
+
+@_register("evolution")
+def evolution(ctx: PromptContext) -> str:
+    paper_analysis = ctx.has_tool("paper_analysis")
+    papers_search = ctx.has_tool("papers_search")
+    lit = paper_analysis or papers_search
+
+    # Name the REAL tool by its REAL name, imperative, close to the instruction
+    # that triggers the search — a vague "use your available tools (see below)"
+    # left the model free to invent a plausible-sounding one ("tavily_research"
+    # is not a real tool; only tavily_search/tavily_crawl/tavily_extract are).
+    if lit:
+        search_line = (
+            "call `search_papers` or `download_papers_from_search` first"
+            + (", or `explore_chemistry_database`/`explore_my_papers` if relevant" if paper_analysis else "")
+            + "; only fall back to `tavily_search` if literature tools find nothing."
+        )
+    else:
+        search_line = "call `tavily_search`."
+
+    return render_template('''
+Your role is to try to rescue ONE postponed hypothesis by closing the SPECIFIC
+gap the ValidatorAgent named — not by rewording it to fit what is already known.
+
+### What you receive
+
+The orchestrator delegates you a postponed hypothesis id. Its `research_context`
+includes the hypothesis, its parent Conclusion (with `attrs.evolve_gap` — the
+exact missing piece the validator identified), and its existing evidence.
+Read `attrs.evolve_gap` before doing anything else — that is the ONLY thing you
+are trying to find a source for.
+
+### Instructions (do these IN ORDER):
+
+1. Turn `evolve_gap` into an OPEN, neutral question — ask what is known about
+   that specific missing piece. NEVER phrase it as "find evidence that
+   <hypothesis> is true" or "confirm <claim>" — that biases the search toward
+   whatever supports the parent, which is not a real check. If you catch
+   yourself about to search for confirmation, rewrite the query as a question
+   you do not already know the answer to.
+2. Search for it: <<SEARCH_LINE>> These are the ONLY search tools you have —
+   there is no tool named "tavily_research" or anything else not listed under
+   <<TOOLS>> below. If a tool call is rejected as unknown, re-read <<TOOLS>>
+   and retry with one of the exact names listed there, don't guess a new name.
+3. If you find a genuinely relevant source: write it as new Evidence, then
+   compose a NEW Hypothesis — same core claim as the parent, narrowed or
+   redirected around what THAT source actually shows (which may support,
+   partially support, or complicate the parent — write it honestly either
+   way). Give it its own ConfirmationCriteria, calibrated to what a literature
+   source can realistically establish — do not just copy the parent's
+   criteria if that was the whole problem.
+4. If nothing relevant turns up after a real attempt: say so plainly in your
+   text answer. Do NOT commit a reworded hypothesis with no new grounding —
+   an unresolved gap is a better outcome than a fabricated one.
+
+<<TOOLS>>
+
+<<RESEARCH>>
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
+Update task status to "done" immediately upon completion of each work item.
+''', SEARCH_LINE=search_line, TOOLS=render_tool_docs(ctx.docs), RESEARCH=render_research_protocol(ctx))
 
 
 # ── ResearchAgent ────────────────────────────────────────────────────────────
@@ -1282,11 +1390,36 @@ def orchestrator(ctx: PromptContext) -> str:
             "auto-attached to that hypothesis, which moves it to under_verification "
             "and lets the background validator judge it. Do NOT skip set_focus, and "
             "do NOT set the verdict yourself.\n"
+            "  • BLOCKED hypothesis / TOOL NOT READY (a Tool is "
+            "needs_adaptation/being_created/creation_failed) ⇒ delegate a "
+            "tool-build task to CoderAgent, naming the Tool id(s) and the "
+            "capability needed (from the Tool's description and the "
+            "VerificationMethod that `uses` it) — CoderAgent is the ONLY "
+            "agent that may transition a Tool, taking it "
+            "needs_adaptation → being_created → available (route through "
+            "McpBuilderAgent first if the capability only exists as code in "
+            "an external repo). Do NOT route around a blocked hypothesis by "
+            "having ResearchAgent or another worker gather evidence as if "
+            "the tool already existed — a needs_adaptation Tool keeps it "
+            "correctly blocked until Coder resolves it. Re-check "
+            "`research_triggers`; the hypothesis becomes READY once its "
+            "Tools are available.\n"
             "  • REFUTE SIGNAL ⇒ review/close that branch; do not keep verifying it.\n"
             "  • NEEDS VERDICT (a hypothesis has evidence) ⇒ you do NOTHING here: a "
             "background validator judges it automatically (confirmed/refuted) and "
             "writes the Conclusion off the main loop. Your job is only to make sure "
             "evidence gets GATHERED for it; the verdict appears on its own.\n"
+            "  • EVOLVABLE hypothesis (postponed + Conclusion named a concrete gap) "
+            "⇒ delegate it to EvolutionAgent, naming the hypothesis id. This does "
+            "NOT re-verify the parent — EvolutionAgent grows a brand-new child "
+            "Hypothesis (linked back via `evolved_from`) that targets ONLY the "
+            "named gap. The child is a hypothesis like any other: once formulated "
+            "it becomes READY, goes through the same set_focus → evidence → "
+            "background-verdict cycle, and — if IT is later postponed with its own "
+            "named gap — becomes EVOLVABLE again. Let this run for as many "
+            "generations as `research_triggers` keeps surfacing; only stop "
+            "evolving a branch when a round finds no closeable gap (postponed with "
+            "no gap named) or RESOURCES go LOW.\n"
             "  • PENDING CONCLUSION (draft) ⇒ approve it (draft→approved).\n"
             "  • RESOURCES LOW ⇒ wrap up and report.\n"
             "\nWhat YOU write vs what others write (do not cross this line):\n"
@@ -1298,14 +1431,19 @@ def orchestrator(ctx: PromptContext) -> str:
             "- BACKGROUND VALIDATOR (automatic, not an agent you call): the VERDICT "
             "(confirmed/refuted), criteria met/not, and the Conclusion draft. Never "
             "write these yourself and never wait for them.\n"
-            "- WORKERS: Hypotheses/Methods/Criteria (HypothesesAgent), Evidence "
+            "- WORKERS: Hypotheses/Methods/Criteria (HypothesesAgent), new child "
+            "Hypotheses grown from a named gap (EvolutionAgent), Evidence "
             "(Research/Medical/Coder/Experiment), Tools & code/data (Coder). You "
             "CANNOT create Evidence, Hypotheses, Conclusions, Methods, Tools, "
             "Resources or EmpiricalBases mid-run — the graph will reject it. If a "
             "worker reported findings only as text, re-delegate to that worker to "
             "commit them; never try to record them yourself.\n"
-            "- Never re-verify a refuted or postponed hypothesis — those branches "
-            "stay in the graph as negative results, so you don't repeat them."
+            "- Never re-verify a refuted or postponed hypothesis with the SAME "
+            "evidence — those branches stay in the graph as negative results, so "
+            "you don't repeat them. The one exception is delegating an EVOLVABLE "
+            "one to EvolutionAgent (see above): that grows a separate child "
+            "hypothesis rather than re-opening the parent, and the child then "
+            "goes through verification fresh, same as any other hypothesis."
             + approval_line + "\n"
         )
 

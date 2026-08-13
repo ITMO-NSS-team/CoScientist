@@ -470,6 +470,47 @@ def test_maintainer_auto_advances_hypothesis_on_evidence(store):
     assert h1["status_history"][-1]["source"] == "graph-maintainer"
 
 
+def test_evidence_text_falls_back_to_structured_attrs():
+    """Bug #2 regression: an Evidence node with no `content` (e.g. bibliographic
+    title/authors/journal/year, or computational mean_macro_f1-style metrics)
+    must not render as blank to the validator's LLM prompt."""
+    import CoScientist.graph.research.validator as V
+
+    with_content = {"attrs": {"subtype": "literature", "content": "strong support"}}
+    assert V._evidence_text(with_content) == "strong support"
+
+    bibliographic = {"attrs": {"subtype": "literature", "title": "A2A knockout study",
+                               "authors": "Huang et al.", "year": 2005}}
+    text = V._evidence_text(bibliographic)
+    assert text and text != ""
+    assert "A2A knockout study" in text and "Huang et al." in text and "2005" in text
+    assert "subtype" not in text  # not duplicated — it's already shown separately
+
+    computational = {"attrs": {"subtype": "computational", "mean_macro_f1": 0.9664}}
+    assert "0.9664" in V._evidence_text(computational)
+
+    empty = {"attrs": {"subtype": "literature"}}
+    assert V._evidence_text(empty) == ""
+
+
+def test_build_user_surfaces_evidence_without_content_field(store):
+    """End-to-end through _build_user: an Evidence node written with only
+    structured fields (no `content`) still shows up with real text in the
+    prompt the judge reads — not as an empty evidence line."""
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "computational", "mean_macro_f1": 0.9664,
+                     "approach": "MiniROCKET + Ridge"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+    sl = store.get_context_slice("H1", depth=2)
+    prompt = V._build_user(sl, "H1")
+    assert "0.9664" in prompt
+    assert "MiniROCKET" in prompt
+
+
 def test_background_validator_judges_hypothesis(store):
     """The async validator (with an injected fake LLM) turns an under_verification
     hypothesis with evidence into a verdict + Conclusion, committed as ValidatorAgent."""
@@ -549,6 +590,360 @@ def test_validator_assigns_polarity_to_autolinked_evidence(store):
     nodes = {n["id"]: n for n in full["nodes"]}
     assert nodes["H1"]["status"] == "confirmed" and nodes["CC1"]["status"] == "met"
     assert any(n["type"] == "Conclusion" for n in full["nodes"])
+
+
+def test_validator_surfaces_evolve_gap_on_postponed(store):
+    """A postponed verdict that names a concrete gap gets it recorded on the
+    Conclusion (evolve_recommended/evolve_gap) — the signal EvolutionAgent
+    acts on, per graph/research/evolution.py's design."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "literature",
+                         "content": "direction is right, no numbers"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"postponed","criteria":{"CC1":"not_met"},'
+                '"conclusion":"supportive but no IC50 value","validity_bounds":"in vitro",'
+                '"reason":"missing quantitative threshold",'
+                '"evolve":{"recommended":true,"gap":"IC50 value for X against Y"}}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    assert nodes["H1"]["status"] == "postponed"
+    concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
+    assert concl["attrs"]["evolve_recommended"] is True
+    assert concl["attrs"]["evolve_gap"] == "IC50 value for X against Y"
+
+
+def test_validator_ignores_recommended_flag_without_a_named_gap(store):
+    """Defensive parsing: recommended=true with an empty gap string is NOT
+    trusted — there is nothing concrete for EvolutionAgent to search for."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "literature",
+                         "content": "weak, vague"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"postponed","criteria":{"CC1":"not_met"},'
+                '"conclusion":"too vague to evolve","validity_bounds":"—",'
+                '"reason":"insufficient evidence",'
+                '"evolve":{"recommended":true,"gap":""}}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    concl = next(n for n in store.full()["nodes"] if n["type"] == "Conclusion")
+    assert concl["attrs"]["evolve_recommended"] is False
+    assert "evolve_gap" not in concl["attrs"]
+
+
+def test_evolvable_hypotheses_trigger(store):
+    """queries.evolvable_hypotheses surfaces a postponed hypothesis whose
+    Conclusion named a gap, and stops surfacing it once a child hypothesis
+    has evolved_from it (don't re-fire on an already-rescued branch)."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "literature",
+                         "content": "direction is right, no numbers"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"postponed","criteria":{"CC1":"not_met"},'
+                '"conclusion":"c","validity_bounds":"b","reason":"r",'
+                '"evolve":{"recommended":true,"gap":"IC50 value for X against Y"}}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    items = queries.evolvable_hypotheses(store)["items"]
+    assert [i["hypothesis"] for i in items] == ["H1"]
+    assert items[0]["gap"] == "IC50 value for X against Y"
+
+    # EvolutionAgent grows H2 from H1 — the branch is no longer evolvable.
+    r = store.commit(
+        source="EvolutionAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "narrower claim"}},
+               {"type": "ConfirmationCriteria", "ref": "cc2", "attrs": {"threshold": "qualitative"}}],
+        edges=[{"type": "motivates", "from": "Q1", "to": "#h2"},
+               {"type": "evolved_from", "from": "#h2", "to": "H1"},
+               {"type": "formulated_for", "from": "#cc2", "to": "#h2"}],
+    )
+    assert r.ok, r.errors
+    assert queries.evolvable_hypotheses(store)["items"] == []
+
+
+def test_evolution_agent_permissions(store):
+    """EvolutionAgent may create Hypothesis/ConfirmationCriteria/Evidence and
+    link evolved_from — but not judge (no ValidatorAgent-only transitions)."""
+    errs = schema.validate_edge("EvolutionAgent", "evolved_from", "Hypothesis", "Hypothesis")
+    assert errs == []
+    errs = schema.validate_transition("EvolutionAgent", "Hypothesis",
+                                      "under_verification", "confirmed")
+    assert errs  # judging a verdict stays ValidatorAgent-only
+
+
+def test_is_restatement_matches_on_shared_source_ref_even_without_id_mention():
+    """Two evidence items citing the exact same source_ref are a restatement
+    of each other even when neither text names the other's node id — the
+    other detection path (explicit id citation) is covered by
+    test_duplicate_evidence_flagged_but_does_not_block_ordinary_hypothesis."""
+    import CoScientist.graph.research.validator as V
+
+    a = {"id": "E5", "attrs": {"content": "Scaffold X is most frequent.",
+                                "source_ref": "gsk3b_classified.csv"}}
+    b = {"id": "E6", "attrs": {"content": "Scaffold X dominates the set.",
+                                "source_ref": "gsk3b_classified.csv"}}
+    assert V._is_restatement(a, b)
+    assert V._is_restatement(b, a)
+
+    c = {"id": "E7", "attrs": {"content": "Unrelated finding.",
+                                "source_ref": "other_file.csv"}}
+    assert not V._is_restatement(a, c)
+
+
+def test_is_restatement_does_not_flag_ordinary_citation_among_several():
+    """Citing another evidence id in passing, alongside other citations, as
+    background context is ordinary scholarly citation — not a restatement.
+    Regression for a false positive found replaying real data: an evidence
+    item's write-up mentioned "and E7" among its cited rationale and was
+    wrongly flagged as duplicating E7 before the cue-based narrowing (a bare
+    "any mention of the id" check can't tell a citation list from a redo)."""
+    import CoScientist.graph.research.validator as V
+
+    a = {"id": "E12", "attrs": {
+        "content": "New RDKit SMARTS scaffold counts for the potent subset.",
+        "source_ref": "ChEMBL CHEMBL262 SMARTS analysis; structural rationale "
+                       "from E2 (product data) and E7 (purine taxonomy)."}}
+    b = {"id": "E7", "attrs": {"content": "CHIR-99021 is aminopyrimidine, not purine.",
+                                "source_ref": "YeasenBio product description"}}
+    assert not V._is_restatement(a, b)
+    assert not V._is_restatement(b, a)
+
+
+def test_confirmed_verdict_downgraded_when_evolved_hypothesis_has_only_birth_evidence(store):
+    """Independence check: an evolved hypothesis whose ONLY evidence was
+    committed in the SAME batch as the hypothesis itself (i.e. it has never
+    faced anything beyond what motivated EvolutionAgent to write it) must not
+    be confirmed. The verdict is downgraded to postponed and routed back
+    through EvolutionAgent (evolve_recommended) for a genuinely separate
+    source — this is the H7/E19/E21 failure mode from a live run."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    r = store.commit(
+        source="EvolutionAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "narrower claim"}},
+               {"type": "ConfirmationCriteria", "ref": "cc2", "attrs": {"threshold": "qualitative"}},
+               {"type": "Evidence", "ref": "e2", "attrs": {"subtype": "computational",
+                       "content": "self-computed re-analysis backing the narrower claim"}}],
+        edges=[{"type": "motivates", "from": "Q1", "to": "#h2"},
+               {"type": "evolved_from", "from": "#h2", "to": "H1"},
+               {"type": "formulated_for", "from": "#cc2", "to": "#h2"},
+               {"type": "supports", "from": "#e2", "to": "#h2"}],
+    )
+    assert r.ok, r.errors
+    h2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "h2")
+    e2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "e2")
+    cc2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "cc2")
+
+    async def fake_complete(system, user):
+        return ('{"evidence":{"%s":"supports"},"verdict":"confirmed",'
+                '"criteria":{"%s":"met"},"conclusion":"looks solid",'
+                '"validity_bounds":"b","reason":"evidence supports it"}' % (e2_id, cc2_id))
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis(h2_id, complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    assert nodes[h2_id]["status"] == "postponed"  # NOT confirmed — downgraded
+    concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
+    assert concl["attrs"]["independence_check"] == "failed"
+    assert concl["attrs"]["evolve_recommended"] is True
+    assert "independent" in concl["attrs"]["evolve_gap"].lower()
+
+
+def test_confirmed_verdict_stays_when_evolved_hypothesis_gains_independent_evidence(store):
+    """Once an evolved hypothesis has evidence attached AFTER its own creation
+    — a separate commit, unrelated content/source — a confirmed verdict is
+    let through unchanged: independent confirmation did happen."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    r = store.commit(
+        source="EvolutionAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "narrower claim"}},
+               {"type": "ConfirmationCriteria", "ref": "cc2", "attrs": {"threshold": "qualitative"}},
+               {"type": "Evidence", "ref": "eb", "attrs": {"subtype": "computational",
+                       "content": "birth evidence motivating the narrower claim"}}],
+        edges=[{"type": "motivates", "from": "Q1", "to": "#h2"},
+               {"type": "evolved_from", "from": "#h2", "to": "H1"},
+               {"type": "formulated_for", "from": "#cc2", "to": "#h2"},
+               {"type": "supports", "from": "#eb", "to": "#h2"}],
+    )
+    assert r.ok, r.errors
+    h2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "h2")
+    cc2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "cc2")
+
+    # A separate, later commit: a genuinely independent literature source.
+    r2 = store.commit(
+        source="ResearchAgent",
+        nodes=[{"type": "Evidence", "ref": "ei", "attrs": {"subtype": "literature",
+                "content": "an unrelated published study reporting the same effect",
+                "source_ref": "Smith et al. 2024, J. Med. Chem."}}],
+        edges=[{"type": "supports", "from": "#ei", "to": h2_id}],
+    )
+    assert r2.ok, r2.errors
+    ei_id = next(n["id"] for n in r2.committed["nodes"] if n.get("ref") == "ei")
+
+    async def fake_complete(system, user):
+        return ('{"evidence":{"%s":"supports"},"verdict":"confirmed",'
+                '"criteria":{"%s":"met"},"conclusion":"independently corroborated",'
+                '"validity_bounds":"b","reason":"literature confirms it"}' % (ei_id, cc2_id))
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis(h2_id, complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    assert nodes[h2_id]["status"] == "confirmed"
+    concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
+    assert "independence_check" not in concl["attrs"]
+
+
+def test_pre_existing_evidence_cited_at_birth_does_not_count_as_seed(store):
+    """A hypothesis EvolutionAgent evolves by citing an OLD, already-existing
+    Evidence node (found independently, before this hypothesis existed) must
+    NOT be treated as circular just because the graph edge linking it was
+    necessarily drawn in the same commit as the hypothesis itself — only
+    evidence minted at that exact moment (test above) is seed. This is the
+    real E7 pattern from a live run: a pre-existing literature fact EvolutionAgent
+    cites as structural rationale for a new, narrower claim."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    r0 = store.commit(source="ResearchAgent",
+                      nodes=[{"type": "Evidence", "ref": "eold", "attrs": {"subtype": "literature",
+                              "content": "an independently found background fact",
+                              "source_ref": "some 2019 paper"}}],
+                      edges=[{"type": "relates_to", "from": "#eold", "to": "H1"}])
+    assert r0.ok, r0.errors
+    eold_id = next(n["id"] for n in r0.committed["nodes"] if n.get("ref") == "eold")
+
+    r = store.commit(
+        source="EvolutionAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "narrower claim"}},
+               {"type": "ConfirmationCriteria", "ref": "cc2", "attrs": {"threshold": "qualitative"}}],
+        edges=[{"type": "motivates", "from": "Q1", "to": "#h2"},
+               {"type": "evolved_from", "from": "#h2", "to": "H1"},
+               {"type": "formulated_for", "from": "#cc2", "to": "#h2"},
+               {"type": "refines", "from": eold_id, "to": "#h2"}],
+    )
+    assert r.ok, r.errors
+    h2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "h2")
+    cc2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "cc2")
+
+    async def fake_complete(system, user):
+        return ('{"evidence":{"%s":"refines"},"verdict":"confirmed",'
+                '"criteria":{"%s":"met"},"conclusion":"backed by prior finding",'
+                '"validity_bounds":"b","reason":"consistent with known fact"}'
+                % (eold_id, cc2_id))
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis(h2_id, complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    assert nodes[h2_id]["status"] == "confirmed"  # not downgraded: eold pre-existed h2
+    concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
+    assert "independence_check" not in concl["attrs"]
+
+
+def test_duplicate_evidence_flagged_but_does_not_block_ordinary_hypothesis(store):
+    """A restated evidence item (its text names the earlier evidence's id) is
+    flagged as duplicate_evidence on the Conclusion for transparency, but the
+    hard independence block only applies to EVOLVED hypotheses — an ordinary
+    (non-evolved) hypothesis can still be confirmed despite the duplicate."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    r1 = store.commit(source="ResearchAgent",
+                      nodes=[{"type": "Evidence", "ref": "e1", "attrs": {"subtype": "computational",
+                              "content": "IC50 = 5 nM, assay run on batch A",
+                              "source_ref": "run_A.csv"}}],
+                      edges=[{"type": "supports", "from": "#e1", "to": "H1"}])
+    assert r1.ok, r1.errors
+    e1_id = next(n["id"] for n in r1.committed["nodes"] if n.get("ref") == "e1")
+
+    r2 = store.commit(source="ResearchAgent",
+                      nodes=[{"type": "Evidence", "ref": "e2", "attrs": {"subtype": "computational",
+                              "content": f"Re-analysis of {e1_id}: IC50 = 5 nM, same batch A run",
+                              "source_ref": "run_A.csv"}}],
+                      edges=[{"type": "supports", "from": "#e2", "to": "H1"}])
+    assert r2.ok, r2.errors
+    e2_id = next(n["id"] for n in r2.committed["nodes"] if n.get("ref") == "e2")
+
+    async def fake_complete(system, user):
+        return ('{"evidence":{"%s":"supports","%s":"supports"},"verdict":"confirmed",'
+                '"criteria":{"CC1":"met"},"conclusion":"confirmed by assay",'
+                '"validity_bounds":"in vitro","reason":"IC50 meets threshold"}'
+                % (e1_id, e2_id))
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    assert nodes["H1"]["status"] == "confirmed"  # ordinary hypothesis: not blocked
+    concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
+    assert concl["attrs"]["duplicate_evidence"] == [e2_id]
 
 
 def test_background_validator_retries_after_failed_judgment(monkeypatch):

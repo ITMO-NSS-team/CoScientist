@@ -40,13 +40,22 @@ _SYSTEM = (
     "irrelevant). Then weigh it against the criteria and return a verdict. Be "
     "conservative: confirm only when supporting evidence is strong, consistent and "
     "meets the criteria; refute when there is decisive contradicting evidence; "
-    "otherwise postpone. Reply with STRICT JSON only, no prose:\n"
+    "otherwise postpone. When you postpone, additionally judge whether the "
+    "hypothesis is CLOSE: evidence direction is consistent/supportive and exactly "
+    "ONE specific, nameable piece is missing (e.g. a quantitative value, an "
+    "untested sub-claim, a named comparison) — as opposed to genuinely weak or "
+    "too vague to refine. Only recommend evolving it when the missing piece is "
+    "concrete enough that a targeted literature search could plausibly find it — "
+    "name that missing piece exactly, don't restate the whole hypothesis. Reply "
+    "with STRICT JSON only, no prose:\n"
     '{"evidence":{"<evidence_id>":"supports|refutes|refines|irrelevant"},'
     '"verdict":"confirmed|refuted|postponed",'
     '"criteria":{"<criteria_id>":"met|not_met"},'
     '"conclusion":"one-paragraph synthesis of the finding",'
     '"validity_bounds":"limits of validity",'
-    '"reason":"one sentence justifying the verdict"}'
+    '"reason":"one sentence justifying the verdict",'
+    '"evolve":{"recommended":true|false,'
+    '"gap":"one sentence naming the SPECIFIC missing piece; empty if not recommended"}}'
 )
 
 
@@ -91,6 +100,122 @@ def _research_id(graph: Any) -> str:
     return str(full.get("research_id") or "")
 
 
+def _evidence_text(e: Dict[str, Any]) -> str:
+    """The evidence's `content`, or — when an agent recorded its findings under
+    other attr keys instead (e.g. bibliographic title/authors/journal/year with
+    no `content`, or computational metrics like mean_macro_f1) — a fallback
+    serialization of those attrs, so the judge never sees a blank line for
+    evidence that actually has data. Without this, populated Evidence nodes
+    render as empty and the validator postpones for "no data" even when the
+    graph has real findings attached."""
+    attrs = e.get("attrs") or {}
+    content = str(attrs.get("content", "")).strip()
+    if content:
+        return content
+    rest = {k: v for k, v in attrs.items() if k not in ("content", "subtype")}
+    if not rest:
+        return ""
+    return "; ".join(f"{k}={v}" for k, v in rest.items())
+
+
+_EVIDENCE_EDGE_TYPES = ("supports", "refutes", "refines")
+
+
+def _has_evolved_from(g: Any, hid: str) -> bool:
+    """True if `hid` is itself an evolved hypothesis (points to a parent via
+    `evolved_from`) — the only case the independence checks below apply to."""
+    return any(k == "evolved_from" for _, _, k in g.out_edges(hid, keys=True))
+
+
+def _seed_evidence_ids(g: Any, hid: str):
+    """Evidence NODES created at the exact same instant as `hid` itself
+    (identical `created_at`) — i.e. evidence fabricated in the same breath as
+    the hypothesis it supports, as opposed to evidence that already existed.
+    Deliberately keyed on the EVIDENCE NODE's own timestamp, not the edge's:
+    the edge linking `hid` to a pre-existing piece of evidence is always drawn
+    in the same commit that writes `hid` (that's just how a single commit
+    works), so an edge-timestamp check would wrongly flag genuinely old,
+    independently-found evidence — e.g. a literature fact ResearchAgent
+    recorded long before this hypothesis existed — as "seed" merely because
+    EvolutionAgent cited it while writing the hypothesis. `commit()` stamps
+    one shared timestamp on every node/edge it writes (store.py), so matching
+    on the evidence node's created_at is exact, not heuristic: only evidence
+    EvolutionAgent minted AT THE MOMENT it wrote `hid` counts as seed. For an
+    evolved hypothesis, support limited to that has never been checked against
+    anything independent."""
+    genesis = g.nodes[hid].get("created_at")
+    if genesis is None:
+        return set()
+    return {u for u, _, k in g.in_edges(hid, keys=True)
+            if k in _EVIDENCE_EDGE_TYPES and g.nodes[u].get("created_at") == genesis}
+
+
+_RESTATEMENT_CUES = (
+    r"interpreting", r"interpretation of", r"interprets",
+    r"reinterpreting", r"reinterpretation of",
+    r"re-?analysis of", r"re-?analyzing",
+    r"re-?comput(?:ed|ing) from",
+    r"restating", r"restatement of",
+    r"same (?:number|result|data|finding) as",
+    r"duplicate of",
+)
+_RESTATEMENT_PATTERN = (
+    r"(?:" + "|".join(_RESTATEMENT_CUES) + r")\s+(?:the\s+|this\s+|that\s+)?"
+)
+
+
+def _cites_as_restatement(text: str, node_id: str) -> bool:
+    """True if `text` explicitly frames itself as a reinterpretation/re-run of
+    `node_id` (e.g. "interpreting E19 data", "re-analysis of E19") — as
+    opposed to merely citing it alongside other ids as background context
+    (e.g. "structural rationale from E2 ... and E7"), which is ordinary,
+    non-circular citation and must NOT be flagged. Deliberately narrow: it
+    will miss phrasings outside this cue list (a cheap heuristic, not
+    semantic dedup) — under-flagging is the safe failure mode here, since
+    this feeds a check that can block a genuine confirmation."""
+    if not node_id:
+        return False
+    return re.search(_RESTATEMENT_PATTERN + re.escape(node_id) + r"\b",
+                     text or "", re.IGNORECASE) is not None
+
+
+def _is_restatement(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """True if evidence `a` looks like a restatement of `b` rather than an
+    independent source: `a`'s own text explicitly frames itself as
+    reinterpreting `b` (see `_cites_as_restatement`), or both cite the
+    identical source_ref (same underlying dataset/script/document). A cheap
+    text-level signal, not semantic dedup — it catches an agent citing the
+    same computed number twice under two evidence ids as if that were two
+    confirmations (the failure mode actually observed: H7 confirmed on E19 +
+    E21, where E21 was EvolutionAgent's own restatement of E19's number,
+    captioned "interpreting E19 data" and written the instant H7 was
+    created)."""
+    attrs_a, attrs_b = a.get("attrs") or {}, b.get("attrs") or {}
+    text_a = f"{attrs_a.get('content', '')} {attrs_a.get('source_ref', '')}"
+    if _cites_as_restatement(text_a, str(b.get("id", ""))):
+        return True
+    ref_a = str(attrs_a.get("source_ref", "")).strip().lower()
+    ref_b = str(attrs_b.get("source_ref", "")).strip().lower()
+    return bool(ref_a) and ref_a == ref_b
+
+
+def _independent_evidence_ids(by_id: Dict[str, Any], ev_ids) -> set:
+    """Collapse text-level restatements (`_is_restatement`) among `ev_ids` so
+    citing the same underlying number/source twice counts once. Evidence ids
+    not present in `by_id` are dropped silently (defensive)."""
+    keep: List[str] = []
+    for eid in sorted(ev_ids):
+        node = by_id.get(eid)
+        if node is None:
+            continue
+        node = {**node, "id": eid}
+        if any(_is_restatement(node, {**by_id[k], "id": k}) or
+               _is_restatement({**by_id[k], "id": k}, node) for k in keep):
+            continue
+        keep.append(eid)
+    return set(keep)
+
+
 def _build_user(slice_: Dict[str, Any], hid: str) -> str:
     """Render the focused judging prompt from the hypothesis' context slice."""
     by_id = {n["id"]: n for n in slice_.get("nodes", [])}
@@ -111,7 +236,7 @@ def _build_user(slice_: Dict[str, Any], hid: str) -> str:
         if evs:
             lines.append(f"{label} EVIDENCE:")
             lines += [f"- {e['id']} ({(e.get('attrs') or {}).get('subtype','')}): "
-                      f"{(e.get('attrs') or {}).get('content','')}" for e in evs]
+                      f"{_evidence_text(e)}" for e in evs]
             lines.append("")
     return "\n".join(lines)
 
@@ -196,12 +321,68 @@ async def judge_hypothesis(
             if et in ("supports", "refutes", "refines"):
                 polarity.setdefault(eid, et)
 
+        # Independence check: collapse evidence that merely restates another
+        # cited item (same underlying source/number under a different id) so
+        # it can't pad the evidence count, and — for an EVOLVED hypothesis —
+        # also drop evidence born in the same commit as the hypothesis itself
+        # (it never faced anything beyond what motivated EvolutionAgent to
+        # write it). A "confirmed" verdict resting on nothing outside that is
+        # not independent confirmation: downgrade it and route it back through
+        # EvolutionAgent (evolve_recommended) for a genuinely separate source.
+        circular_reason = ""
+        duplicate_evidence: List[str] = []
+        supporting_ids = {eid for eid, pol in polarity.items()
+                          if pol in ("supports", "refines")}
+        if supporting_ids:
+            independent = _independent_evidence_ids(by_id, supporting_ids)
+            duplicate_evidence = sorted(supporting_ids - independent)
+            if verdict == "confirmed":
+                fg = graph.full_graph()
+                if _has_evolved_from(fg, hid):
+                    independent -= _seed_evidence_ids(fg, hid)
+                if not independent:
+                    circular_reason = (
+                        "confirmed verdict rejected: every supporting evidence "
+                        "item is self-referential — born with the hypothesis "
+                        "and/or a restatement of the same source/number under "
+                        "a different id. No independent confirmation yet."
+                    )
+                    verdict = "postponed"
+                    status_updates[0]["status"] = verdict
+                    status_updates[0]["reason"] = circular_reason[:300]
+
         nodes: List[Dict[str, Any]] = []
         concl = str(data.get("conclusion", "")).strip()
         if concl:
-            nodes.append({"type": "Conclusion", "ref": "cl",
-                          "attrs": {"synthesis": concl[:2000],
-                                    "validity_bounds": str(data.get("validity_bounds", ""))[:500]}})
+            concl_attrs: Dict[str, Any] = {
+                "synthesis": concl[:2000],
+                "validity_bounds": str(data.get("validity_bounds", ""))[:500],
+            }
+            if duplicate_evidence:
+                concl_attrs["duplicate_evidence"] = duplicate_evidence
+            # The gap EvolutionAgent acts on (graph/research/evolution.py). Only
+            # meaningful on a postponed verdict; only trusted "recommended" if a
+            # concrete gap actually came with it (a bare true with no gap text
+            # is treated as the model not really having one to name).
+            if verdict == "postponed":
+                evolve = data.get("evolve")
+                evolve = evolve if isinstance(evolve, dict) else {}
+                gap = str(evolve.get("gap", "")).strip()[:300]
+                concl_attrs["evolve_recommended"] = bool(evolve.get("recommended")) and bool(gap)
+                if gap:
+                    concl_attrs["evolve_gap"] = gap
+                if circular_reason:
+                    # Overrides whatever the model said — it reasoned under
+                    # "confirmed", so its own evolve judgment (if any) isn't
+                    # about this gap. The next EvolutionAgent pass needs an
+                    # INDEPENDENT source for the SAME claim, not a new sub-claim.
+                    concl_attrs["evolve_recommended"] = True
+                    concl_attrs["evolve_gap"] = (
+                        "independent confirmation: a source for this claim "
+                        "that is not already cited on it"
+                    )
+                    concl_attrs["independence_check"] = "failed"
+            nodes.append({"type": "Conclusion", "ref": "cl", "attrs": concl_attrs})
             edges += [{"type": "based_on", "from": "#cl", "to": eid}
                       for eid in sorted(polarity)]
             edges += [{"type": "determines_sufficiency", "from": ccid, "to": "#cl"}

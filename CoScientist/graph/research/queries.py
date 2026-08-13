@@ -250,6 +250,38 @@ def unresolved_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[st
     return {"items": items, "rendered": "\n".join(lines)}
 
 
+def evolvable_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """Postponed hypotheses whose Conclusion named a concrete, closeable gap
+    (ValidatorAgent's `evolve_recommended`/`evolve_gap`, see
+    graph/research/validator.py) and that have not already been evolved (no
+    existing child hypothesis pointing back via `evolved_from`) — the
+    orchestrator delegates these to EvolutionAgent, which grows a NEW
+    hypothesis by finding a source for that specific gap, rather than
+    reformulating the same evidence the parent already had."""
+    g = _graph(store).full_graph()
+    conclusions = _nodes_of(g, "Conclusion")
+    items = []
+    for h in _nodes_of(g, "Hypothesis"):
+        if _status(g, h) != "postponed":
+            continue
+        if _in(g, h, "evolved_from"):  # already has ≥1 evolved child — don't re-fire
+            continue
+        evidence_ids = {e for et in _EVIDENCE_EDGES for e in _in(g, h, et)}
+        gap = ""
+        for cl in conclusions:
+            attrs = g.nodes[cl].get("attrs") or {}
+            if not attrs.get("evolve_recommended"):
+                continue
+            if set(_out(g, cl, "based_on")) & evidence_ids:
+                gap = str(attrs.get("evolve_gap", ""))
+                break
+        if gap:
+            items.append({"hypothesis": h, "label": _label(g, h), "gap": gap})
+    lines = [f"EVOLVABLE: {i['hypothesis']} \"{i['label']}\" — gap: {i['gap']} "
+             f"→ delegate to EvolutionAgent" for i in items]
+    return {"items": items, "rendered": "\n".join(lines)}
+
+
 def progress(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
     g = _graph(store).full_graph()
     counts: Dict[str, Dict[str, int]] = {}
@@ -278,6 +310,7 @@ TRIGGERS = {
     "blocked_hypotheses": blocked_hypotheses,
     "refuting_evidence": refuting_evidence,
     "unresolved_hypotheses": unresolved_hypotheses,
+    "evolvable_hypotheses": evolvable_hypotheses,
     "closable_hypotheses": closable_hypotheses,
     "pending_conclusions": pending_conclusions,
     "missing_tools": missing_tools,
