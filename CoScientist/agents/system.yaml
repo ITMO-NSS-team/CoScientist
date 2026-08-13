@@ -55,7 +55,7 @@ defaults:
 # The manager driver (CoScientist.main) executes: pre… → root → post…
 # ─────────────────────────────────────────────────────────────────────────────
 pipeline:
-  pre: []                         # e.g. [PlannerAgent] to A/B-test the planner
+  pre: [ContextInitAgent]         # draft + confirm + seed the research frame
   post: [ResultAggregatorAgent]
 
 agents:
@@ -145,6 +145,29 @@ agents:
         name: Plan
         description: Produce a research roadmap for a scientific task
         tags: [planning, roadmap, science]
+
+  # ── Context initialization (pre-stage) ──────────────────────────────────────
+  ContextInitAgent:
+    # context_init_session = SessionAgent whose review shows the operator a
+    # STRUCTURED FORM of the research frame (the framing entities of the
+    # meta-model). Once confirmed, it seeds the frame into the Research Context
+    # Graph (root question + constraint star + budgets + tools + empirical base +
+    # confirmation criteria + cost model) BEFORE the orchestrator picks a
+    # strategy. Runs as pipeline.pre; toggle via ${context_init.enabled}.
+    class: custom:context_init_session
+    enabled: ${context_init.enabled}
+    description: >-
+      агент инициализации контекста — превращает исследовательский вопрос в
+      структурированную рамку (вопрос, профиль, ограничения, бюджеты,
+      инструменты, эмпирическая база, условия подтверждения, модель стоимости),
+      согласует её с оператором и заполняет граф исследования до старта.
+    prompt: context_init
+    output_key: research_frame
+    output_schema: research_frame
+    hitl: true
+    callbacks:
+      # Strip prose/fences around the JSON before strict output_schema validation.
+      after_model: [sanitize_json_output]
 
   ResultAggregatorAgent:
     class: llm

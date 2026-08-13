@@ -39,8 +39,8 @@ orchestrator_agent = _system.root
 root_agent = orchestrator_agent
 
 # Agents that run as pipeline stages (pre/post) around the orchestrator.
-pipeline_pre_agents = [_system.agent(n) for n in _system.config.pipeline.pre]
-pipeline_post_agents = [_system.agent(n) for n in _system.config.pipeline.post]
+pipeline_pre_agents = [_system.agent(n) for n in _system.config.pipeline.pre if _system.config.agent(n).is_enabled()]
+pipeline_post_agents = [_system.agent(n) for n in _system.config.pipeline.post if _system.config.agent(n).is_enabled()]
 
 # The RUN root: the whole lifecycle (pre → orchestrator → post/aggregator) is one
 # ADK SequentialAgent, driven by a single Runner.run_async so it is ONE invocation

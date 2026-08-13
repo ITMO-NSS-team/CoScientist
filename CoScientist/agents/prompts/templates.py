@@ -1672,9 +1672,17 @@ def orchestrator(ctx: PromptContext) -> str:
             "state and active triggers:\n"
             "{research_context?}\n\n"
             "Protocol (for research investigations):\n"
-            "- EMPTY graph + a research task ⇒ call `research_init(question=…)` "
-            "first (include known tools / resources / constraints / empirical "
-            "bases), then delegate.\n"
+            "- The context-initialization pre-stage normally SEEDS the graph "
+            "(root question + framing frame) before you run. Only if the graph is "
+            "still EMPTY, call `research_init(question=…)` first (include known "
+            "tools / resources / constraints / empirical bases), then delegate.\n"
+            "- FRAME GATE (experiment setup): before you start a COSTLY "
+            "VerificationMethod (one that consumes Resources), the frame must be "
+            "set — the question must carry a completion_criteria attribute AND the "
+            "graph must hold ConfirmationCriteria and a CostModel. If they are "
+            "missing, prefer cheap literature evidence first, or (HITL on) ask the "
+            "operator; do NOT launch an expensive experiment on an unframed "
+            "research.\n"
         )
         # Dynamic hypothesis-count rule
         from CoScientist.config import get_settings as _gs
@@ -2214,6 +2222,77 @@ usually returns a worse plan.
 # ═════════════════════════════════════════════════════════════════════════════
 
 # ── TZSpecAgent — free-form request -> StructuredTZ (document-shaped) ────────
+
+@_register("context_init")
+def context_init(ctx: PromptContext) -> str:
+    """Draft the ResearchFrame — the framing entities of the meta-model."""
+    from CoScientist.context_init.models import FRAME_SPEC
+
+    block_lines = []
+    for i, (title, kind, subtype, usage, field_names) in enumerate(FRAME_SPEC, 1):
+        block_lines.append(
+            f"{i}. «{title}» ({usage}). Поля: {', '.join(field_names)}.")
+    blocks_desc = "\n".join(block_lines)
+
+    return render_template('''
+Ты — агент инициализации контекста в системе CoScientist (мультиагентная
+система для научно-исследовательского процесса). Твоя задача — превратить
+исследовательский вопрос пользователя (последнее сообщение) в СТРУКТУРИРОВАННУЮ
+РАМКУ ИССЛЕДОВАНИЯ: набор блоков, где каждый блок — группа полей, и каждое поле
+имеет значение и статус. Из этого JSON заполняется контекст графа исследования
+ДО того, как оркестратор выберет стратегию (литературный обзор, дорогой или
+дешёвый эксперимент). Поэтому рамка важна.
+
+ОБЯЗАТЕЛЬНЫЕ БЛОКИ (ровно с такими названиями и полями, в этом порядке):
+<<BLOCKS_DESC>>
+
+ПРАВИЛА:
+- Заполни поле «formulation» блока «Вопрос исследования» точной формулировкой
+  вопроса пользователя.
+- Не выдумывай факты. Если значения нет ни в запросе, ни в разумном контексте
+  домена — оставь value «Не задано», status «не задано» (такие поля ОБЯЗАТЕЛЬНО
+  оставляй — они показывают пробелы, которые заполнит оператор).
+- Значения, прямо названные пользователем, помечай статусом «задано заказчиком».
+- Обоснованные рабочие значения из контекста домена помечай статусом
+  «уточнено оператором».
+- Значения, которые определятся на следующих этапах (напр. фактические
+  бюджеты), помечай статусом «рассчитывается агентом».
+- Для блока «Режим и завершение»: ai_application_model — один из
+  «ИИ-лаборант / ИИ-ассистент / ИИ-копайлот / ИИ-архитектор»;
+  completion_criteria — один из «исчерпывающий / прагматичный / ресурсный /
+  экономический».
+- Для «Ресурсы и бюджеты» значение задавай как «остаток / лимит» (напр.
+  «100 / 100») там, где это применимо.
+- В каждом блоке заполни usage — одну фразу, как блок используется дальше.
+- Поле original_request заполни исходным запросом пользователя дословно.
+- Отвечай ТОЛЬКО валидным JSON без пояснений и без обрамления ```.
+
+ОБРАБОТКА ОТВЕТОВ ОПЕРАТОРА (при перегенерации после ревью):
+Если фидбек содержит правки — примени их к полям, статус «уточнено оператором».
+Всегда возвращай ПОЛНЫЙ обновлённый JSON рамки (все блоки).
+
+Статусы поля (строго одно из): "задано заказчиком", "уточнено оператором",
+"не задано", "свободный комментарий", "рассчитывается агентом".
+
+ФОРМАТ ОТВЕТА (строго этот JSON; показан один блок для примера — заполни ВСЕ
+обязательные блоки и их поля):
+{
+  "original_request": "<исходный запрос пользователя дословно>",
+  "blocks": [
+    {
+      "title": "Вопрос исследования",
+      "kind": "question",
+      "usage": "атрибуты корневого исследовательского вопроса",
+      "fields": [
+        {"name": "formulation", "value": "...", "status": "задано заказчиком"},
+        {"name": "domain", "value": "...", "status": "уточнено оператором"},
+        {"name": "trl", "value": "Не задано", "status": "не задано"}
+      ]
+    }
+  ]
+}
+''', BLOCKS_DESC=blocks_desc)
+
 
 @_register("microfluidics_tz")
 def microfluidics_tz(ctx: PromptContext) -> str:

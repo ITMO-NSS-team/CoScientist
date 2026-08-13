@@ -163,6 +163,22 @@ class HITLSettings(BaseModel):
     enabled: bool = False
 
 # =========================
+# CONTEXT INITIALIZATION
+# =========================
+class ContextInitSettings(BaseModel):
+    """The pre-stage that drafts the research frame, confirms it with the
+    operator (structured web form, when HITL is on) and seeds it into the
+    research graph before the orchestrator runs.
+
+    ``enabled`` gates the whole pre-stage — referenced from system.yaml as
+    ``${context_init.enabled}``. The gate is soft: the operator may submit the
+    form with fields deferred (the agent fills working values), so a run never
+    blocks indefinitely. Override via CONTEXT_INIT__ENABLED.
+    """
+    enabled: bool = True
+
+
+# =========================
 # ORCHESTRATOR
 # =========================
 class OrchestratorSettings(BaseModel):
@@ -253,6 +269,7 @@ class WebSettings(BaseModel):
     opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
     auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
     coscientist_username: _Optional[str] = _os.getenv("COSCIENTIST_USERNAME") or _os.getenv("DEFAULT_USERNAME")
+    context_init_enabled: bool = _os.getenv("CONTEXT_INIT__ENABLED", "true").lower() in ("true", "1", "yes")
     session_snapshots_dir: str = _os.getenv("SESSION_SNAPSHOTS_DIR", "session_snapshots")
 
 
@@ -295,6 +312,7 @@ class Settings(BaseSettings):
     s3: S3Settings = S3Settings()
     opik: OpikSettings = OpikSettings()
     hitl: HITLSettings = HITLSettings()
+    context_init: ContextInitSettings = ContextInitSettings()
     orchestrator: OrchestratorSettings = OrchestratorSettings()
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()

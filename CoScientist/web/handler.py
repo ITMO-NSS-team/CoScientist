@@ -172,6 +172,7 @@ class WebHITLHandler(AbstractHITLHandler):
             "message": request.message,
             "options": request.options,
             "context": public_context,
+            "form": request.form,
             "invoked_via": request.invoked_via,
             "timeout_seconds": timeout_sec,
         }
@@ -249,6 +250,7 @@ class WebHITLHandler(AbstractHITLHandler):
             selected_option=response_data.get("selected_option"),
             instructions=response_data.get("instructions"),
             free_input=response_data.get("free_input"),
+            form_values=response_data.get("form_values"),
         )
 
     def resolve_request(

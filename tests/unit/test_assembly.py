@@ -49,15 +49,19 @@ def test_pipeline_stages_are_declared_agents_and_not_root(config):
 
 
 def test_run_root_is_one_sequential_run_ending_in_the_aggregator():
-    """The whole lifecycle is ONE ADK SequentialAgent (orchestrator → aggregator)
-    driven by a single run_async — so it is one invocation / one Opik trace with the
-    Result Aggregator as the terminal stage (no separate static-directive run)."""
+    """The whole lifecycle is ONE ADK SequentialAgent (context-init pre-stage →
+    orchestrator → aggregator) driven by a single run_async — so it is one
+    invocation / one Opik trace with the Result Aggregator as the terminal stage
+    (no separate static-directive run)."""
     from google.adk.agents.sequential_agent import SequentialAgent
     from CoScientist.agents import run_root, orchestrator_agent
 
     assert isinstance(run_root, SequentialAgent)
     names = [a.name for a in run_root.sub_agents]
-    assert names[0] == orchestrator_agent.name == "OrchestratorAgent"
+    # The context-init pre-stage seeds the research frame before the orchestrator.
+    assert names[0] == "ContextInitAgent", "context-init runs before the orchestrator"
+    assert orchestrator_agent.name == "OrchestratorAgent"
+    assert names.index("OrchestratorAgent") < names.index("ResultAggregatorAgent")
     assert names[-1] == "ResultAggregatorAgent", "aggregator must be the terminal stage"
 
 

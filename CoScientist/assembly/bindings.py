@@ -951,16 +951,21 @@ def _register_classes() -> None:
     from CoScientist.agents.custom_agents import WebToolsDeployerAgent
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
+    from CoScientist.context_init.agent import ContextInitSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
     REGISTRY.register_agent_class("tz_session", TZSessionAgent)
+    # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
+    # and seeds the confirmed frame into the research graph.
+    REGISTRY.register_agent_class("context_init_session", ContextInitSessionAgent)
 
 
 def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
     from CoScientist.microfluidics.models import LiteratureQueries, StructuredTZ
+    from CoScientist.context_init.models import ResearchFrame
 
     REGISTRY.register_output_schema("tool_ranking", ToolRanking)
     REGISTRY.register_output_schema("mcp_ranking", MCPRanking)
@@ -968,6 +973,8 @@ def _register_schemas() -> None:
     # from it (see CoScientist/agents/microfluidics.yaml).
     REGISTRY.register_output_schema("structured_tz", StructuredTZ)
     REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
+    # Framing entities of the meta-model, filled per run (context_init pre-stage).
+    REGISTRY.register_output_schema("research_frame", ResearchFrame)
 
 
 def _register_planners() -> None:

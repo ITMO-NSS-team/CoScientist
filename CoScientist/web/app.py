@@ -130,6 +130,10 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "coscientistUsername" in general:
         val = str(general["coscientistUsername"]).strip()
         web.coscientist_username = val if val else None
+    if "contextInitEnabled" in general:
+        val = bool(general["contextInitEnabled"])
+        web.context_init_enabled = val
+        get_settings().context_init.enabled = val
     if "knowledgeGraphEnabled" in general:
         web.knowledge_graph_enabled = bool(general["knowledgeGraphEnabled"])
     if "researchGraphEnabled" in general:
@@ -201,6 +205,7 @@ def _settings_payload() -> dict:
             "opikEnabled": web.opik_enabled,
             "autoNamingEnabled": web.auto_naming_enabled,
             "coscientistUsername": web.coscientist_username or "",
+            "contextInitEnabled": settings.context_init.enabled,
             "knowledgeGraphEnabled": web.knowledge_graph_enabled,
             "autoClearGraphEnabled": web.auto_clear_graph_enabled,
             "researchGraphEnabled": settings.research_graph.enabled,
