@@ -281,7 +281,7 @@ def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(monkeypatc
     collector = config.agent("DatasetCollectorAgent")
     # Both share the coder toolset -> same workspace-state anchor -> same sandbox.
     assert "coder" in collector.tools and "coder" in coder.tools
-    on = _build_with(monkeypatch, config, coder_local_tools_enabled=True)
+    on = _build_with(monkeypatch, config, coder_mode="local")
     # The coder prompt advertises the subordinate (rendered from config).
     coder_instruction = on.agent("CoderAgent").instruction
     assert "DatasetCollectorAgent" in coder_instruction
@@ -522,7 +522,7 @@ def test_research_graph_switch_drops_tools_and_prompt(monkeypatch, config):
 def test_coder_local_tools_switch_leaves_only_the_sandbox(monkeypatch, config):
     """The CoderAgent keeps working — through the sandbox — and its prompt stops
     telling it to reach for execute_bash."""
-    off = _build_with(monkeypatch, config, coder_local_tools_enabled=False)
+    off = _build_with(monkeypatch, config, coder_mode="openhands")
 
     for name in ("CoderAgent", "DatasetCollectorAgent"):
         cfg = config.agent(name)
@@ -540,7 +540,7 @@ def test_coder_local_tools_switch_on_attaches_the_local_toolset(monkeypatch, con
     """The other half of the switch. Pinned rather than read off the ambient
     settings: CODER__LOCAL_TOOLS_ENABLED=False in a developer's .env would
     otherwise turn this into a failure about their environment."""
-    on = _build_with(monkeypatch, config, coder_local_tools_enabled=True)
+    on = _build_with(monkeypatch, config, coder_mode="local")
 
     coder = on.agent("CoderAgent")
     assert "execute_bash" in _tool_names(coder)

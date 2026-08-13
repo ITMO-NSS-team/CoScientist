@@ -15,6 +15,7 @@ from google.adk.models.llm_response import LlmResponse
 
 from CoScientist.config import get_settings
 from CoScientist.hitl.handler import ConsoleHITLHandler, DelegatingHITLHandler
+from CoScientist.utils.selective_proxy import LiteLLMProxy
 
 settings = get_settings()
 
@@ -33,6 +34,7 @@ _RETRYABLE_SUBSTRINGS = (
     "temporarily unavailable",
     "timeout",
     "timed out",
+    "client has been closed",
     "502",
     "503",
     "504",
@@ -49,7 +51,33 @@ _RETRYABLE_TYPES = (
 _LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 
 
+def is_proxy_error(err: Exception) -> bool:
+    """Return True if *err* represents an unreachable proxy or network connection failure."""
+    if not settings.web.use_proxy:
+        return False
+    msg = str(err).lower()
+    proxy_keywords = (
+        "proxy",
+        "all connection attempts failed",
+        "connecterror",
+        "connection refused",
+        "cannot connect to host",
+        "failed to connect",
+        "proxyerror",
+        "timed out",
+        "timeout",
+        "connecttimeout",
+    )
+    if any(k in msg for k in proxy_keywords):
+        return True
+    if settings.services.proxy_url and ("connectionerror" in msg or "connecterror" in msg or "apiconnectionerror" in msg):
+        return True
+    return False
+
+
 def _is_transient(err: Exception) -> bool:
+    if is_proxy_error(err):
+        return False
     if type(err).__name__ in _RETRYABLE_TYPES:
         return True
     msg = str(err).lower()
@@ -63,9 +91,40 @@ class RetryingLiteLlm(LiteLlm):
     duplicated) and only for transient errors; everything else propagates.
     """
 
+    @staticmethod
+    async def _verify_proxy_reachable() -> None:
+        """Fast HTTP probe to confirm the corporate proxy can reach the internet/VPN.
+
+        When a corporate VPN is not connected, the local proxy container accepts
+        TCP connections on localhost, but hangs indefinitely when trying to reach
+        upstream endpoints. litellm's default request_timeout is 6000s (100 min),
+        causing an infinite freeze in the UI. We probe an upstream endpoint THROUGH
+        the proxy with a 5s deadline to fail fast when VPN is off.
+        """
+        if not settings.web.use_proxy or not settings.services.proxy_url:
+            return
+
+        import httpx
+
+        probe_url = "https://openrouter.ai/api/v1/models"
+        try:
+            async with httpx.AsyncClient(
+                proxy=settings.services.proxy_url,
+                timeout=httpx.Timeout(5.0, connect=5.0)
+            ) as client:
+                await client.get(probe_url)
+        except Exception as err:
+            _logger.warning("Proxy pre-flight probe failed: %s", err)
+            raise ConnectionError(
+                f"Error connecting to proxy server."
+                f"Please ensure the proxy container is running, corporate VPN is enabled (other - disabled), "
+                f"and proxy is accessible: {err}"
+            ) from err
+
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
+        await self._verify_proxy_reachable()
         attempt = 0
         while True:
             yielded = False
@@ -88,10 +147,26 @@ class RetryingLiteLlm(LiteLlm):
 
 MODEL = settings.llm.main_model
 litellm.api_key = settings.llm.openai_api_key
+litellm.request_timeout = 45.0
 # Silence litellm's "Provider List: https://docs.litellm.ai/docs/providers" spam.
 # It fires when litellm can't map a model prefix (e.g. "qwen/...") to a known
 # provider during cost/token bookkeeping — harmless, but it floods the console.
 litellm.suppress_debug_info = True
+
+_litellm_proxy: LiteLLMProxy | None = None
+if settings.services.proxy_url:
+    _litellm_proxy = LiteLLMProxy(settings.services.proxy_url)
+    if settings.web.use_proxy:
+        _litellm_proxy.enable()
+
+
+def sync_proxy_session() -> None:
+    """Synchronize litellm proxy with the runtime ``use_proxy`` toggle."""
+    if _litellm_proxy is not None:
+        if settings.web.use_proxy:
+            _litellm_proxy.enable()
+        else:
+            _litellm_proxy.disable()
 
 hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 

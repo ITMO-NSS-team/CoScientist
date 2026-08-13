@@ -69,7 +69,7 @@ def _medical():
 def _coder():
     """Local coder toolset — dropped when the web UI switches it off, leaving
     the coder family to work through the OpenHands `sandbox` tools only."""
-    if not _web_flag("coder_local_tools_enabled"):
+    if not _is_local_coder():
         return None
     from CoScientist.tools import coder_toolset_instance
     return coder_toolset_instance
@@ -97,6 +97,14 @@ def _web_flag(field: str) -> bool:
     try:
         from CoScientist.config import get_settings
         return bool(getattr(get_settings().web, field))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _is_local_coder() -> bool:
+    try:
+        from CoScientist.config import get_settings
+        return get_settings().web.coder_mode == "local"
     except Exception:  # noqa: BLE001
         return True
 
@@ -648,7 +656,7 @@ def _sandbox_docs():
     workspaces must not be confused. Alone, it IS the way the agent runs
     anything, so the guidance must not point back at execute_bash.
     """
-    if _web_flag("coder_local_tools_enabled"):
+    if _is_local_coder():
         run_usage = (
             "The sandbox is a SEPARATE machine from your execute_bash "
             "workspace — files do NOT cross between them. Data goes in via "

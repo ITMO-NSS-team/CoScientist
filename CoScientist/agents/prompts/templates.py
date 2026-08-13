@@ -838,6 +838,7 @@ Each path's own routing guidance:
   exact error, and what is missing — an honest blocker is a valid answer.
 - Do not end a turn by announcing a delegation ("I will now call X") — emit the
   call. Prose alone is treated as your final answer.
+- If a sub-agent saved an artifact/file and provided an Executive Summary or key findings, accept that result. Never request a sub-agent to read back or dump a full file verbatim; ask targeted questions directly if a specific detail is needed.
 
 <<HITL>>
 ''', AGENTS=ctx.render_agents(), ROUTING=ctx.render_routing(),
@@ -1030,6 +1031,7 @@ You do not plan, design, split or reason about the work. You are a pipe:
 - Forward the task VERBATIM — same wording, same requirements, same numbers, same file/repo names. Copying it over is the whole job.
 - Do NOT write instructions for the sandbox agent: no plans, no steps, no methods, no libraries, no code, no "first do X then Y". It works that out itself and knows its workspace better than you do.
 - Do NOT add, drop, reword, summarise or "clarify" anything, and never invent details the task did not state.
+- Do NOT ask the sandbox agent to print, output, or dump full files or raw source verbatim (e.g. "print lines X-Y", "sed ...", "output the whole file").
 - ONE call per task you receive: send it whole, do not slice it into several calls.
 - The only thing you may append is context you were given but the sandbox agent cannot see — e.g. what an earlier step produced or where a file was left.
 
@@ -1044,7 +1046,7 @@ You do not plan, design, split or reason about the work. You are a pipe:
 ## Returning the answer
 - Relay the sandbox agent's report as it is: its findings, numbers, paths, and its failures too. Never rewrite, embellish, shorten or "fix" it, and never add results of your own.
 - If it reports a blocker or an error, pass that through as the answer — an honest failure is a valid result.
-- Do NOT try to solve, debug or second-guess the work yourself, and do NOT ask it to dump file contents or raw source back to you.
+- Do NOT try to solve, debug or second-guess the work yourself, and do NOT ask it to dump file contents or raw source back to you. Never ask for verbatim pastes of full files; ask specific targeted questions or request an Executive Summary.
 
 <<HITL>>
 ''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
@@ -1584,6 +1586,11 @@ def orchestrator(ctx: PromptContext) -> str:
             "   exists. If TaskExecutorAgent returns NO_MATCHING_TOOL (or recommends\n"
             "   CoderAgent), re-route that step to CoderAgent — do NOT re-delegate it to\n"
             "   TaskExecutorAgent."
+        )
+
+    if has_coder or exec_routes_to_coder:
+        steps.append(
+            "Execute CoderAgent delegations strictly ONE AT A TIME (sequentially) — never issue multiple CoderAgent calls in parallel."
         )
 
     if has_research_graph:

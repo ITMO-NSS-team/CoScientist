@@ -295,17 +295,17 @@ def test_the_dataset_block_reaches_the_coder_in_both_tool_setups(local_coder_too
     from CoScientist.config import get_settings
 
     settings = get_settings()
-    previous = settings.web.coder_local_tools_enabled
-    settings.web.coder_local_tools_enabled = local_coder_tools
+    previous = settings.web.coder_mode
+    settings.web.coder_mode = "local" if local_coder_tools else "openhands"
     try:
         system = build_for_mode()
         for name in ("CoderAgent", "DatasetCollectorAgent"):
             assert "{dataset_context?}" in system.agents[name].instruction, (
                 f"{name} cannot see the attached archive with "
-                f"coder_local_tools_enabled={local_coder_tools}"
+                f"coder_mode={settings.web.coder_mode}"
             )
     finally:
-        settings.web.coder_local_tools_enabled = previous
+        settings.web.coder_mode = previous
 
 
 def test_nothing_fills_dataset_url_in_behind_the_agent():

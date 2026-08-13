@@ -145,18 +145,13 @@
   <!-- SideNavBar -->
   <aside id="side-nav"
     class="w-64 h-full fixed left-0 top-0 border-r border-[#424656]/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
-    <div class="px-6 mb-8 flex items-start justify-between gap-2">
-      <div>
-        <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
-        <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
-      </div>
-      <button type="button" onclick="toggleSideNav()" title="Hide sidebar"
-        class="text-outline-variant hover:text-primary transition-colors -mr-1">
-        <span class="material-symbols-outlined text-base">left_panel_close</span>
-      </button>
+    <div class="px-6 mb-8">
+      <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
+      <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
     </div>
     <div class="px-6 mb-4">
-      <h3 class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Agents</h3>
+      <h3 data-i18n="nav.agents" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Agents
+      </h3>
     </div>
     <nav id="agent-nav" class="flex-1 space-y-1 px-3 overflow-y-auto no-scrollbar">
       <!-- Populated by JS -->
@@ -164,21 +159,36 @@
     <div class="px-4 mt-auto space-y-4">
       <div class="space-y-2 pt-4 border-t border-outline-variant/10">
         <div class="flex items-center justify-between">
-          <label class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">User</label>
+          <label data-i18n="nav.user"
+            class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">User</label>
           <button onclick="openIdentityModal()" title="Register user" class="text-primary hover:brightness-125"><span
               class="material-symbols-outlined text-sm">person_add</span></button>
         </div>
         <select id="user-select" onchange="onUserSelected(this.value)"
           class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
         <div class="flex items-center justify-between">
-          <label class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">Session</label>
+          <label data-i18n="nav.session"
+            class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">Session</label>
           <div class="flex gap-2">
             <button onclick="renameCurrentSession()" title="Rename session"
               class="text-outline-variant hover:text-primary"><span
                 class="material-symbols-outlined text-sm">edit</span></button>
+            <button onclick="saveCurrentSession()" title="Save session to disk"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">save</span></button>
+            <button onclick="exportCurrentSession()" title="Export session (.zip)"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">download</span></button>
+            <button onclick="triggerImportSession()" title="Import session"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">upload</span></button>
+            <button onclick="openSavedSessionsModal()" title="Restore saved session"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">restore</span></button>
             <button onclick="createNewSession()" title="New session" class="text-primary hover:brightness-125"><span
                 class="material-symbols-outlined text-sm">add_circle</span></button>
           </div>
+          <input type="file" id="import-session-input" accept=".cossession.zip,.zip" class="hidden" onchange="handleImportFile(this)">
         </div>
         <select id="session-select" onchange="onSessionSelected(this.value)"
           class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
@@ -188,8 +198,10 @@
           <span class="material-symbols-outlined text-primary text-sm">science</span>
         </div>
         <div>
-          <p id="active-nickname" class="text-[10px] font-bold text-on-surface">No user selected</p>
-          <p id="conn-status" class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
+          <p id="active-nickname" data-i18n="nav.noUser" class="text-[10px] font-bold text-on-surface">No user selected
+          </p>
+          <p id="conn-status" data-i18n="nav.disconnected"
+            class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
         </div>
       </div>
     </div>
@@ -203,7 +215,8 @@
         class="text-[#424656] hover:text-[#00daf3] transition-colors flex items-center">
         <span id="side-nav-toggle-icon" class="material-symbols-outlined">left_panel_open</span>
       </button>
-      <div class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR</div>
+      <div data-i18n="nav.orchestrator" class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR
+      </div>
       <div
         class="hidden md:flex items-center gap-6 font-['Space_Grotesk'] text-[10px] uppercase tracking-widest font-bold">
         <span id="status-badge" class="text-[#424656]">Status: Idle</span>
@@ -227,7 +240,8 @@
       <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
         <div class="flex items-center gap-3">
           <span id="live-dot" class="w-2 h-2 bg-[#424656] rounded-full"></span>
-          <h2 class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
+          <h2 data-i18n="chat.missionControl"
+            class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
           </h2>
         </div>
         <div class="flex items-center gap-3">
@@ -235,7 +249,7 @@
             class="text-[#424656] hover:text-primary transition-colors">
             <span class="material-symbols-outlined text-base">timeline</span>
           </button>
-          <div id="active-badge"
+          <div id="active-badge" data-i18n="chat.offline"
             class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
             Offline</div>
         </div>
@@ -261,7 +275,8 @@
         class="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20">
         <div class="flex flex-col items-center justify-center h-full opacity-50">
           <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
-          <p class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
+          <p data-i18n="chat.sendQuery" class="text-sm text-outline-variant font-medium">Send a query to begin
+            orchestration</p>
         </div>
       </div>
 
@@ -284,14 +299,14 @@
                   stroke-linecap="round" stroke-dasharray="113.097" stroke-dashoffset="62.20"
                   class="transition-all duration-300"></circle>
               </svg>
-              <span id="dataset-upload-pct"
-                class="absolute text-xs font-bold font-mono text-on-surface">45%</span>
+              <span id="dataset-upload-pct" class="absolute text-xs font-bold font-mono text-on-surface">45%</span>
             </div>
 
             <!-- Labels and Controls -->
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between gap-2">
-                <span class="text-[10px] font-bold tracking-wider uppercase text-outline-variant font-mono">DATASET UPLOAD</span>
+                <span class="text-[10px] font-bold tracking-wider uppercase text-outline-variant font-mono">DATASET
+                  UPLOAD</span>
                 <button type="button" id="dataset-upload-cancel-btn" onclick="cancelDatasetUpload()"
                   class="px-2.5 py-0.5 text-[11px] font-medium bg-[#222631] hover:bg-[#2c3140] border border-outline-variant/20 rounded-md text-on-surface-variant hover:text-on-surface transition-colors">
                   Cancel
@@ -310,11 +325,16 @@
           </div>
 
           <!-- Expandable Details Drawer -->
-          <div id="dataset-upload-details" class="hidden mt-3 pt-2.5 border-t border-outline-variant/10 text-[11px] font-mono text-outline-variant space-y-1">
-            <div class="flex justify-between"><span class="text-outline-variant/70">Filename:</span><span id="dataset-upload-filename" class="text-on-surface truncate max-w-[220px]">—</span></div>
-            <div class="flex justify-between"><span class="text-outline-variant/70">Speed:</span><span id="dataset-upload-speed" class="text-on-surface">—</span></div>
-            <div class="flex justify-between"><span class="text-outline-variant/70">ETA:</span><span id="dataset-upload-eta" class="text-on-surface">—</span></div>
-            <div class="flex justify-between"><span class="text-outline-variant/70">Status:</span><span id="dataset-upload-status" class="text-on-surface font-semibold">—</span></div>
+          <div id="dataset-upload-details"
+            class="hidden mt-3 pt-2.5 border-t border-outline-variant/10 text-[11px] font-mono text-outline-variant space-y-1">
+            <div class="flex justify-between"><span class="text-outline-variant/70">Filename:</span><span
+                id="dataset-upload-filename" class="text-on-surface truncate max-w-[220px]">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">Speed:</span><span
+                id="dataset-upload-speed" class="text-on-surface">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">ETA:</span><span
+                id="dataset-upload-eta" class="text-on-surface">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">Status:</span><span
+                id="dataset-upload-status" class="text-on-surface font-semibold">—</span></div>
           </div>
         </div>
 
@@ -337,7 +357,8 @@
           </div>
           <textarea id="chat-input" rows="3" wrap="soft" spellcheck="false" autocomplete="off"
             class="bg-transparent border-none focus:ring-0 text-sm flex-1 py-1.5 text-on-surface placeholder:text-outline-variant/50 font-medium no-scrollbar"
-            placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"></textarea>
+            placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"
+            data-i18n-placeholder="chat.placeholder"></textarea>
           <button type="button" id="stop-btn" onclick="stopChat()"
             class="hidden p-2 bg-error/20 text-error border border-error/30 rounded-md hover:bg-error/30 transition-all shadow-md"
             title="Stop agents">
@@ -361,7 +382,8 @@
             <span class="w-1 h-1 bg-[#424656] rounded-full"></span> Offline
           </span>
         </div>
-        <h4 class="text-[10px] font-bold text-outline-variant uppercase mb-3 tracking-widest">Telemetry Output</h4>
+        <h4 data-i18n="telemetry.header"
+          class="text-[10px] font-bold text-outline-variant uppercase mb-3 tracking-widest">Telemetry Output</h4>
         <div id="telemetry-log"
           class="space-y-1.5 font-mono text-[9px] text-primary/60 max-h-96 overflow-y-auto no-scrollbar">
           <div class="text-outline-variant">Waiting for connection…</div>
@@ -371,7 +393,8 @@
       <!-- Usage & Cost — what this session has spent, by agent -->
       <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
         <div class="flex items-baseline justify-between mb-3">
-          <h4 class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Usage &amp; Cost</h4>
+          <h4 data-i18n="usage.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">
+            Usage &amp; Cost</h4>
           <span id="metrics-total" class="text-sm font-mono font-bold text-primary">$0.0000</span>
         </div>
         <div id="metrics-summary" class="text-[9px] font-mono text-outline-variant mb-2">no model calls yet</div>
@@ -404,16 +427,285 @@
     const SESSION_STORAGE_KEY = 'coscientist.session_id';
     const NICK_STORAGE_KEY = 'coscientist.nickname';
     const SIDE_NAV_KEY = 'coscientist.side_nav';
+    const LANG_STORAGE_KEY = 'coscientist.lang';
+
+    // =========================================================================
+    // i18n – lightweight translation system
+    // =========================================================================
+    // Текущий язык: 'ru' по умолчанию (или из localStorage)
+    let currentLang = localStorage.getItem(LANG_STORAGE_KEY) || 'ru';
+
+    const i18n = {
+      // ── Navigation & Sidebar ──
+      'nav.agents': { en: 'Agents', ru: 'Агенты' },
+      'nav.user': { en: 'User', ru: 'Пользователь' },
+      'nav.session': { en: 'Session', ru: 'Сессия' },
+      'nav.noUser': { en: 'No user selected', ru: 'Пользователь не выбран' },
+      'nav.disconnected': { en: 'Disconnected', ru: 'Отключено' },
+      'nav.orchestrator': { en: 'ORCHESTRATOR', ru: 'ОРКЕСТРАТОР' },
+
+      // Agent descriptions in side nav
+      'agent.OrchestratorAgent.desc': { en: 'Master Orchestrator', ru: 'Главный оркестратор' },
+      'agent.PlannerAgent.desc': { en: 'Roadmap Planner', ru: 'Планировщик задач' },
+      'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Просмотр инструментов' },
+      'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
+      'agent.MCPBuilds.desc': { en: 'MCP Builds', ru: 'Сборки MCP' },
+      'agent.CoderSandbox.desc': { en: 'CoderSandbox', ru: 'Песочница кода' },
+      'agent.__settings__.desc': { en: 'Settings', ru: 'Настройки' },
+
+      // Chat controls & Header
+      'chat.missionControl': { en: 'Mission Control', ru: 'Центр управления' },
+      'chat.offline': { en: 'Offline', ru: 'Офлайн' },
+      'chat.sendQuery': { en: 'Send a query to begin orchestration', ru: 'Отправьте запрос для начала работы' },
+      'chat.placeholder': { en: 'Send system command…  (Enter — send, Shift+Enter — new line)', ru: 'Введите запрос… (Enter — отправить, Shift+Enter — новая строка)' },
+      'telemetry.header': { en: 'Telemetry Output', ru: 'Лог телеметрии' },
+      'usage.header': { en: 'Usage & Cost', ru: 'Использование и стоимость' },
+
+      // ── Settings modal header ──
+      'settings.title': { en: 'Settings', ru: 'Настройки' },
+      'settings.subtitle': { en: 'System Configuration', ru: 'Конфигурация системы' },
+
+      // ── General section ──
+      'settings.general': { en: 'General', ru: 'Общие' },
+      'settings.general.hint': {
+        en: '(Default values are set in .env or settings.py)',
+        ru: '(Значения по умолчанию задаются в .env или settings.py)'
+      },
+
+      'settings.startMode.label': { en: 'Session Start Mode', ru: 'Режим запуска сессии' },
+      'settings.startMode.desc': {
+        en: 'Choose which agent starts the session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator. <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.',
+        ru: 'Выберите, какой агент запускает сессию. <strong>PlannerAgent</strong> сначала запускает PlannerAgent, затем OrchestratorAgent. <strong>OrchestratorAgent</strong> запускает оркестратор напрямую. <strong>Orchestrator as a planner</strong> даёт оркестратору инструмент планирования и отключает PlannerAgent.'
+      },
+      'settings.startMode.init': { en: 'PlannerAgent', ru: 'PlannerAgent' },
+      'settings.startMode.orchestrator': { en: 'OrchestratorAgent', ru: 'OrchestratorAgent' },
+      'settings.startMode.orchestratorPlanner': { en: 'Orchestrator as a planner', ru: 'Orchestrator в роли планировщика' },
+
+      'settings.maxRetries.label': { en: 'Max LLM Retries', ru: 'Макс. повторов LLM' },
+      'settings.maxRetries.desc': {
+        en: 'Number of LLM call retry attempts on transient network or upstream API errors.',
+        ru: 'Количество повторных попыток вызова LLM при временных сбоях сети или API.'
+      },
+
+      'settings.hitl.label': { en: 'HITL Enabled', ru: 'Включить HITL (подтверждения)' },
+      'settings.hitl.desc': {
+        en: 'Toggle Human-in-the-Loop approval for dangerous or outward-facing actions.',
+        ru: 'Включить подтверждение человеком (Human-in-the-Loop) для опасных или внешних действий.'
+      },
+      'settings.hitlTimeout.label': { en: 'HITL Auto-Approve Timeout (s)', ru: 'Автоподтверждение HITL (сек)' },
+      'settings.hitlTimeout.desc': {
+        en: 'Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).',
+        ru: 'Секунды до автоподтверждения HITL (-1 — без тайм-аута, ждать человека).'
+      },
+
+      'settings.usePlanner.label': { en: 'Use Planner', ru: 'Использовать планировщик' },
+      'settings.usePlanner.note': {
+        en: '(disabled when using PlannerAgent mode)',
+        ru: '(отключено в режиме PlannerAgent)'
+      },
+      'settings.usePlanner.desc': {
+        en: 'Whether the orchestrator delegates to PlannerAgent for task decomposition.',
+        ru: 'Делегирует ли оркестратор декомпозицию задач компоненту PlannerAgent.'
+      },
+
+      'settings.useProxy.label': { en: 'Use Corporate Proxy', ru: 'Корпоративный прокси' },
+      'settings.useProxy.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
+      'settings.useProxy.desc': {
+        en: 'Route LLM model calls through corporate proxy (SERVICES__PROXY_URL).',
+        ru: 'Маршрутизировать вызовы моделей LLM через корпоративный прокси (SERVICES__PROXY_URL).'
+      },
+
+      'settings.opik.label': { en: 'Enable Opik Tracing', ru: 'Включить трассировку Opik' },
+      'settings.opik.desc': {
+        en: 'Send execution logs and agent traces to your Opik dashboard.',
+        ru: 'Отправлять логи выполнения и трассировки агентов в дашборд Opik.'
+      },
+
+      'settings.autoNaming.label': { en: 'Auto-name Sessions', ru: 'Авто-наименование сессий' },
+      'settings.autoNaming.desc': {
+        en: 'Automatically generate session titles based on the first prompt.',
+        ru: 'Автоматически генерировать названия сессий на основе первого запроса.'
+      },
+
+      'settings.defaultUsername.label': { en: 'Default Username', ru: 'Имя пользователя по умолчанию' },
+      'settings.defaultUsername.desc': {
+        en: 'Auto-selects user on startup (can also be set via COSCIENTIST_USERNAME in .env).',
+        ru: 'Автоматически выбирает пользователя при старте (задаётся также через COSCIENTIST_USERNAME в .env).'
+      },
+      'settings.defaultUsername.placeholder': {
+        en: 'e.g. COSCIENTIST_USERNAME in .env',
+        ru: 'например COSCIENTIST_USERNAME в .env'
+      },
+
+      // ── Graphs section ──
+      'settings.graphs': { en: 'Graphs', ru: 'Графы' },
+      'settings.knowledgeGraph.label': { en: 'Knowledge Graph', ru: 'Граф знаний' },
+      'settings.knowledgeGraph.desc': {
+        en: 'Records the execution graph of every run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent and from their prompts.',
+        ru: 'Записывает граф выполнения каждого запуска и позволяет агентам читать его (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). Когда выключен, ничего не записывается, вкладка графа пуста, а инструменты убираются у всех агентов.'
+      },
+
+      'settings.researchGraph.label': { en: 'Research Graph', ru: 'Граф исследований' },
+      'settings.researchGraph.desc': {
+        en: 'The typed research blackboard agents commit findings to (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, orchestrator triggers). When off, the whole feature — tools and prompt sections — drops out and agents pass context through their answers only.',
+        ru: 'Доска исследований, куда агенты записывают результаты (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, триггеры оркестратора). Когда выключен, инструменты и секции промптов отключаются, контекст передается только в ответах.'
+      },
+
+      'settings.graphs.sessionNote': {
+        en: 'Applies to new sessions — the agent system is built once per session.',
+        ru: 'Применяется к новым сессиям — система агентов инициализируется при создании сессии.'
+      },
+
+      'settings.deleteGraph.label': { en: 'Delete Graph Data', ru: 'Удалить данные графов' },
+      'settings.deleteGraph.desc': {
+        en: 'Wipe what the graphs have recorded. The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory is installation-wide and disappears for every session at once. The research graph and the knowledge memory are archived next to their files first; the execution graph keeps only the agent roster.',
+        ru: 'Очистить записанные данными графов. Графы выполнения и исследований относятся к <strong>текущей сессии</strong>; память знаний распространяется на всю систему. Граф исследований и память знаний архивируются; граф выполнения сохраняет только список агентов.'
+      },
+      'settings.deleteGraph.optExecution': { en: 'Execution (session)', ru: 'Выполнение (сессия)' },
+      'settings.deleteGraph.optResearch': { en: 'Research (session)', ru: 'Исследования (сессия)' },
+      'settings.deleteGraph.optMemory': { en: 'Knowledge memory (global)', ru: 'Память знаний (глобальная)' },
+      'settings.deleteGraph.optAll': { en: 'All of the above', ru: 'Всё вышеперечисленное' },
+      'settings.deleteGraph.btn': { en: 'Delete', ru: 'Удалить' },
+
+      'settings.autoClearGraph.label': { en: 'Auto-clear Graph Before Session', ru: 'Автоочистка графов перед сессией' },
+      'settings.autoClearGraph.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
+      'settings.autoClearGraph.desc': {
+        en: 'Automatically clear graph data before each session starts.',
+        ru: 'Автоматически очищать данные графов перед началом каждой сессии.'
+      },
+
+      // ── PlannerAgent section ──
+      'settings.planner.retrieval.label': { en: 'Retrieval Tools', ru: 'Инструменты поиска' },
+      'settings.planner.retrieval.desc': {
+        en: 'Let the planner search the MCP registry (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) before writing the roadmap. When off, it plans by outcome and never names concrete tools or server ids.',
+        ru: 'Разрешить планировщику искать в реестре MCP (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) перед созданием плана. Когда выключено, планирование происходит без указания конкретных инструментов.'
+      },
+
+      'settings.planner.graph.label': { en: 'Graph Tools', ru: 'Инструменты графа' },
+      'settings.planner.graph.note': { en: '(disabled — Knowledge Graph is off)', ru: '(отключено — Граф знаний выключен)' },
+      'settings.planner.graph.desc': {
+        en: 'Let the planner read the shared knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.',
+        ru: 'Разрешить планировщику читать общий граф знаний (историю, список агентов, память знаний), чтобы не планировать заново выполненную работу.'
+      },
+
+      'settings.planner.critic.label': { en: 'Plan Critic', ru: 'Критик плана' },
+      'settings.planner.critic.desc': {
+        en: 'Have an LLM critic review the registered roadmap (assignees, coverage, dependencies) before it is executed, and send it back to the planner if it objects. Runs whether or not HITL is on, before a human sees the plan. Costs one extra LLM call per planning run.',
+        ru: 'Проверять созданный план с помощью LLM-критика (исполнители, покрытие, зависимости) перед выполнением и возвращать планировщику при наличии замечаний. Добавляет 1 вызов LLM на запуск планирования.'
+      },
+
+      'settings.planner.rounds.label': { en: 'Revision Rounds', ru: 'Раунды доработки' },
+      'settings.planner.rounds.desc': {
+        en: 'How many times the critic may send the roadmap back. <span class="font-mono">1</span> — it gets a single say and the rewrite then stands. Each extra round is a full replan, and a critic that never approves would otherwise keep the planner going.',
+        ru: 'Сколько раз критик может возвращать план на доработку. <span class="font-mono">1</span> — одна проверка, после чего версия утверждается. Каждый доп. раунд — полный переутверждённый план.'
+      },
+
+      'settings.planner.mergeTasks.label': { en: 'Merge Tasks', ru: 'Объединение задач' },
+      'settings.planner.mergeTasks.desc': {
+        en: 'Automatically merge consecutive tasks assigned to the same executor (CoderAgent / TaskExecutorAgent) into a single task. Turn off to keep every task the planner wrote as a separate unit of work.',
+        ru: 'Автоматически объединять последовательные задачи, назначенные одному исполнителю (CoderAgent / TaskExecutorAgent), в одну задачу.'
+      },
+
+      // ── ResearchAgent section ──
+      'settings.research.maxSearches.label': { en: 'Per-turn — max searches', ru: 'Макс. поисков за ход' },
+      'settings.research.maxSearches.desc': {
+        en: 'Maximum number of web search tool calls per agent turn. After this limit, the agent must synthesize from existing results.',
+        ru: 'Максимальное количество вызовов поиска в сети за один ход агента. После превышения лимита агент должен отвечать из имеющихся данных.'
+      },
+
+      // ── HypothesesAgent section ──
+      'settings.hypotheses.maxActive.label': { en: 'Max Active Hypotheses', ru: 'Макс. активных гипотез' },
+      'settings.hypotheses.maxActive.desc': {
+        en: 'How many hypotheses are kept as active (<span class="font-mono">formulated</span>) simultaneously for parallel verification. <span class="font-mono">1</span> — the classic "one at a time" mode: the agent picks the single best hypothesis and postpones the rest. Higher values let the orchestrator verify several branches in parallel.',
+        ru: 'Сколько гипотез одновременно сохраняются активными (<span class="font-mono">formulated</span>) для параллельной проверки. <span class="font-mono">1</span> — режим "по одной": выбирается 1 лучшая гипотеза. Более высокие значения позволяют проверять несколько веток параллельно.'
+      },
+
+      // ── CoderAgent section ──
+      'settings.coder.mode.label': { en: 'Coder Execution Mode', ru: 'Режим выполнения Coder' },
+      'settings.coder.mode.note': { en: '(no Sandbox URL set — OpenHands mode requires a Sandbox URL)', ru: '(не задан URL песочницы — для режима OpenHands требуется URL песочницы)' },
+      'settings.coder.mode.desc': {
+        en: 'Choose execution mode: <strong>local</strong> uses in-process tools (<span class="font-mono">execute_bash</span>, file edits, git); <strong>openhands</strong> relays tasks to the remote OpenHands sandbox agent.',
+        ru: 'Выберите режим выполнения: <strong>local</strong> использует локальные инструменты (<span class="font-mono">execute_bash</span>, правка файлов, git); <strong>openhands</strong> передаёт задачи удалённому агенту в песочнице OpenHands.'
+      },
+
+      'settings.coder.sandboxUrl.label': { en: 'Sandbox Remote URL', ru: 'Удалённый URL песочницы' },
+      'settings.coder.sandboxUrl.desc': {
+        en: 'The endpoint URL of the isolated code-execution sandbox server.',
+        ru: 'URL-адрес изолированного сервера-песочницы для выполнения кода.'
+      },
+
+      'settings.coder.workspaceId.label': { en: 'Coder Workspace ID', ru: 'ID рабочей области Coder' },
+      'settings.coder.workspaceId.desc': {
+        en: 'Pin a custom persistent workspace folder name to save code state across delegations. Leave empty to auto-generate.',
+        ru: 'Указать имя папки рабочей области для сохранения состояния кода между вызовами. Оставьте пустым для автогенерации.'
+      },
+      'settings.coder.workspaceId.placeholder': { en: 'e.g. workspace_1', ru: 'например workspace_1' },
+
+      // ── TaskExecutorAgent section ──
+      'settings.taskExec.keepScore.label': { en: 'Tool Keep Threshold', ru: 'Порог релевантности инструментов' },
+      'settings.taskExec.keepScore.desc': {
+        en: 'Minimum relevance score (0.0 to 1.0) for a retrieved MCP tool to be loaded into context.',
+        ru: 'Минимальный балл релевантности (от 0.0 до 1.0) для загрузки найденного инструмента MCP в контекст.'
+      },
+
+      'settings.taskExec.abstainScore.label': { en: 'Tool Abstain Threshold', ru: 'Порог отказа от инструментов' },
+      'settings.taskExec.abstainScore.desc': {
+        en: 'Threshold below which the tool pipeline completely abstains, so the executor re-routes the task to the CoderAgent.',
+        ru: 'Порог, ниже которого пайплайн инструментов отказывается от выполнения, и исполнитель перенаправляет задачу в CoderAgent.'
+      },
+
+      // ── Empty / Common sections ──
+      'settings.noConfig': { en: 'No configurable parameters yet.', ru: 'Пока нет настраиваемых параметров.' },
+      'settings.cancel': { en: 'Cancel', ru: 'Отмена' },
+      'settings.save': { en: 'Save Settings', ru: 'Сохранить настройки' },
+    };
+
+    /** Применяет текущий язык ко всем элементам с data-i18n / data-i18n-placeholder */
+    function applyLanguage(lang) {
+      if (lang) currentLang = lang;
+      localStorage.setItem(LANG_STORAGE_KEY, currentLang);
+      document.documentElement.lang = currentLang;
+
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        const entry = i18n[key];
+        if (entry && entry[currentLang]) el.innerHTML = entry[currentLang];
+      });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        const entry = i18n[key];
+        if (entry && entry[currentLang]) el.placeholder = entry[currentLang];
+      });
+
+      // Обновляем кнопки переключателя языка
+      const btnEn = document.getElementById('lang-btn-en');
+      const btnRu = document.getElementById('lang-btn-ru');
+      if (btnEn) {
+        btnEn.classList.toggle('bg-primary', currentLang === 'en');
+        btnEn.classList.toggle('text-on-primary', currentLang === 'en');
+      }
+      if (btnRu) {
+        btnRu.classList.toggle('bg-primary', currentLang === 'ru');
+        btnRu.classList.toggle('text-on-primary', currentLang === 'ru');
+      }
+    }
+
+    // Применяем язык при загрузке страницы (после того как DOM построится)
+    document.addEventListener('DOMContentLoaded', () => applyLanguage());
+
 
     const appSettings = {
       general: {
         startMode: 'init',   // 'init' | 'orchestrator' | 'orchestrator_planner'
         maxRetries: 3,
         hitlEnabled: false,
+        hitlAutoApproveTimeout: 300,
         usePlanner: true,
+        useProxy: true,
         opikEnabled: false,
         autoNamingEnabled: true,
         knowledgeGraphEnabled: true,
+        autoClearGraphEnabled: false,
         researchGraphEnabled: true,
       },
       researchAgent: {
@@ -426,7 +718,7 @@
       coderAgent: {
         sandboxUrl: 'http://localhost:8884',
         workspaceId: '',
-        localToolsEnabled: true,
+        mode: 'local',
       },
       orchestratorAgent: {},
       plannerAgent: {
@@ -477,13 +769,14 @@
           <div ${elemIdAttr} ${hrefAttr} onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
             <span class="material-symbols-outlined ${iconColorClass} text-lg">${a.icon}</span>
             <div class="flex flex-col">
-              <span class="text-sm ${textColorClass}">${a.desc}</span>
+              <span class="text-sm ${textColorClass}" data-i18n="agent.${a.name}.desc">${a.desc}</span>
               <span class="text-[8px] text-outline-variant/50 font-mono uppercase">${a.name}</span>
             </div>
             ${extraDot}
           </div>
         `;
       }).join('');
+      applyLanguage();
     }
 
     function onAgentClick(name) {
@@ -1048,11 +1341,14 @@
             appSettings.general.startMode = data.general.startMode || 'init';
             appSettings.general.maxRetries = data.general.maxRetries ?? 3;
             appSettings.general.hitlEnabled = data.general.hitlEnabled ?? false;
+            appSettings.general.hitlAutoApproveTimeout = data.general.hitlAutoApproveTimeout ?? 300;
             appSettings.general.usePlanner = data.general.usePlanner ?? true;
+            appSettings.general.useProxy = data.general.useProxy ?? appSettings.general.useProxy;
             appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
             appSettings.general.autoNamingEnabled = data.general.autoNamingEnabled ?? true;
             appSettings.general.coscientistUsername = data.general.coscientistUsername || '';
             appSettings.general.knowledgeGraphEnabled = data.general.knowledgeGraphEnabled ?? true;
+            appSettings.general.autoClearGraphEnabled = data.general.autoClearGraphEnabled ?? false;
             appSettings.general.researchGraphEnabled = data.general.researchGraphEnabled ?? true;
           }
           if (data.plannerAgent) {
@@ -1075,7 +1371,7 @@
           if (data.coderAgent) {
             appSettings.coderAgent.sandboxUrl = data.coderAgent.sandboxUrl || 'http://localhost:8884';
             appSettings.coderAgent.workspaceId = data.coderAgent.workspaceId || '';
-            appSettings.coderAgent.localToolsEnabled = data.coderAgent.localToolsEnabled ?? true;
+            appSettings.coderAgent.mode = data.coderAgent.mode || 'local';
           }
           if (!activeSandboxWatchUrl) {
             updateCoderSandboxButton(null);
@@ -1089,17 +1385,22 @@
     async function openSettings() {
       const modal = document.getElementById('settings-modal');
       modal.classList.remove('hidden');
+      // Apply current language to the modal (highlight toggle + translate)
+      applyLanguage();
       // Load latest from server
       await loadSettings();
       // Sync UI with current state
       document.getElementById('start-mode-select').value = appSettings.general.startMode;
       document.getElementById('max-retries-input').value = appSettings.general.maxRetries;
       document.getElementById('hitl-enabled-checkbox').checked = appSettings.general.hitlEnabled;
+      document.getElementById('hitl-timeout-input').value = appSettings.general.hitlAutoApproveTimeout ?? 300;
       document.getElementById('use-planner-checkbox').checked = appSettings.general.usePlanner;
+      document.getElementById('use-proxy-checkbox').checked = appSettings.general.useProxy;
       document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
       document.getElementById('auto-naming-enabled-checkbox').checked = appSettings.general.autoNamingEnabled;
       document.getElementById('default-username-input').value = appSettings.general.coscientistUsername || '';
       document.getElementById('knowledge-graph-checkbox').checked = appSettings.general.knowledgeGraphEnabled;
+      document.getElementById('auto-clear-graph-checkbox').checked = appSettings.general.autoClearGraphEnabled;
       document.getElementById('research-graph-checkbox').checked = appSettings.general.researchGraphEnabled;
       document.getElementById('planner-retrieval-checkbox').checked = appSettings.plannerAgent.retrievalEnabled;
       document.getElementById('planner-graph-checkbox').checked = appSettings.plannerAgent.graphEnabled;
@@ -1112,7 +1413,7 @@
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
       document.getElementById('coder-sandbox-url').value = appSettings.coderAgent.sandboxUrl;
       document.getElementById('coder-workspace-id').value = appSettings.coderAgent.workspaceId;
-      document.getElementById('coder-local-tools-checkbox').checked = appSettings.coderAgent.localToolsEnabled;
+      document.getElementById('coder-mode-select').value = appSettings.coderAgent.mode || 'local';
       // A deletion result from an earlier visit says nothing about now.
       const graphDeleteStatus = document.getElementById('graph-delete-status');
       graphDeleteStatus.textContent = '';
@@ -1213,10 +1514,11 @@
       }
     }
 
-    // Warn when the coder ends up with no way to run anything: local tools off
+    // Warn when the coder ends up with no way to run anything: openhands mode
     // and no sandbox URL leaves CoderAgent unable to execute at all.
     function updateCoderToolsUI() {
-      const localOn = document.getElementById('coder-local-tools-checkbox').checked;
+      const mode = document.getElementById('coder-mode-select').value;
+      const localOn = mode === 'local';
       const sandboxUrl = document.getElementById('coder-sandbox-url').value.trim();
       const note = document.getElementById('coder-local-tools-note');
       if (note) note.classList.toggle('hidden', localOn || !!sandboxUrl);
@@ -1231,9 +1533,12 @@
       appSettings.general.startMode = document.getElementById('start-mode-select').value;
       appSettings.general.maxRetries = parseInt(document.getElementById('max-retries-input').value, 10) || 3;
       appSettings.general.hitlEnabled = document.getElementById('hitl-enabled-checkbox').checked;
+      const hitlTimeoutVal = parseInt(document.getElementById('hitl-timeout-input').value, 10);
+      appSettings.general.hitlAutoApproveTimeout = !isNaN(hitlTimeoutVal) ? hitlTimeoutVal : 300;
       if (appSettings.general.startMode === 'orchestrator') {
         appSettings.general.usePlanner = document.getElementById('use-planner-checkbox').checked;
       }
+      appSettings.general.useProxy = document.getElementById('use-proxy-checkbox').checked;
       appSettings.general.opikEnabled = document.getElementById('opik-enabled-checkbox').checked;
       appSettings.general.autoNamingEnabled = document.getElementById('auto-naming-enabled-checkbox').checked;
       appSettings.general.coscientistUsername = document.getElementById('default-username-input').value.trim();
@@ -1269,7 +1574,7 @@
 
       appSettings.coderAgent.sandboxUrl = document.getElementById('coder-sandbox-url').value.trim() || 'http://localhost:8884';
       appSettings.coderAgent.workspaceId = document.getElementById('coder-workspace-id').value.trim();
-      appSettings.coderAgent.localToolsEnabled = document.getElementById('coder-local-tools-checkbox').checked;
+      appSettings.coderAgent.mode = document.getElementById('coder-mode-select').value;
       if (!activeSandboxWatchUrl) {
         updateCoderSandboxButton(null);
       }
@@ -2372,7 +2677,7 @@
       document.getElementById('chat-feed').innerHTML = `
     <div class="flex flex-col items-center justify-center h-full opacity-50">
       <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
-      <p class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
+      <p data-i18n="chat.sendQuery" class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
     </div>`;
     }
 
@@ -2476,7 +2781,7 @@
           try {
             const d = JSON.parse(e.data);
             if (d) updateDatasetUploadUI(d);
-          } catch (_) {}
+          } catch (_) { }
         });
         datasetLogEventSource.addEventListener('status', (e) => {
           if (String(e.data).trim() === 'idle') {
@@ -3053,8 +3358,18 @@
             <span class="material-symbols-outlined text-primary text-sm">settings</span>
           </div>
           <div>
-            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Settings</h3>
-            <p class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">System Configuration</p>
+            <h3 data-i18n="settings.title"
+              class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Settings</h3>
+            <p data-i18n="settings.subtitle"
+              class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">System Configuration</p>
+          </div>
+          <!-- Language toggle -->
+          <div
+            class="flex items-center gap-1 ml-4 bg-surface-container-high rounded-md border border-outline-variant/20 p-0.5">
+            <button id="lang-btn-en" onclick="applyLanguage('en')"
+              class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">EN</button>
+            <button id="lang-btn-ru" onclick="applyLanguage('ru')"
+              class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">RU</button>
           </div>
         </div>
         <button onclick="closeSettings()"
@@ -3071,7 +3386,7 @@
           <div class="flex items-center gap-2 mb-1">
             <span class="material-symbols-outlined text-primary text-base">tune</span>
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">
-              General <span
+              <span data-i18n="settings.general">General</span> <span data-i18n="settings.general.hint"
                 class="normal-case text-[10px] font-normal text-on-surface-variant font-sans tracking-normal ml-1">(Default
                 values are set in .env or settings.py)</span>
             </h4>
@@ -3080,8 +3395,10 @@
             <!-- Start Mode -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Session Start Mode</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Choose which agent starts the
+                <label data-i18n="settings.startMode.label" class="text-xs font-bold text-on-surface">Session Start
+                  Mode</label>
+                <p data-i18n="settings.startMode.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Choose which agent starts the
                   session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent.
                   <strong>OrchestratorAgent</strong> starts directly with the orchestrator.
                   <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.
@@ -3089,17 +3406,20 @@
               </div>
               <select id="start-mode-select" onchange="updateStartModeUI()"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
-                <option value="init">PlannerAgent</option>
-                <option value="orchestrator">OrchestratorAgent</option>
-                <option value="orchestrator_planner">Orchestrator as a planner</option>
+                <option value="init" data-i18n="settings.startMode.init">PlannerAgent</option>
+                <option value="orchestrator" data-i18n="settings.startMode.orchestrator">OrchestratorAgent</option>
+                <option value="orchestrator_planner" data-i18n="settings.startMode.orchestratorPlanner">Orchestrator as
+                  a planner</option>
               </select>
             </div>
             <hr class="border-outline-variant/10" />
             <!-- Max Retries -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Max LLM Retries</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Number of LLM call retry attempts on
+                <label data-i18n="settings.maxRetries.label" class="text-xs font-bold text-on-surface">Max LLM
+                  Retries</label>
+                <p data-i18n="settings.maxRetries.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Number of LLM call retry attempts on
                   transient network or upstream API errors.</p>
               </div>
               <input id="max-retries-input" type="number" min="0" max="10" value="3"
@@ -3109,22 +3429,36 @@
             <!-- HITL -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">HITL Enabled</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Toggle Human-in-the-Loop approval for
+                <label data-i18n="settings.hitl.label" class="text-xs font-bold text-on-surface">HITL Enabled</label>
+                <p data-i18n="settings.hitl.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Toggle
+                  Human-in-the-Loop approval for
                   dangerous or outward-facing actions.</p>
               </div>
               <input id="hitl-enabled-checkbox" type="checkbox" checked class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- HITL Auto-Approve Timeout -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.hitlTimeout.label" class="text-xs font-bold text-on-surface">HITL Auto-Approve Timeout (s)</label>
+                <p data-i18n="settings.hitlTimeout.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).</p>
+              </div>
+              <input id="hitl-timeout-input" type="number" min="-1" step="1" value="300"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
             <hr class="border-outline-variant/10" />
             <!-- Use Planner -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <label class="text-xs font-bold text-on-surface">Use Planner</label>
-                  <span id="use-planner-note" class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
+                  <label data-i18n="settings.usePlanner.label" class="text-xs font-bold text-on-surface">Use
+                    Planner</label>
+                  <span id="use-planner-note" data-i18n="settings.usePlanner.note"
+                    class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
                     when using PlannerAgent mode)</span>
                 </div>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Whether the orchestrator delegates to
+                <p data-i18n="settings.usePlanner.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Whether the orchestrator delegates to
                   PlannerAgent for task decomposition.</p>
               </div>
               <input id="use-planner-checkbox" type="checkbox" checked
@@ -3132,11 +3466,31 @@
                 class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
             </div>
             <hr class="border-outline-variant/10" />
+            <!-- Use Proxy -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <label data-i18n="settings.useProxy.label" class="text-xs font-bold text-on-surface">Use Corporate
+                    Proxy</label>
+                  <span id="use-proxy-note" data-i18n="settings.useProxy.note"
+                    class="text-[10px] text-warning/90 italic font-normal">(set only in
+                    env)</span>
+                </div>
+                <p data-i18n="settings.useProxy.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Route LLM model calls through
+                  corporate proxy (SERVICES__PROXY_URL).</p>
+              </div>
+              <input id="use-proxy-checkbox" type="checkbox" disabled
+                class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
+            </div>
+            <hr class="border-outline-variant/10" />
             <!-- Enable Opik Tracing -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Enable Opik Tracing</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Send execution logs and agent traces
+                <label data-i18n="settings.opik.label" class="text-xs font-bold text-on-surface">Enable Opik
+                  Tracing</label>
+                <p data-i18n="settings.opik.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Send
+                  execution logs and agent traces
                   to your Opik dashboard.</p>
               </div>
               <input id="opik-enabled-checkbox" type="checkbox" class="w-5 h-5 accent-primary cursor-pointer" />
@@ -3145,8 +3499,10 @@
             <!-- Auto-name Sessions -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Auto-name Sessions</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically generate session titles
+                <label data-i18n="settings.autoNaming.label" class="text-xs font-bold text-on-surface">Auto-name
+                  Sessions</label>
+                <p data-i18n="settings.autoNaming.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Automatically generate session titles
                   based on the first prompt.</p>
               </div>
               <input id="auto-naming-enabled-checkbox" type="checkbox" checked
@@ -3156,11 +3512,14 @@
             <!-- Default Username -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Default Username</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Auto-selects user on startup (can
+                <label data-i18n="settings.defaultUsername.label" class="text-xs font-bold text-on-surface">Default
+                  Username</label>
+                <p data-i18n="settings.defaultUsername.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Auto-selects user on startup (can
                   also be set via COSCIENTIST_USERNAME in .env).</p>
               </div>
               <input id="default-username-input" type="text" placeholder="e.g. COSCIENTIST_USERNAME in .env"
+                data-i18n-placeholder="settings.defaultUsername.placeholder"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-48 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
           </div>
@@ -3170,14 +3529,17 @@
         <div class="space-y-4">
           <div class="flex items-center gap-2 mb-1">
             <span class="material-symbols-outlined text-primary text-base">hub</span>
-            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">Graphs</h4>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline"><span
+                data-i18n="settings.graphs">Graphs</span></h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
             <!-- Knowledge graph -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Knowledge Graph</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Records the execution graph of every
+                <label data-i18n="settings.knowledgeGraph.label" class="text-xs font-bold text-on-surface">Knowledge
+                  Graph</label>
+                <p data-i18n="settings.knowledgeGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Records the execution graph of every
                   run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span
                     class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>).
                   When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent
@@ -3190,8 +3552,10 @@
             <!-- Research graph -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Research Graph</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The typed research blackboard agents
+                <label data-i18n="settings.researchGraph.label" class="text-xs font-bold text-on-surface">Research
+                  Graph</label>
+                <p data-i18n="settings.researchGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The typed research blackboard agents
                   commit findings to (<span class="font-mono">research_commit</span>, <span
                     class="font-mono">research_context_slice</span>, orchestrator triggers). When off, the whole
                   feature — tools and prompt sections — drops out and agents pass context through their answers only.
@@ -3200,14 +3564,29 @@
               <input id="research-graph-checkbox" type="checkbox" checked
                 class="w-5 h-5 accent-primary cursor-pointer" />
             </div>
-            <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
+            <hr class="border-outline-variant/10" />
+            <!-- Auto-clear graph before session -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <label data-i18n="settings.autoClearGraph.label" class="text-xs font-bold text-on-surface">Auto-clear Graph Before Session</label>
+                  <span id="auto-clear-graph-note" data-i18n="settings.autoClearGraph.note" class="text-[10px] text-warning/90 italic font-normal">(set only in env)</span>
+                </div>
+                <p data-i18n="settings.autoClearGraph.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically clear graph data before each session starts.</p>
+              </div>
+              <input id="auto-clear-graph-checkbox" type="checkbox" disabled class="w-5 h-5 accent-primary cursor-not-allowed opacity-60" />
+            </div>
+            <p data-i18n="settings.graphs.sessionNote" class="text-[10px] text-outline-variant/80 italic">Applies to new
+              sessions — the agent system is built
               once per session.</p>
             <hr class="border-outline-variant/10" />
             <!-- Delete stored graphs -->
             <div class="flex items-start justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Delete Graph Data</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Wipe what the graphs have recorded.
+                <label data-i18n="settings.deleteGraph.label" class="text-xs font-bold text-on-surface">Delete Graph
+                  Data</label>
+                <p data-i18n="settings.deleteGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Wipe what the graphs have recorded.
                   The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory
                   is installation-wide and disappears for every session at once. The research graph and the knowledge
                   memory are archived next to their files first; the execution graph keeps only the agent roster.</p>
@@ -3216,14 +3595,15 @@
               <div class="flex items-center gap-2 shrink-0">
                 <select id="graph-delete-target"
                   class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 cursor-pointer">
-                  <option value="execution">Execution (session)</option>
-                  <option value="research">Research (session)</option>
-                  <option value="memory">Knowledge memory (global)</option>
-                  <option value="all">All of the above</option>
+                  <option value="execution" data-i18n="settings.deleteGraph.optExecution">Execution (session)</option>
+                  <option value="research" data-i18n="settings.deleteGraph.optResearch">Research (session)</option>
+                  <option value="memory" data-i18n="settings.deleteGraph.optMemory">Knowledge memory (global)</option>
+                  <option value="all" data-i18n="settings.deleteGraph.optAll">All of the above</option>
                 </select>
                 <button id="graph-delete-btn" onclick="deleteGraphData()"
                   class="px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
-                  <span class="material-symbols-outlined text-sm">delete_forever</span> Delete
+                  <span class="material-symbols-outlined text-sm">delete_forever</span> <span
+                    data-i18n="settings.deleteGraph.btn">Delete</span>
                 </button>
               </div>
             </div>
@@ -3240,8 +3620,10 @@
             <!-- Retrieval tools -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Retrieval Tools</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner search the MCP
+                <label data-i18n="settings.planner.retrieval.label" class="text-xs font-bold text-on-surface">Retrieval
+                  Tools</label>
+                <p data-i18n="settings.planner.retrieval.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner search the MCP
                   registry (<span class="font-mono">retrieve_tools</span>, <span
                     class="font-mono">get_server_info</span>) before writing the roadmap. When off, it plans by outcome
                   and never names concrete tools or server ids.</p>
@@ -3254,11 +3636,14 @@
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <label class="text-xs font-bold text-on-surface">Graph Tools</label>
-                  <span id="planner-graph-note" class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
+                  <label data-i18n="settings.planner.graph.label" class="text-xs font-bold text-on-surface">Graph
+                    Tools</label>
+                  <span id="planner-graph-note" data-i18n="settings.planner.graph.note"
+                    class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
                     — Knowledge Graph is off)</span>
                 </div>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner read the shared
+                <p data-i18n="settings.planner.graph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner read the shared
                   knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.</p>
               </div>
               <input id="planner-graph-checkbox" type="checkbox" checked
@@ -3268,8 +3653,10 @@
             <!-- Plan critic -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Plan Critic</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Have an LLM critic review the
+                <label data-i18n="settings.planner.critic.label" class="text-xs font-bold text-on-surface">Plan
+                  Critic</label>
+                <p data-i18n="settings.planner.critic.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Have an LLM critic review the
                   registered roadmap (assignees, coverage, dependencies) before it is executed, and send it back to
                   the planner if it objects. Runs whether or not HITL is on, before a human sees the plan. Costs one
                   extra LLM call per planning run.</p>
@@ -3280,8 +3667,10 @@
             <!-- Critic revision rounds -->
             <div id="planner-critic-rounds-row" class="flex items-center justify-between gap-4 pl-3">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Revision Rounds</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many times the critic may send
+                <label data-i18n="settings.planner.rounds.label" class="text-xs font-bold text-on-surface">Revision
+                  Rounds</label>
+                <p data-i18n="settings.planner.rounds.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many times the critic may send
                   the roadmap back. <span class="font-mono">1</span> — it gets a single say and the rewrite then
                   stands. Each extra round is a full replan, and a critic that never approves would otherwise keep
                   the planner going.</p>
@@ -3293,15 +3682,18 @@
             <!-- Merge tasks -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Merge Tasks</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically merge consecutive
+                <label data-i18n="settings.planner.mergeTasks.label" class="text-xs font-bold text-on-surface">Merge
+                  Tasks</label>
+                <p data-i18n="settings.planner.mergeTasks.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically merge consecutive
                   tasks assigned to the same executor (CoderAgent / TaskExecutorAgent) into a single task. Turn off to
                   keep every task the planner wrote as a separate unit of work.</p>
               </div>
               <input id="planner-merge-tasks-checkbox" type="checkbox" checked
                 class="w-5 h-5 accent-primary cursor-pointer" />
             </div>
-            <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
+            <p data-i18n="settings.graphs.sessionNote" class="text-[10px] text-outline-variant/80 italic">Applies to new
+              sessions — the agent system is built
               once per session.</p>
           </div>
         </div>
@@ -3315,8 +3707,10 @@
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Per-turn — max searches</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Maximum number of web search tool
+                <label data-i18n="settings.research.maxSearches.label"
+                  class="text-xs font-bold text-on-surface">Per-turn — max searches</label>
+                <p data-i18n="settings.research.maxSearches.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Maximum number of web search tool
                   calls per agent turn. After this limit, the agent must synthesize from existing results.</p>
               </div>
               <input id="research-max-searches" type="number" min="1" max="20" value="2"
@@ -3335,12 +3729,15 @@
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Max Active Hypotheses</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many hypotheses are kept
+                <label data-i18n="settings.hypotheses.maxActive.label" class="text-xs font-bold text-on-surface">Max
+                  Active Hypotheses</label>
+                <p data-i18n="settings.hypotheses.maxActive.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many hypotheses are kept
                   as active (<span class="font-mono">formulated</span>) simultaneously for parallel verification.
                   <span class="font-mono">1</span> — the classic "one at a time" mode: the agent picks the single
                   best hypothesis and postpones the rest. Higher values let the orchestrator verify several
-                  branches in parallel.</p>
+                  branches in parallel.
+                </p>
               </div>
               <input id="hypotheses-max-active" type="number" min="1" max="5" value="1"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-20 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
@@ -3355,28 +3752,36 @@
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">CoderAgent</h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
-            <!-- Local coder tools -->
+            <!-- Coder mode -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <label class="text-xs font-bold text-on-surface">Local Coder Tools</label>
-                  <span id="coder-local-tools-note" class="text-[10px] text-warning/90 italic font-normal hidden">(no
-                    Sandbox URL set — the coder would have nothing to run code with)</span>
+                  <label data-i18n="settings.coder.mode.label" class="text-xs font-bold text-on-surface">Coder Execution
+                    Mode</label>
+                  <span id="coder-local-tools-note" data-i18n="settings.coder.mode.note"
+                    class="text-[10px] text-warning/90 italic font-normal hidden">(no
+                    Sandbox URL set — OpenHands mode requires a Sandbox URL)</span>
                 </div>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The in-process toolset (<span
-                    class="font-mono">execute_bash</span>, file edits, git). Turn it off to leave the coder family with
-                  the OpenHands <span class="font-mono">sandbox</span> tools only — everything then runs on the remote
-                  sandbox instead of this machine.</p>
+                <p data-i18n="settings.coder.mode.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Choose execution mode:
+                  <strong>local</strong> uses in-process tools (<span class="font-mono">execute_bash</span>, file edits,
+                  git); <strong>openhands</strong> relays tasks to the remote OpenHands sandbox agent.
+                </p>
               </div>
-              <input id="coder-local-tools-checkbox" type="checkbox" checked onchange="updateCoderToolsUI()"
-                class="w-5 h-5 accent-primary cursor-pointer" />
+              <select id="coder-mode-select" onchange="updateCoderToolsUI()"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
+                <option value="local">local</option>
+                <option value="openhands">openhands</option>
+              </select>
             </div>
             <hr class="border-outline-variant/10" />
             <!-- Sandbox URL -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Sandbox Remote URL</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The endpoint URL of the isolated
+                <label data-i18n="settings.coder.sandboxUrl.label" class="text-xs font-bold text-on-surface">Sandbox
+                  Remote URL</label>
+                <p data-i18n="settings.coder.sandboxUrl.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The endpoint URL of the isolated
                   code-execution sandbox server.</p>
               </div>
               <input id="coder-sandbox-url" type="text" oninput="updateCoderToolsUI()"
@@ -3386,11 +3791,14 @@
             <!-- Workspace ID -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Coder Workspace ID</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Pin a custom persistent workspace
+                <label data-i18n="settings.coder.workspaceId.label" class="text-xs font-bold text-on-surface">Coder
+                  Workspace ID</label>
+                <p data-i18n="settings.coder.workspaceId.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Pin a custom persistent workspace
                   folder name to save code state across delegations. Leave empty to auto-generate.</p>
               </div>
               <input id="coder-workspace-id" type="text" placeholder="e.g. workspace_1"
+                data-i18n-placeholder="settings.coder.workspaceId.placeholder"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[240px]" />
             </div>
           </div>
@@ -3403,7 +3811,8 @@
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">MedicalAgent</h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
-            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+            <p data-i18n="settings.noConfig" class="text-[10px] text-outline-variant italic">No configurable parameters
+              yet.</p>
           </div>
         </div>
 
@@ -3418,8 +3827,10 @@
             <!-- Keep score -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Tool Keep Threshold</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Minimum relevance score (0.0 to 1.0)
+                <label data-i18n="settings.taskExec.keepScore.label" class="text-xs font-bold text-on-surface">Tool Keep
+                  Threshold</label>
+                <p data-i18n="settings.taskExec.keepScore.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Minimum relevance score (0.0 to 1.0)
                   for a retrieved MCP tool to be loaded into context.</p>
               </div>
               <input id="task-exec-keep-score" type="number" min="0" max="1" step="0.05" value="0.3"
@@ -3429,8 +3840,10 @@
             <!-- Abstain score -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Tool Abstain Threshold</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Threshold below which the tool
+                <label data-i18n="settings.taskExec.abstainScore.label" class="text-xs font-bold text-on-surface">Tool
+                  Abstain Threshold</label>
+                <p data-i18n="settings.taskExec.abstainScore.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Threshold below which the tool
                   pipeline completely abstains, so the executor re-routes the task to the CoderAgent.</p>
               </div>
               <input id="task-exec-abstain-score" type="number" min="0" max="1" step="0.05" value="0.2"
@@ -3447,7 +3860,8 @@
             </h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
-            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+            <p data-i18n="settings.noConfig" class="text-[10px] text-outline-variant italic">No configurable parameters
+              yet.</p>
           </div>
         </div>
 
@@ -3458,15 +3872,246 @@
       <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 bg-surface-container-low/50">
         <button onclick="closeSettings()"
           class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
-          Cancel
+          <span data-i18n="settings.cancel">Cancel</span>
         </button>
         <button onclick="saveSettings()"
           class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">save</span> Save Settings
+          <span class="material-symbols-outlined text-sm">save</span> <span data-i18n="settings.save">Save
+            Settings</span>
         </button>
       </div>
     </div>
   </div>
+
+  <!-- Saved Sessions Modal -->
+  <div id="saved-sessions-modal"
+    class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl p-6 mx-4 max-h-[80vh] flex flex-col">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h3 class="font-headline font-bold text-on-surface uppercase tracking-wider">Saved Sessions</h3>
+          <p class="text-[10px] text-outline-variant mt-1">Restore or manage previously saved sessions</p>
+        </div>
+        <button onclick="closeSavedSessionsModal()"
+          class="text-outline-variant hover:text-on-surface">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div id="saved-sessions-list" class="flex-1 overflow-y-auto space-y-2 min-h-[100px]">
+        <p class="text-[10px] text-outline-variant italic">Loading…</p>
+      </div>
+      <div class="pt-4 border-t border-outline-variant/10 flex justify-end">
+        <button onclick="closeSavedSessionsModal()"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // === Session Export / Import / Save / Restore ===
+
+    async function fetchErrorMessage(resp) {
+      try {
+        const data = await resp.json();
+        if (data && data.detail) return data.detail;
+      } catch (_) {
+        try {
+          const text = await resp.text();
+          if (text) return text.slice(0, 200);
+        } catch (_) {}
+      }
+      return resp.statusText || `HTTP ${resp.status}`;
+    }
+
+    async function exportCurrentSession() {
+      if (!activeUser || !activeSession) return addSystemMsg('No active session to export.');
+      try {
+        addSystemMsg('📥 Exporting session…');
+        const resp = await fetch(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/export`, { method: 'POST' });
+        if (!resp.ok) {
+          const errMsg = await fetchErrorMessage(resp);
+          throw new Error(errMsg);
+        }
+        const blob = await resp.blob();
+        const disposition = resp.headers.get('content-disposition') || '';
+        let filename = `session_${activeSession.id}.cossession.zip`;
+        const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        if (utf8Match) {
+          try { filename = decodeURIComponent(utf8Match[1]); } catch (_) {}
+        } else {
+          const match = disposition.match(/filename="([^"]+)"/);
+          if (match) filename = match[1];
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        addSystemMsg('✅ Session exported: ' + filename);
+      } catch (err) { addSystemMsg('❌ Export failed: ' + err.message); }
+    }
+
+    async function saveCurrentSession() {
+      if (!activeUser || !activeSession) return addSystemMsg('No active session to save.');
+      try {
+        addSystemMsg('💾 Saving session to disk…');
+        const data = await apiJson(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/save`, { method: 'POST' });
+        addSystemMsg('✅ Session saved: ' + data.filename);
+      } catch (err) { addSystemMsg('❌ Save failed: ' + err.message); }
+    }
+
+    function triggerImportSession() {
+      if (!activeUser) return openIdentityModal();
+      document.getElementById('import-session-input').click();
+    }
+
+    async function handleImportFile(input) {
+      const file = input.files[0];
+      input.value = '';
+      if (!file) return;
+      if (!activeUser) return openIdentityModal();
+      try {
+        addSystemMsg('📤 Importing session from ' + file.name + '…');
+        const formData = new FormData();
+        formData.append('file', file);
+        const resp = await fetch(`/api/users/${encodeURIComponent(activeUser.id)}/import-session`, {
+          method: 'POST',
+          body: formData
+        });
+        if (!resp.ok) {
+          const errMsg = await fetchErrorMessage(resp);
+          throw new Error(errMsg);
+        }
+        const result = await resp.json();
+        const importedUser = result.user;
+        const importedSession = result.session;
+        // If the imported user is different from current, switch to it
+        if (importedUser.id !== activeUser.id) {
+          if (!knownUsers.find(u => u.id === importedUser.id)) {
+            knownUsers.push(importedUser);
+          }
+          activeUser = importedUser;
+          populateUserSelectors();
+        }
+        // Add session and switch to it
+        knownSessions.unshift(importedSession);
+        await activateSession(activeUser, importedSession);
+        addSystemMsg('✅ Session imported: ' + importedSession.title);
+      } catch (err) { addSystemMsg('❌ Import failed: ' + err.message); }
+    }
+
+    function openSavedSessionsModal() {
+      document.getElementById('saved-sessions-modal').classList.remove('hidden');
+      loadSavedSessionsList();
+    }
+
+    function closeSavedSessionsModal() {
+      document.getElementById('saved-sessions-modal').classList.add('hidden');
+    }
+
+    async function loadSavedSessionsList() {
+      const container = document.getElementById('saved-sessions-list');
+      container.innerHTML = '<p class="text-[10px] text-outline-variant italic">Loading…</p>';
+      try {
+        const data = await apiJson('/api/saved-sessions');
+        const sessions = data.sessions || [];
+        if (!sessions.length) {
+          container.innerHTML = '<p class="text-[10px] text-outline-variant italic">No saved sessions found.</p>';
+          return;
+        }
+        container.innerHTML = sessions.map(s => {
+          const sizeKb = (s.size_bytes / 1024).toFixed(1);
+          const date = s.exported_at ? new Date(s.exported_at).toLocaleString() : '—';
+          return `<div class="flex items-center justify-between bg-surface-container-high rounded-lg px-4 py-3 border border-outline-variant/10">
+            <div class="flex-1 min-w-0">
+              <p class="text-xs font-bold text-on-surface truncate">${escHtml(s.title)}</p>
+              <p class="text-[10px] text-outline-variant">${date} · ${sizeKb} KB${s.original_nickname ? ' · by ' + escHtml(s.original_nickname) : ''}</p>
+            </div>
+            <div class="flex gap-2 ml-3 shrink-0">
+              <button onclick="restoreSavedSession('${escHtml(s.filename)}')" title="Restore"
+                class="px-3 py-1.5 bg-primary text-on-primary rounded text-[10px] font-bold uppercase hover:brightness-110">
+                Restore</button>
+              <button onclick="downloadSavedSession('${escHtml(s.filename)}')" title="Download"
+                class="px-3 py-1.5 bg-surface-container border border-outline-variant/20 text-on-surface rounded text-[10px] font-bold uppercase hover:bg-surface-variant/40">
+                <span class="material-symbols-outlined text-sm">download</span></button>
+              <button onclick="deleteSavedSession('${escHtml(s.filename)}')" title="Delete"
+                class="px-3 py-1.5 bg-surface-container border border-error/30 text-error rounded text-[10px] font-bold uppercase hover:bg-error/10">
+                <span class="material-symbols-outlined text-sm">delete</span></button>
+            </div>
+          </div>`;
+        }).join('');
+      } catch (err) {
+        container.innerHTML = `<p class="text-[10px] text-error">Failed to load saved sessions: ${escHtml(err.message)}</p>`;
+      }
+    }
+
+    async function restoreSavedSession(filename) {
+      try {
+        addSystemMsg('📂 Restoring session from ' + filename + '…');
+        const resp = await fetch('/api/restore-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename })
+        });
+        if (!resp.ok) {
+          const errMsg = await fetchErrorMessage(resp);
+          throw new Error(errMsg);
+        }
+        const result = await resp.json();
+        const restoredUser = result.user;
+        const restoredSession = result.session;
+        if (!knownUsers.find(u => u.id === restoredUser.id)) {
+          knownUsers.push(restoredUser);
+        }
+        activeUser = restoredUser;
+        populateUserSelectors();
+        knownSessions.unshift(restoredSession);
+        await activateSession(activeUser, restoredSession);
+        closeSavedSessionsModal();
+        addSystemMsg('✅ Session restored: ' + restoredSession.title);
+      } catch (err) { addSystemMsg('❌ Restore failed: ' + err.message); }
+    }
+
+    async function downloadSavedSession(filename) {
+      try {
+        const resp = await fetch(`/api/saved-sessions/${encodeURIComponent(filename)}/download`);
+        if (!resp.ok) {
+          const errMsg = await fetchErrorMessage(resp);
+          throw new Error(errMsg);
+        }
+        const blob = await resp.blob();
+        const disposition = resp.headers.get('content-disposition') || '';
+        let dlFilename = filename;
+        const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        if (utf8Match) {
+          try { dlFilename = decodeURIComponent(utf8Match[1]); } catch (_) {}
+        } else {
+          const match = disposition.match(/filename="([^"]+)"/);
+          if (match) dlFilename = match[1];
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = dlFilename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (err) { addSystemMsg('❌ Download failed: ' + err.message); }
+    }
+
+    async function deleteSavedSession(filename) {
+      if (!confirm('Delete saved session "' + filename + '"?')) return;
+      try {
+        const resp = await fetch(`/api/saved-sessions/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+        if (!resp.ok) {
+          const errMsg = await fetchErrorMessage(resp);
+          throw new Error(errMsg);
+        }
+        loadSavedSessionsList();
+        addSystemMsg('🗑 Saved session deleted: ' + filename);
+      } catch (err) { addSystemMsg('❌ Delete failed: ' + err.message); }
+    }
+  </script>
 
 </body>
 

@@ -1,11 +1,11 @@
 """Tools for websearch / literature research (MCP toolsets)."""
-from typing import Optional
-
-from CoScientist.config import get_settings
+from typing import Any, Optional
 
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
+from CoScientist.config import get_settings
+from CoScientist.utils.selective_proxy import create_mcp_proxy_httpx_factory
 
 settings = get_settings()
 PAPER_ANALYSIS_URL = settings.mcp.paper_analysis_url
@@ -36,11 +36,21 @@ def _http_mcp_toolset(
     )
 
 
-# Tavily websearch is always available (the key is interpolated into the URL).
+# ---------------------------------------------------------------------------
+# Tavily websearch — optionally proxied via SERVICES__PROXY_URL
+# ---------------------------------------------------------------------------
+_tavily_conn_kwargs: dict[str, Any] = {
+    "url": f"https://mcp.tavily.com/mcp/?tavilyApiKey={settings.services.tavily_api_key}",
+}
+
+if settings.services.proxy_url:
+    _tavily_conn_kwargs["httpx_client_factory"] = create_mcp_proxy_httpx_factory(
+        settings.services.proxy_url,
+        enabled_fn=get_settings().web.use_proxy,
+    )
+
 websearch_toolset_instance = McpToolset(
-    connection_params=StreamableHTTPConnectionParams(
-        url=f"https://mcp.tavily.com/mcp/?tavilyApiKey={settings.services.tavily_api_key}"
-    ),
+    connection_params=StreamableHTTPConnectionParams(**_tavily_conn_kwargs),
 )
 
 # Optional paper-analysis / paper-search MCP servers — only built when configured

@@ -1,3 +1,4 @@
+from CoScientist.agents.common import is_proxy_error
 import asyncio
 import json
 import logging
@@ -25,6 +26,7 @@ from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
+from CoScientist.agents.common import sync_proxy_session
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -114,8 +116,13 @@ def _apply_frontend_settings(frontend: dict) -> None:
         val = bool(general["hitlEnabled"])
         web.hitl_enabled = val
         get_settings().hitl.enabled = val
+    if "hitlAutoApproveTimeout" in general:
+        web.hitl_auto_approve_timeout = int(general["hitlAutoApproveTimeout"])
     if "usePlanner" in general:
         web.use_planner = bool(general["usePlanner"])
+    if "useProxy" in general:
+        web.use_proxy = bool(general["useProxy"])
+        sync_proxy_session()
     if "opikEnabled" in general:
         web.opik_enabled = bool(general["opikEnabled"])
     if "autoNamingEnabled" in general:
@@ -170,8 +177,8 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "workspaceId" in coder:
         val = coder["workspaceId"]
         web.coder_workspace_id = val if val else None
-    if "localToolsEnabled" in coder:
-        web.coder_local_tools_enabled = bool(coder["localToolsEnabled"])
+    if "mode" in coder:
+        web.coder_mode = str(coder["mode"])
 
 
 def _settings_payload() -> dict:
@@ -188,11 +195,14 @@ def _settings_payload() -> dict:
             "startMode": web.start_mode,
             "maxRetries": web.max_retries,
             "hitlEnabled": web.hitl_enabled,
+            "hitlAutoApproveTimeout": web.hitl_auto_approve_timeout,
             "usePlanner": web.use_planner,
+            "useProxy": web.use_proxy,
             "opikEnabled": web.opik_enabled,
             "autoNamingEnabled": web.auto_naming_enabled,
             "coscientistUsername": web.coscientist_username or "",
             "knowledgeGraphEnabled": web.knowledge_graph_enabled,
+            "autoClearGraphEnabled": web.auto_clear_graph_enabled,
             "researchGraphEnabled": settings.research_graph.enabled,
         },
         "plannerAgent": {
@@ -213,7 +223,7 @@ def _settings_payload() -> dict:
         "coderAgent": {
             "sandboxUrl": web.sandbox_url,
             "workspaceId": web.coder_workspace_id or "",
-            "localToolsEnabled": web.coder_local_tools_enabled,
+            "mode": web.coder_mode,
         },
     }
 
@@ -375,6 +385,8 @@ class WebRuntime:
         async with self.manager_lock:
             manager = self.managers.get(key)
             if manager is None:
+                if get_settings().web.auto_clear_graph_enabled:
+                    _clear_session_graphs(user_id, session_id, view="all")
                 manager = CoScientistManager(
                     app_name=APP_NAME,
                     user_id=user_id,
@@ -696,6 +708,63 @@ async def lifespan(app: FastAPI):
     await app.state.runtime.close()
 
 
+def _clear_session_graphs(
+    user_id: str,
+    session_id: str,
+    view: str = "all",
+) -> tuple[dict[str, Any], bool]:
+    """Wipe graph data for a user/session.
+
+    Returns a tuple of (deleted_details_dict, has_failed_boolean).
+    """
+    if view == "all":
+        targets = GRAPH_DELETE_TARGETS
+    elif view == "session":
+        targets = ("execution", "research")
+    elif view in GRAPH_DELETE_TARGETS:
+        targets = (view,)
+    else:
+        targets = ()
+
+    deleted: dict[str, Any] = {}
+    failed = False
+    for name in targets:
+        try:
+            if name == "execution":
+                from CoScientist.graph.memory import reset_knowledge_graph
+                reset_knowledge_graph(user_id=user_id, session_id=session_id)
+                deleted[name] = {"scope": "session", "cleared": True}
+            elif name == "research":
+                from CoScientist.graph.research.store import get_research_graph
+                archived = get_research_graph(
+                    user_id=user_id,
+                    session_id=session_id,
+                ).reset(archive=True)
+                deleted[name] = {
+                    "scope": "session",
+                    "cleared": True,
+                    "archived": archived,
+                }
+            elif name == "memory":
+                from CoScientist.graph.memory_store import (
+                    get_global_knowledge_memory,
+                )
+                result = get_global_knowledge_memory().clear()
+                deleted[name] = {
+                    "scope": "global",
+                    "cleared": bool(result.get("persisted")),
+                    **result,
+                }
+                failed = failed or not result.get("persisted")
+        except Exception as exc:  # noqa: BLE001 — report every target's fate
+            logging.getLogger("CoScientist.web").warning(
+                "Graph deletion failed for %s: %s", name, exc
+            )
+            deleted[name] = {"cleared": False, "error": str(exc)}
+            failed = True
+    return deleted, failed
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -869,6 +938,8 @@ def create_app() -> FastAPI:
                 title,
                 session_id=session_id,
             )
+            if get_settings().web.auto_clear_graph_enabled:
+                _clear_session_graphs(user_id, session_id, view="all")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -894,6 +965,141 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session})
+
+    # --- Session export / import / save / restore ---
+    @app.post("/api/users/{user_id}/sessions/{session_id}/export")
+    async def export_session_endpoint(user_id: str, session_id: str):
+        """Download a full session bundle as a .cossession.zip file."""
+        from urllib.parse import quote
+        from CoScientist.web.session_bundle import export_session, BUNDLE_EXTENSION
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        bundle_bytes = await export_session(runtime, (user_id, session_id))
+        session_meta = runtime.registry.get_session(user_id, session_id) or {}
+        title = session_meta.get("title", "session")
+        safe_title = "".join(
+            c if c.isalnum() or c in " _-" else "_" for c in title
+        )[:60].strip() or "session"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"{safe_title}_{stamp}{BUNDLE_EXTENSION}"
+
+        ascii_title = "".join(
+            c if (c.isascii() and c.isalnum()) or c in " _-" else "_" for c in title
+        )[:60].strip() or "session"
+        fallback_filename = f"{ascii_title}_{stamp}{BUNDLE_EXTENSION}"
+        encoded_filename = quote(filename)
+
+        return Response(
+            content=bundle_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fallback_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            },
+        )
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/save")
+    async def save_session_endpoint(user_id: str, session_id: str):
+        """Save a session bundle to disk (no download)."""
+        from CoScientist.web.session_bundle import export_session, save_to_disk
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        bundle_bytes = await export_session(runtime, (user_id, session_id))
+        session_meta = runtime.registry.get_session(user_id, session_id) or {}
+        title = session_meta.get("title", "session")
+        filename = save_to_disk(bundle_bytes, title, user_id, session_id)
+        return JSONResponse({"status": "success", "filename": filename})
+
+    @app.post("/api/users/{user_id}/import-session")
+    async def import_session_endpoint(user_id: str, request: Request):
+        """Import a session from an uploaded .cossession.zip bundle.
+
+        Accepts ``multipart/form-data`` with a ``file`` field, OR raw bytes
+        with ``application/zip``/``application/octet-stream``.
+        """
+        from CoScientist.web.session_bundle import import_session
+
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "multipart" in content_type:
+            from fastapi import UploadFile
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise HTTPException(status_code=400, detail="No file uploaded.")
+            bundle_bytes = await upload.read()
+        else:
+            bundle_bytes = await request.body()
+
+        if not bundle_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+
+        # Always import into the ITMO_DEV user, ignoring the URL user_id
+        target_nickname = "ITMO_DEV"
+        try:
+            result = await import_session(runtime, target_nickname, bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
+    @app.get("/api/saved-sessions")
+    async def list_saved_sessions_endpoint():
+        """List all session bundles saved to disk."""
+        from CoScientist.web.session_bundle import list_saved_sessions
+        return JSONResponse({"sessions": list_saved_sessions()})
+
+    @app.post("/api/restore-session")
+    async def restore_session_endpoint(data: dict):
+        """Restore a previously saved session from disk."""
+        from CoScientist.web.session_bundle import (
+            import_session,
+            read_saved_bundle,
+        )
+        filename = data.get("filename", "")
+        if not filename:
+            raise HTTPException(status_code=400, detail="filename is required.")
+        try:
+            bundle_bytes = read_saved_bundle(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        target_nickname = "ITMO_DEV"
+        try:
+            result = await import_session(runtime, target_nickname, bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
+    @app.delete("/api/saved-sessions/{filename}")
+    async def delete_saved_session_endpoint(filename: str):
+        """Delete a saved session bundle from disk."""
+        from CoScientist.web.session_bundle import delete_saved_session
+        if delete_saved_session(filename):
+            return JSONResponse({"status": "deleted"})
+        raise HTTPException(status_code=404, detail=f"No saved session '{filename}'.")
+
+    @app.get("/api/saved-sessions/{filename}/download")
+    async def download_saved_session_endpoint(filename: str):
+        """Download a previously saved bundle from disk."""
+        from urllib.parse import quote
+        from CoScientist.web.session_bundle import read_saved_bundle
+        try:
+            bundle_bytes = read_saved_bundle(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        safe_name = Path(filename).name
+        ascii_name = "".join(
+            c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in safe_name
+        ) or "session.cossession.zip"
+        encoded_name = quote(safe_name)
+        return Response(
+            content=bundle_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
+            },
+        )
 
     # --- HITL diagnostics ---
     @app.get("/api/hitl-status")
@@ -1001,67 +1207,23 @@ def create_app() -> FastAPI:
         session_id: str,
         view: str = "all",
     ):
-        """Drop stored graph data on the operator's explicit request.
-
-        ``execution`` and ``research`` belong to this session alone; ``memory``
-        is the installation-wide semantic memory, so it disappears for every
-        session at once. Both the research graph and the semantic memory are
-        archived next to their files first; the execution graph is re-seeded
-        with the agent roster so the Graph view keeps rendering.
-        """
+        """Drop stored graph data on the operator's explicit request."""
         try:
             runtime.registry.require_session(user_id, session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        targets = GRAPH_DELETE_TARGETS if view == "all" else (view,)
-        unknown = [name for name in targets if name not in GRAPH_DELETE_TARGETS]
-        if unknown:
+        allowed_views = (*GRAPH_DELETE_TARGETS, "all", "session")
+        if view not in allowed_views:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"unknown graph view {unknown[0]!r}; expected one of "
-                    f"{', '.join((*GRAPH_DELETE_TARGETS, 'all'))}"
+                    f"unknown graph view {view!r}; expected one of "
+                    f"{', '.join(allowed_views)}"
                 ),
             )
 
-        deleted: dict[str, Any] = {}
-        failed = False
-        for name in targets:
-            try:
-                if name == "execution":
-                    from CoScientist.graph.memory import reset_knowledge_graph
-                    reset_knowledge_graph(user_id=user_id, session_id=session_id)
-                    deleted[name] = {"scope": "session", "cleared": True}
-                elif name == "research":
-                    from CoScientist.graph.research.store import get_research_graph
-                    archived = get_research_graph(
-                        user_id=user_id,
-                        session_id=session_id,
-                    ).reset(archive=True)
-                    deleted[name] = {
-                        "scope": "session",
-                        "cleared": True,
-                        "archived": archived,
-                    }
-                else:  # memory
-                    from CoScientist.graph.memory_store import (
-                        get_global_knowledge_memory,
-                    )
-                    result = get_global_knowledge_memory().clear()
-                    deleted[name] = {
-                        "scope": "global",
-                        "cleared": bool(result.get("persisted")),
-                        **result,
-                    }
-                    failed = failed or not result.get("persisted")
-            except Exception as exc:  # noqa: BLE001 — report every target's fate
-                logging.getLogger("CoScientist.web").warning(
-                    "Graph deletion failed for %s: %s", name, exc
-                )
-                deleted[name] = {"cleared": False, "error": str(exc)}
-                failed = True
-
+        deleted, failed = _clear_session_graphs(user_id, session_id, view=view)
         return JSONResponse(
             {"status": "error" if failed else "success", "deleted": deleted},
             status_code=500 if failed else 200,
@@ -1480,14 +1642,36 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         _cancel_pending_hitl(runtime, key)
         runtime.hitl_handler.reset(key)
         runtime.registry.touch_session(user_id, session_id, status="idle")
-        error_msg = f"Error processing query: {str(exc)}"
-        error_event = {
-            "type": "error",
-            "message": error_msg,
-            "timestamp": datetime.now().isoformat(),
-        }
-        await runtime.send(key, error_event)
-        runtime.agent_events[key].append(error_event)
+
+        if is_proxy_error(exc):
+            msg = (
+                f"**Error connecting to proxy server**\n\n"
+                f"Failed to connect to the proxy server to execute the query to the language model. "
+                f"Please ensure the proxy container is running, the corporate VPN is enabled (other - disabled), and "
+                f"and the proxy is accessible."
+            )
+            agent_msg = {
+                "type": "agent_event",
+                "author": "OrchestratorAgent",
+                "content": msg,
+                "is_final": True,
+                "timestamp": datetime.now().isoformat(),
+            }
+            runtime.agent_events[key].append(agent_msg)
+            await runtime.send(key, agent_msg)
+            await runtime.send(key, {
+                "type": "final_response",
+                "content": msg,
+            })
+        else:
+            error_msg = f"Error processing query: {str(exc)}"
+            error_event = {
+                "type": "error",
+                "message": error_msg,
+                "timestamp": datetime.now().isoformat(),
+            }
+            await runtime.send(key, error_event)
+            runtime.agent_events[key].append(error_event)
 
 
 async def _run_chat_invocation(
