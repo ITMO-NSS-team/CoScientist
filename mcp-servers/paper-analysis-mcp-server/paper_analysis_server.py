@@ -14,7 +14,6 @@ class NamedBytesIO(BytesIO):
 
 
 from CoScientist.chemical_utils.chemical_functions import extract_reactions_from_pdf, extract_molecules_from_pdf, remove_keys
-from CoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
 from CoScientist.paper_analysis.prompts import extract_query_filters_prompt
 from CoScientist.paper_analysis.question_processing import (
     process_scientific_question,
@@ -24,7 +23,6 @@ from CoScientist.paper_analysis.question_processing import (
     get_domain_metadata_type
 )
 from CoScientist.paper_parser.s3_connection import S3BucketService
-from CoScientist.paper_parser.utils import extract_s3_bucket_and_key
 
 from CoScientist.papers_processing_refactoring.embeddings import create_embedding_model
 from CoScientist.papers_processing_refactoring.storage.artifacts import S3DomainArtifactStore
@@ -34,6 +32,7 @@ from CoScientist.papers_processing_refactoring.reranking import create_reranker
 
 from prompts import explore_my_papers_prompt, sys_prompt
 
+# TODO: unify S3 clients for tools (use S3DomainArtifactStore)
 s3_service = S3BucketService(
     endpoint=os.getenv("S3__ENDPOINT_URL"),
     access_key=os.getenv("S3__ACCESS_KEY"),
