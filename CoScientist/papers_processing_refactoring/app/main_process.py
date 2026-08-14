@@ -13,11 +13,11 @@ from langchain_openai import ChatOpenAI
 
 
 def _bootstrap_coscientist_package() -> None:
-    """Регистрирует облегчённую заглушку пакета CoScientist, чтобы импорт подпакетов не исполнял
-    CoScientist/__init__.py в окружении обработки.
+    """Registers a lightweight wrapper for the CoScientist package to ensure that importing sub-packages does not
+    execute `CoScientist/__init__.py` in the execution environment.
 
-    Не трогает sys.path (отсутствуют коллизии имён со stdlib) и срабатывает
-    исключительно тогда, когда CoScientist ещё не был импортирован.
+    It does not alter `sys.path` (there are no name conflicts with the standard library) and only takes effect when
+    CoScientist has not yet been imported.
     """
     if "CoScientist" in sys.modules:
         return
@@ -55,18 +55,6 @@ load_dotenv(CONFIG_PATH)
 settings = get_settings()
 
 
-def build_services(etl_settings):
-    embedding_model = create_embedding_model({
-        "type": etl_settings.embeddings.type,
-        "url": etl_settings.embeddings.api_url,
-        "model_name": etl_settings.embeddings.model_name,
-        "batch_size": etl_settings.embeddings.batch_size,
-    })
-    return {
-        "embedding_model": embedding_model
-    }
-
-
 def build_vector_store(etl_settings):
     if etl_settings.vectordb.backend == "chromadb":
         return ChromaVectorStore(
@@ -102,93 +90,111 @@ def build_state_store(etl_settings):
     else:
         raise ValueError("State store configuration must be provided")
 
-# TODO: consider moving the initialisation of shared objects to the `main` function, taking thread safety into account
-def process_single_article(article, app_settings):
+
+def build_shared_services(etl_settings):
+    """Creates clients without per-article state (vector database, S3, LLM, embeddings), which can be safely reused
+    across all worker threads. The state manager is not included here — it has its own connection to the database,
+    so it is recreated for each article in `process_single_article`.
+    """
+    embedding_model = create_embedding_model({
+        "type": etl_settings.embeddings.type,
+        "url": etl_settings.embeddings.api_url,
+        "model_name": etl_settings.embeddings.model_name,
+        "batch_size": etl_settings.embeddings.batch_size,
+    })
+    artifact_store, public_store = build_artifacts_stores(etl_settings)
+    return {
+        "vector_store": build_vector_store(etl_settings),
+        "artifact_store": artifact_store,
+        "public_store": public_store,
+        "llm_model": ChatOpenAI(
+            model=etl_settings.llm.llm_name,
+            base_url=etl_settings.llm.llm_base_url,
+            api_key=etl_settings.llm.llm_api_key.get_secret_value(),  # noqa
+            temperature=0.1
+        ),
+        "embedding_model": embedding_model,
+    }
+
+
+def process_single_article(article, app_settings, services):
     logger.info(f"[{article.name}] Thread started...")
-    
-    # TODO: wrap state manager in 'with' block
-    state_manager = build_state_store(app_settings)
-    
-    if state_manager.get_status(article.id, "publish") == "done":
-        return f"[{article.name}] Already processed. Skipped."
-    
-    if any(elem["status"] == "running" for elem in state_manager.list_states(article.id)):
-        return f"[{article.name}] Processing is already running. Skipped."
-    
-    local_source = LocalSource(settings.files.directory)
-    # TODO: wrap functions in 'try...except' block
-    vector_store = build_vector_store(settings)
-    artifact_store, public_store = build_artifacts_stores(settings)
-    llm_model = ChatOpenAI(
-        model=settings.llm.llm_name,
-        base_url=settings.llm.llm_base_url,
-        api_key=settings.llm.llm_api_key.get_secret_value(),  # noqa
-        temperature=0.1
-    )
-    embedding_model = build_services(settings)["embedding_model"]
-    
-    pipeline = ETLPipeline(
-        steps=[
-            FetchStep(source=local_source),
-            ParseStep(),
-            HtmlCleaningStep(),
-            ImageFilteringStep(),
-            ImageCaptioningStep(),
-            PaperSummarisatonStep(),
-            ChunkingStep(),
-            EmbeddingStep(),
-            PublishStep()
-        ]
-    )
-    
-    ctx = ETLContext(
-        article=article,
-        state_manager=state_manager,
-        artifact_store=artifact_store,
-        public_store=public_store,
-        vector_store=vector_store,
-        llm=llm_model,
-        embedding_model=embedding_model
-    )
-    
-    start = time.perf_counter()
-    
-    try:
-        pipeline.run(ctx)
-        end = time.perf_counter()
-        return f"[{article.id}] Success in {end - start:.2f}s"
-    except Exception as e:
-        end = time.perf_counter()
-        logger.error(f"[{article.id}] Failed: {str(e)}", exc_info=True)
-        return f"[{article.id}] Failed in {end - start:.2f}s"
+
+    with build_state_store(app_settings) as state_manager:
+        if state_manager.get_status(article.id, "publish") == "done":
+            return f"[{article.name}] Already processed. Skipped."
+
+        if any(elem["status"] == "running" for elem in state_manager.list_states(article.id)):
+            return f"[{article.name}] Processing is already running. Skipped."
+
+        local_source = LocalSource(app_settings.files.directory)
+
+        pipeline = ETLPipeline(
+            steps=[
+                FetchStep(source=local_source),
+                ParseStep(),
+                HtmlCleaningStep(),
+                ImageFilteringStep(),
+                ImageCaptioningStep(),
+                PaperSummarisatonStep(),
+                ChunkingStep(),
+                EmbeddingStep(),
+                PublishStep()
+            ]
+        )
+
+        ctx = ETLContext(
+            article=article,
+            state_manager=state_manager,
+            artifact_store=services["artifact_store"],
+            public_store=services["public_store"],
+            vector_store=services["vector_store"],
+            llm=services["llm_model"],
+            embedding_model=services["embedding_model"]
+        )
+
+        start = time.perf_counter()
+
+        try:
+            pipeline.run(ctx)
+            end = time.perf_counter()
+            return f"[{article.id}] Success in {end - start:.2f}s"
+        except Exception as e:
+            end = time.perf_counter()
+            logger.error(f"[{article.id}] Failed: {str(e)}", exc_info=True)
+            return f"[{article.id}] Failed in {end - start:.2f}s"
 
 
-def handle_articles_batch(articles):
+def handle_articles_batch(articles, app_settings, services):
     logger.info(f"Scheduler found {len(articles)} articles. Starting parallel processing...")
-    
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_article = {
-            executor.submit(process_single_article, art, settings): art
+            executor.submit(process_single_article, art, app_settings, services): art
             for art in articles
         }
-        
-        # TODO: wrap in 'try...except' block
+
         for future in as_completed(future_to_article):
-            result_msg = future.result()
-            logger.info(result_msg)
+            article = future_to_article[future]
+            try:
+                result_msg = future.result()
+                logger.info(result_msg)
+            except Exception as e:
+                logger.error(f"[{article.name}] Unhandled exception during processing: {e}", exc_info=True)
 
 
 def main():
     logger.info("Starting Papers ETL Daemon...")
-    
+
     with build_state_store(settings) as state_manager:
         logger.info("Cleaning up hanging tasks...")
         state_manager.reset_running_states()
-    
+
     local_source = LocalSource(settings.files.directory)
-    
+    services = build_shared_services(settings)
+
     scheduler = IngestionScheduler(
-        on_batch=lambda batch: handle_articles_batch(batch)
+        on_batch=lambda batch: handle_articles_batch(batch, settings, services)
     )
     scheduler.register(local_source, Schedule(timedelta(minutes=POOLING_TIME_MINUTES)))
     
