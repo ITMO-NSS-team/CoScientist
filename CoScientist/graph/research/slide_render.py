@@ -237,7 +237,12 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
 
     vms = g.linked(h["id"], "tested_by", types=("VerificationMethod",))
     vm = vms[0] if vms else None
-    vtext = wrap(a(vm, "procedure", "method", "description", "method_type") or NOT_SET, 220, 9.4, 4)
+    # A postponed hypothesis has no method by design; NOT_SET's "ask the operator"
+    # reads as a missing input rather than a deliberate state.
+    _vm_missing = ("метод не определён — гипотеза отложена"
+                   if (h.get("status") or "") == "postponed" else NOT_SET)
+    vtext = wrap(a(vm, "procedure", "method", "description", "method_type") or _vm_missing,
+                 220, 9.4, 4)
     cc = g.linked(h["id"], "formulated_for", incoming=True, types=("ConfirmationCriteria",))
     ctext = a(cc[0], "success_metric", "threshold", "criterion") if cc else ""
     tools = g.any_linked(vm["id"], ("uses", "requires"), types=("Tool",)) if vm else []
@@ -246,7 +251,10 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
     evs = g.any_linked(h["id"], ("supports", "refutes", "relates_to"), incoming=True,
                        types=("Evidence",))
     etext: List[str] = []
-    for ev in evs[:2]:
+    # Three, not two: a hypothesis is often decided by the LAST piece of evidence
+    # filed against it (an audit, a refutation), and cropping to two hid exactly
+    # the one that changed the verdict.
+    for ev in evs[:3]:
         # Evidence is written by the agents as metric/value/description, which the
         # earlier key list missed entirely -- real measurements rendered as
         # "not set". Lead with the number, since that is what a reader looks for.

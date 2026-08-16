@@ -471,12 +471,19 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("contextualizes", "defines_scope", "applies_to"),
     ),
     # The human writes through the HITL bridge (web endpoint / approval flow),
-    # never through an LLM toolset.
+    # never through an LLM toolset. Expert evidence is the human's own layer-1
+    # contribution in the meta-model ("Свидетельство … подтипы: … экспертное;
+    # Человек в контуре — экспертные"), and it is checked to actually carry
+    # subtype=expert in validate_node_draft. Without the edges the human could
+    # create a Constraint but never attach it to anything, leaving it orphaned.
     "human": AgentPerm(
-        create=frozenset({"Constraint"}),
+        create=frozenset({"Constraint", "Evidence"}),
         update_attrs=frozenset(),
         transitions=_transitions(("Conclusion", "draft", "approved")),
-        edges=frozenset(),
+        edges=_edges("contextualizes", "regulates", "relates_to",
+                     ("refines", "Evidence", "Hypothesis"),
+                     ("supports", "Evidence", "Hypothesis"),
+                     ("refutes", "Evidence", "Hypothesis")),
     ),
 }
 
@@ -521,6 +528,15 @@ def validate_node_draft(agent: str, node_type: str, status: str,
             errors.append(
                 f"{node_type} requires attrs.subtype — one of: "
                 f"{', '.join(spec.subtypes)}.")
+        # The human may file evidence, but only the kind a human actually is:
+        # expert judgement. Routing a computational or literature result through
+        # the HITL bridge would launder its provenance.
+        if enforce_permissions and agent == "human" and node_type == "Evidence" \
+                and subtype != "expert":
+            errors.append(
+                "the human may only file Evidence with subtype='expert'; a "
+                f"'{subtype or 'missing'}' result must be recorded by the agent "
+                "that produced it.")
     return errors
 
 

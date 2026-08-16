@@ -8,6 +8,8 @@ all of them into the digest the orchestrator sees before every turn.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict, List, Optional
 
 from CoScientist.graph.research.store import ResearchGraphStore, research_graph
@@ -273,7 +275,117 @@ def _num(value) -> Optional[float]:
 
 # ── the digest the orchestrator consumes ─────────────────────────────────────
 
+# Evaluation metrics and methodological norms, with the spellings they actually
+# appear in. Matching is deterministic and explainable on purpose: a research is
+# told which WORD it recorded and never thresholded, so the finding can be checked
+# by reading two nodes. Extend per domain; unknown vocabulary simply is not audited.
+_METRIC_LEXICON: Dict[str, tuple] = {
+    "validity": ("validity", "valid smiles", "% valid", "chemically valid"),
+    "uniqueness": ("uniqueness", "unique molecules", "% unique", "duplicate rate"),
+    "novelty": ("novelty", "novel molecules", "not in the training set"),
+    "diversity": ("diversity", "internal diversity", "scaffold diversity"),
+    "target hit rate": ("hit rate", "hit fraction", "target hit", "target-property hit"),
+    "synthetic accessibility": ("synthetic accessibility", "sa score", "sa>", "sa >"),
+    "drug-likeness": ("qed", "drug-likeness", "druglikeness"),
+    "distribution match": ("fcd", "frechet", "kl divergence to the data"),
+    "accuracy": ("accuracy", "top-1", "error rate"),
+    # Bare "precision"/"recall" are dropped: they matched "precision medicine" in
+    # a literature abstract. Only spellings that cannot mean anything else.
+    "precision/recall/F1": ("f1", "f1-score", "f-score", "precision and recall",
+                            "precision/recall"),
+    "auc": ("auc", "roc", "average precision"),
+    "regression error": ("rmse", "mae", "r2", "r^2"),
+    "baseline comparison": ("baseline", "compared against", "vs. random"),
+    "statistical significance": ("p-value", "p <", "significance", "z-score",
+                                 "confidence interval", "effect size"),
+    "ablation": ("ablation",),
+    "cross-validation": ("cross-validation", "cross validation", "held-out", "hold-out"),
+    "reproducibility": ("reproducib", "fixed seed", "random seed"),
+}
+
+# Nodes that may CARRY a norm (what the field expects) and nodes that IMPOSE it
+# (what this research actually committed to check).
+_NORM_SOURCES = ("Evidence", "Constraint")
+_NORM_CONSTRAINT_SUBTYPES = ("methodological_norms", "domain_standards", "expert_knowledge")
+
+
+def _text_of(g, node_id: str) -> str:
+    attrs = (g.nodes[node_id].get("attrs") or {}) if node_id in g.nodes else {}
+    return " ".join(str(v) for v in attrs.values() if v).lower()
+
+
+def _spelling_re(s: str):
+    # Plain substring matching is not safe here: short metric names live inside
+    # identifiers — "f1" matches the PDB code 5F19, "auc" matches "glaucoma" —
+    # and a false gap is worse than a missed one, because it sends the run off to
+    # add a threshold nobody asked for. The boundary is only applied on the sides
+    # that end in a word character: "sa>" is followed by the threshold value
+    # ("sa>3"), and demanding a non-alphanumeric there would miss every use.
+    head = r"(?<![a-z0-9])" if s[:1].isalnum() else ""
+    tail = r"(?![a-z0-9])" if s[-1:].isalnum() else ""
+    return re.compile(head + re.escape(s) + tail)
+
+
+_METRIC_RE = {name: tuple(_spelling_re(s) for s in spellings)
+              for name, spellings in _METRIC_LEXICON.items()}
+
+
+def _metrics_in(text: str) -> List[str]:
+    return sorted({name for name, patterns in _METRIC_RE.items()
+                   if any(p.search(text) for p in patterns)})
+
+
+def criteria_coverage(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """Confirmation criteria that omit a metric this research itself recorded.
+
+    A run can pass every threshold it set and still be void, because the
+    thresholds never covered what the field requires. Both halves of that
+    comparison are nodes here — the norm arrives as literature Evidence or a
+    methodological Constraint, the threshold lives in ConfirmationCriteria — so
+    the omission is a query rather than a matter of noticing. Cheap enough to run
+    before a costly VerificationMethod, which is the point: it fires while the
+    experiment can still be changed.
+    """
+    g = _graph(store).full_graph()
+
+    recorded: Dict[str, List[str]] = {}
+    for ntype in _NORM_SOURCES:
+        for nid in _nodes_of(g, ntype):
+            attrs = g.nodes[nid].get("attrs") or {}
+            if ntype == "Constraint":
+                sub = str(attrs.get("subtype") or "").lower()
+                if sub not in _NORM_CONSTRAINT_SUBTYPES:
+                    continue
+            for m in _metrics_in(_text_of(g, nid)):
+                recorded.setdefault(m, []).append(nid)
+
+    items = []
+    for cc in _nodes_of(g, "ConfirmationCriteria"):
+        thresholded = set(_metrics_in(_text_of(g, cc)))
+        missing = sorted(set(recorded) - thresholded)
+        hyps = _in(g, cc, "formulated_for") or _out(g, cc, "formulated_for")
+        if missing:
+            items.append({
+                "criteria": cc,
+                "hypotheses": hyps,
+                "thresholded": sorted(thresholded),
+                "missing": missing,
+                "recorded_in": {m: recorded[m] for m in missing},
+            })
+
+    lines = [
+        f"CRITERIA GAP: {i['criteria']} thresholds {', '.join(i['thresholded']) or 'nothing measurable'} "
+        f"but this research recorded {', '.join(i['missing'])} "
+        f"(in {', '.join(sorted({n for ns in i['recorded_in'].values() for n in ns}))}) "
+        f"— add them before running the experiment, or state why they do not apply"
+        for i in items
+    ]
+    return {"items": items, "rendered": "\n".join(lines),
+            "recorded_metrics": sorted(recorded)}
+
+
 TRIGGERS = {
+    "criteria_coverage": criteria_coverage,
     "ready_hypotheses": ready_hypotheses,
     "blocked_hypotheses": blocked_hypotheses,
     "refuting_evidence": refuting_evidence,
