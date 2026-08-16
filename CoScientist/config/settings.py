@@ -1,11 +1,15 @@
 """
 Application configuration using Pydantic Settings.
 """
+import os as _os
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel
+from dotenv import load_dotenv as _load_dotenv
+from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_load_dotenv()
 
 from rag_tools.config import Settings as ToolRAGSettings
 
@@ -173,9 +177,21 @@ class ContextInitSettings(BaseModel):
     ``enabled`` gates the whole pre-stage — referenced from system.yaml as
     ``${context_init.enabled}``. The gate is soft: the operator may submit the
     form with fields deferred (the agent fills working values), so a run never
-    blocks indefinitely. Override via CONTEXT_INIT__ENABLED.
+    blocks indefinitely. Override via RESEARCH_FRAME (or CONTEXT_INIT__ENABLED).
     """
-    enabled: bool = True
+    enabled: bool = _os.getenv("RESEARCH_FRAME", _os.getenv("CONTEXT_INIT__ENABLED", "true")).lower() in ("true", "1", "yes")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_research_frame(cls, data):
+        rf = _os.getenv("RESEARCH_FRAME")
+        if rf is not None:
+            val = rf.lower() in ("true", "1", "yes")
+            if isinstance(data, dict):
+                data["enabled"] = val
+            elif data is None:
+                data = {"enabled": val}
+        return data
 
 
 # =========================
