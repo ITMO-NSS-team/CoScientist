@@ -59,6 +59,7 @@ class AgentSystem:
 
     config: SystemConfig
     agents: Dict[str, BaseAgent] = field(default_factory=dict)
+    _run_root: Optional[BaseAgent] = field(default=None, init=False, repr=False)
 
     @property
     def root(self) -> BaseAgent:
@@ -66,6 +67,8 @@ class AgentSystem:
 
     @property
     def run_root(self) -> BaseAgent:
+        if self._run_root is not None:
+            return self._run_root
         pipeline_pre = [
             self.agents[n]
             for n in self.config.pipeline.pre
@@ -79,7 +82,7 @@ class AgentSystem:
         if pipeline_pre or pipeline_post:
             from google.adk.agents.sequential_agent import SequentialAgent
 
-            return SequentialAgent(
+            self._run_root = SequentialAgent(
                 name="ResearchPipeline",
                 description=(
                     "Full research lifecycle: orchestrator run then report"
@@ -87,7 +90,9 @@ class AgentSystem:
                 ),
                 sub_agents=[*pipeline_pre, self.root, *pipeline_post],
             )
-        return self.root
+        else:
+            self._run_root = self.root
+        return self._run_root
 
     def agent(self, name: str) -> BaseAgent:
         if name not in self.agents:

@@ -124,7 +124,9 @@ def _apply_frontend_settings(frontend: dict) -> None:
         web.use_proxy = bool(general["useProxy"])
         sync_proxy_session()
     if "opikEnabled" in general:
-        web.opik_enabled = bool(general["opikEnabled"])
+        val = bool(general["opikEnabled"])
+        web.opik_enabled = val
+        get_settings().opik.enabled = val
     if "autoNamingEnabled" in general:
         web.auto_naming_enabled = bool(general["autoNamingEnabled"])
     if "coscientistUsername" in general:

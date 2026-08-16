@@ -417,7 +417,7 @@ def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store):
     statuses = {n["id"]: n["status"] for n in store.full()["nodes"]
                 if n["type"] == "Hypothesis"}
     assert statuses == {"H1": "postponed", "H2": "formulated", "H3": "postponed"}
-    assert any("only ONE is" in w for w in r.warnings)
+    assert any("may be verified at a time" in w for w in r.warnings)
     # only the selected one is offered for verification; the backlog stays quiet
     assert [i["hypothesis"] for i in queries.ready_hypotheses(store)["items"]] == ["H2"]
     assert not queries.postponed_hypotheses(store)["rendered"]

@@ -96,7 +96,9 @@ def test_independent_tasks_keep_the_order_they_were_registered_in():
     ]
 
 
-def test_merged_coder_task_inherits_every_dependency():
+def test_merged_coder_task_inherits_every_dependency(monkeypatch):
+    from CoScientist.config import get_settings
+    monkeypatch.setattr(get_settings().web, "merge_tasks_enabled", True)
     tracker = TaskTrackerToolset()
     context = _context()
 

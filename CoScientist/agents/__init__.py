@@ -113,7 +113,7 @@ def build_for_mode():
             system = build_system()
         _tracer = get_multi_agent_tracer()
         if _tracer is not None:
-            track_adk_agent_recursive(system.root, _tracer)
+            track_adk_agent_recursive(system.run_root, _tracer)
         return system
 
     if start_mode in ("orchestrator_planner", "orchestrator_plan"):
@@ -144,7 +144,7 @@ def build_for_mode():
         system = build_system(config=patched)
         _tracer = get_multi_agent_tracer()
         if _tracer is not None:
-            track_adk_agent_recursive(system.root, _tracer)
+            track_adk_agent_recursive(system.run_root, _tracer)
         return system
 
     if start_mode != "orchestrator":
@@ -172,7 +172,7 @@ def build_for_mode():
     system = build_system(config=patched)
     _tracer = get_multi_agent_tracer()
     if _tracer is not None:
-        track_adk_agent_recursive(system.root, _tracer)
+        track_adk_agent_recursive(system.run_root, _tracer)
     return system
 
 __all__ = [

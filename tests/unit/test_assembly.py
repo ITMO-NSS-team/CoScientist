@@ -48,19 +48,24 @@ def test_pipeline_stages_are_declared_agents_and_not_root(config):
     assert "ResultAggregatorAgent" in config.pipeline.post
 
 
-def test_run_root_is_one_sequential_run_ending_in_the_aggregator():
+def test_run_root_is_one_sequential_run_ending_in_the_aggregator(monkeypatch):
     """The whole lifecycle is ONE ADK SequentialAgent (context-init pre-stage →
     orchestrator → aggregator) driven by a single run_async — so it is one
     invocation / one Opik trace with the Result Aggregator as the terminal stage
     (no separate static-directive run)."""
     from google.adk.agents.sequential_agent import SequentialAgent
-    from CoScientist.agents import run_root, orchestrator_agent
+    from CoScientist.assembly import build_system
+    from CoScientist.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.context_init, "enabled", True)
+    system = build_system()
+    run_root = system.run_root
 
     assert isinstance(run_root, SequentialAgent)
     names = [a.name for a in run_root.sub_agents]
     # The context-init pre-stage seeds the research frame before the orchestrator.
     assert names[0] == "ContextInitAgent", "context-init runs before the orchestrator"
-    assert orchestrator_agent.name == "OrchestratorAgent"
     assert names.index("OrchestratorAgent") < names.index("ResultAggregatorAgent")
     assert names[-1] == "ResultAggregatorAgent", "aggregator must be the terminal stage"
 
@@ -456,6 +461,7 @@ def test_build_for_mode_run_root_includes_pipeline_pre_and_post(monkeypatch):
 
     settings = get_settings()
     monkeypatch.setattr(settings.web, "start_mode", "orchestrator")
+    monkeypatch.setattr(settings.context_init, "enabled", True)
 
     system = build_for_mode()
     run_root = system.run_root
@@ -472,6 +478,7 @@ def test_build_for_mode_planner_run_root(monkeypatch):
     from CoScientist.agents import build_for_mode
 
     settings = get_settings()
+    monkeypatch.setattr(settings.context_init, "enabled", True)
     for mode in ("planner"):
         monkeypatch.setattr(settings.web, "start_mode", mode)
 
