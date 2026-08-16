@@ -83,6 +83,10 @@ async def _complete(system: str, user: str) -> str:
                   {"role": "user", "content": user}],
         temperature=0,
     )
+    # Judged in the background, off the agent tree: the ambient session binding
+    # is what keeps this call attached to the run that triggered it.
+    from CoScientist.logging.metrics import record_completion
+    record_completion(resp, model=model, agent="ResearchValidator")
     return resp.choices[0].message.content or ""
 
 

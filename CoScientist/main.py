@@ -23,8 +23,9 @@ from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings, ReportConfig
-from CoScientist.agents import run_root
+from CoScientist.agents import orchestrator_agent, root_agent, run_root, build_for_mode
 from CoScientist.reporting import finalize_report, RunResult
+from CoScientist.tools.coder_tools import coder_toolset
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
@@ -183,6 +184,9 @@ class CoScientistManager:
                 )
             from google.adk.apps.app import App
             from CoScientist.logging.event_logger import EventLoggerPlugin
+            from CoScientist.logging.tool_activity import ToolActivityPlugin
+            from CoScientist.logging.agent_output import AgentOutputPlugin
+            from CoScientist.logging.metrics import UsageMetricsPlugin
             from CoScientist.graph.plugin import GraphMemoryPlugin
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
@@ -190,12 +194,12 @@ class CoScientistManager:
             from CoScientist.verify.gate_plugin import ArtifactGatePlugin
             from CoScientist.agents.loop_guard_plugin import RepeatCallGuardPlugin
 
-            # `run_root` is the whole lifecycle as ONE SequentialAgent
-            # (orchestrator → Result Aggregator). A single run_async over it is one
-            # ADK invocation = one trace, with the aggregator as the terminal child.
+            # Build the agent system (reads start_mode + tunable params from settings).
+            system = build_for_mode()
+
             app = App(
                 name=self.app_name,
-                root_agent=run_root,
+                root_agent=system.root,
                 plugins=[
                     # First: deterministically refuse training on a fabricated
                     # dataset (before_tool gate) — fabrication buys nothing.
@@ -204,6 +208,18 @@ class CoScientistManager:
                     # tight loop (a collector once repeated one web search 39 times).
                     RepeatCallGuardPlugin(),
                     EventLoggerPlugin(),
+                    # Observer: reports tool use from nested AgentTool runners
+                    # too, which the top-level event stream cannot see. Inert
+                    # unless a consumer (the Web UI) registered a sink.
+                    ToolActivityPlugin(),
+                    # Observer: posts the final answer of the agents flagged
+                    # `report_output` (hypotheses, research, execution report),
+                    # which otherwise only exists inside the caller's
+                    # function_response. Inert without a sink.
+                    AgentOutputPlugin(),
+                    # Prices every model call, in nested AgentTool runners too,
+                    # so one session total covers the whole agent tree.
+                    UsageMetricsPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
                     # Capture artifact (figure/table) URLs from tool results BEFORE
@@ -218,6 +234,11 @@ class CoScientistManager:
 
             if self._hitl_handler:
                 hitl_toolset._handler = self._hitl_handler
+                if getattr(coder_toolset, "_hitl_handler", None) is not None:
+                    if hasattr(coder_toolset._hitl_handler, 'set_delegate'):
+                        coder_toolset._hitl_handler.set_delegate(self._hitl_handler)
+                    else:
+                        coder_toolset._hitl_handler = self._hitl_handler
 
             self._initialized = True
 
@@ -361,6 +382,16 @@ class CoScientistManager:
                 if blocks:
                     report_markdown = "## Captured results\n\n" + "\n\n".join(blocks)
 
+        # What this run cost, per agent. Logged rather than returned: the caller
+        # hands `final_response` to a user (or to another model), and a bill is
+        # not part of the answer. Disable with LOG_USAGE_METRICS=0.
+        if os.getenv("LOG_USAGE_METRICS", "1") != "0":
+            try:
+                from CoScientist.logging.metrics import log_report
+                log_report((self.user_id, self.session_id))
+            except Exception as exc:  # noqa: BLE001 - reporting never fails a run
+                logger.debug("Usage report unavailable: %s", exc)
+
         if not report_markdown.strip():
             if self._run_error is not None:
                 report_markdown = (
@@ -411,6 +442,13 @@ class CoScientistManager:
             await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
         except Exception as exc:
             logger.error(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
+        # The ledger is process memory that grows with the number of sessions a
+        # long-lived host serves, so a closed session gives its entry back.
+        try:
+            from CoScientist.logging.metrics import reset_session
+            reset_session(key=(self.user_id, self.session_id))
+        except Exception:  # noqa: BLE001 - nothing here is worth a failed close
+            pass
 
 # Convenience functions
 async def create_manager() -> CoScientistManager:

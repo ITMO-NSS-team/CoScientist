@@ -232,6 +232,42 @@ class CodeExecSettings(BaseModel):
     workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
 
 # =========================
+# WEB / RUNTIME SETTINGS
+# =========================
+import os as _os
+from typing import Optional as _Optional
+
+class WebSettings(BaseModel):
+    """Runtime-tunable parameters configurable from the web UI.
+
+    Unlike the rest of Settings (loaded once from .env), these can be
+    mutated at runtime via ``/api/settings``.  The global ``settings``
+    singleton is the single source of truth — all components read from it
+    directly.
+    """
+    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "init" | "orchestrator" | "orchestrator_planner"
+    max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
+    max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
+    hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
+    use_planner: bool = _os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
+    planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
+    planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
+    planner_critic_enabled: bool = _os.getenv("PLANNER__CRITIC_ENABLED", "false").lower() in ("true", "1", "yes")
+    planner_critic_rounds: int = int(_os.getenv("PLANNER__CRITIC_ROUNDS", "1"))
+    knowledge_graph_enabled: bool = _os.getenv("GRAPH__ENABLED", "true").lower() in ("true", "1", "yes")
+    executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
+    executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+    sandbox_url: str = _os.getenv("SANDBOX_URL", "")
+    coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")
+    coder_local_tools_enabled: bool = _os.getenv("CODER__LOCAL_TOOLS_ENABLED", "true").lower() in ("true", "1", "yes")
+    merge_tasks_enabled: bool = _os.getenv("PLANNER__MERGE_TASKS", "true").lower() in ("true", "1", "yes")
+    max_active_hypotheses: int = int(_os.getenv("HYPOTHESES__MAX_ACTIVE", "1"))
+    opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
+    auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
+    coscientist_username: _Optional[str] = _os.getenv("COSCIENTIST_USERNAME") or _os.getenv("DEFAULT_USERNAME")
+
+
+# =========================
 # RESEARCH CONTEXT GRAPH
 # =========================
 class ResearchGraphSettings(BaseModel):
@@ -275,6 +311,7 @@ class Settings(BaseSettings):
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()
+    web: WebSettings = WebSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
 
     model_config = SettingsConfigDict(

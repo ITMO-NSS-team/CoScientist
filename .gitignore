@@ -26,3 +26,6 @@ graph_runs/
 
 # Rasterised exports — regenerate from the committed .svg / .json
 research_graph_*.png
+
+# Run bundles dropped in for analysis (artefacts, checkpoints, traces)
+CoScientist/track3/

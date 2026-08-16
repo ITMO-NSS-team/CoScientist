@@ -28,9 +28,9 @@ lifetimes:
 USER QUERY
   │  (execution graph, live)
   ▼
-goal ── OrchestratorAgent ── agent_call: TaskExecutorAgent ── agent_call: ExperimentAgent ── tool_call: dock(...)
-              │                                                                                     │
-              └── result  ◀──────────────────────────────────────────────────────────────────────┘
+goal ── OrchestratorAgent ── agent_call: TaskExecutorAgent ── agent_call: ToolPipelineAgent ── agent_call: ExperimentAgent ── tool_call: dock(...)
+              │                                                                                                                       │
+              └── result  ◀────────────────────────────────────────────────────────────────────────────────────────────────────────┘
                     │
                     │  (semantic extraction, LLM, on the final answer)
                     ▼
@@ -146,6 +146,7 @@ to the Runner in `main.py`.
 
 | flag | default | effect |
 |------|---------|--------|
+| `GRAPH__ENABLED=false` | on | master switch, also exposed as **Settings → Graphs → Knowledge Graph** in the web UI: the `graph` reader toolset drops off every agent (and out of their prompts), `inject_graph_root` yields nothing, and `GraphMemoryPlugin` records nothing, so the Graph view stays empty |
 | `LOG_AGENT_EVENTS=0` | on | turn the graph/logging off |
 | `KG_SEMANTIC_ENABLED=0` | **on** | LLM entity extraction into memory (1 small LLM call per query); set 0 to disable |
 | `KG_SEMANTIC_MODEL` | main model | model used for extraction |

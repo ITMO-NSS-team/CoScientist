@@ -8,7 +8,7 @@ from CoScientist.tools.research_tools import websearch_toolset_instance, paper_a
 from CoScientist.tools.retrieval_tools import RetrievalToolSet, retrieval_toolset_instance
 from CoScientist.tools.servers_web_search import search_mcp_servers
 from CoScientist.tools.med_tools import med_toolset_instance
-from CoScientist.tools.coder_tools import CoderToolset, coder_toolset_instance
+from CoScientist.tools.coder_tools.coder_tools import CoderToolset, coder_toolset_instance
 from CoScientist.tools.task_tracker import TaskTrackerToolset, task_tracker_instance
 from CoScientist.tools.result_formatter_tool import (
     ResultFormatterToolset,

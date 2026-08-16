@@ -47,6 +47,36 @@ _COMMIT_HINT = ("Fix the listed items and call research_commit again. "
 _LABEL_ATTRS = ("formulation", "content", "synthesis", "name", "title",
                 "description", "rule", "threshold", "path")
 
+# Priority words accepted in attrs.priority, most important first.
+_PRIORITY_WORDS = {"critical": 0, "highest": 0, "high": 1, "primary": 0,
+                   "medium": 2, "normal": 2, "moderate": 2, "low": 3, "lowest": 4}
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "да", "selected",
+                                         "primary")
+    return bool(value)
+
+
+def priority_rank(attrs: Dict[str, Any]) -> Tuple[float, float]:
+    """Sort key for hypothesis selection: lower = more important.
+
+    An explicit ``attrs.selected`` (the agent's own pick) always wins; otherwise
+    ``attrs.priority`` is read both as a word (high/medium/low) and as a number
+    (1 = most important, the spec's 1..5 scale). Unspecified sorts last but keeps
+    the commit order among equals.
+    """
+    attrs = attrs or {}
+    selected = 0 if _is_truthy(attrs.get("selected") or attrs.get("primary")) else 1
+    raw = str(attrs.get("priority", "")).strip().lower()
+    if raw in _PRIORITY_WORDS:
+        return (selected, float(_PRIORITY_WORDS[raw]))
+    try:
+        return (selected, float(raw))
+    except ValueError:
+        return (selected, 99.0)
+
 
 def _default_dir() -> str:
     """Snapshot directory from settings, tolerating a missing settings group
@@ -430,6 +460,9 @@ class ResearchGraphStore:
             creates.append({"ref": ref, "type": ntype, "status": status,
                             "attrs": attrs, "source": d.get("source")})
 
+        # -- one active hypothesis per commit --------------------------------
+        self._normalize_hypothesis_selection(creates, warnings)
+
         # -- edges: resolve endpoints against existing nodes + this commit ---
         staged_edges: List[Dict[str, Any]] = []
         for j, d in enumerate(edge_drafts):
@@ -640,6 +673,54 @@ class ResearchGraphStore:
                 committed["status_updates"].append(
                     {"id": hid, "from": "formulated", "to": "under_verification",
                      "auto": True})
+
+    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
+                                        warnings: List[str]) -> None:
+        """Store invariant: at most N hypotheses enter the run as active per commit.
+
+        N = ``settings.web.max_active_hypotheses`` (default 1).
+
+        A generator agent naturally proposes several hypotheses at once; if they
+        all land as ``formulated``, every one of them shows up as READY and the
+        orchestrator starts verifying them — which may not be desired. So
+        exactly N (the agent's own picks: ``attrs.selected``, else the highest
+        ``attrs.priority``, else the first N) stay ``formulated`` and the rest
+        are created as ``postponed``: they remain in the graph as the ranked
+        backlog, invisible to the READY trigger, and the orchestrator can revive
+        one (postponed→formulated) once an active branch has a verdict.
+
+        Deterministic and mechanical — it never drops or rewrites a hypothesis,
+        only decides which ones are offered for verification next.
+        """
+        from CoScientist.config import get_settings
+        max_active = max(1, min(5, get_settings().web.max_active_hypotheses))
+
+        active = [c for c in creates
+                  if c["type"] == "Hypothesis" and c["status"] == "formulated"]
+        if len(active) <= max_active:
+            return
+        # Sort by priority_rank (lower = higher priority) and keep top N.
+        ranked = sorted(active, key=lambda c: priority_rank(c["attrs"]))
+        primary_set = set(id(c) for c in ranked[:max_active])
+        for c in active:
+            if id(c) in primary_set:
+                continue
+            c["status"] = "postponed"
+            c["attrs"].setdefault(
+                "postponed_reason",
+                "alternative hypothesis — kept as backlog while the selected "
+                "ones are verified")
+        kept_labels = ", ".join(
+            f'"{self._label(c, 60) or c.get("ref") or "?"}"'
+            for c in ranked[:max_active])
+        warnings.append(
+            f"{len(active)} hypotheses were proposed as active at once; only "
+            f"{max_active} may be verified at a time, so {kept_labels} "
+            f"stay 'formulated' and the other "
+            f"{len(active) - max_active} were created as 'postponed' (backlog). "
+            f"To choose which ones are verified, mark them with "
+            f"attrs.selected=true or a higher attrs.priority; the orchestrator "
+            f"can revive a postponed one later.")
 
     def _stage_merge(self, source: str, i: int, draft: Dict[str, Any],
                      merges: List[Dict[str, Any]]) -> List[str]:

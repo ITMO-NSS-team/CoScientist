@@ -14,7 +14,11 @@ The YAML declares every agent of the system in one place. Per agent:
   callbacks:    {before_model|after_model|before_tool|after_tool|before_agent|after_agent: [names]}
   hitl:         whether the agent uses human-in-the-loop (tools + prompt section
                 for llm agents, review-loop handler for session agents)
+  critic:       an LLM critic reviews the agent's output once and it rewrites
+                on request (session agents only; bool or "${settings.path}")
+  report_output: the agent's final answer is a deliverable — show it in the chat
   output_key / output_schema / planner / options: passthrough constructor config
+                (an ``options`` value may be "${settings.path}" too)
   a2a:          how the agent is exposed as an A2A service (key, port, skill, env)
 """
 from __future__ import annotations
@@ -52,19 +56,31 @@ def resolve_config_path(ref: Optional[str] = None) -> Path:
     return CONFIG_DIR / f"{ref}.yaml"
 
 
+def _is_setting_ref(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.strip().startswith("${")
+        and value.strip().endswith("}")
+    )
+
+
+def _setting_value(ref: str) -> Any:
+    """The live value behind a "${dotted.settings.path}" reference."""
+    obj: Any = get_settings()
+    for part in ref.strip()[2:-1].split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
 def _resolve_setting_ref(value: Union[bool, str]) -> bool:
     """Resolve an ``enabled`` value: a bool, or "${dotted.settings.path}"."""
     if isinstance(value, bool):
         return value
-    text = value.strip()
-    if not (text.startswith("${") and text.endswith("}")):
+    if not _is_setting_ref(value):
         raise ValueError(
             f"enabled must be a bool or '${{settings.path}}', got {value!r}"
         )
-    obj: Any = get_settings()
-    for part in text[2:-1].split("."):
-        obj = getattr(obj, part)
-    return bool(obj)
+    return bool(_setting_value(value))
 
 
 class SkillConfig(BaseModel):
@@ -124,6 +140,15 @@ class AgentConfig(BaseModel):
     children: List[str] = Field(default_factory=list)
     callbacks: CallbacksConfig = Field(default_factory=CallbacksConfig)
     hitl: bool = False
+    # An LLM critic reviews my proposed output once before it is accepted, and
+    # I rewrite it if the critic asks (session-style custom agents only — the
+    # review loop is theirs). Independent of the orchestrator's pre/post-action
+    # critic callbacks. Accepts "${settings.path}" like `enabled`.
+    critic: Union[bool, str] = False
+    # My final answer is a deliverable in its own right (hypotheses, a research
+    # summary): report it to the chat instead of leaving it buried in the
+    # delegation's function_response. See logging/agent_output.py.
+    report_output: bool = False
     include_contents: Optional[str] = "default"
     mode: Optional[str] = None
     output_key: Optional[str] = None
@@ -159,6 +184,22 @@ class AgentConfig(BaseModel):
 
     def is_enabled(self) -> bool:
         return _resolve_setting_ref(self.enabled)
+
+    def uses_critic(self) -> bool:
+        return _resolve_setting_ref(self.critic)
+
+    def resolved_options(self) -> Dict[str, Any]:
+        """``options`` with every "${settings.path}" value replaced by the value.
+
+        Lets a constructor kwarg follow a runtime setting the way ``enabled``
+        and ``critic`` do — e.g. the plan critic's round budget, which the web
+        UI writes to settings — instead of being frozen in the YAML. Values
+        keep their own type (int stays int); only strings are inspected.
+        """
+        return {
+            key: _setting_value(value) if _is_setting_ref(value) else value
+            for key, value in self.options.items()
+        }
 
 
 class DefaultsConfig(BaseModel):
@@ -216,6 +257,13 @@ class SystemConfig(BaseModel):
                 )
 
         for agent in self.agents.values():
+            # The critic's review→revise round needs an agent that can re-run
+            # itself; only the session-style custom classes have that loop.
+            if agent.critic and not agent.cls.startswith("custom:"):
+                raise ValueError(
+                    f"{agent.name}: critic: is supported only by custom "
+                    f"session agents, not by a {agent.cls!r} agent"
+                )
             for ref in agent.subordinates + agent.children:
                 if ref not in self.agents:
                     raise ValueError(f"{agent.name}: unknown agent reference {ref!r}")
@@ -281,6 +329,13 @@ class SystemConfig(BaseModel):
     def delegatable_names(self) -> set:
         """Names of every agent that some agent delegates to via AgentTool."""
         return {s for a in self.agents.values() for s in a.subordinates}
+
+    def reported_output_agents(self) -> frozenset:
+        """Enabled agents whose final answer is shown in the chat."""
+        return frozenset(
+            a.name for a in self.agents.values()
+            if a.report_output and a.is_enabled()
+        )
 
     def a2a_agents(self) -> List[AgentConfig]:
         return [a for a in self.agents.values() if a.a2a]

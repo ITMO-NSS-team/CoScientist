@@ -71,6 +71,12 @@ def _install_graph_resolver(monkeypatch):
 
     monkeypatch.setattr(plugin_module, "get_knowledge_graph", resolve)
     monkeypatch.setattr(plugin_module, "_agent_names", lambda: set())
+    # Pin the agent topology: these scenarios drive OrchestratorAgent directly,
+    # and reading root/parents out of system.yaml made the assertions depend on
+    # the deployed hierarchy — wrapping the orchestrator in a composite parent
+    # legitimately adds that parent's node and broke the exact-set checks.
+    monkeypatch.setattr(plugin_module, "_system_root", lambda: "OrchestratorAgent")
+    monkeypatch.setattr(plugin_module, "_composite_parents", lambda: {})
     monkeypatch.setenv("KG_SEMANTIC_ENABLED", "0")
     return graphs
 

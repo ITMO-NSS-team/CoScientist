@@ -388,6 +388,56 @@ def test_ready_trigger(store):
     assert [i["hypothesis"] for i in ready] == ["H1"]
 
 
+def test_ready_trigger_offers_one_hypothesis_at_a_time(store):
+    """Several verifiable hypotheses ⇒ exactly ONE is actionable; the rest are
+    reported as queued so the orchestrator does not verify them in parallel."""
+    _build_verifiable(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "h2",
+                         "attrs": {"formulation": "alt", "priority": "high"}}],
+                 edges=[{"type": "motivates", "from": "Q1", "to": "#h2"}])
+    ready = queries.ready_hypotheses(store)
+    assert [i["hypothesis"] for i in ready["items"]] == ["H2"]   # higher priority wins
+    assert [i["hypothesis"] for i in ready["queued"]] == ["H1"]
+    assert "QUEUED" in ready["rendered"]
+
+
+def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store):
+    """A batch of hypotheses proposed in one commit: the selected one stays
+    `formulated`, the alternatives are stored as `postponed` backlog."""
+    _init(store)
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "first"}},
+               {"type": "Hypothesis", "ref": "b",
+                "attrs": {"formulation": "the relevant one", "selected": "true"}},
+               {"type": "Hypothesis", "ref": "c", "attrs": {"formulation": "third"}}],
+        edges=[{"type": "motivates", "from": "Q1", "to": "#b"}])
+    assert r.ok, r.errors
+    statuses = {n["id"]: n["status"] for n in store.full()["nodes"]
+                if n["type"] == "Hypothesis"}
+    assert statuses == {"H1": "postponed", "H2": "formulated", "H3": "postponed"}
+    # the warning names the cap and how to steer it, so the agent can act on it
+    assert any("may be verified at a time" in w and "attrs.selected" in w
+               for w in r.warnings), r.warnings
+    # only the selected one is offered for verification; the backlog stays quiet
+    assert [i["hypothesis"] for i in queries.ready_hypotheses(store)["items"]] == ["H2"]
+    assert not queries.postponed_hypotheses(store)["rendered"]
+
+
+def test_postponed_backlog_surfaces_only_when_nothing_is_active(store):
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
+                        {"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "two"}}])
+    assert not queries.postponed_hypotheses(store)["rendered"]   # H1 is active
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "postponed"}])
+    backlog = queries.postponed_hypotheses(store)
+    assert [i["hypothesis"] for i in backlog["items"]] == ["H1", "H2"]
+    assert "BACKLOG" in backlog["rendered"]
+
+
 def test_blocked_trigger(store):
     _build_verifiable(store)
     # a hypothesis requiring a tool that is still being created is blocked, not ready

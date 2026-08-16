@@ -4,6 +4,7 @@ Re-exported here so callers can use `from CoScientist.agents.callbacks import
 <name>` regardless of which submodule defines it.
 """
 from CoScientist.agents.callbacks.critic import (
+    make_plan_critique,
     make_post_action_critique,
     make_pre_action_critique,
 )
@@ -23,8 +24,11 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     before_get_task,
     before_tool_reranker_model,
     capture_mcp_artifacts,
+    inject_dataset_context,
     inject_graph_root,
+    make_plan_registration_guard,
     make_unknown_tool_guard,
+    inject_original_query,
     print_research_agent_tool_call,
     redirect_when_no_tools,
 )
@@ -32,6 +36,7 @@ from CoScientist.agents.callbacks.tool_callbacks import (
 __all__ = [
     "make_pre_action_critique",
     "make_post_action_critique",
+    "make_plan_critique",
     "before_model_modifier",
     "med_agent_before_model",
     "papers_agent_before_model",
@@ -44,7 +49,10 @@ __all__ = [
     "capture_mcp_artifacts",
     "redirect_when_no_tools",
     "make_unknown_tool_guard",
+    "make_plan_registration_guard",
+    "inject_original_query",
     "before_get_task",
     "inject_graph_root",
+    "inject_dataset_context",
     "sanitize_json_output",
 ]

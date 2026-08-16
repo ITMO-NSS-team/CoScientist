@@ -28,6 +28,12 @@
 #   hitl:         I use human-in-the-loop (llm: approval/selection tools +
 #                 prompt section; custom:session: review-loop handler).
 #                 Takes effect only when HITL__ENABLED is on globally.
+#   critic:       an LLM critic reviews my output in that same review loop and
+#                 I rewrite once if it objects (custom:session agents only)
+#   report_output: my final answer is a deliverable of its own (hypotheses, a
+#                 research summary, an execution report) — post it to the chat
+#                 as MY message instead of leaving it inside the caller's
+#                 function_response, where only a preview was ever visible
 #   a2a:          standalone A2A service: key (env prefix <KEY>_PORT and serve
 #                 argument), default port, advertised skill, pre-import env
 #
@@ -60,19 +66,12 @@ agents:
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
-    # retrieval lets the orchestrator check which ready-made MCP tools exist
-    # BEFORE routing a step — prefer TaskExecutorAgent over research when a
-    # relevant tool is already available.
-    # No task_tracker: with the PlannerAgent disabled nothing calls create_plan,
-    # so the tracker is always empty and the orchestrator only ever hallucinated
-    # update_task_status on phantom task ids. Dropped so it coordinates directly.
     tools: [retrieval, graph, research_graph_orchestrator]
     subordinates:
       - PlannerAgent
       - HypothesesAgent
       - ResearchAgent
       - TaskExecutorAgent
-      - CoderAgent
       - MedicalAgent
       - McpBuilderAgent
     callbacks:
@@ -98,7 +97,23 @@ agents:
         name: Orchestrate
         description: Coordinate scientific research agents to solve complex tasks
         tags: [orchestration, science, multi-agent]
-
+  PlanningPipelineAgent:
+    class: sequential
+    root: false
+    children:
+      - PlannerAgent
+      - OrchestratorAgent
+    enabled: false
+    hitl: true
+    description: Initial planning pipeline (PlannerAgent -> OrchestratorAgent)
+    a2a:
+      key: init
+      port: 8008
+      skill:
+        id: init
+        name: Init
+        description: Initialize the CoScientist planning pipeline
+        tags: [init, science, multi-agent]
 
   # ── Direct subordinates ────────────────────────────────────────────────────
   PlannerAgent:
@@ -112,15 +127,16 @@ agents:
       for a complex multi-step task, call this FIRST to produce a roadmap,
       then follow it step by step.
     prompt: planner
-    # retrieval lets the planner inspect which ready-made MCP tools exist (and
-    # what they accept/return) BEFORE writing the roadmap, so the plan reflects
-    # real tool capabilities instead of guessing from priors.
-    tools: [retrieval, create_plan_tool, graph]
+    tools: [planner_retrieval, create_plan_tool, planner_graph]
     output_key: planner_roadmap
+    report_output: true
     callbacks:
       before_agent: [inject_graph_root]
-      after_model: [guard_unknown_tools]
+      after_model: [guard_unknown_tools, finish_after_plan_registered]
     hitl: true
+    critic: ${web.planner_critic_enabled}
+    options:
+      critic_max_rounds: ${web.planner_critic_rounds}
     a2a:
       key: planner
       port: 8001
@@ -175,12 +191,20 @@ agents:
 
   HypothesesAgent:
     class: llm
-    description: generates ideas and hypotheses.
-    routing: when the direction is unclear or multiple approaches need to be proposed.
+    description: >-
+      generates candidate hypotheses and returns the selected hypothesis(es) to verify next 
+      the alternatives stay in the graph as postponed backlog).
+    routing: >-
+      when the direction is unclear or approaches need to be proposed. It comes
+      back with selected hypothesis(es) — verify those; do not start the
+      alternatives in parallel unless they are among the selected set.
     planning: |-
-      Use this to generate and test hypotheses.
+      Use this to generate hypotheses when the solution is unclear or approaches need to be proposed.
+      It picks the single most relevant hypothesis to test first, so plan ONE verification branch after it.
+      Decision-making and compatibility assessment based on gathered facts.
     prompt: hypotheses
     output_key: hypotheses
+    report_output: true
     tools: [task_tracker, graph, research_graph]
     # HITL so it can co-build the graph with the human: validate proposed
     # hypotheses and ask for acceptance criteria when the human didn't add any.
@@ -213,13 +237,16 @@ agents:
       cannot be solved computationally, or claims need literature validation. If
       it returns no/empty/insufficient results, escalate by reformulating into
       "find and download papers about <expanded topic>". Do NOT use it to read a
-      specific repository or URL the user named — that goes to CoderAgent.
+      specific repository or URL the user named — that goes to TaskExecutorAgent.
     planning: |-
-      Use this ONLY when information cannot be computed or retrieved via tools, and specifically 
+      Use it when your domain knowledge is not enough.
+      Use it to gather extra information about the scientific field and literature.
+      Use it when information cannot be computed or retrieved via tools, and specifically 
       requires searching information from the web or literature.  
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
     output_key: search_results
+    report_output: true
     callbacks:
       before_agent: [before_get_task, inject_research_context]
       before_model: [inject_uploaded_papers]
@@ -237,6 +264,44 @@ agents:
         tags: [research, literature, web-search, knowledge]
 
   TaskExecutorAgent:
+    class: llm
+    description: >-
+      executes tasks: routes each one to the path that can actually deliver it —
+      RUNNING existing ready-made MCP tools/services (property estimation,
+      docking, simulations, inference), or ENGINEERING it in a sandbox (writing
+      and running code, shell/git, data work) when no ready tool covers it.
+    routing: >-
+      for ANY task that must actually be EXECUTED — computed with an existing
+      tool OR built/run as code. It chooses the execution path itself, so you do
+      not have to decide up front whether a ready tool exists. Hallmark:
+      "compute/run X", "write code / clone repo X / assemble a dataset".
+    planning: |-
+      Use this as your primary choice for ANY task that must be EXECUTED:
+        - computations served by ready-made MCP tools
+        - engineering work: writing, debugging and running code, ML training and
+          evaluation, shell and git operations, collecting/processing data
+      It routes between those two paths internally, so assign it the OUTCOME and
+      let it choose how to reach it.
+    prompt: task_router
+    subordinates: [ToolPipelineAgent, CoderAgent]
+    output_key: executor_results
+    report_output: true
+    callbacks:
+      after_model: [guard_unknown_tools]
+    a2a:
+      key: task_execution
+      port: 8004
+      env:
+        CODER_WORKSPACE_ID: a2a_shared
+        GIT_HTTP_LOW_SPEED_LIMIT: "1000"
+        GIT_HTTP_LOW_SPEED_TIME: "20"
+      skill:
+        id: execute_task
+        name: Execute Task
+        description: Run a task via ready-made MCP tools or by writing and running code
+        tags: [experiment, mcp, computation, ml, code]
+
+  ToolPipelineAgent:
     class: sequential
     description: >-
       runs computations by orchestrating EXISTING ready-to-use MCP
@@ -246,20 +311,7 @@ agents:
     routing: >-
       when the result can be obtained by RUNNING AN EXISTING tool/service.
       Hallmark: "compute/run X using tools we already have."
-    planning: |-
-      Use this as your primary choice for ANY task that can be calculated. 
-      This agent has comprehensive capabilities and must be prioritized over searching whenever possible: 
-        - Any computational task requiring tools
-        - Solves all tasks involving chemistry
     children: [ToolPreparerAgent, ExperimentAgent]
-    a2a:
-      key: task_execution
-      port: 8004
-      skill:
-        id: execute_task
-        name: Execute Task
-        description: Discover MCP tools and run computational experiments to solve a task
-        tags: [experiment, mcp, computation, ml]
 
   CoderAgent:
     class: llm
@@ -280,21 +332,24 @@ agents:
       and read repo X / assemble a dataset."
     planning: |-
       choose for steps that require ENGINEERING work in a sandbox:
-          * writing and running code or scripts
+          * writing, debugging, and running scripts/code
+          * machine learning model preparation, training, and evaluation
           * shell and git operations (cloning repos, committing, pushing)
           * collecting, parsing, or transforming data
           * environment setup and running long jobs
           → Use whenever no existing tool covers the objective and the step requires
             doing software/data engineering rather than calling a ready service
     prompt: coder
-    tools: [coder, research_graph, verify]
+    tools: [coder, sandbox, research_graph, verify]
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
-      before_agent: [inject_research_context]
+      before_agent: [inject_research_context, inject_dataset_context]
+      #before_model: [hitl_before_model]
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
       # corrective message instead of letting ADK crash the whole run.
       after_model: [guard_unknown_tools]
+    hitl: true
     a2a:
       key: coder
       port: 8006
@@ -331,10 +386,10 @@ agents:
       building or training on it (e.g. "collect a dataset of BTK inhibitors with
       IC50"). It downloads into the shared workspace and writes a MANIFEST.
     prompt: dataset_collector
-    tools: [coder, websearch, research_graph, verify]
+    tools: [coder, sandbox, websearch, research_graph, verify]
     output_key: dataset_results
     callbacks:
-      before_agent: [inject_research_context]
+      before_agent: [inject_research_context, inject_dataset_context]
       after_model: [guard_unknown_tools]
 
   MedicalAgent:
@@ -353,6 +408,7 @@ agents:
     prompt: medical
     tools: [medical, task_tracker, graph, research_graph]
     output_key: medical_results
+    report_output: true
     callbacks:
       before_agent: [before_get_task, inject_research_context]
       before_model: [inject_medical_artifacts]
@@ -400,7 +456,7 @@ agents:
         description: Turn a scientific GitHub repository into a validated, served MCP tool server
         tags: [mcp, codegen, docker, tools]
 
-  # ── TaskExecutorAgent pipeline ─────────────────────────────────────────────
+  # ── ToolPipelineAgent stages ───────────────────────────────────────────────
   ToolPreparerAgent:
     class: sequential
     description: Agent to find and prepare relevant mcp servers for current task

@@ -13,9 +13,10 @@ hierarchy (delegations AND sequential/parallel children):
            ├─ tool_call: retrieve_tools          (a tool the orchestrator ran)
            ├─ agent_call: PlannerAgent           (a delegation)
            │     └─ tool_call: create_plan
-           ├─ agent_call: TaskExecutorAgent      (a sequential composite)
-           │     └─ agent_call: ExperimentAgent  (its child — hierarchy preserved)
-           │           └─ tool_call: fedot_tool
+           ├─ agent_call: TaskExecutorAgent      (the execution router)
+           │     └─ agent_call: ToolPipelineAgent    (a sequential composite)
+           │           └─ agent_call: ExperimentAgent  (its child — hierarchy kept)
+           │                 └─ tool_call: fedot_tool
            └─ result                             (final answer — out of the orchestrator)
 
 Node labels: tool_call shows the TOOL name, agent_call shows the AGENT name (who
@@ -104,6 +105,14 @@ def _system_root() -> str:
 
 
 def _enabled() -> bool:
+    # The web UI switch wins: with the knowledge graph off nothing is recorded,
+    # matching the `graph` reader toolset dropping out of every agent.
+    try:
+        from CoScientist.config import get_settings
+        if not get_settings().web.knowledge_graph_enabled:
+            return False
+    except Exception:  # noqa: BLE001 — never let config break event recording
+        pass
     value = os.getenv("LOG_AGENT_EVENTS") or os.getenv("A2A_LOG_EVENTS") or "1"
     return value not in ("0", "false", "False")
 
