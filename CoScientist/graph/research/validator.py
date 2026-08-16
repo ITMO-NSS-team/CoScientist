@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from google.adk.plugins.base_plugin import BasePlugin
@@ -40,7 +41,13 @@ _SYSTEM = (
     "irrelevant). Then weigh it against the criteria and return a verdict. Be "
     "conservative: confirm only when supporting evidence is strong, consistent and "
     "meets the criteria; refute when there is decisive contradicting evidence; "
-    "otherwise postpone. When you postpone, additionally judge whether the "
+    "otherwise postpone. If the hypothesis claims to be THE dominant/leading/"
+    "most-frequent option, a test against a theoretical/uniform baseline is NOT "
+    "enough — that only shows it beats chance, not that it beats its actual "
+    "runner-up. Do not mark such criteria 'met' unless the evidence contains a "
+    "head-to-head comparison against the specific runner-up; a close runner-up "
+    "with no such comparison is grounds to postpone, not confirm. When you "
+    "postpone, additionally judge whether the "
     "hypothesis is CLOSE: evidence direction is consistent/supportive and exactly "
     "ONE specific, nameable piece is missing (e.g. a quantitative value, an "
     "untested sub-claim, a named comparison) — as opposed to genuinely weak or "
@@ -125,6 +132,41 @@ def _has_evolved_from(g: Any, hid: str) -> bool:
     """True if `hid` is itself an evolved hypothesis (points to a parent via
     `evolved_from`) — the only case the independence checks below apply to."""
     return any(k == "evolved_from" for _, _, k in g.out_edges(hid, keys=True))
+
+
+def _evolved_neighbors(g: Any, hid: str) -> set:
+    """Direct `evolved_from` neighbors of `hid` — its parent (if `hid` is a
+    child) and/or its children (if `hid` is a parent). Legitimate, EXPECTED
+    lineage — not the "unrelated hypothesis" concern `_shared_evidence_hyps`
+    below flags; a parent and its evolved child sharing seed evidence is by
+    design, already handled separately by `_seed_evidence_ids`."""
+    out = {v for _, v, k in g.out_edges(hid, keys=True) if k == "evolved_from"}
+    inn = {u for u, _, k in g.in_edges(hid, keys=True) if k == "evolved_from"}
+    return out | inn
+
+
+def _shared_evidence_hyps(g: Any, hid: str, evidence_ids) -> Dict[str, List[str]]:
+    """Other Hypothesis nodes (excluding `hid` and its evolved_from lineage,
+    see `_evolved_neighbors`) that cite any of `evidence_ids` too — i.e. this
+    hypothesis' confirmation is not independent grounding but shares its
+    source with a sibling. A real case this catches: a mechanistic paper
+    (MRAS-SHOC2 → MAPK reactivation) cited as supporting BOTH a YAP/TAZ
+    hypothesis and a separate NF1/SHOC2 hypothesis — two nominally
+    independent branches resting partly on the same underlying fact. Flag
+    only (see judge_hypothesis) — overlap can be entirely legitimate two
+    hypotheses correctly drawing on the same well-established fact — this is
+    for the report to interpret and present honestly, not a verdict call."""
+    excluded = _evolved_neighbors(g, hid) | {hid}
+    shared: Dict[str, List[str]] = {}
+    for eid in evidence_ids:
+        if eid not in g:
+            continue
+        for _, target, k in g.out_edges(eid, keys=True):
+            if (k in ("supports", "refutes", "refines", "relates_to")
+                    and target not in excluded
+                    and g.nodes.get(target, {}).get("type") == "Hypothesis"):
+                shared.setdefault(target, []).append(eid)
+    return shared
 
 
 def _seed_evidence_ids(g: Any, hid: str):
@@ -214,6 +256,59 @@ def _independent_evidence_ids(by_id: Dict[str, Any], ev_ids) -> set:
             continue
         keep.append(eid)
     return set(keep)
+
+
+_SUPERLATIVE_RE = re.compile(
+    r"\b(?:dominant|dominates?|most (?:frequent|common)|leading|"
+    r"outperforms? all|highest[- ]frequency)\b"
+    # Cyrillic stems get no trailing \b: they're deliberately truncated to
+    # match inflected endings (частый/частым/частая/...), and \w* eats the
+    # rest of the word — a trailing \b would fail mid-word since Cyrillic
+    # letters are \w in Python's Unicode-aware re.
+    r"|\b(?:сам\w*\s+част\w*|доминир\w*|преоблада\w*)",
+    re.IGNORECASE,
+)
+_COMPARATOR_RE = re.compile(
+    r"\b(vs\.?|versus|compared to|against the|second[- ]most|runner-?up|"
+    r"против|чем у|второе место|ближайш\w* конкурент)\b",
+    re.IGNORECASE,
+)
+# A "vs/against ... uniform/random/baseline/chance/theoretical/expected/null"
+# phrase is a comparison against a THEORY, not a real competitor — it must
+# not itself count as a comparator match (that is exactly the failure mode
+# this check exists to catch: "binomial test vs uniform baseline: p=1.97e-12"
+# reads as having a "vs", but names no actual runner-up).
+_BASELINE_COMPARISON_RE = re.compile(
+    r"\b(?:vs\.?|versus|compared to|against(?: the)?)\s+(?:an?\s+|the\s+)?"
+    r"(?:uniform|random|baseline|chance|theoretical|expected|null)\b[\w\s%().,-]*",
+    re.IGNORECASE,
+)
+
+
+def _claims_superlative(text: str) -> bool:
+    """True if a hypothesis's own wording claims to be THE dominant/leading/
+    most-frequent option — a claim that is only meaningful relative to
+    whatever the actual runner-up is, not to a theoretical/uniform baseline."""
+    return bool(_SUPERLATIVE_RE.search(text or ""))
+
+
+def _has_named_comparator(texts: List[str]) -> bool:
+    """True if any evidence text explicitly frames a head-to-head comparison
+    (e.g. "vs indole", "second-most frequent") rather than only a comparison
+    against a theoretical/uniform baseline. Baseline-comparison phrases are
+    stripped out FIRST (see _BASELINE_COMPARISON_RE) so "vs uniform baseline"
+    doesn't itself satisfy the check via its bare "vs". A cheap text-level
+    signal, not semantic parsing — it will miss a real comparison phrased
+    without one of these cue words (a real GSK-3β run's evidence used exactly
+    this pattern: "vs indole 273: p=6.03e-04"), so a MISS here is only a soft
+    flag on the Conclusion for review, never a verdict downgrade (see
+    judge_hypothesis) — unlike the independence check, this signal is too
+    fuzzy to hard-block on."""
+    for t in texts:
+        stripped = _BASELINE_COMPARISON_RE.sub(" ", t or "")
+        if _COMPARATOR_RE.search(stripped):
+            return True
+    return False
 
 
 def _build_user(slice_: Dict[str, Any], hid: str) -> str:
@@ -351,6 +446,30 @@ async def judge_hypothesis(
                     status_updates[0]["status"] = verdict
                     status_updates[0]["reason"] = circular_reason[:300]
 
+        # Comparator check: a hypothesis that claims to be THE dominant/
+        # leading/most-frequent option only means something relative to the
+        # actual runner-up. Flag — do NOT block, see _has_named_comparator —
+        # when a superlative claim is confirmed with no evidence that frames
+        # a head-to-head comparison against a named competitor (the failure
+        # mode actually observed: a scaffold "confirmed dominant" via a
+        # binomial test against a uniform 10% baseline, while its real
+        # runner-up sat within a percentage point — a proper head-to-head
+        # test on that pair came back p≈0.5, not significant at all).
+        comparator_missing = False
+        if verdict == "confirmed" and _claims_superlative(
+                (h.get("attrs") or {}).get("formulation", "")):
+            ev_texts = [_evidence_text(by_id[eid]) for eid in supporting_ids if eid in by_id]
+            comparator_missing = not _has_named_comparator(ev_texts)
+
+        # Cross-hypothesis grounding check: see _shared_evidence_hyps. Only
+        # meaningful once this hypothesis is actually confirmed — that's the
+        # point at which a reader (or ResultAggregatorAgent) would otherwise
+        # treat it as an independently-established sibling finding.
+        shared_evidence_hyps: Dict[str, List[str]] = {}
+        if verdict == "confirmed" and supporting_ids:
+            shared_evidence_hyps = _shared_evidence_hyps(
+                graph.full_graph(), hid, supporting_ids)
+
         nodes: List[Dict[str, Any]] = []
         concl = str(data.get("conclusion", "")).strip()
         if concl:
@@ -360,6 +479,15 @@ async def judge_hypothesis(
             }
             if duplicate_evidence:
                 concl_attrs["duplicate_evidence"] = duplicate_evidence
+            if comparator_missing:
+                concl_attrs["comparator_check"] = "missing"
+            if shared_evidence_hyps:
+                # Sorted for deterministic output — dict iteration order isn't
+                # guaranteed stable across runs/Python versions in a way this
+                # attr's consumers should depend on.
+                concl_attrs["shares_evidence_with"] = {
+                    k: sorted(v) for k, v in sorted(shared_evidence_hyps.items())
+                }
             # The gap EvolutionAgent acts on (graph/research/evolution.py). Only
             # meaningful on a postponed verdict; only trusted "recommended" if a
             # concrete gap actually came with it (a bare true with no gap text
@@ -491,3 +619,70 @@ class BackgroundValidatorPlugin(BasePlugin):
 
 
 background_validator_plugin = BackgroundValidatorPlugin()
+
+
+# How long the Result Aggregator will wait for straggler judgments before
+# writing the report anyway (best-effort — never blocks the report forever).
+_SETTLE_TIMEOUT = 60.0
+_SETTLE_POLL = 2.0
+
+
+async def wait_for_validator_settle(callback_context: Any) -> None:
+    """before_agent callback for ResultAggregatorAgent: give any hypothesis
+    still `under_verification` one more chance to resolve before the report
+    freezes its status in prose.
+
+    BackgroundValidatorPlugin.after_tool_callback (above) only reschedules a
+    judgment on the NEXT `research_commit` tool call. That is fine while the
+    run keeps committing evidence — but ResultAggregatorAgent's own tools are
+    read-only (`research_graph_readonly`), so if whichever agent left a
+    hypothesis `under_verification` (e.g. EvolutionAgent, right after
+    attaching evidence to a freshly evolved child) was the LAST one to touch
+    the graph this run, nothing ever re-triggers it again. It is not "still
+    judging" — it is orphaned: a real observed case had `status_history`
+    stop dead at the "auto: evidence attached" transition, no entry after,
+    ever, because no later `research_commit` happened to re-scan for it.
+
+    This callback actively re-schedules those stragglers through the SAME
+    plugin instance (reusing its `_completed`/`_inflight` dedup, so it never
+    double-judges something genuinely still in flight from elsewhere), then
+    polls, bounded by `_SETTLE_TIMEOUT`, for them to land. Best-effort: never
+    raises, never blocks the report past the timeout — whatever is still
+    `under_verification` when it gives up is exactly what the (now stricter)
+    result_aggregator prompt is instructed to flag as preliminary rather than
+    narrate with confidence."""
+    if not _enabled():
+        return None
+    try:
+        graph = get_research_graph(callback_context)
+        research_id = _research_id(graph)
+        background_validator_plugin._activate_research(graph, research_id)
+        deadline = time.monotonic() + _SETTLE_TIMEOUT
+        while True:
+            counts = graph.overview().get("counts", {}).get("Hypothesis", {})
+            if counts.get("under_verification", 0) == 0:
+                return None
+            for item in queries.unresolved_hypotheses(graph)["items"]:
+                key = background_validator_plugin._key(graph, research_id, item)
+                if (key in background_validator_plugin._completed
+                        or key in background_validator_plugin._inflight):
+                    continue
+                background_validator_plugin._inflight.add(key)
+                logger.info(
+                    "[validator] result_aggregator settle: rescheduling stale %s",
+                    item["hypothesis"],
+                )
+                task = asyncio.create_task(
+                    background_validator_plugin._run_validation(
+                        key=key, graph=graph,
+                        hypothesis=item["hypothesis"], research_id=research_id,
+                    )
+                )
+                _TASKS.add(task)
+                task.add_done_callback(_TASKS.discard)
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(_SETTLE_POLL)
+    except Exception:  # noqa: BLE001 — best-effort, must never break the report
+        logger.warning("[validator] wait_for_validator_settle failed", exc_info=True)
+        return None

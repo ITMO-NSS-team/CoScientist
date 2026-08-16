@@ -946,6 +946,206 @@ def test_duplicate_evidence_flagged_but_does_not_block_ordinary_hypothesis(store
     assert concl["attrs"]["duplicate_evidence"] == [e2_id]
 
 
+def _build_superlative(store, formulation):
+    """Like _build_verifiable but with a caller-supplied H1 formulation, for
+    the comparator-check tests (needs superlative wording: "dominant" etc.)."""
+    _init(store)
+    store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h", "attrs": {"formulation": formulation}},
+               {"type": "VerificationMethod", "ref": "vm", "attrs": {"method_type": "computational"}},
+               {"type": "ConfirmationCriteria", "ref": "cc", "attrs": {"threshold": "p<0.05"}}],
+        edges=[{"type": "motivates", "from": "Q1", "to": "#h"},
+               {"type": "tested_by", "from": "#h", "to": "#vm"},
+               {"type": "formulated_for", "from": "#cc", "to": "#h"},
+               {"type": "requires", "from": "#h", "to": "T1"},
+               {"type": "uses", "from": "#vm", "to": "T1"}],
+    )
+
+
+def test_claims_superlative_and_has_named_comparator():
+    import CoScientist.graph.research.validator as V
+
+    assert V._claims_superlative("Scaffold X is the dominant heteroaromatic scaffold")
+    assert V._claims_superlative("X является самым частым скэффолдом")
+    assert not V._claims_superlative("X binds Y with high affinity")
+
+    assert V._has_named_comparator(["X (418) vs runner-up Y (400): p=0.001"])
+    assert V._has_named_comparator(["X is the second-most frequent scaffold"])
+    assert not V._has_named_comparator(
+        ["X: 418/2979, binomial test vs uniform baseline (10%): p=1.97e-12"])
+
+
+def test_shares_evidence_with_flags_confirmed_sibling_overlap(store):
+    """Two nominally independent hypotheses (H1, H2) that both cite the SAME
+    evidence node get `shares_evidence_with` on H1's Conclusion when H1 is
+    confirmed — regression for a live case: a mechanistic paper (MRAS-SHOC2
+    -> MAPK reactivation) cited as supporting BOTH a YAP/TAZ hypothesis and a
+    separate NF1/SHOC2 hypothesis, presented in the final report as two
+    independent confirmations when they partly rest on the same source."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)  # H1: "X binds Y"
+    store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "Y regulates Z"}},
+               {"type": "VerificationMethod", "ref": "vm2", "attrs": {"method_type": "computational"}},
+               {"type": "ConfirmationCriteria", "ref": "cc2", "attrs": {"threshold": "<-8"}}],
+        edges=[{"type": "motivates", "from": "Q1", "to": "#h2"},
+               {"type": "tested_by", "from": "#h2", "to": "#vm2"},
+               {"type": "formulated_for", "from": "#cc2", "to": "#h2"},
+               {"type": "requires", "from": "#h2", "to": "T1"},
+               {"type": "uses", "from": "#vm2", "to": "T1"}],
+    )
+    store.commit(
+        source="ResearchAgent",
+        nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "literature",
+                "content": "shared mechanistic finding cited by both branches"}}],
+        edges=[{"type": "supports", "from": "#e", "to": "H1"},
+               {"type": "supports", "from": "#e", "to": "H2"}],
+    )
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"confirmed","criteria":{"CC1":"met"},'
+                '"conclusion":"X binds Y","validity_bounds":"in vitro","reason":"r"}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
+    assert concl["attrs"]["shares_evidence_with"] == {"H2": ["E1"]}
+
+
+def test_shares_evidence_with_absent_when_no_overlap(store):
+    """The ordinary case (no shared evidence across hypotheses) gets no flag —
+    regression against false positives on every confirmed hypothesis."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "literature",
+                         "content": "evidence used by nobody else"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"confirmed","criteria":{"CC1":"met"},'
+                '"conclusion":"X binds Y","validity_bounds":"in vitro","reason":"r"}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    concl = next(n for n in store.full()["nodes"] if n["type"] == "Conclusion")
+    assert "shares_evidence_with" not in concl["attrs"]
+
+
+def test_comparator_check_flags_superlative_confirmed_without_head_to_head(store):
+    """A hypothesis claiming to be THE dominant scaffold, confirmed only via a
+    uniform-baseline test with no head-to-head comparison against the actual
+    runner-up, gets comparator_check='missing' on its Conclusion — flagged,
+    NOT blocked (verdict stays confirmed; this signal is too fuzzy to hard-
+    block on, see _has_named_comparator). Regression for a live case: a
+    scaffold "confirmed dominant" via binomial-vs-uniform (p=1.97e-12) whose
+    real runner-up was a percentage point behind — a proper head-to-head test
+    on that pair came back p≈0.5, not significant at all."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_superlative(store, "Scaffold X is the dominant heteroaromatic scaffold")
+    store.commit(source="CoderAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "computational",
+                         "content": "Scaffold X: 418/2979 (14.0%), binomial test vs uniform "
+                                    "baseline (10%): p=1.97e-12"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"confirmed","criteria":{"CC1":"met"},'
+                '"conclusion":"X is dominant","validity_bounds":"ChEMBL","reason":"p<0.05"}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    assert nodes["H1"]["status"] == "confirmed"  # flagged, NOT blocked
+    concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
+    assert concl["attrs"]["comparator_check"] == "missing"
+
+
+def test_comparator_check_silent_when_head_to_head_is_present(store):
+    """The same superlative claim, but evidence DOES frame a head-to-head
+    comparison against the named runner-up — no flag."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_superlative(store, "Scaffold X is the dominant heteroaromatic scaffold")
+    store.commit(source="CoderAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "computational",
+                         "content": "Scaffold X (418) vs runner-up Scaffold Y (200), "
+                                    "Fisher's exact test: p=0.001"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"confirmed","criteria":{"CC1":"met"},'
+                '"conclusion":"X beats its closest competitor","validity_bounds":"ChEMBL",'
+                '"reason":"p<0.05 vs runner-up"}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    concl = next(n for n in store.full()["nodes"] if n["type"] == "Conclusion")
+    assert "comparator_check" not in concl["attrs"]
+
+
+def test_comparator_check_does_not_fire_on_non_superlative_hypothesis(store):
+    """A plain (non-superlative) confirmed hypothesis never gets this flag,
+    regardless of what its evidence says."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)  # H1: "X binds Y" — no superlative wording
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "literature",
+                         "content": "strong support, no baseline language at all"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def fake_complete(system, user):
+        return ('{"verdict":"confirmed","criteria":{"CC1":"met"},'
+                '"conclusion":"X binds Y","validity_bounds":"in vitro","reason":"r"}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=fake_complete))
+    finally:
+        V.research_graph = orig
+
+    assert res and res["ok"], res
+    concl = next(n for n in store.full()["nodes"] if n["type"] == "Conclusion")
+    assert "comparator_check" not in concl["attrs"]
+
+
 def test_background_validator_retries_after_failed_judgment(monkeypatch):
     import asyncio
     from types import SimpleNamespace
@@ -1018,6 +1218,73 @@ def test_background_validator_retries_after_failed_judgment(monkeypatch):
 
     asyncio.run(scenario())
     assert calls == [("H1", "research-1"), ("H1", "research-1")]
+
+
+def test_wait_for_validator_settle_reschedules_orphaned_hypothesis(monkeypatch):
+    """A hypothesis stuck `under_verification` with no further research_commit
+    to re-trigger it (see wait_for_validator_settle's docstring — the real
+    case this is a regression test for: status_history stopping dead at
+    "auto: evidence attached") gets picked up and resolved by the
+    ResultAggregatorAgent's settle callback, without waiting for the full
+    timeout."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    class FakeGraph:
+        def __init__(self):
+            self.settled = False
+
+        def full(self):
+            return {"research_id": "research-1"}
+
+        def overview(self):
+            return {"counts": {"Hypothesis": {"under_verification": 0 if self.settled else 1}}}
+
+    graph = FakeGraph()
+    item = {"hypothesis": "H6", "supporting": ["E1"], "refuting": [], "related": []}
+
+    async def fake_judge(hypothesis, *, graph, expected_research_id):
+        graph.settled = True
+        return {"ok": True}
+
+    monkeypatch.setattr(V, "_enabled", lambda: True)
+    monkeypatch.setattr(V, "get_research_graph", lambda ctx: graph)
+    monkeypatch.setattr(V.queries, "unresolved_hypotheses", lambda g: {"items": [item]})
+    monkeypatch.setattr(V, "judge_hypothesis", fake_judge)
+    monkeypatch.setattr(V, "_SETTLE_POLL", 0.01)
+    monkeypatch.setattr(V, "_SETTLE_TIMEOUT", 2.0)
+    monkeypatch.setattr(V, "background_validator_plugin", V.BackgroundValidatorPlugin())
+
+    asyncio.run(asyncio.wait_for(V.wait_for_validator_settle(object()), timeout=1.0))
+    assert graph.settled is True
+
+
+def test_wait_for_validator_settle_gives_up_after_timeout(monkeypatch):
+    """A hypothesis that never settles (e.g. the LLM judgment keeps failing)
+    must not hang the report forever — the callback gives up at the bound
+    and lets the (stricter) result_aggregator prompt flag it as preliminary."""
+    import asyncio
+    import CoScientist.graph.research.validator as V
+
+    class FakeGraph:
+        def full(self):
+            return {"research_id": "research-1"}
+
+        def overview(self):
+            return {"counts": {"Hypothesis": {"under_verification": 1}}}  # never clears
+
+    graph = FakeGraph()
+
+    monkeypatch.setattr(V, "_enabled", lambda: True)
+    monkeypatch.setattr(V, "get_research_graph", lambda ctx: graph)
+    monkeypatch.setattr(V.queries, "unresolved_hypotheses", lambda g: {"items": []})
+    monkeypatch.setattr(V, "_SETTLE_POLL", 0.01)
+    monkeypatch.setattr(V, "_SETTLE_TIMEOUT", 0.03)
+    monkeypatch.setattr(V, "background_validator_plugin", V.BackgroundValidatorPlugin())
+
+    # Must return on its own once the bound elapses — the outer timeout here
+    # is only a safety net against a real hang, not the mechanism under test.
+    asyncio.run(asyncio.wait_for(V.wait_for_validator_settle(object()), timeout=1.0))
 
 
 def test_background_validator_dedup_tracks_related_evidence_and_research_id(

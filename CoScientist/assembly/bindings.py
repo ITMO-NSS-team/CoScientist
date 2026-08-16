@@ -119,6 +119,7 @@ def _research_graph_readonly():
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
     factory=_websearch,
+    optional=True,  # built only when TAVILY_API_KEY is configured (see research_tools.py)
     runtime_resolved=True,  # Tavily MCP — tool surface comes from the remote server
     docs=(
         ToolDoc(
@@ -651,6 +652,11 @@ def _inject_research_context(ctx):
     return make_inject_research_context(is_root=is_root)
 
 
+def _wait_for_validator_settle():
+    from CoScientist.graph.research.validator import wait_for_validator_settle
+    return wait_for_validator_settle
+
+
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     return SearchLimiter(max_searches=2).limit_searches
@@ -728,6 +734,10 @@ _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
 # Seed state['research_context'] from the research blackboard (role-dependent).
 _cb("inject_research_context", "before_agent", factory=_inject_research_context)
+# Give straggler hypothesis judgments one more bounded chance to land before
+# ResultAggregatorAgent freezes their status in prose (see validator.py's
+# wait_for_validator_settle for why they can otherwise be orphaned forever).
+_cb("wait_for_validator_settle", "before_agent", factory=lambda ctx: _wait_for_validator_settle())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.

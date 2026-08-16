@@ -148,7 +148,11 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      before_agent: [inject_research_context]
+      # Order matters: give straggler judgments (see validator.py's
+      # wait_for_validator_settle) a bounded chance to land BEFORE the
+      # overview/digest that inject_research_context bakes into the prompt
+      # is computed, so the injected digest reflects post-settle statuses too.
+      before_agent: [wait_for_validator_settle, inject_research_context]
     output_key: final_report
 
   HypothesesAgent:
@@ -191,11 +195,12 @@ agents:
       — those need more general research, not a targeted rescue.
     planning: |-
       Use this only after ValidatorAgent has postponed a hypothesis AND named
-      a specific gap. It searches for exactly that gap, honestly (not to
-      confirm the parent hypothesis), and grows a new child hypothesis from
-      whatever it finds.
+      a specific gap. It delegates the search FOR that gap, honestly (not to
+      confirm the parent hypothesis), to whichever specialist fits — literature
+      or computation — and grows a new child hypothesis from whatever it finds.
     prompt: evolution
-    tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
+    tools: [task_tracker, graph, research_graph]
+    subordinates: [ResearchAgent, MedicalAgent, TaskExecutorAgent]
     output_key: evolved_hypothesis
     callbacks:
       before_agent: [before_get_task, inject_research_context]

@@ -212,6 +212,14 @@ For each hypothesis, also propose HOW it would be verified: a VerificationMethod
 sufficient). Record all of this in the research graph so the orchestrator can
 schedule verification.
 
+If a hypothesis claims to be THE dominant/leading/most-frequent option among
+several alternatives, its ConfirmationCriteria MUST require a head-to-head
+comparison against the actual runner-up found in the data (e.g. "p<0.05 vs the
+second-most-frequent scaffold specifically"), not just a comparison against a
+theoretical/uniform baseline. A test against a uniform baseline only shows the
+option beats chance — it says nothing about whether it beats its closest real
+competitor, which is what "dominant" actually claims.
+
 If a method needs a Tool that is not yet in the graph, CREATE it in the same
 commit with status "needs_adaptation" (you are flagging a NEED, not confirming
 availability) and link it with `requires`/`uses` — the orchestrator/coder
@@ -241,22 +249,35 @@ Update task status to "done" immediately upon completion of each work item.
 
 @_register("evolution")
 def evolution(ctx: PromptContext) -> str:
-    paper_analysis = ctx.has_tool("paper_analysis")
-    papers_search = ctx.has_tool("papers_search")
-    lit = paper_analysis or papers_search
-
-    # Name the REAL tool by its REAL name, imperative, close to the instruction
-    # that triggers the search — a vague "use your available tools (see below)"
-    # left the model free to invent a plausible-sounding one ("tavily_research"
-    # is not a real tool; only tavily_search/tavily_crawl/tavily_extract are).
-    if lit:
-        search_line = (
-            "call `search_papers` or `download_papers_from_search` first"
-            + (", or `explore_chemistry_database`/`explore_my_papers` if relevant" if paper_analysis else "")
-            + "; only fall back to `tavily_search` if literature tools find nothing."
+    # EvolutionAgent does not search or compute directly — it delegates to
+    # whichever specialist actually fits the named gap (literature vs
+    # clinical vs computational), the same specialists the orchestrator
+    # itself uses. This avoids maintaining a second, narrower copy of their
+    # tool lists here (which repeatedly went stale and got hallucinated
+    # against — "tavily_research", "explore_scientific_database",
+    # "find_papers_in_db" all trace back to this agent guessing at tools it
+    # didn't actually have). Delegating means it inherits their REAL,
+    # up-to-date toolkits instead.
+    delegation = ""
+    if ctx.subordinates:
+        routing = ctx.render_routing()
+        delegation = (
+            "## Delegating the search\n"
+            "Hand the gap-question to ONE of these agents, based on what closing "
+            "it actually needs — a literature fact (ResearchAgent), a clinical "
+            "question (MedicalAgent), or a computation/tool run like docking or "
+            "an in-silico property (TaskExecutorAgent). Do not try to search or "
+            "compute it yourself; you have no search or computation tools of "
+            "your own on purpose — that work belongs to them. Mechanically, "
+            "that means calling the agent BY ITS NAME as your tool call (e.g. "
+            "`ResearchAgent(...)`) — never a literature/search function name "
+            "like `explore_scientific_database` or `tavily_search` directly; "
+            "you were not given any such tool, and no agent has one by that "
+            "first name — that exact name has been hallucinated before and "
+            "does not exist on any agent:\n\n"
+            f"{ctx.render_agents()}\n"
+            + (f"\n{routing}\n" if routing else "")
         )
-    else:
-        search_line = "call `tavily_search`."
 
     return render_template('''
 Your role is to try to rescue ONE postponed hypothesis by closing the SPECIFIC
@@ -272,27 +293,66 @@ are trying to find a source for.
 
 ### Instructions (do these IN ORDER):
 
+0. Check FIRST whether `research_context`'s existing evidence already answers
+   `evolve_gap` (e.g. it was gathered after the parent was postponed, for a
+   reason unrelated to this rescue). If it genuinely does, skip delegation
+   entirely — go straight to step 3, citing that existing evidence instead of
+   searching for new evidence. Do not invent a search just because these
+   instructions describe one; only search when the gap is actually still open.
 1. Turn `evolve_gap` into an OPEN, neutral question — ask what is known about
    that specific missing piece. NEVER phrase it as "find evidence that
    <hypothesis> is true" or "confirm <claim>" — that biases the search toward
    whatever supports the parent, which is not a real check. If you catch
    yourself about to search for confirmation, rewrite the query as a question
    you do not already know the answer to.
-2. Search for it: <<SEARCH_LINE>> These are the ONLY search tools you have —
-   there is no tool named "tavily_research" or anything else not listed under
-   <<TOOLS>> below. If a tool call is rejected as unknown, re-read <<TOOLS>>
-   and retry with one of the exact names listed there, don't guess a new name.
-3. If you find a genuinely relevant source: write it as new Evidence, then
+2. Delegate that question to the right specialist below ("Delegating the
+   search"). Give them the open question, not the parent hypothesis to confirm.
+3. If a genuinely relevant result comes back: write it as new Evidence, then
    compose a NEW Hypothesis — same core claim as the parent, narrowed or
-   redirected around what THAT source actually shows (which may support,
+   redirected around what THAT result actually shows (which may support,
    partially support, or complicate the parent — write it honestly either
-   way). Give it its own ConfirmationCriteria, calibrated to what a literature
-   source can realistically establish — do not just copy the parent's
-   criteria if that was the whole problem.
+   way). Give it its own ConfirmationCriteria, calibrated to what that result
+   can realistically establish — do not just copy the parent's criteria if
+   that was the whole problem. If the result REDIRECTS the child onto a
+   different sub-mechanism than the parent named (rather than narrowing the
+   same one) — e.g. the parent's specific pathway was contradicted, so you
+   pivot to a different candidate that could still explain the same
+   phenomenon — say so explicitly in the child's own formulation: name what
+   changed and why it still answers the original ResearchQuestion, not a
+   quietly different one. A reader (or ResultAggregatorAgent) comparing
+   parent and child later has only the graph text to go on; a silent pivot
+   reads as if the parent's exact mechanism kept being investigated when it
+   was actually replaced.
 4. If nothing relevant turns up after a real attempt: say so plainly in your
    text answer. Do NOT commit a reworded hypothesis with no new grounding —
    an unresolved gap is a better outcome than a fabricated one.
 
+### Example: adjusting a numeric threshold honestly vs. gaming it
+
+Say the parent required "docking score ≤ −8.0 kcal/mol" and the computation
+you delegated came back with −6.976 — below the bar.
+
+BAD (gaming it — do NOT do this): quietly change the child's criterion to
+"≤ −6.0 kcal/mol" because that number happens to be cleared by the −6.976 you
+already have. The new threshold was picked FROM the result, not derived
+independently of it — that is curve-fitting the pass/fail bar to the answer
+you already know, which is exactly the "grading yourself easier" this agent
+exists to avoid, whether or not the underlying mechanism you cite for it
+(e.g. "covalent binding isn't captured by non-covalent docking") is itself
+true.
+
+GOOD: derive any threshold adjustment from something OTHER than the result
+being graded — e.g. independent literature on the typical energetic
+contribution of the mechanism the parent's method can't capture — stated
+and cited BEFORE judging pass/fail. If you cannot independently justify a
+specific adjusted number, do not adjust the number. Keep the original
+criterion and evaluate honestly against it, which may mean the child
+confirms a DIFFERENT, more defensible claim instead (e.g. that the
+*experimental* affinity — not the docking score — explains the effect, with
+the docking-vs-experiment gap reported as an open discrepancy rather than
+resolved by redefining the bar).
+
+<<DELEGATION>>
 <<TOOLS>>
 
 <<RESEARCH>>
@@ -303,7 +363,7 @@ Context of tasks:
 
 Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
 Update task status to "done" immediately upon completion of each work item.
-''', SEARCH_LINE=search_line, TOOLS=render_tool_docs(ctx.docs), RESEARCH=render_research_protocol(ctx))
+''', DELEGATION=delegation, TOOLS=render_tool_docs(ctx.docs), RESEARCH=render_research_protocol(ctx))
 
 
 # ── ResearchAgent ────────────────────────────────────────────────────────────
@@ -315,6 +375,7 @@ Update task status to "done" immediately upon completion of each work item.
 def research(ctx: PromptContext) -> str:
     paper_analysis = ctx.has_tool("paper_analysis")
     papers_search = ctx.has_tool("papers_search")
+    websearch = ctx.has_tool("websearch")
     lit = paper_analysis or papers_search
 
     steps, n = [], 1
@@ -346,16 +407,29 @@ def research(ctx: PromptContext) -> str:
         )
         n += 1
 
-    # 4) Final fallback to tavily
-    if lit:
+    # 4) Final fallback to tavily — only advertise it when it actually built
+    # (TAVILY_API_KEY configured, see research_tools.py); otherwise calling it
+    # hard-errors with "Tool not found" since no live tool by that name exists.
+    if websearch and lit:
         steps.append(
             f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. "
             "Never use Tavily before the literature tools."
         )
-    else:
+    elif websearch:
         steps.append(
             f"{n}. Use `tavily_search` to search the web; use `tavily_extract` to read a "
             "specific page/URL when one is given."
+        )
+    elif lit:
+        steps.append(
+            f"{n}. Web search is NOT available this session (no `tavily_search` tool) — "
+            "if the literature tools above are insufficient, say so plainly rather than "
+            "guessing at a web search tool name."
+        )
+    else:
+        steps.append(
+            f"{n}. No search tools are available this session. State that plainly instead "
+            "of answering from memory or guessing at a tool name."
         )
 
     paper_search_section = ""
@@ -1801,13 +1875,40 @@ A starting digest of the graph:
    - **Approach** — the hypotheses explored and the methods/tools/agents used.
    - **Results** — the findings, keyed to the graph's Conclusions and Evidence,
      with figures/tables from step 2 placed where they support the text. State
-     concrete numbers from the actual Evidence nodes. Report refuted or postponed
-     hypotheses honestly as negative results — do not hide them.
+     concrete numbers from the actual Evidence nodes. Report refuted AND
+     postponed hypotheses honestly — do not hide them, and do not blur them
+     into one bucket: use the graph's actual status word for each. They mean
+     different things — `refuted` is a closed, disproven claim; `postponed`
+     means evidence was insufficient either way, which is why some postponed
+     hypotheses in the graph have an `evolved_from` child that narrowed or
+     redirected them (report that lineage when it exists, instead of just the
+     postponed parent). Never call a postponed hypothesis "refuted" — that
+     misstates what was actually established. The same care applies to
+     `under_verification` Hypotheses and `draft` Conclusions — the validator
+     has not finished judging them (async, fire-and-forget; see
+     graph/research/validator.py's BackgroundValidatorPlugin). Narrating one
+     with the same confidence as an approved Conclusion misstates the run's
+     actual state — flag it explicitly wherever you use it (e.g. "H6 is
+     still under verification — treat this as preliminary"), not just once
+     in a status table the reader may skim past. Likewise, check each
+     confirmed Conclusion's `shares_evidence_with` attr (set by
+     ValidatorAgent, graph/research/validator.py's `_shared_evidence_hyps`):
+     if present, that hypothesis and the listed sibling(s) are not fully
+     independent findings — they partly rest on the same evidence node(s).
+     Do not present them as separate confirmations of unrelated mechanisms;
+     say plainly that they share grounding (name which evidence), so the
+     reader doesn't read two confirmed hypotheses as two independent lines
+     of proof when they overlap.
    - **Discussion** — interpretation, caveats, discrepancies, and any failures.
    - **Limitations & Next steps** — what a researcher should do to extend or verify.
 4. **Ground every claim in a graph node.** Do not invent numbers, citations, or
    figures. If the graph is empty or a branch failed, say so plainly rather than
-   papering over it.
+   papering over it. This extends to numbers an Evidence node itself flags as
+   ungrounded — e.g. a search tool that failed and was filled in "from model
+   knowledge" rather than an actual retrieved source. That is not the same
+   as a cited number, and burying the caveat once in Limitations while the
+   number is used at full confidence everywhere else IS inventing it in
+   practice. Attach the caveat at every point of use, or omit the number.
 5. **No placeholders.** The report must render on its own — every referenced figure
    and table must be one `format_results` actually collected.
 
