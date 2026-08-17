@@ -169,9 +169,12 @@ class HypothesisSubsystemAgent(LlmAgent):
             else (kwargs.pop("model_str", None) or settings.llm.main_model)
         )
 
-        # Extract assembler-provided callbacks BEFORE building the generator,
-        # so we can compose them with the internal inject_state callback.
+        # Extract assembler-provided callbacks and tools BEFORE building the
+        # generator, so we can (a) compose the callbacks with the internal
+        # state-injection callback and (b) use the assembler's tool wiring when
+        # the agent was built through system.yaml.
         assembler_before_agent = kwargs.pop("before_agent_callback", None)
+        assembler_tools = kwargs.pop("tools", None)
 
         audit = HypothesisAuditLogger(
             _stdlib_logging.getLogger("hypothesis_subsystem")
@@ -188,21 +191,24 @@ class HypothesisSubsystemAgent(LlmAgent):
         add_critic_loop_tool(generator)
 
         # ---- Compose before_agent callbacks ----
+        # ADK's canonical_before_agent_callbacks accepts either a single callable
+        # or a list, and runs a list in order. Do NOT wrap them in a manual
+        # composer that would try to call the assembler-provided LIST as one
+        # function (the original TypeError). Normalize to a list with our
+        # state-injection FIRST, then hand the whole chain to ADK.
         _inject = _make_inject_state(registry, loop_coordinator, audit)
-
-        async def composed_before_agent(callback_context):
-            """Inject subsystem state, then run the assembler-provided callback.
-
-            Handles BOTH sync and async callbacks (ADK allows both).
-            """
-            await _inject(callback_context)
-            if assembler_before_agent is None:
-                return None
-            import inspect as _inspect
-            if _inspect.iscoroutinefunction(assembler_before_agent):
-                return await assembler_before_agent(callback_context)
+        before_callbacks: list = [_inject]
+        if assembler_before_agent is not None:
+            if isinstance(assembler_before_agent, list):
+                before_callbacks.extend(assembler_before_agent)
             else:
-                return assembler_before_agent(callback_context)
+                before_callbacks.append(assembler_before_agent)
+
+        # Tools: prefer the assembler-provided wiring (declared in system.yaml)
+        # so the guard_unknown_tools whitelist matches the actually-attached
+        # tools; fall back to the generator's own tools when constructed
+        # standalone (no assembler, e.g. tests embedding the subsystem directly).
+        tools = assembler_tools if assembler_tools is not None else generator.tools
 
         # Pass the generator's own attributes through to the LlmAgent
         # constructor, overlaid with any assembly-level overrides
@@ -211,10 +217,10 @@ class HypothesisSubsystemAgent(LlmAgent):
             description=description,
             model=generator.model,
             instruction=generator.instruction,
-            tools=generator.tools,
+            tools=tools,
             output_schema=generator.output_schema,
             output_key=output_key or generator.output_key,
-            before_agent_callback=composed_before_agent,
+            before_agent_callback=before_callbacks,
             **kwargs,
         )
 

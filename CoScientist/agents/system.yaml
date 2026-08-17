@@ -166,6 +166,12 @@ agents:
       Use this to generate and test hypotheses with built-in critic validation.
       The agent always delegates generation to its internal tool pipeline.
     output_key: hypotheses
+    # The internal strategy tools are declared here (not built ad-hoc inside the
+    # class) so the assembler sees them and can (a) keep guard_unknown_tools'
+    # whitelist accurate and (b) keep the attached/documented tool names in one
+    # place. The agent is still a black box to the orchestrator: these are its
+    # own tools, not exposed to any parent.
+    tools: [generate_via_moosechem, run_critic_loop]
     callbacks:
       before_agent: [before_get_task, inject_research_context]
       after_model: [guard_unknown_tools]

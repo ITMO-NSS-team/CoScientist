@@ -10,6 +10,7 @@ This agent owns the tool registry and orchestrates:
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from opik import track
@@ -25,11 +26,14 @@ from CoScientist.hypothesis_subsystem.models import (
     HypothesisList,
     HypothesisQuery,
     HypothesisStatus,
+    Provenance,
     ProvenanceRecord,
     ToolResult,
 )
 from CoScientist.hypothesis_subsystem.prompts import GENERATOR_INSTRUCTION
 from CoScientist.hypothesis_subsystem.tool_registry import HypothesisToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -37,7 +41,7 @@ from CoScientist.hypothesis_subsystem.tool_registry import HypothesisToolRegistr
 # ============================================================================
 
 @track(name="generate_via_moosechem")
-async def _generate_via_moosechem(
+async def generate_via_moosechem(
     research_question: str,
     background_survey: Optional[str] = None,
     domain_constraints: Optional[str] = None,
@@ -102,7 +106,7 @@ async def _generate_via_moosechem(
 # ============================================================================
 
 @track(name="run_critic_loop")
-async def _run_critic_loop(
+async def run_critic_loop(
     hypotheses_json: str,
     research_question: str,
     tool_context: Optional[ToolContext] = None,
@@ -138,25 +142,37 @@ async def _run_critic_loop(
     # Convert to Hypothesis objects
     hypotheses: List[Hypothesis] = []
     for h in raw_hypotheses:
+        if not isinstance(h, dict):
+            logger.warning("[run_critic_loop] skipping non-dict hypothesis entry: %r", h)
+            continue
         try:
             hypotheses.append(Hypothesis(**h))
-        except Exception:
-            # If parsing fails, create a minimal wrapper
+        except Exception as exc:
+            # A malformed entry must not abort the whole loop — log it and build
+            # a minimal wrapper carrying the required provenance so the critic
+            # can still judge it (rather than raising ValidationError inside the
+            # except handler).
+            logger.warning(
+                "[run_critic_loop] malformed hypothesis; using minimal wrapper: %s", exc
+            )
             hypotheses.append(
                 Hypothesis(
-                    claim=str(h.get("claim", "Unknown")),
-                    domain=str(h.get("domain", "")),
-                    reasoning=str(h.get("reasoning", "")),
-                    strategy_type=str(h.get("strategy_type", "unknown")),
-                    verification_plan=str(h.get("verification_plan", "")),
-                    refutation_conditions=str(h.get("refutation_conditions", "")),
+                    claim=str(h.get("claim") or "Unknown hypothesis"),
+                    domain=str(h.get("domain") or ""),
+                    reasoning=str(h.get("reasoning") or ""),
+                    strategy_type=str(h.get("strategy_type") or "unknown"),
+                    verification_plan=str(h.get("verification_plan") or ""),
+                    refutation_conditions=str(h.get("refutation_conditions") or ""),
+                    provenance=Provenance(creator="HypothesisGenerator/fallback"),
                 )
             )
 
     hypothesis_list = HypothesisList(hypotheses=hypotheses)
 
     # Run critic loop
-    refined = await loop_coordinator.run_critic_loop(hypothesis_list, research_question)
+    refined = await loop_coordinator.run_critic_loop(
+        hypothesis_list, research_question, tool_context=tool_context
+    )
 
     return {"hypotheses": [h.model_dump(mode="json") for h in refined.hypotheses]}
 
@@ -183,7 +199,7 @@ def build_hypothesis_generator(
     """
     # Register tools
     generator_tools: List[FunctionTool] = [
-        FunctionTool(_generate_via_moosechem),
+        FunctionTool(generate_via_moosechem),
     ]
     # run_critic_loop is added later by build_hypothesis_subsystem
     # after the loop_coordinator is constructed.
@@ -214,4 +230,4 @@ def add_critic_loop_tool(agent: LlmAgent) -> None:
     Args:
         agent: The HypothesisGenerator LlmAgent to add the tool to.
     """
-    agent.tools.append(FunctionTool(_run_critic_loop))
+    agent.tools.append(FunctionTool(run_critic_loop))

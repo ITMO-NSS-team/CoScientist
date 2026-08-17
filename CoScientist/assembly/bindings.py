@@ -116,6 +116,20 @@ def _research_graph_readonly():
     from CoScientist.graph.research.agent_tools import research_reporter_toolset
     return research_reporter_toolset
 
+
+def _hypothesis_generate():
+    """The generator's internal strategy tool (MooseChem pipeline)."""
+    from google.adk.tools import FunctionTool
+    from CoScientist.hypothesis_subsystem.generator_agent import generate_via_moosechem
+    return [FunctionTool(generate_via_moosechem)]
+
+
+def _hypothesis_critic_loop():
+    """The generator's internal critic-loop tool (Generator↔Critic refinement)."""
+    from google.adk.tools import FunctionTool
+    from CoScientist.hypothesis_subsystem.generator_agent import run_critic_loop
+    return [FunctionTool(run_critic_loop)]
+
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
     factory=_websearch,
@@ -338,6 +352,41 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,
     runtime_resolved=True,
     docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
+))
+
+# The hypothesis subsystem's internal strategy tools. They are declared in
+# system.yaml so the guard_unknown_tools whitelist is populated from the same
+# single source of truth as every other agent (and so the attached/documented
+# tool names never drift). The names match the underlying function __name__,
+# which is what ADK's FunctionTool uses as the callable tool name.
+REGISTRY.register_tool(ToolEntry(
+    key="generate_via_moosechem",
+    factory=_hypothesis_generate,
+    docs=(
+        ToolDoc(
+            name="generate_via_moosechem",
+            signature="generate_via_moosechem(research_question, background_survey, domain_constraints, max_hypotheses, temperature)",
+            purpose=(
+                "Builds a PubMed literature corpus, generates hypotheses via "
+                "LLM, scores them, and returns a structured HypothesisList."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="run_critic_loop",
+    factory=_hypothesis_critic_loop,
+    docs=(
+        ToolDoc(
+            name="run_critic_loop",
+            signature="run_critic_loop(hypotheses_json, research_question)",
+            purpose=(
+                "Sends hypotheses to the Critic for review; refines and "
+                "re-submits each until approval or max iterations."
+            ),
+        ),
+    ),
 ))
 
 REGISTRY.register_tool(ToolEntry(

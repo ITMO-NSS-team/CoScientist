@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import List
+import logging
+from typing import Any, Dict, List, Optional
 
 import litellm
+from google.adk.tools.tool_context import ToolContext
 from opik import track
 
 from CoScientist.hypothesis_subsystem.moosechem_tool import _extract_json
+
+logger = logging.getLogger(__name__)
 
 from CoScientist.hypothesis_subsystem.critic_agent import (
     HypothesisCriticAgent,
@@ -57,7 +61,12 @@ class HypothesisLoopCoordinator:
         self._critic = HypothesisCriticAgent(rag_client=RAGClient(), model=self._model)
 
     @track(name="hypothesis_run_critic_loop")
-    async def run_critic_loop(self, hypotheses: HypothesisList, research_question: str) -> HypothesisList:
+    async def run_critic_loop(
+        self,
+        hypotheses: HypothesisList,
+        research_question: str,
+        tool_context: Optional[ToolContext] = None,
+    ) -> HypothesisList:
         refined_list: List[Hypothesis] = []
         for hypothesis in hypotheses.hypotheses:
             try:
@@ -68,7 +77,14 @@ class HypothesisLoopCoordinator:
                     action="critic_loop_error", agent="HypothesisLoopCoordinator",
                     detail=f"Critic loop failed: {exc}"))
                 refined_list.append(hypothesis)
-        return HypothesisList(hypotheses=refined_list)
+        final = HypothesisList(hypotheses=refined_list)
+        # The hypothesis subsystem is the ONLY agent permitted to create
+        # Hypothesis/VerificationMethod/ConfirmationCriteria/Tool nodes
+        # (schema.AGENT_PERMISSIONS), so the final ACTIVE hypotheses must be
+        # committed here programmatically — the orchestrator has no right to do
+        # it and the model cannot be relied on to emit research_commit itself.
+        self._commit_active_hypotheses(final, research_question, tool_context)
+        return final
 
     @track(name="hypothesis_critic_iteration")
     async def _iterate_one(self, hypothesis: Hypothesis, research_question: str) -> Hypothesis:
@@ -110,6 +126,93 @@ class HypothesisLoopCoordinator:
 
     async def _invoke_critic(self, critic_input: HypothesisInput) -> HypothesisCriticResult:
         return await asyncio.to_thread(self._critic.critique_one, critic_input)
+
+    def _commit_active_hypotheses(
+        self,
+        hypothesis_list: HypothesisList,
+        research_question: str,
+        tool_context: Optional[ToolContext],
+    ) -> None:
+        """Commit final ACTIVE hypotheses (plus their VerificationMethods,
+        ConfirmationCriteria and required Tools) into the shared Research Context
+        Graph. Best-effort: any failure is logged and never breaks the run."""
+        active = [h for h in hypothesis_list.hypotheses if h.status == HypothesisStatus.ACTIVE]
+        if not active:
+            logger.info("[hypothesis] no ACTIVE hypotheses to commit to the research graph")
+            return
+        try:
+            if tool_context is None:
+                logger.warning(
+                    "[hypothesis] no ToolContext available; skipping research-graph commit"
+                )
+                return
+            from CoScientist.graph.research.store import get_research_graph
+            graph = get_research_graph(tool_context)
+        except Exception as exc:  # noqa: BLE001 — graph commit must never break a run
+            self._audit.log_error("research_graph_commit", str(exc))
+            return
+
+        root: Optional[str] = None
+        try:
+            root = graph.root_id()
+        except Exception:  # noqa: BLE001
+            root = None
+
+        nodes: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
+        for i, h in enumerate(active, 1):
+            href, vmref, ccref = f"h{i}", f"vm{i}", f"cc{i}"
+            nodes.append({
+                "type": "Hypothesis", "ref": href,
+                "attrs": {
+                    "formulation": h.claim,
+                    "rationale": h.reasoning,
+                    "priority": "medium",
+                },
+            })
+            nodes.append({
+                "type": "VerificationMethod", "ref": vmref,
+                "attrs": {
+                    "method_type": "computational",
+                    "inputs": "domain, variables and evidence from the hypothesis",
+                    "outputs": "evidence supporting or refuting the hypothesis",
+                    "limitations": h.verification_plan[:500],
+                },
+            })
+            nodes.append({
+                "type": "ConfirmationCriteria", "ref": ccref,
+                "attrs": {
+                    "threshold": h.refutation_conditions or "not specified",
+                    "confirmations_needed": 1,
+                    "reproducibility": "must be reproducible",
+                },
+            })
+            edges.append({"type": "tested_by", "from": f"#{href}", "to": f"#{vmref}"})
+            edges.append({"type": "formulated_for", "from": f"#{ccref}", "to": f"#{href}"})
+            if root:
+                edges.append({"type": "motivates", "from": root, "to": f"#{href}"})
+            for j, tool_name in enumerate(h.tools or [], 1):
+                tref = f"t{i}_{j}"
+                nodes.append({
+                    "type": "Tool", "ref": tref, "status": "needs_adaptation",
+                    "attrs": {"name": tool_name, "tool_type": "computational"},
+                })
+                edges.append({"type": "requires", "from": f"#{href}", "to": f"#{tref}"})
+                edges.append({"type": "uses", "from": f"#{vmref}", "to": f"#{tref}"})
+
+        try:
+            result = graph.commit(source="HypothesesAgent", nodes=nodes, edges=edges)
+            if result.ok:
+                logger.info(
+                    "[hypothesis] committed %d ACTIVE hypotheses to the research graph",
+                    len(active),
+                )
+            else:
+                self._audit.log_error(
+                    "research_graph_commit", "; ".join(result.errors)
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._audit.log_error("research_graph_commit", str(exc))
 
     def _map_verdict(self, result: HypothesisCriticResult) -> CriticVerdict:
         if result.passed:

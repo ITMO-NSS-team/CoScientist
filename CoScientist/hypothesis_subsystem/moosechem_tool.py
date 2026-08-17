@@ -338,11 +338,18 @@ class MooseChemTool(BaseHypothesisTool):
             # 3. Score hypotheses
             scored = await self._score_hypotheses(raw_hypotheses)
 
-            # 4. Build Pydantic models (sorted by score)
-            scored.sort(key=lambda x: x.get("total", 0), reverse=True)
+            # 4. Build Pydantic models. The LLM returns each score with an
+            # `index` field pointing back at the hypothesis it judged, so match
+            # by that index — never by position after a sort (sorting would
+            # attach someone else's score to a hypothesis).
+            score_by_index = {}
+            for s in scored:
+                idx = s.get("index")
+                if isinstance(idx, int):
+                    score_by_index[idx] = s
             hypotheses = [
                 self._to_hypothesis(
-                    h, scored[i] if i < len(scored) else None, query
+                    h, score_by_index.get(i), query
                 )
                 for i, h in enumerate(raw_hypotheses[:max_h])
             ]
