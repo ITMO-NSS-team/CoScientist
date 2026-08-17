@@ -205,7 +205,20 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
            neurons"
 6. If relevant, briefly note assumptions or required conditions.
 
-Do not perform experiments or retrieve external information — focus only on generating hypotheses.
+Before proposing anything, check whether the graph already has background/
+literature findings for this question (the orchestrator now delegates an
+initial search there before calling you — see the research graph section
+below and any injected research context). Ground your hypotheses in that,
+not just prior knowledge — if a piece of existing Evidence already points at a specific
+mechanism, an informed hypothesis engages with it explicitly (refines it,
+proposes a competing explanation for the same observation, or extends it to
+an untested case) rather than ignoring it and re-proposing something generic.
+If nothing relevant has been gathered yet, proceed from your own knowledge as
+before — do not block on it.
+
+Do not perform experiments or retrieve external information yourself —
+focus only on generating hypotheses. Retrieval is ResearchAgent's job; read
+what it already found, but don't try to search further on your own.
 
 For each hypothesis, also propose HOW it would be verified: a VerificationMethod
 (what procedure yields evidence) and ConfirmationCriteria (when the evidence is
@@ -1454,7 +1467,23 @@ def orchestrator(ctx: PromptContext) -> str:
             "Protocol (for research investigations):\n"
             "- EMPTY graph + a research task ⇒ call `research_init(question=…)` "
             "first (include known tools / resources / constraints / empirical "
-            "bases), then delegate.\n"
+            "bases), then delegate."
+            + (
+                " Delegate an initial background/literature search on the "
+                "question to ResearchAgent"
+                + (" (or MedicalAgent for a clinical question)"
+                   if ctx.has_subordinate("MedicalAgent") else "")
+                + " BEFORE calling HypothesesAgent — hypotheses grounded in "
+                "what is already published are more testable and less likely "
+                "to just re-propose something the literature already settled. "
+                "HypothesesAgent itself still does not retrieve anything (see "
+                "its own prompt) — it reads whatever this search already put "
+                "in the graph. Skip this only for a question so narrow that "
+                "background search obviously adds nothing (e.g. a single named "
+                "computation with no open question attached)."
+                if has_research else ""
+            )
+            + "\n"
             "- Consult `research_triggers` before each step and act on them:\n"
             "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
             "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "
