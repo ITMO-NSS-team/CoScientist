@@ -106,41 +106,60 @@ class ResearchGraphStore:
                       constraints: Optional[List[Dict[str, Any]]] = None,
                       tools: Optional[List[Dict[str, Any]]] = None,
                       resources: Optional[List[Dict[str, Any]]] = None,
-                      empirical_bases: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                      empirical_bases: Optional[List[Dict[str, Any]]] = None,
+                      confirmation_criteria: Optional[List[Dict[str, Any]]] = None,
+                      cost_models: Optional[List[Dict[str, Any]]] = None,
+                      question_source: Optional[str] = None) -> Dict[str, Any]:
         """Start a NEW research: root ResearchQuestion + the context star
         (Constraints —contextualizes→ Q, Q —defines_scope→ EmpiricalBases,
-        standalone Tool/Resource nodes). The previous graph, if any, is
-        archived to a timestamped file — only after the new one validates.
+        CostModels —applies_to→ Q, standalone Tool/Resource/ConfirmationCriteria
+        nodes). The previous graph, if any, is archived to a timestamped file —
+        only after the new one validates.
+
+        Each seed item may carry its own ``source`` (e.g. "human" for a field the
+        operator set, "ContextInitAgent" for one the agent drafted) so the graph
+        records the automation-vs-human split; items without it fall back to the
+        top-level ``source``. ``question_source`` sets the root question's source.
         """
         if not (question or "").strip():
             return CommitResult(ok=False, errors=["question must be a non-empty string"],
                                 hint=_COMMIT_HINT).model_dump()
 
-        nodes: List[Dict[str, Any]] = [{
+        root: Dict[str, Any] = {
             "type": "ResearchQuestion", "ref": "q",
             "attrs": {"formulation": question.strip(), **(attrs or {})},
-        }]
+        }
+        if question_source:
+            root["source"] = question_source
+        nodes: List[Dict[str, Any]] = [root]
         edges: List[Dict[str, Any]] = []
 
         def _star(items, node_type, ref_prefix):
             for i, item in enumerate(dict(it) for it in (items or []) if isinstance(it, dict)):
                 status = item.pop("status", None)
+                node_source = item.pop("source", None)
                 a = item.pop("attrs", None) or item  # accept flat or {"attrs": …}
                 draft = {"type": node_type, "ref": f"{ref_prefix}{i}", "attrs": a}
                 if status:
                     draft["status"] = status
+                if node_source:
+                    draft["source"] = node_source
                 nodes.append(draft)
 
         _star(constraints, "Constraint", "c")
         _star(tools, "Tool", "t")
         _star(resources, "Resource", "r")
         _star(empirical_bases, "EmpiricalBase", "eb")
+        _star(confirmation_criteria, "ConfirmationCriteria", "cc")
+        _star(cost_models, "CostModel", "cm")
         for draft in nodes:
             ref = draft["ref"]
             if draft["type"] == "Constraint":
                 edges.append({"type": "contextualizes", "from": f"#{ref}", "to": "#q"})
             elif draft["type"] == "EmpiricalBase":
                 edges.append({"type": "defines_scope", "from": "#q", "to": f"#{ref}"})
+            elif draft["type"] == "CostModel":
+                edges.append({"type": "applies_to", "from": f"#{ref}", "to": "#q"})
 
         with self._lock:
             old_graph, old_meta = self._g, (self._research_id, self._created_at, self._root_id)
@@ -387,7 +406,8 @@ class ResearchGraphStore:
                     ref = None
                 else:
                     refs[ref] = len(creates)
-            creates.append({"ref": ref, "type": ntype, "status": status, "attrs": attrs})
+            creates.append({"ref": ref, "type": ntype, "status": status,
+                            "attrs": attrs, "source": d.get("source")})
 
         # -- edges: resolve endpoints against existing nodes + this commit ---
         staged_edges: List[Dict[str, Any]] = []
@@ -457,11 +477,14 @@ class ResearchGraphStore:
         for c in creates:
             nid = self._next_id(c["type"])
             attrs = self._truncate_attrs(c["attrs"], warnings)
+            # A per-node source (e.g. "human" for an operator-set frame field)
+            # overrides the commit's default source; edges/status keep the default.
+            node_source = c.get("source") or source
             node = ResearchNode(
                 id=nid, type=c["type"], attrs=attrs, status=c["status"],
-                source=source, created_at=now, updated_at=now,
+                source=node_source, created_at=now, updated_at=now,
                 status_history=[{"from": None, "to": c["status"],
-                                 "source": source, "at": now}],
+                                 "source": node_source, "at": now}],
             )
             self._g.add_node(nid, **node.model_dump())
             if c["ref"]:
