@@ -892,6 +892,68 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session}, status_code=201)
 
+    @app.post("/api/demo/replay")
+    async def start_replay(data: dict):
+        """Replay a recorded session into a fresh one, for a demonstration.
+
+        The study being shown took hours; a booth has minutes, and re-running it
+        on stage is not an option. This plays back what that run actually
+        recorded — its events and the growth of its research graph — into a new
+        session, at a chosen speed, so the screen shows the real run on a
+        different clock. Every replayed event carries a marker saying so.
+        """
+        from CoScientist.web.replay import ReplaySession, load_recording
+
+        bundle = str(data.get("bundle") or "").strip()
+        if not bundle:
+            raise HTTPException(status_code=400, detail="'bundle' is required")
+        user_id = str(data.get("user_id") or "").strip()
+        speed = float(data.get("speed") or 120)
+        max_gap = float(data.get("max_gap") or 2.5)
+        title = str(data.get("title") or "Recorded study (replay)")
+
+        try:
+            events, graph = load_recording(bundle)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            if user_id:
+                runtime.registry.require_user(user_id)
+            else:
+                users = runtime.registry.list_users() or []
+                if not users:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="no user exists yet — open the UI once, then replay")
+                user_id = users[0]["id"]
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        session_id = f"session_{uuid4().hex}"
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+        await runtime.session_service.create_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+            state={"active_tasks": [], GRAPH_SCOPE_USER_KEY: user_id,
+                   GRAPH_SCOPE_SESSION_KEY: session_id},
+        )
+        session = runtime.registry.create_session(user_id, title,
+                                                  session_id=session_id)
+
+        replay = ReplaySession(runtime, user_id, session_id, events=events,
+                               graph=graph, speed=speed, max_gap=max_gap,
+                               source=bundle)
+        asyncio.create_task(replay.run())
+        return JSONResponse({
+            "session": session, "user_id": user_id, "session_id": session_id,
+            "events": len(events), "nodes": len(graph.get("nodes") or []),
+            "speed": speed,
+            "open": f"/?user={user_id}&session={session_id}",
+        }, status_code=201)
+
     @app.get("/api/users/{user_id}/sessions/{session_id}")
     async def get_user_session(user_id: str, session_id: str):
         try:
