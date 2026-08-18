@@ -141,6 +141,14 @@ def render_research_protocol(ctx: PromptContext) -> str:
         "`research_context_slice(id)`, `research_overview()`, "
         "`research_provenance(id)`.",
         "",
+        "BEFORE you implement anything, read the Tool nodes in your slice. They "
+        "name the libraries and services this research is built on and carry "
+        "`location` — a repo URL, path or endpoint. If one covers what you are "
+        "about to write, READ THE CODE THERE and build on it; writing your own "
+        "version of a tool the research already declared is the single most "
+        "common way a run ends up answering a different question. If the tool you "
+        "need has no `location`, say so and ask rather than substituting one.",
+        "",
         "Via a SINGLE `research_commit` at the end of your turn you may ONLY:",
         "  • create nodes: " + ("; ".join(perm["create"]) or "(none)"),
     ]
@@ -329,6 +337,14 @@ when the method truly needs a specific COMPUTATIONAL/informational capability
 (a library, an API, a dataset), with status "needs_adaptation", linked via
 `requires`/`uses`. Never add a physical-instrument Tool. For `consumes`, only
 reference Resource nodes that already exist (declared at init).
+
+Every Tool MUST carry `location` — the repo URL, local path, MCP server or API
+endpoint. A Tool that is only a name is useless to whoever has to run it: told
+to "use GOLEM" with no path, a worker writes its own optimiser instead, and the
+run quietly stops using the library the research is about. If a prior research
+already recorded that tool, carry its location across rather than inventing a
+substitute; if you genuinely do not know where it lives, say so in the attrs
+instead of leaving the field out.
 
 <<RESEARCH>>
 

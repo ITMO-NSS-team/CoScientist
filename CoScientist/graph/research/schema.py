@@ -110,6 +110,12 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             "name": "tool/service name",
             "tool_type": "computational / laboratory / analytical / informational",
             "requirements": "what it needs to run",
+            # Without this a Tool is only a name. A worker told to "use GOLEM"
+            # and given no path has to guess where it is, and what it does
+            # instead is write its own — which is how a run silently stops using
+            # the library it was supposed to build on.
+            "location": "WHERE it is: repo URL, local path, MCP server or API "
+                        "endpoint — required for anything the coder must read or run",
         },
     ),
     NodeTypeSpec(
