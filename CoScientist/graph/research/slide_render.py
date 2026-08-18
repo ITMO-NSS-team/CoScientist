@@ -20,6 +20,7 @@ from __future__ import annotations
 import collections
 import html
 import json
+import os
 import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -45,9 +46,60 @@ H_STATUS = {
     "formulated": (NEUTRAL_STROKE, NEUTRAL_FILL, "○", "сформулирована"),
     "postponed": (NEUTRAL_STROKE, NEUTRAL_FILL, "⏸", "отложена"),
 }
-COUNTERS = [("✓ подтверждено", "confirmed", GREEN), ("✗ опровергнуто", "refuted", RED),
-            ("⧗ на проверке", "under_verification", YELLOW),
-            ("○ сформулировано", "formulated", NEUTRAL_STROKE)]
+# Labels come in two languages: the live view is read in Russian, a paper figure
+# has to be in English. Selected with SLIDE_LANG=en (or lang= on render_slide).
+_L = {
+    "ru": {"confirmed": "подтверждено", "refuted": "опровергнуто",
+           "under_verification": "на проверке", "formulated": "сформулировано",
+           "question": "Вопрос", "framing": "Постановка", "metric": "Целевая метрика",
+           "hypothesis": "Гипотеза", "method": "Метод", "evidence": "Свидетельство",
+           "conclusion": "Вывод", "outcome": "Итог", "tools": "Инструменты",
+           "tested_by": "проверяется", "yields": "даёт", "based_on": "основание",
+           "stats": "{h} гипотез · {e} свидетельств · {c} выводов · {n} узлов",
+           "backlog": "Отложенный бэклог ({n})",
+           "completion": "завершение: {v}",
+           "no_method": "метод не определён — гипотеза отложена",
+           "no_ev": {"planned": "метод ещё не запускался — свидетельств нет",
+                     "running": "метод выполняется — свидетельств пока нет",
+                     "failed": "метод завершился ошибкой — свидетельств нет",
+                     "done": "метод отработал, но свидетельство не записано",
+                     "": "свидетельств пока нет"},
+           "no_cl": "свидетельств нет — выводить не из чего",
+           "no_cl2": "свидетельства есть, вывод ещё не сформулирован",
+           "hitl_yes": "уточнена с пользователем (HITL)",
+           "hitl_no": "не подтверждена пользователем",
+           "no_tools": "инструменты не объявлены",
+           "form": "Форма", "domain": "Область", "gap": "Пробел", "trl": "УГТ"},
+    "en": {"confirmed": "confirmed", "refuted": "refuted",
+           "under_verification": "under verification", "formulated": "formulated",
+           "question": "Research question", "framing": "Framing", "metric": "Target criteria",
+           "hypothesis": "Hypothesis", "method": "Method", "evidence": "Evidence",
+           "conclusion": "Conclusion", "outcome": "Outcome", "tools": "Tools",
+           "tested_by": "tested by", "yields": "yields", "based_on": "based on",
+           "stats": "{h} hypotheses · {e} evidence · {c} conclusions · {n} nodes",
+           "backlog": "Postponed backlog ({n})",
+           "completion": "completion: {v}", "no_method": "no method — hypothesis postponed",
+           "no_ev": {"planned": "method not started — no evidence",
+                     "running": "method running — no evidence yet",
+                     "failed": "method failed — no evidence",
+                     "done": "method finished without recording evidence",
+                     "": "no evidence yet"},
+           "no_cl": "no evidence — nothing to conclude from",
+           "no_cl2": "evidence on file, conclusion not written yet",
+           "hitl_yes": "confirmed with the operator (HITL)",
+           "hitl_no": "not confirmed by the operator",
+           "no_tools": "no tools declared",
+           "form": "Form", "domain": "Domain", "gap": "Gap", "trl": "TRL"},
+}
+_LANG = os.getenv("SLIDE_LANG", "ru")
+
+
+def T(key: str):
+    return _L.get(_LANG, _L["ru"]).get(key, _L["ru"].get(key, key))
+
+
+COUNTERS = [("confirmed", GREEN), ("refuted", RED),
+            ("under_verification", YELLOW), ("formulated", NEUTRAL_STROKE)]
 
 E = lambda s: html.escape(str(s), quote=False)
 
@@ -79,8 +131,16 @@ def _cw(c: str, fs: float) -> float:
     return fs * 0.535
 
 
+#: The per-class table was fitted against Arial, but a figure exported to PDF is
+#: rasterised with the fallback (DejaVu Sans), which is ~9% wider — enough for a
+#: line that "fits" to run past its card in print. Calibrated against DejaVu so
+#: the exported figure is right; Arial in the browser then has slack, which is
+#: the safe direction to be wrong in.
+_WIDTH_CALIBRATION = 1.10
+
+
 def _tw(s: str, fs: float) -> float:
-    return sum(_cw(c, fs) for c in s)
+    return sum(_cw(c, fs) for c in s) * _WIDTH_CALIBRATION
 
 
 def wrap(text: str, budget: float, fs: float, max_lines: int) -> List[str]:
@@ -182,11 +242,20 @@ def card(x: float, y: float, w: float, h: float, fill: str, stroke: str) -> str:
             f'stroke="{stroke}" stroke-width="1.7"/>')
 
 
+#: Emoji need a colour-emoji font. The browser has one; the rasteriser that
+#: exports a figure to PDF does not, and every icon comes out as a tofu box.
+#: SLIDE_NO_EMOJI=1 drops them and reclaims the space for the title.
+_NO_EMOJI = os.getenv("SLIDE_NO_EMOJI", "") not in ("", "0", "false")
+
+
 def head(glyph: str, gcolor: str, emoji: str, title: str) -> str:
-    return (f'<text x="13" y="21" font-size="10.5" fill="{gcolor}" font-family="{FONT}">{E(glyph)}</text>'
-            f'<text x="28" y="21" font-size="10" font-family="{FONT}">{E(emoji)}</text>'
-            f'<text x="45" y="21" font-size="11" font-weight="700" fill="{INK}" '
-            f'font-family="{FONT}">{E(title)}</text>')
+    out = (f'<text x="13" y="21" font-size="10.5" fill="{gcolor}" '
+           f'font-family="{FONT}">{E(glyph)}</text>')
+    if not _NO_EMOJI:
+        out += f'<text x="28" y="21" font-size="10" font-family="{FONT}">{E(emoji)}</text>'
+    x = 28 if _NO_EMOJI else 45
+    return out + (f'<text x="{x}" y="21" font-size="11" font-weight="700" fill="{INK}" '
+                  f'font-family="{FONT}">{E(title)}</text>')
 
 
 def body(lines: List[str], y0: float = 38.0, fs: float = 9.6, lh: float = 12.4,
@@ -239,7 +308,7 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
     vm = vms[0] if vms else None
     # A postponed hypothesis has no method by design; NOT_SET's "ask the operator"
     # reads as a missing input rather than a deliberate state.
-    _vm_missing = ("метод не определён — гипотеза отложена"
+    _vm_missing = (T("no_method")
                    if (h.get("status") or "") == "postponed" else NOT_SET)
     vtext = wrap(a(vm, "procedure", "method", "description", "method_type") or _vm_missing,
                  220, 9.4, 4)
@@ -270,12 +339,8 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
         # supply, but wrong here: evidence is produced by running the method, not
         # obtained by asking a human — inviting the operator to fill it in invites
         # fabrication. Say what the method is actually doing instead.
-        etext = wrap({
-            "planned": "метод ещё не запускался — свидетельств нет",
-            "running": "метод выполняется — свидетельств пока нет",
-            "failed": "метод завершился ошибкой — свидетельств нет",
-            "done": "метод отработал, но свидетельство не записано",
-        }.get((vm or {}).get("status") or "", "свидетельств пока нет"), 206, 9.4, 2)
+        _no = T("no_ev")
+        etext = wrap(_no.get((vm or {}).get("status") or "", _no[""]), 206, 9.4, 2)
     eh = max(70, 38 + len(etext) * 12.0 + 14)
 
     cls: List[Dict[str, Any]] = []
@@ -283,10 +348,16 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
         cls += g.linked(ev["id"], "based_on", incoming=True, types=("Conclusion",))
     if not cls and cc:
         cls = g.linked(cc[0]["id"], "determines_sufficiency", types=("Conclusion",))
-    cl = cls[0] if cls else None
+    # A hypothesis can be judged more than once — evidence arrives late, or a
+    # first pass was made on an incomplete record. Showing the FIRST conclusion
+    # then displays a superseded verdict beside the evidence that overturned it.
+    # Approved beats draft, and newer beats older.
+    cls = {c["id"]: c for c in cls}.values()
+    cl = max(cls, key=lambda c: ((c.get("status") == "approved"),
+                                 c.get("created_at") or 0, c["id"]), default=None)
     cltext = wrap(a(cl, "synthesis", "conclusion", "statement")
-                  or ("свидетельств нет — выводить не из чего" if not evs
-                      else "свидетельства есть, вывод ещё не сформулирован"),
+                  or (T("no_cl") if not evs
+                      else T("no_cl2")),
                   274, 9.4, 4)
     ch = max(70, 38 + len(cltext) * 12.0 + 14)
 
@@ -297,10 +368,27 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
 
 
 # ── the slide ────────────────────────────────────────────────────────────────
-def render_slide(data: Dict[str, Any]) -> str:
+def render_slide(data: Dict[str, Any], compact: Optional[bool] = None) -> str:
     g = Graph(data)
     q = g.nodes.get(g.root) or (g.by_type("ResearchQuestion") or [None])[0]
     hyps = g.by_type("Hypothesis")
+
+    # Compact (SLIDE_COMPACT=1, or compact=True): a postponed branch that never
+    # produced evidence gets a one-line mention instead of a full empty row. In a
+    # study that keeps three alternatives in the backlog those rows are most of
+    # the picture and carry none of the result — unusable as a paper figure.
+    if compact is None:
+        compact = os.getenv("SLIDE_COMPACT", "") not in ("", "0", "false")
+    backlog: List[Dict[str, Any]] = []
+    if compact:
+        def _idle(h):
+            return (h.get("status") == "postponed"
+                    and not g.any_linked(h["id"], ("supports", "refutes", "relates_to"),
+                                         incoming=True, types=("Evidence",)))
+        backlog = [h for h in hyps if _idle(h)]
+        kept = [h for h in hyps if not _idle(h)]
+        if kept:                      # never collapse to an empty slide
+            hyps = kept
 
     # Pre-pass: lay out every row's four cards, so the footer is placed below the
     # TALLEST card actually drawn (a long method/evidence card is taller than the
@@ -311,7 +399,8 @@ def render_slide(data: Dict[str, Any]) -> str:
     for y, r in zip(row_y, rows):
         last_bottom = max(last_bottom, y + r["hh"], y + 26 + r["vh"] - 26,
                           y + r["vh"], y + 26 + r["eh"], y + 26 + r["ch"])
-    foot_y = int(last_bottom + 22)
+    backlog_y = int(last_bottom + 16) if backlog else 0
+    foot_y = int((backlog_y + 34 if backlog else last_bottom) + 22)
     H = int(foot_y + 63 + 26)
 
     out: List[str] = [
@@ -325,28 +414,28 @@ def render_slide(data: Dict[str, Any]) -> str:
 
     # ── status counters ──
     counts = collections.Counter((n.get("status") or "") for n in hyps)
-    for i, (label, key, col) in enumerate(COUNTERS):
+    for i, (key, col) in enumerate(COUNTERS):
         x = 24 + i * 148
         out.append(f'<g transform="translate({x},30)">'
                    f'<rect width="140" height="46" rx="9" fill="{NEUTRAL_FILL}" '
                    f'stroke="{NEUTRAL_STROKE}" stroke-width="1.4"/>'
                    f'<text x="13" y="23" font-size="16" font-weight="700" fill="{col}" '
                    f'font-family="{FONT}">{counts.get(key, 0)}</text>'
-                   f'<text x="13" y="38" font-size="9" fill="{MUTED}" font-family="{FONT}">{E(label)}</text></g>')
-    meta = (f'{len(hyps)} гипотез · {len(g.by_type("Evidence"))} свидетельств · '
-            f'{len(g.by_type("Conclusion"))} выводов · {len(g.nodes)} узлов')
+                   f'<text x="13" y="38" font-size="9" fill="{MUTED}" font-family="{FONT}">{E(T(key))}</text></g>')
+    meta = T("stats").format(h=len(hyps), e=len(g.by_type("Evidence")),
+                             c=len(g.by_type("Conclusion")), n=len(g.nodes))
     out.append(f'<text x="620" y="59" font-size="9.4" fill="{DIM}" font-family="{FONT}">{E(meta)}</text>')
 
     # ── context band: question / framing / target metric ──
     qtext = a(q, "formulation") or NOT_SET
     out.append(card(24, 100, 470, 85, BLUE_FILL, BLUE) +
-               head("○", BLUE, "❓", "Вопрос") +
+               head("○", BLUE, "❓", T("question")) +
                body(wrap(qtext, 444, 9.6, 4)) + "</g>")
 
     frame_bits = [(k, a(q, k)) for k in ("target_setting", "research_form", "domain", "gap", "trl")]
     frame_bits = [(k, v) for k, v in frame_bits if v]
-    label_ru = {"target_setting": "Постановка", "research_form": "Форма", "domain": "Область",
-                "gap": "Пробел", "trl": "УГТ"}
+    label_ru = {"target_setting": T("framing"), "research_form": T("form"), "domain": T("domain"),
+                "gap": T("gap"), "trl": T("trl")}
     lines: List[str] = []
     for k, v in frame_bits:
         lines += wrap(f"{label_ru.get(k, k)}: {v}", 494, 9.4, 3)
@@ -354,10 +443,10 @@ def render_slide(data: Dict[str, Any]) -> str:
         lines = wrap(NOT_SET, 494, 9.4, 2)
     lines = lines[:9]
     out.append(card(514, 100, 520, 140, AMBER_FILL, AMBER) +
-               head("○", AMBER, "🧩", "Постановка") +
+               head("○", AMBER, "🧩", T("framing")) +
                body(lines, fs=9.4, lh=11.4) +
-               note("🧑‍🔬 уточнена с пользователем (HITL)" if human_touched(q)
-                    else "🧑‍🔬 не подтверждена пользователем", 131) + "</g>")
+               note(("" if _NO_EMOJI else "🧑‍🔬 ") + T("hitl_yes") if human_touched(q)
+                    else ("" if _NO_EMOJI else "🧑‍🔬 ") + T("hitl_no"), 131) + "</g>")
 
     # A card labelled "target metric" must show a measurable target. It used to
     # show the question's `completion_criteria`, which is the STOPPING RULE
@@ -375,10 +464,10 @@ def render_slide(data: Dict[str, Any]) -> str:
         metric += f" (+{rest} ещё)"
     completion = a(q, "completion_criteria")
     out.append(card(1054, 100, 202, 108, AMBER_FILL, AMBER) +
-               head("○", AMBER, "🎯", "Целевая метрика") +
+               head("○", AMBER, "🎯", T("metric")) +
                body(wrap(metric or NOT_SET, 176, 9.4, 4 if completion else 5),
                     fs=9.4, lh=11.6) +
-               (note(wrap(f"завершение: {completion}", 176, 8.8, 1)[0], 99, DIM, 8.8)
+               (note(wrap(T("completion").format(v=completion), 176, 8.8, 1)[0], 99, DIM, 8.8)
                 if completion else "") + "</g>")
 
     # ── one row per hypothesis ──
@@ -387,16 +476,16 @@ def render_slide(data: Dict[str, Any]) -> str:
         stroke, fill, glyph = r["stroke"], r["fill"], r["glyph"]
 
         out.append(card(24, y, 292, r["hh"], fill, stroke) +
-                   head(glyph, stroke, "💡", f"Гипотеза {i + 1}") + body(r["htext"]) +
+                   head(glyph, stroke, "💡", f'{T("hypothesis")} {i + 1}') + body(r["htext"]) +
                    (note(wrap(r["rationale"], 266, 8.8, 1)[0], r["hh"] - 9)
                     if r["rationale"] else "") + "</g>")
 
         seg = [card(376, y, 246, r["vh"], BLUE_FILL, BLUE),
-               head("◉" if r["vm"] else "○", BLUE, "⚙", f"Метод {i + 1}"),
+               head("◉" if r["vm"] else "○", BLUE, "⚙", f'{T("method")} {i + 1}'),
                body(r["vtext"], fs=9.4, lh=12.0)]
         cy = 38 + len(r["vtext"]) * 12.0 + 6
         if r["ctext"]:
-            seg.append(note("🎯 " + wrap(r["ctext"], 210, 8.8, 1)[0], cy, MUTED, 8.8))
+            seg.append(note(("" if _NO_EMOJI else "🎯 ") + wrap(r["ctext"], 210, 8.8, 1)[0], cy, MUTED, 8.8))
             cy += 14
         tx = 13
         for t in r["tools"][:3]:
@@ -410,7 +499,7 @@ def render_slide(data: Dict[str, Any]) -> str:
 
         ecol, efill = (ORANGE, ORANGE_FILL) if r["evs"] else (NEUTRAL_STROKE, NEUTRAL_FILL)
         out.append(card(666, y + 26, 232, r["eh"], efill, ecol) +
-                   head("●" if r["evs"] else "○", ecol, "🔬", f"Свидетельство {i + 1}") +
+                   head("●" if r["evs"] else "○", ecol, "🔬", f'{T("evidence")} {i + 1}') +
                    body(r["etext"], fs=9.4, lh=12.0) + "</g>")
 
         cl = r["cl"]
@@ -418,31 +507,44 @@ def render_slide(data: Dict[str, Any]) -> str:
                        else (RED, RED_FILL) if (cl and r["status"] == "refuted")
                        else (ORANGE, ORANGE_FILL) if cl else (NEUTRAL_STROKE, NEUTRAL_FILL))
         out.append(card(956, y + 26, 300, r["ch"], cfill, ccol) +
-                   head(glyph if cl else "○", ccol, "📝", f"Вывод {i + 1}") +
+                   head(glyph if cl else "○", ccol, "📝", f'{T("conclusion")} {i + 1}') +
                    body(r["cltext"], fs=9.4, lh=12.0) + "</g>")
 
-        out.append(arrow(320, y + r["hh"] / 2, 372, "проверяется"))
-        out.append(arrow(626, y + 26 + r["eh"] / 2, 662, "даёт"))
-        out.append(arrow(902, y + 26 + r["ch"] / 2, 952, "основание"))
+        out.append(arrow(320, y + r["hh"] / 2, 372, T("tested_by")))
+        out.append(arrow(626, y + 26 + r["eh"] / 2, 662, T("yields")))
+        out.append(arrow(902, y + 26 + r["ch"] / 2, 952, T("based_on")))
+
+    if backlog:
+        names = "; ".join(
+            (a(h, "formulation", "statement") or h["id"])[:70].rstrip() + "…"
+            for h in backlog[:3])
+        out.append(card(24, backlog_y, 1232, 30, NEUTRAL_FILL, NEUTRAL_STROKE) +
+                   f'<text x="13" y="19" font-size="9.6" fill="{MUTED}" '
+                   f'font-family="{FONT}">{"" if _NO_EMOJI else "⏸ "}'
+                   f'{E(T("backlog").format(n=len(backlog)))}: {E(names)}</text></g>')
 
     # ── outcome + tools ──
     conf = counts.get("confirmed", 0)
     refu = counts.get("refuted", 0)
     prog = counts.get("under_verification", 0)
-    approved = [c for c in g.by_type("Conclusion") if (c.get("status") == "approved")]
-    summary = (a(approved[0], "synthesis") if approved else "") or " ".join(
-        a(c, "synthesis") for c in g.by_type("Conclusion")[:2]) or NOT_SET
+    # The outcome is the STANDING verdict, not the oldest one on file: a study
+    # judged twice (evidence arriving after a first pass) would otherwise show a
+    # superseded conclusion as its headline.
+    concls = sorted(g.by_type("Conclusion"),
+                    key=lambda c: ((c.get("status") == "approved"),
+                                   c.get("created_at") or 0, c["id"]))
+    summary = (a(concls[-1], "synthesis") if concls else "") or NOT_SET
     out.append(card(24, foot_y, 900, 61, "#131a27", BLUE) +
-               head("○", BLUE, "▣", "Итог") +
+               head("○", BLUE, "▣", T("outcome")) +
                body(wrap(summary, 858, 9.4, 2), y0=38, fs=9.4, lh=12.0) + "</g>")
     out.append(f'<text x="{24 + 900 - 6:.0f}" y="{foot_y + 21:.0f}" font-size="9" fill="{DIM}" '
                f'text-anchor="end" font-family="{FONT}">'
                f'{E(f"✓{conf} · ✗{refu} · ⧗{prog}")}</text>')
 
     tools_all = sorted({a(t, "name") or t["id"] for t in g.by_type("Tool")})
-    ttext = " · ".join(tools_all) if tools_all else "инструменты не объявлены"
+    ttext = " · ".join(tools_all) if tools_all else T("no_tools")
     out.append(card(940, foot_y, 316, 63, ORANGE_FILL, ORANGE) +
-               head("○", ORANGE, "🔧", "Инструменты · MCP") +
+               head("○", ORANGE, "🔧", T("tools") + " · MCP") +
                body(wrap(ttext, 290, 9.2, 2), fs=9.2, lh=11.6) + "</g>")
 
     out.append("</svg>")
