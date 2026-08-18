@@ -1,3 +1,4 @@
+from CoScientist.agents.common import is_proxy_error
 import asyncio
 import json
 import logging
@@ -7,13 +8,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.web.session_registry import LocalSessionRegistry
@@ -22,6 +25,8 @@ from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
+from CoScientist.tools.coder_tools.coder_tools import coder_toolset
+from CoScientist.agents.common import sync_proxy_session
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -62,6 +67,173 @@ TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
 APP_NAME = "coscientist_app"
 SessionKey = tuple[str, str]
 SOCKET_SEND_TIMEOUT_SECONDS = 5.0
+# Tool records replayed to a reconnecting tab. Chat messages live in the same
+# log and are never dropped, so only the tool stream is capped.
+MAX_TOOL_ACTIVITY_EVENTS = 600
+TOOL_ACTIVITY_TRIM_SLACK = 200
+DATASET_URL_MAX_LENGTH = 2048
+# Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
+# absent on purpose: it is a projection of ``execution`` plus ``memory``.
+GRAPH_DELETE_TARGETS = ("execution", "research", "memory")
+
+
+def _validated_dataset_url(raw: Any) -> str:
+    """Normalize the dataset link the user attached in the chat; "" clears it.
+
+    Only an http(s) ``.zip`` is accepted, because that is what the sandbox does
+    with it: download the URL and unpack the archive into /workspace. Rejecting
+    anything else here turns a typo into an immediate message instead of a run
+    that fails minutes later inside the container.
+    """
+    url = str(raw or "").strip()
+    if not url:
+        return ""
+    if len(url) > DATASET_URL_MAX_LENGTH:
+        raise ValueError("Dataset link is too long.")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Dataset link must be an http(s) URL.")
+    if not parsed.path.lower().endswith(".zip"):
+        raise ValueError("Dataset link must point to a .zip archive.")
+    return url
+
+
+def _apply_frontend_settings(frontend: dict) -> None:
+    """Map the frontend JS ``appSettings`` object to ``settings.web``.
+
+    Called before every ``_get_manager()`` invocation so the config singleton
+    is always up-to-date when the system is (re)built.
+    """
+    from CoScientist.config import get_settings
+    web = get_settings().web
+
+    general = frontend.get("general", {})
+    if "startMode" in general:
+        web.start_mode = general["startMode"]
+    if "maxRetries" in general:
+        web.max_retries = int(general["maxRetries"])
+    if "hitlEnabled" in general:
+        val = bool(general["hitlEnabled"])
+        web.hitl_enabled = val
+        get_settings().hitl.enabled = val
+    if "hitlAutoApproveTimeout" in general:
+        web.hitl_auto_approve_timeout = int(general["hitlAutoApproveTimeout"])
+    if "usePlanner" in general:
+        web.use_planner = bool(general["usePlanner"])
+    if "useProxy" in general:
+        web.use_proxy = bool(general["useProxy"])
+        sync_proxy_session()
+    if "opikEnabled" in general:
+        val = bool(general["opikEnabled"])
+        web.opik_enabled = val
+        get_settings().opik.enabled = val
+    if "autoNamingEnabled" in general:
+        web.auto_naming_enabled = bool(general["autoNamingEnabled"])
+    if "coscientistUsername" in general:
+        val = str(general["coscientistUsername"]).strip()
+        web.coscientist_username = val if val else None
+    if "contextInitEnabled" in general:
+        val = bool(general["contextInitEnabled"])
+        web.context_init_enabled = val
+        get_settings().context_init.enabled = val
+    if "knowledgeGraphEnabled" in general:
+        web.knowledge_graph_enabled = bool(general["knowledgeGraphEnabled"])
+    if "researchGraphEnabled" in general:
+        # The research blackboard reads its own settings block (bindings and
+        # graph/research/* both go through settings.research_graph.enabled).
+        get_settings().research_graph.enabled = bool(general["researchGraphEnabled"])
+
+    planner = frontend.get("plannerAgent", {})
+    if "retrievalEnabled" in planner:
+        web.planner_retrieval_enabled = bool(planner["retrievalEnabled"])
+    if "graphEnabled" in planner:
+        web.planner_graph_enabled = bool(planner["graphEnabled"])
+    if "criticEnabled" in planner:
+        web.planner_critic_enabled = bool(planner["criticEnabled"])
+    if "criticRounds" in planner:
+        # A zero-round critic is just a critic that never runs — that is what
+        # the switch above is for, so keep the budget at one round minimum.
+        val = int(planner["criticRounds"])
+        if val >= 1:
+            web.planner_critic_rounds = val
+    if "mergeTasksEnabled" in planner:
+        web.merge_tasks_enabled = bool(planner["mergeTasksEnabled"])
+
+    research = frontend.get("researchAgent", {})
+    if "maxSearches" in research:
+        val = int(research["maxSearches"])
+        if val >= 0:
+            web.max_searches = val
+
+    task_exec = frontend.get("taskExecutorAgent", {})
+    if "keepScore" in task_exec:
+        web.executor_tool_keep_score = float(task_exec["keepScore"])
+    if "abstainScore" in task_exec:
+        web.executor_tool_abstain_score = float(task_exec["abstainScore"])
+
+    hypotheses = frontend.get("hypothesesAgent", {})
+    if "maxActiveHypotheses" in hypotheses:
+        val = int(hypotheses["maxActiveHypotheses"])
+        if 1 <= val <= 5:
+            web.max_active_hypotheses = val
+
+    coder = frontend.get("coderAgent", {})
+    if "sandboxUrl" in coder:
+        web.sandbox_url = coder["sandboxUrl"]
+    if "workspaceId" in coder:
+        val = coder["workspaceId"]
+        web.coder_workspace_id = val if val else None
+    if "mode" in coder:
+        web.coder_mode = str(coder["mode"])
+
+
+def _settings_payload() -> dict:
+    """The frontend ``appSettings`` shape, read back off the config singleton.
+
+    Both /api/settings endpoints answer with it, so a GET and the echo of a
+    POST can never drift apart.
+    """
+    from CoScientist.config import get_settings
+    settings = get_settings()
+    web = settings.web
+    return {
+        "general": {
+            "startMode": web.start_mode,
+            "maxRetries": web.max_retries,
+            "hitlEnabled": web.hitl_enabled,
+            "hitlAutoApproveTimeout": web.hitl_auto_approve_timeout,
+            "usePlanner": web.use_planner,
+            "useProxy": web.use_proxy,
+            "opikEnabled": web.opik_enabled,
+            "autoNamingEnabled": web.auto_naming_enabled,
+            "coscientistUsername": web.coscientist_username or "",
+            "contextInitEnabled": settings.context_init.enabled,
+            "knowledgeGraphEnabled": web.knowledge_graph_enabled,
+            "autoClearGraphEnabled": web.auto_clear_graph_enabled,
+            "researchGraphEnabled": settings.research_graph.enabled,
+        },
+        "plannerAgent": {
+            "retrievalEnabled": web.planner_retrieval_enabled,
+            "graphEnabled": web.planner_graph_enabled,
+            "criticEnabled": web.planner_critic_enabled,
+            "criticRounds": web.planner_critic_rounds,
+            "mergeTasksEnabled": web.merge_tasks_enabled,
+        },
+        "researchAgent": {"maxSearches": web.max_searches},
+        "hypothesesAgent": {
+            "maxActiveHypotheses": web.max_active_hypotheses,
+        },
+        "taskExecutorAgent": {
+            "keepScore": web.executor_tool_keep_score,
+            "abstainScore": web.executor_tool_abstain_score,
+        },
+        "coderAgent": {
+            "sandboxUrl": web.sandbox_url,
+            "workspaceId": web.coder_workspace_id or "",
+            "mode": web.coder_mode,
+        },
+    }
+
 
 
 class WebRuntime:
@@ -79,6 +251,13 @@ class WebRuntime:
         self.stopping_runs: set[SessionKey] = set()
         self._closing = False
         self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
+        # Latest usage/cost snapshot per session — cumulative, so one entry is
+        # the whole history and a reconnecting tab needs nothing older.
+        self.metrics: dict[SessionKey, dict[str, Any]] = {}
+        # Dataset archive attached to a session from the chat's "+" menu. Kept
+        # here as well as in ADK state so a reconnecting tab and a session whose
+        # manager has not been built yet both see the same link.
+        self.dataset_urls: dict[SessionKey, str] = {}
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
         self.hitl_handler.set_sender(self.send_socket)
@@ -213,6 +392,8 @@ class WebRuntime:
         async with self.manager_lock:
             manager = self.managers.get(key)
             if manager is None:
+                if get_settings().web.auto_clear_graph_enabled:
+                    _clear_session_graphs(user_id, session_id, view="all")
                 manager = CoScientistManager(
                     app_name=APP_NAME,
                     user_id=user_id,
@@ -302,10 +483,52 @@ class WebRuntime:
                     "active_tasks": _json_safe(active_tasks),
                     "status": status,
                     "run_status_version": version,
+                    "metrics": self.metrics.get(key),
+                    "dataset_url": self.dataset_urls.get(key, ""),
                 })
             except Exception:
                 self.detach_socket(key, ws)
                 raise
+
+    async def apply_dataset_url(
+        self,
+        key: SessionKey,
+        url: str | None = None,
+    ) -> str:
+        """Attach/clear the session's dataset archive and mirror it into ADK state.
+
+        ``url=None`` re-syncs the stored link without changing it — called at the
+        start of every run, because the ADK session may not have existed yet when
+        the user attached the archive.
+        """
+        if url is not None:
+            if url:
+                self.dataset_urls[key] = url
+            else:
+                self.dataset_urls.pop(key, None)
+        current = self.dataset_urls.get(key, "")
+
+        user_id, session_id = key
+        adk_session = await self.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if adk_session is None:
+            return current
+        if adk_session.state.get(DATASET_URL_STATE_KEY, "") == current:
+            return current
+        await self.session_service.append_event(
+            adk_session,
+            Event(
+                invocation_id=f"dataset_{uuid4().hex}",
+                author="user",
+                actions=EventActions(
+                    state_delta={DATASET_URL_STATE_KEY: current},
+                ),
+            ),
+        )
+        return current
 
     async def send(self, key: SessionKey, payload: dict[str, Any]) -> None:
         """Broadcast an event only to tabs viewing this session."""
@@ -363,6 +586,124 @@ def _wire_hitl(runtime: WebRuntime) -> None:
     )
 
 
+def _wire_sandbox_links(runtime: WebRuntime) -> None:
+    """Deliver the sandbox console links while the sandbox is still working.
+
+    ``run_sandbox_task`` waits inline for as long as the job runs (up to
+    ``SANDBOX_RUN_WAIT`` seconds), so the only other carrier of ``watch_url`` /
+    ``vscode_url`` — the tool's function_response — reaches the browser when
+    the run is already over. The sandbox client therefore calls this sink the
+    moment the container answers, and the links land in the tab as an ordinary
+    agent event.
+    """
+    from CoScientist.tools.coder_tools import sandbox_tools
+
+    # sandbox_id per session: a follow-up task reuses the container and would
+    # otherwise repost the same two links on every single call.
+    announced: dict[SessionKey, str] = {}
+
+    async def deliver(key: SessionKey | None, info: dict[str, Any]) -> None:
+        urls = [url for url in (info.get("watch_url"), info.get("vscode_url")) if url]
+        sandbox_id = str(info.get("sandbox_id") or "")
+        if key is None or not urls or announced.get(key) == sandbox_id:
+            return
+        announced[key] = sandbox_id
+
+        event = {
+            "type": "agent_event",
+            "author": "CoderAgent",
+            "is_final": False,
+            "timestamp": datetime.now().isoformat(),
+            "content": "\n".join([f"Sandbox is up:", *urls]),
+        }
+        runtime.agent_events[key].append(event)
+        await runtime.send(key, event)
+
+    sandbox_tools.set_sandbox_start_sink(deliver)
+
+
+def _wire_metrics(runtime: WebRuntime) -> None:
+    """Stream the running cost of a session to the tabs watching it.
+
+    The ledger is updated on every model call; the sink is rate-limited on the
+    producing side (``METRICS_PUSH_INTERVAL``) so a hundred-call run does not
+    turn into a hundred websocket frames. Only the latest snapshot is kept for
+    replay — it is cumulative, so history would be the same number repeated.
+    """
+    from CoScientist.logging.metrics import set_metrics_sink
+
+    async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
+        if key not in runtime.sockets and key not in runtime.active_runs:
+            return
+        event = {"type": "metrics", **_json_safe(payload)}
+        runtime.metrics[key] = event
+        await runtime.send(key, event)
+
+    set_metrics_sink(deliver)
+
+
+def _wire_tool_activity(runtime: WebRuntime) -> None:
+    """Stream every tool call — including those inside AgentTool sub-agents.
+
+    The top-level ``run_async`` stream only carries a delegation's own
+    function_call/function_response, so a subordinate's inner tools (e.g.
+    ``ResearchAgent`` → ``tavily_search``) are invisible to the browser. The
+    plugin sink below fires at every nesting level and routes each call to the
+    tabs watching the owning session.
+    """
+    from CoScientist.logging.tool_activity import set_tool_activity_sink
+
+    def trim(events: list[dict[str, Any]]) -> None:
+        """Bound replay history: drop the oldest tool records, keep the chat."""
+        if len(events) <= MAX_TOOL_ACTIVITY_EVENTS + TOOL_ACTIVITY_TRIM_SLACK:
+            return
+        indexes = [
+            index for index, event in enumerate(events)
+            if event.get("type") == "tool_activity"
+        ]
+        excess = len(indexes) - MAX_TOOL_ACTIVITY_EVENTS
+        if excess <= 0:
+            return
+        dropped = set(indexes[:excess])
+        events[:] = [
+            event for index, event in enumerate(events) if index not in dropped
+        ]
+
+    async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
+        if key not in runtime.sockets and key not in runtime.active_runs:
+            # A key we never served (e.g. the CLI default scope) has nowhere to go.
+            return
+        event = {"type": "tool_activity", **_json_safe(payload)}
+        events = runtime.agent_events[key]
+        events.append(event)
+        trim(events)
+        await runtime.send(key, event)
+
+    set_tool_activity_sink(deliver)
+
+
+def _wire_agent_output(runtime: WebRuntime) -> None:
+    """Post the final answer of the key agents into the chat.
+
+    A subordinate runs as an ``AgentTool``, so its deliverable — the hypotheses,
+    the research summary, the execution report — arrives as the caller's
+    function_response and is never spoken in the top-level stream. The plugin
+    sink below routes the answer of every agent flagged ``report_output`` in
+    ``system.yaml`` to the tabs watching the session, as a message of its own.
+    """
+    from CoScientist.logging.agent_output import set_agent_output_sink
+
+    async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
+        if key not in runtime.sockets and key not in runtime.active_runs:
+            # A key we never served (e.g. the CLI default scope) has nowhere to go.
+            return
+        event = {"type": "agent_output", **_json_safe(payload)}
+        runtime.agent_events[key].append(event)
+        await runtime.send(key, event)
+
+    set_agent_output_sink(deliver)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -374,6 +715,63 @@ async def lifespan(app: FastAPI):
     await app.state.runtime.close()
 
 
+def _clear_session_graphs(
+    user_id: str,
+    session_id: str,
+    view: str = "all",
+) -> tuple[dict[str, Any], bool]:
+    """Wipe graph data for a user/session.
+
+    Returns a tuple of (deleted_details_dict, has_failed_boolean).
+    """
+    if view == "all":
+        targets = GRAPH_DELETE_TARGETS
+    elif view == "session":
+        targets = ("execution", "research")
+    elif view in GRAPH_DELETE_TARGETS:
+        targets = (view,)
+    else:
+        targets = ()
+
+    deleted: dict[str, Any] = {}
+    failed = False
+    for name in targets:
+        try:
+            if name == "execution":
+                from CoScientist.graph.memory import reset_knowledge_graph
+                reset_knowledge_graph(user_id=user_id, session_id=session_id)
+                deleted[name] = {"scope": "session", "cleared": True}
+            elif name == "research":
+                from CoScientist.graph.research.store import get_research_graph
+                archived = get_research_graph(
+                    user_id=user_id,
+                    session_id=session_id,
+                ).reset(archive=True)
+                deleted[name] = {
+                    "scope": "session",
+                    "cleared": True,
+                    "archived": archived,
+                }
+            elif name == "memory":
+                from CoScientist.graph.memory_store import (
+                    get_global_knowledge_memory,
+                )
+                result = get_global_knowledge_memory().clear()
+                deleted[name] = {
+                    "scope": "global",
+                    "cleared": bool(result.get("persisted")),
+                    **result,
+                }
+                failed = failed or not result.get("persisted")
+        except Exception as exc:  # noqa: BLE001 — report every target's fate
+            logging.getLogger("CoScientist.web").warning(
+                "Graph deletion failed for %s: %s", name, exc
+            )
+            deleted[name] = {"cleared": False, "error": str(exc)}
+            failed = True
+    return deleted, failed
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -381,6 +779,10 @@ def create_app() -> FastAPI:
     os.environ["COSCIENTIST_WEB_MODE"] = "true"
     runtime = WebRuntime()
     _wire_hitl(runtime)
+    _wire_sandbox_links(runtime)
+    _wire_tool_activity(runtime)
+    _wire_agent_output(runtime)
+    _wire_metrics(runtime)
     app = FastAPI(
         title="CoScientist Web UI",
         version="1.0.0",
@@ -404,10 +806,97 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get("/api/downloads/logs")
+    async def proxy_download_logs(wait_seconds: float = 60.0):
+        """Relay the sandbox's download SSE stream to the browser.
+
+        The sandbox lives on another origin, so a page served from here cannot
+        open an ``EventSource`` against it without CORS headers we do not
+        control. Proxying keeps the browser same-origin and lets the sandbox
+        URL stay a server-side setting.
+        """
+        import httpx
+
+        from CoScientist.tools.coder_tools.openhands_sandbox import resolve_sandbox_url
+
+        try:
+            base = resolve_sandbox_url()
+        except Exception as exc:  # sandbox_url not configured
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        upstream = f"{base.rstrip('/')}/api/v1/downloads/logs"
+
+        async def relay():
+            # No read timeout: an SSE stream is idle by design between events.
+            timeout = httpx.Timeout(10.0, read=None)
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "GET", upstream, params={"wait_seconds": wait_seconds},
+                    ) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+            except Exception as exc:
+                logging.getLogger("CoScientist.web").warning(
+                    "Download log proxy failed (%s): %s", upstream, exc
+                )
+                yield f"event: status\ndata: unreachable: {exc}\n\n".encode()
+
+        return StreamingResponse(
+            relay(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/api/v1/downloads/cancel")
+    @app.post("/api/downloads/cancel")
+    async def proxy_download_cancel(request: Request):
+        """Relay download cancellation POST request to the sandbox."""
+        import httpx
+
+        from CoScientist.tools.coder_tools.openhands_sandbox import resolve_sandbox_url
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        try:
+            base = resolve_sandbox_url()
+            upstream = f"{base.rstrip('/')}/api/v1/downloads/cancel"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(upstream, json=body)
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers={"Content-Type": resp.headers.get("Content-Type", "application/json")},
+                )
+        except Exception as exc:
+            logging.getLogger("CoScientist.web").warning(
+                "Download cancel proxy failed: %s", exc
+            )
+            return JSONResponse({"status": "cancelled", "detail": str(exc)}, status_code=200)
+
     # --- Local users and sessions (process lifetime only) ---
     @app.get("/api/users")
     async def list_users():
-        return JSONResponse({"users": runtime.registry.list_users()})
+        from CoScientist.config import get_settings
+        web = get_settings().web
+        default_username = web.coscientist_username.strip() if web.coscientist_username else None
+        if default_username:
+            users = runtime.registry.list_users()
+            existing = [u for u in users if u["nickname"].casefold() == default_username.casefold()]
+            if not existing:
+                try:
+                    user = runtime.registry.create_user(default_username)
+                    runtime.registry.create_session(user["id"], title="New session")
+                except ValueError:
+                    pass
+        return JSONResponse({
+            "users": runtime.registry.list_users(),
+            "defaultUsername": default_username,
+        })
 
     @app.post("/api/users")
     async def create_user(data: dict):
@@ -456,6 +945,8 @@ def create_app() -> FastAPI:
                 title,
                 session_id=session_id,
             )
+            if get_settings().web.auto_clear_graph_enabled:
+                _clear_session_graphs(user_id, session_id, view="all")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -482,6 +973,141 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session})
 
+    # --- Session export / import / save / restore ---
+    @app.post("/api/users/{user_id}/sessions/{session_id}/export")
+    async def export_session_endpoint(user_id: str, session_id: str):
+        """Download a full session bundle as a .cossession.zip file."""
+        from urllib.parse import quote
+        from CoScientist.web.session_bundle import export_session, BUNDLE_EXTENSION
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        bundle_bytes = await export_session(runtime, (user_id, session_id))
+        session_meta = runtime.registry.get_session(user_id, session_id) or {}
+        title = session_meta.get("title", "session")
+        safe_title = "".join(
+            c if c.isalnum() or c in " _-" else "_" for c in title
+        )[:60].strip() or "session"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"{safe_title}_{stamp}{BUNDLE_EXTENSION}"
+
+        ascii_title = "".join(
+            c if (c.isascii() and c.isalnum()) or c in " _-" else "_" for c in title
+        )[:60].strip() or "session"
+        fallback_filename = f"{ascii_title}_{stamp}{BUNDLE_EXTENSION}"
+        encoded_filename = quote(filename)
+
+        return Response(
+            content=bundle_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fallback_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            },
+        )
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/save")
+    async def save_session_endpoint(user_id: str, session_id: str):
+        """Save a session bundle to disk (no download)."""
+        from CoScientist.web.session_bundle import export_session, save_to_disk
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        bundle_bytes = await export_session(runtime, (user_id, session_id))
+        session_meta = runtime.registry.get_session(user_id, session_id) or {}
+        title = session_meta.get("title", "session")
+        filename = save_to_disk(bundle_bytes, title, user_id, session_id)
+        return JSONResponse({"status": "success", "filename": filename})
+
+    @app.post("/api/users/{user_id}/import-session")
+    async def import_session_endpoint(user_id: str, request: Request):
+        """Import a session from an uploaded .cossession.zip bundle.
+
+        Accepts ``multipart/form-data`` with a ``file`` field, OR raw bytes
+        with ``application/zip``/``application/octet-stream``.
+        """
+        from CoScientist.web.session_bundle import import_session
+
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "multipart" in content_type:
+            from fastapi import UploadFile
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise HTTPException(status_code=400, detail="No file uploaded.")
+            bundle_bytes = await upload.read()
+        else:
+            bundle_bytes = await request.body()
+
+        if not bundle_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+
+        # Always import into the ITMO_DEV user, ignoring the URL user_id
+        target_nickname = "ITMO_DEV"
+        try:
+            result = await import_session(runtime, target_nickname, bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
+    @app.get("/api/saved-sessions")
+    async def list_saved_sessions_endpoint():
+        """List all session bundles saved to disk."""
+        from CoScientist.web.session_bundle import list_saved_sessions
+        return JSONResponse({"sessions": list_saved_sessions()})
+
+    @app.post("/api/restore-session")
+    async def restore_session_endpoint(data: dict):
+        """Restore a previously saved session from disk."""
+        from CoScientist.web.session_bundle import (
+            import_session,
+            read_saved_bundle,
+        )
+        filename = data.get("filename", "")
+        if not filename:
+            raise HTTPException(status_code=400, detail="filename is required.")
+        try:
+            bundle_bytes = read_saved_bundle(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        target_nickname = "ITMO_DEV"
+        try:
+            result = await import_session(runtime, target_nickname, bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
+    @app.delete("/api/saved-sessions/{filename}")
+    async def delete_saved_session_endpoint(filename: str):
+        """Delete a saved session bundle from disk."""
+        from CoScientist.web.session_bundle import delete_saved_session
+        if delete_saved_session(filename):
+            return JSONResponse({"status": "deleted"})
+        raise HTTPException(status_code=404, detail=f"No saved session '{filename}'.")
+
+    @app.get("/api/saved-sessions/{filename}/download")
+    async def download_saved_session_endpoint(filename: str):
+        """Download a previously saved bundle from disk."""
+        from urllib.parse import quote
+        from CoScientist.web.session_bundle import read_saved_bundle
+        try:
+            bundle_bytes = read_saved_bundle(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        safe_name = Path(filename).name
+        ascii_name = "".join(
+            c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in safe_name
+        ) or "session.cossession.zip"
+        encoded_name = quote(safe_name)
+        return Response(
+            content=bundle_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
+            },
+        )
+
     # --- HITL diagnostics ---
     @app.get("/api/hitl-status")
     async def hitl_status():
@@ -494,7 +1120,7 @@ def create_app() -> FastAPI:
             if hasattr(agent, "hitl_handler")
         }
         return JSONResponse({
-            "hitl_enabled": get_settings().hitl.enabled,
+            "hitl_enabled": get_settings().web.hitl_enabled,
             "websocket_connections": runtime.hitl_handler.connection_count(),
             "session_agents_with_handler": agents,
             "pending_requests": runtime.hitl_handler.pending_summary(),
@@ -581,6 +1207,34 @@ def create_app() -> FastAPI:
             else 200
         )
         return JSONResponse(payload, status_code=status_code)
+
+    @app.delete("/api/users/{user_id}/sessions/{session_id}/graph")
+    async def delete_session_graph(
+        user_id: str,
+        session_id: str,
+        view: str = "all",
+    ):
+        """Drop stored graph data on the operator's explicit request."""
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        allowed_views = (*GRAPH_DELETE_TARGETS, "all", "session")
+        if view not in allowed_views:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown graph view {view!r}; expected one of "
+                    f"{', '.join(allowed_views)}"
+                ),
+            )
+
+        deleted, failed = _clear_session_graphs(user_id, session_id, view=view)
+        return JSONResponse(
+            {"status": "error" if failed else "success", "deleted": deleted},
+            status_code=500 if failed else 200,
+        )
 
     @app.get("/api/graph")
     async def api_graph(
@@ -753,6 +1407,18 @@ def create_app() -> FastAPI:
             media_type="text/markdown; charset=utf-8",
         )
 
+    # --- Settings endpoints ---
+    @app.get("/api/settings")
+    async def get_settings_api():
+        """Return current WebSettings."""
+        return JSONResponse(_settings_payload())
+
+    @app.post("/api/settings")
+    async def save_settings_api(data: dict):
+        """Update WebSettings from the frontend."""
+        _apply_frontend_settings(data)
+        return JSONResponse({"status": "success", **_settings_payload()})
+
     # --- Agent info ---
     @app.get("/api/agents")
     async def get_agents():
@@ -780,6 +1446,27 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"events": runtime.agent_events[(user_id, session_id)][-100:]})
+
+    # --- Usage and cost ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
+    async def get_metrics(user_id: str, session_id: str, report: bool = False):
+        """What this session has spent, broken down by agent.
+
+        Read straight from the ledger rather than from the last pushed snapshot,
+        so the answer is current even when no tab is connected. ``?report=1``
+        adds the console rendering, for a quick look from the terminal.
+        """
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        from CoScientist.logging.metrics import format_report, snapshot
+
+        data = snapshot(key=(user_id, session_id))
+        if report:
+            data = {**data, "report": format_report(data)}
+        return JSONResponse(_json_safe(data))
 
     # --- WebSocket ---
     @app.websocket("/ws")
@@ -854,6 +1541,22 @@ def create_app() -> FastAPI:
                         }, key)
                 elif msg_type == "stop_chat":
                     await runtime.stop_run(key)
+                elif msg_type == "set_dataset_url":
+                    try:
+                        url = _validated_dataset_url(data.get("dataset_url"))
+                    except ValueError as exc:
+                        await runtime.send_socket(ws, {
+                            "type": "dataset_url_rejected",
+                            "message": str(exc),
+                        }, key)
+                        continue
+                    await runtime.apply_dataset_url(key, url)
+                    # Broadcast: every tab on this session shows the same
+                    # attachment, whichever one set it.
+                    await runtime.send(key, {
+                        "type": "dataset_url",
+                        "dataset_url": url,
+                    })
                 elif msg_type == "hitl_response":
                     _handle_hitl_response(runtime, key, data)
                 elif msg_type == "ping":
@@ -921,6 +1624,10 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
 
     try:
         manager = await runtime.get_manager(user_id, session_id)
+        # The attachment may predate the ADK session (it is created with the
+        # manager), so mirror it into state now that the session exists — this is
+        # what puts the link in front of CoderAgent.
+        await runtime.apply_dataset_url(key)
         runtime.registry.touch_session(user_id, session_id, status="processing")
         execution_lock = runtime.execution_locks[key]
 
@@ -942,14 +1649,36 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         _cancel_pending_hitl(runtime, key)
         runtime.hitl_handler.reset(key)
         runtime.registry.touch_session(user_id, session_id, status="idle")
-        error_msg = f"Error processing query: {str(exc)}"
-        error_event = {
-            "type": "error",
-            "message": error_msg,
-            "timestamp": datetime.now().isoformat(),
-        }
-        await runtime.send(key, error_event)
-        runtime.agent_events[key].append(error_event)
+
+        if is_proxy_error(exc):
+            msg = (
+                f"**Error connecting to proxy server**\n\n"
+                f"Failed to connect to the proxy server to execute the query to the language model. "
+                f"Please ensure the proxy container is running, the corporate VPN is enabled (other - disabled), and "
+                f"and the proxy is accessible."
+            )
+            agent_msg = {
+                "type": "agent_event",
+                "author": "OrchestratorAgent",
+                "content": msg,
+                "is_final": True,
+                "timestamp": datetime.now().isoformat(),
+            }
+            runtime.agent_events[key].append(agent_msg)
+            await runtime.send(key, agent_msg)
+            await runtime.send(key, {
+                "type": "final_response",
+                "content": msg,
+            })
+        else:
+            error_msg = f"Error processing query: {str(exc)}"
+            error_event = {
+                "type": "error",
+                "message": error_msg,
+                "timestamp": datetime.now().isoformat(),
+            }
+            await runtime.send(key, error_event)
+            runtime.agent_events[key].append(error_event)
 
 
 async def _run_chat_invocation(
@@ -1003,7 +1732,13 @@ async def _run_chat_invocation(
                 }
 
                 if event.content and event.content.parts:
-                    text_parts = [p.text for p in event.content.parts if p.text]
+                    # A model turn that only carries a function call often still
+                    # ships a blank text part. Requiring real characters keeps
+                    # it from surfacing as an empty message bubble.
+                    text_parts = [
+                        p.text for p in event.content.parts
+                        if p.text and p.text.strip()
+                    ]
                     if text_parts:
                         event_data["content"] = "\n".join(text_parts)
 
@@ -1033,6 +1768,10 @@ async def _run_chat_invocation(
                     if tool_calls:
                         event_data["tool_calls"] = tool_calls
                     if tool_responses:
+                        # Sandbox links are NOT lifted out of the response here:
+                        # _wire_sandbox_links already delivered them when the
+                        # container came up. The frontend still renders them from
+                        # a response the push never covered, and skips duplicates.
                         event_data["tool_responses"] = tool_responses
 
                 if event.actions and event.actions.escalate:
@@ -1171,6 +1910,17 @@ async def _run_chat_invocation(
         # A cancelled/failed runner must not leave RequestInput records that a
         # reconnecting tab could mistake for a live approval request.
         _cancel_pending_hitl(runtime, key)
+        # Final cost of the run, past the rate limiter: a run that was stopped
+        # or that crashed still spent money, and the tab should show the last
+        # number rather than whichever one the limiter happened to let through.
+        # The server log gets the per-agent breakdown the panel has no room for.
+        try:
+            from CoScientist.logging.metrics import log_report, publish
+            publish(key, force=True)
+            if os.getenv("LOG_USAGE_METRICS", "1") != "0":
+                log_report(key, title=f"Usage & cost — run for {user_id}")
+        except Exception:  # noqa: BLE001 - reporting never fails a run
+            pass
 
 
 def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):

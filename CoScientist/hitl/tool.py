@@ -62,7 +62,13 @@ class HITLToolset(BaseToolset):
         Returns:
             Dictionary with 'approved' (bool) and optional 'feedback' (str).
         """
-        request_context = dict(context or {})
+        if context is None:
+            request_context = {}
+        elif isinstance(context, dict):
+            request_context = dict(context)
+        else:
+            # LLM may pass a string or other non-dict value
+            request_context = {"details": context}
         user_id, session_id = session_key(tool_context)
         request_context["_session"] = {
             "user_id": user_id,

@@ -21,15 +21,21 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import re
+import shutil
 import threading
 import unicodedata
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from CoScientist.graph.semantic import Extraction
+
+logger = logging.getLogger(__name__)
 
 
 def _slug(s: str) -> str:
@@ -129,6 +135,53 @@ class KnowledgeMemory:
         except ValueError:
             value = path.name
         return f"v2:{os.path.normcase(value)}"
+
+    def clear(self, archive: bool = True) -> Dict[str, Any]:
+        """Drop every fact, keeping a copy of the old file by default.
+
+        A memory whose file could not be read refuses to save, so that a
+        transient read error never silently destroys facts (see ``_save``).
+        Deleting is the deliberate exception: the operator asked for the file to
+        go, so the guard is lifted here — the archive keeps the old bytes.
+        """
+        with self._lock:
+            removed = {
+                "entities": len(self.entities),
+                "relations": len(self.relations),
+            }
+            archived = self._archive_file() if archive else None
+            self.entities = {}
+            self.relations = {}
+            # Migration markers survive a wipe on purpose: re-importing the
+            # obsolete per-user files would resurrect the deleted facts.
+            self._load_ok = True
+            self._last_error = None
+            persisted = self._save()
+            return {
+                **removed,
+                "archived": archived,
+                "persisted": persisted,
+                "error": self._last_error,
+            }
+
+    def _archive_file(self) -> Optional[str]:
+        """Copy the current memory file aside, verbatim (best-effort).
+
+        Copying bytes rather than re-serialising ``self`` keeps a file that
+        failed to load recoverable by hand.
+        """
+        if not self.path.exists():
+            return None
+        try:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            target = self.path.with_name(
+                f"{self.path.stem}_{stamp}_{uuid4().hex[:8]}{self.path.suffix}"
+            )
+            shutil.copy2(self.path, target)
+            return str(target)
+        except Exception as exc:  # noqa: BLE001 — never block the deletion
+            logger.warning("Knowledge memory archive failed: %s", exc)
+            return None
 
     def _rebind(self, path: Path) -> None:
         """Point the singleton at a newly configured path.

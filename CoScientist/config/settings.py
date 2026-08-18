@@ -1,11 +1,15 @@
 """
 Application configuration using Pydantic Settings.
 """
+import os as _os
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel
+from dotenv import load_dotenv as _load_dotenv
+from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_load_dotenv()
 
 from rag_tools.config import Settings as ToolRAGSettings
 
@@ -50,6 +54,7 @@ class ServicesSettings(BaseModel):
     tavily_api_key: Optional[str] = None
     openalex_api_key: Optional[str] = None
     openalex_email: Optional[str] = None
+    proxy_url: Optional[str] = None
 
 
 # =========================
@@ -172,9 +177,21 @@ class ContextInitSettings(BaseModel):
     ``enabled`` gates the whole pre-stage — referenced from system.yaml as
     ``${context_init.enabled}``. The gate is soft: the operator may submit the
     form with fields deferred (the agent fills working values), so a run never
-    blocks indefinitely. Override via CONTEXT_INIT__ENABLED.
+    blocks indefinitely. Override via RESEARCH_FRAME (or CONTEXT_INIT__ENABLED).
     """
-    enabled: bool = True
+    enabled: bool = _os.getenv("RESEARCH_FRAME", _os.getenv("CONTEXT_INIT__ENABLED", "true")).lower() in ("true", "1", "yes")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_research_frame(cls, data):
+        rf = _os.getenv("RESEARCH_FRAME")
+        if rf is not None:
+            val = rf.lower() in ("true", "1", "yes")
+            if isinstance(data, dict):
+                data["enabled"] = val
+            elif data is None:
+                data = {"enabled": val}
+        return data
 
 
 # =========================
@@ -232,6 +249,47 @@ class CodeExecSettings(BaseModel):
     workspace_root: str = "./workspace"   # per-session sandbox root (local fallback)
 
 # =========================
+# WEB / RUNTIME SETTINGS
+# =========================
+import os as _os
+from typing import Optional as _Optional
+
+class WebSettings(BaseModel):
+    """Runtime-tunable parameters configurable from the web UI.
+
+    Unlike the rest of Settings (loaded once from .env), these can be
+    mutated at runtime via ``/api/settings``.  The global ``settings``
+    singleton is the single source of truth — all components read from it
+    directly.
+    """
+    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "planner" | "orchestrator" | "orchestrator_planner"
+    max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
+    max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
+    hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
+    hitl_auto_approve_timeout: int = int(_os.getenv("HITL_AUTO_APPROVE_TIMEOUT", _os.getenv("HITL__AUTO_APPROVE_TIMEOUT", _os.getenv("HITL_TIMEOUT_SECONDS", "300"))))
+    use_planner: bool = _os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
+    planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
+    planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
+    planner_critic_enabled: bool = _os.getenv("PLANNER__CRITIC_ENABLED", "false").lower() in ("true", "1", "yes")
+    planner_critic_rounds: int = int(_os.getenv("PLANNER__CRITIC_ROUNDS", "1"))
+    knowledge_graph_enabled: bool = _os.getenv("GRAPH__ENABLED", "true").lower() in ("true", "1", "yes")
+    auto_clear_graph_enabled: bool = _os.getenv("GRAPH__AUTO_CLEAR", "false").lower() in ("true", "1", "yes")
+    executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
+    executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+    sandbox_url: str = _os.getenv("SANDBOX_URL", "")
+    coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")
+    coder_mode: str = _os.getenv("CODER__MODE", "local")        # "local" | "openhands"
+    merge_tasks_enabled: bool = _os.getenv("PLANNER__MERGE_TASKS", "true").lower() in ("true", "1", "yes")
+    max_active_hypotheses: int = int(_os.getenv("HYPOTHESES__MAX_ACTIVE", "1"))
+    use_proxy: bool = _os.getenv("USE_PROXY", "True").lower() in ("true", "1", "yes")
+    opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
+    auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
+    coscientist_username: _Optional[str] = _os.getenv("COSCIENTIST_USERNAME") or _os.getenv("DEFAULT_USERNAME")
+    context_init_enabled: bool = _os.getenv("RESEARCH_FRAME", "true").lower() in ("true", "1", "yes")
+    session_snapshots_dir: str = _os.getenv("SESSION_SNAPSHOTS_DIR", "session_snapshots")
+
+
+# =========================
 # RESEARCH CONTEXT GRAPH
 # =========================
 class ResearchGraphSettings(BaseModel):
@@ -275,6 +333,7 @@ class Settings(BaseSettings):
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()
+    web: WebSettings = WebSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
 
     model_config = SettingsConfigDict(

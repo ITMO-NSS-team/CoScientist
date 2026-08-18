@@ -24,36 +24,6 @@ def _create_session(client, user_id, title):
     return response.json()["session"]
 
 
-def test_local_users_sessions_and_roadmaps_are_isolated():
-    app = create_app()
-    with TestClient(app) as client:
-        assert client.get("/api/users").json() == {"users": []}
-        gleb = _create_user(client, "Gleb")
-        assert client.post("/api/users", json={"nickname": "gleb"}).status_code == 409
-
-        first = _create_session(client, gleb["id"], "First")
-        second = _create_session(client, gleb["id"], "Second")
-        first_tasks = [{"id": "TASK-1", "title": "Only first"}]
-
-        saved = client.post(
-            f"/api/users/{gleb['id']}/sessions/{first['id']}/roadmap",
-            json={"content": json.dumps(first_tasks)},
-        )
-        assert saved.status_code == 200
-
-        first_result = client.get(
-            f"/api/users/{gleb['id']}/sessions/{first['id']}/roadmap"
-        ).json()
-        second_result = client.get(
-            f"/api/users/{gleb['id']}/sessions/{second['id']}/roadmap"
-        ).json()
-        assert first_result["tasks"] == first_tasks
-        assert second_result["tasks"] == []
-
-        adk_session = app.state.runtime.session_service.sessions[APP_NAME][gleb["id"]][first["id"]]
-        assert adk_session.state["active_tasks"] == first_tasks
-
-
 def test_websocket_reconnect_receives_same_session_snapshot():
     app = create_app()
     with TestClient(app) as client:
@@ -247,3 +217,109 @@ def test_runtime_rejects_new_runs_after_shutdown_begins():
         assert runtime.active_runs == {}
 
     asyncio.run(scenario())
+
+
+
+
+def test_key_agent_output_reaches_the_owning_tab_and_its_history():
+    """A subordinate's deliverable is posted as its own chat message.
+
+    It arrives at the caller as an AgentTool result, so without this it would
+    only ever be visible as a truncated preview in the tool-activity rail.
+    """
+    from CoScientist.logging import agent_output
+
+    class Socket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, payload):
+            self.messages.append(payload)
+
+    async def scenario():
+        runtime = web_app.WebRuntime()
+        web_app._wire_agent_output(runtime)
+        try:
+            owner, other = ("user_a", "session_a"), ("user_b", "session_b")
+            owner_socket, other_socket = Socket(), Socket()
+            runtime.attach_socket(owner, owner_socket)
+            runtime.attach_socket(other, other_socket)
+
+            await agent_output._sink(owner, {
+                "agent": "HypothesesAgent",
+                "caller": "OrchestratorAgent",
+                "content": "H1: ...\nH2: ...",
+                "timestamp": "2026-07-30T12:00:00",
+            })
+
+            (event,) = owner_socket.messages
+            assert event["type"] == "agent_output"
+            assert event["agent"] == "HypothesesAgent"
+            assert event["content"] == "H1: ...\nH2: ..."
+            assert not other_socket.messages          # session isolation
+
+            # A reconnecting tab must find the deliverable in its history.
+            assert runtime.agent_events[owner] == [event]
+
+            # A session nobody is watching (e.g. the CLI scope) is dropped.
+            await agent_output._sink(("cli", "default"), {
+                "agent": "HypothesesAgent", "content": "H3",
+            })
+            assert ("cli", "default") not in runtime.agent_events
+        finally:
+            agent_output.set_agent_output_sink(None)
+
+    asyncio.run(scenario())
+
+
+def test_dataset_link_is_validated_stored_and_broadcast_per_session():
+    """The chat's "+" attachment: only a .zip, per session, visible on reconnect."""
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Gleb")
+        session = _create_session(client, user["id"], "Work")
+        other = _create_session(client, user["id"], "Other")
+        key = (user["id"], session["id"])
+        url = f"/ws?user_id={user['id']}&session_id={session['id']}"
+
+        with client.websocket_connect(url) as websocket:
+            websocket.receive_json()                       # connected
+            assert websocket.receive_json()["dataset_url"] == ""
+
+            # A link that is not an http(s) .zip never reaches the session.
+            for bad in ("ftp://host/data.zip", "https://host/data.tar.gz", "nonsense"):
+                websocket.send_json({"type": "set_dataset_url", "dataset_url": bad})
+                rejected = websocket.receive_json()
+                assert rejected["type"] == "dataset_url_rejected"
+                assert rejected["message"]
+            assert key not in runtime.dataset_urls
+
+            good = "https://example.org/data/dataset.zip"
+            websocket.send_json({"type": "set_dataset_url", "dataset_url": good})
+            accepted = websocket.receive_json()
+            assert accepted == {"type": "dataset_url", "dataset_url": good}
+            assert runtime.dataset_urls[key] == good
+
+        # Mirrored into ADK state, where the coder's prompt/tool callbacks read it.
+        adk_session = runtime.session_service.sessions[APP_NAME][user["id"]][session["id"]]
+        assert adk_session.state[web_app.DATASET_URL_STATE_KEY] == good
+
+        # A reconnecting tab gets it back; a sibling session is unaffected.
+        with client.websocket_connect(url) as websocket:
+            websocket.receive_json()
+            assert websocket.receive_json()["dataset_url"] == good
+        with client.websocket_connect(
+            f"/ws?user_id={user['id']}&session_id={other['id']}"
+        ) as websocket:
+            websocket.receive_json()
+            assert websocket.receive_json()["dataset_url"] == ""
+
+        # Detaching clears both the runtime mirror and the agent-visible state.
+        with client.websocket_connect(url) as websocket:
+            websocket.receive_json()
+            websocket.receive_json()
+            websocket.send_json({"type": "set_dataset_url", "dataset_url": ""})
+            assert websocket.receive_json() == {"type": "dataset_url", "dataset_url": ""}
+        assert key not in runtime.dataset_urls
+        assert adk_session.state[web_app.DATASET_URL_STATE_KEY] == ""

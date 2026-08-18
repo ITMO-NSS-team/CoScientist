@@ -12,6 +12,7 @@ import os
 from google.adk.apps import App
 
 from CoScientist.logging.event_logger import EventLoggerPlugin
+from CoScientist.logging.metrics import UsageMetricsPlugin
 from CoScientist.graph.plugin import GraphMemoryPlugin
 from CoScientist.graph.research.validator import BackgroundValidatorPlugin
 from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
@@ -31,6 +32,7 @@ app = App(
     root_agent=root_agent,
     plugins=[
         EventLoggerPlugin(),
+        UsageMetricsPlugin(),
         GraphMemoryPlugin(),
         BackgroundValidatorPlugin(),
         ToolResultTruncationPlugin(),

@@ -2,6 +2,7 @@ import re
 from typing import Optional
 from google.genai import types as genai_types
 
+from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLRequest, HITLAction
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.graph.session_scope import session_key
@@ -40,6 +41,9 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
     """
 
     async def after_agent_callback(callback_context) -> Optional[genai_types.Content]:
+        if not get_settings().web.hitl_enabled:
+            return None
+
         agent_name = callback_context.agent_name
         # In ADK Context, agent is accessible via _invocation_context.agent
         agent = getattr(callback_context, "_invocation_context", None).agent if hasattr(callback_context, "_invocation_context") else None
@@ -119,7 +123,10 @@ def make_hitl_before_callback(handler: AbstractHITLHandler):
         )
     """
 
-    async def before_agent_callback(callback_context) -> Optional[genai_types.Content]:
+    async def before_agent_callback(callback_context, llm_request=None) -> Optional[genai_types.Content]:
+        if not get_settings().web.hitl_enabled:
+            return None
+
         agent_name = callback_context.agent_name
 
         # Add more context for the human
