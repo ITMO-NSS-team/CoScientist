@@ -8,7 +8,7 @@ class _Response:
     status_code = 204
 
 
-def test_delivery_acknowledges_only_successful_callback():
+def test_trace_delivery_uses_only_the_per_run_capability():
     async def scenario():
         captured = {}
 
@@ -16,20 +16,23 @@ def test_delivery_acknowledges_only_successful_callback():
             captured.update(url=url, headers=headers, body=json)
             return _Response()
 
-        client = TraceDeliveryClient(
-            callback_url="http://codesynapse/internal/events",
-            capability_token="capability",
+        delivered = await TraceDeliveryClient(
+            callback_url="http://codesynapse.internal/events",
+            capability_token="trace-capability",
             post=post,
-        )
-        delivered = await client.deliver([
+        ).deliver([
             TraceEvent(
-                event_id="event-1", run_id="run-1", sequence=1,
-                tenant_id="tenant-1", project_id="project-1", type="run.started",
+                event_id="event-1",
+                run_id="run-1",
+                sequence=1,
+                tenant_id="root",
+                project_id="project-1",
+                type="run.started",
             )
         ])
 
         assert delivered
-        assert captured["headers"]["Authorization"] == "Bearer capability"
+        assert captured["headers"] == {"Authorization": "Bearer trace-capability"}
         assert captured["body"]["events"][0]["event_id"] == "event-1"
 
     asyncio.run(scenario())

@@ -29,7 +29,16 @@ def test_control_router_requires_capability_and_exposes_replay():
 
     class Store:
         async def replay_events(self, run_id, *, after_sequence=0):
-            return [TraceEvent(event_id="event-1", run_id=run_id, sequence=after_sequence + 1, tenant_id="tenant-1", project_id="project-1", type="run.started")]
+            return [
+                TraceEvent(
+                    event_id="event-1",
+                    run_id=run_id,
+                    sequence=after_sequence + 1,
+                    tenant_id="root",
+                    project_id="project-1",
+                    type="run.started",
+                )
+            ]
 
     validator = RunCapabilityValidator({"run-1": hashlib.sha256(b"token-1").hexdigest()})
     app = FastAPI()
@@ -37,7 +46,11 @@ def test_control_router_requires_capability_and_exposes_replay():
     client = TestClient(app)
     headers = {"Authorization": "Bearer token-1"}
 
-    resolved = client.post("/internal/runs/run-1/hitl/request-1/resolve", headers=headers, json={"action": "approve", "approved": True})
+    resolved = client.post(
+        "/internal/runs/run-1/hitl/request-1/resolve",
+        headers=headers,
+        json={"action": "approve", "approved": True},
+    )
     replay = client.get("/internal/runs/run-1/trace?after_sequence=0", headers=headers)
 
     assert resolved.status_code == 204

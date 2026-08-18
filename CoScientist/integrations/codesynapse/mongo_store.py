@@ -45,6 +45,18 @@ class MongoIntegrationStore:
         await self._runs.replace_one({"external_run_id": run.external_run_id}, self._document(run), upsert=False)
         return run.model_copy(deep=True)
 
+    async def save_run_if_non_terminal(self, run: IntegrationRun) -> bool:
+        run.updated_at = datetime.now(timezone.utc)
+        result = await self._runs.replace_one(
+            {
+                "external_run_id": run.external_run_id,
+                "state": {"$nin": [state.value for state in TERMINAL_RUN_STATES]},
+            },
+            self._document(run),
+            upsert=False,
+        )
+        return result.matched_count == 1
+
     async def save_task(self, task: A2ATaskRecord) -> A2ATaskRecord:
         task.updated_at = datetime.now(timezone.utc)
         try:
@@ -54,6 +66,18 @@ class MongoIntegrationStore:
                 raise DuplicateIdentityError(f"task already exists for external run {task.external_run_id}") from exc
             raise
         return task.model_copy(deep=True)
+
+    async def save_task_if_non_terminal(self, task: A2ATaskRecord) -> bool:
+        task.updated_at = datetime.now(timezone.utc)
+        result = await self._tasks.replace_one(
+            {
+                "a2a_task_id": task.a2a_task_id,
+                "state": {"$nin": [state.value for state in TERMINAL_RUN_STATES]},
+            },
+            self._document(task),
+            upsert=False,
+        )
+        return result.matched_count == 1
 
     async def get_task(self, a2a_task_id: str) -> A2ATaskRecord | None:
         document = await self._tasks.find_one({"a2a_task_id": a2a_task_id})

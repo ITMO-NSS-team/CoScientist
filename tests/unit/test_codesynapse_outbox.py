@@ -10,7 +10,14 @@ def test_outbox_dispatcher_delivers_pending_events_once_in_sequence_order():
         store = InMemoryIntegrationStore()
         for sequence in (2, 1):
             await store.append_event(
-                TraceEvent(event_id=f"event-{sequence}", run_id="run-1", sequence=sequence, tenant_id="tenant-1", project_id="project-1", type="tool.completed")
+                TraceEvent(
+                    event_id=f"event-{sequence}",
+                    run_id="run-1",
+                    sequence=sequence,
+                    tenant_id="root",
+                    project_id="project-1",
+                    type="tool.completed",
+                )
             )
         delivered = []
 

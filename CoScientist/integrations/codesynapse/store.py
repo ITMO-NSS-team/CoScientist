@@ -6,7 +6,12 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from CoScientist.integrations.codesynapse.models import A2ATaskRecord, IntegrationRun, TraceEvent
+from CoScientist.integrations.codesynapse.models import (
+    A2ATaskRecord,
+    IntegrationRun,
+    TERMINAL_RUN_STATES,
+    TraceEvent,
+)
 
 
 class DuplicateIdentityError(ValueError):
@@ -30,7 +35,11 @@ class IntegrationStore(Protocol):
 
     async def save_run(self, run: IntegrationRun) -> IntegrationRun: ...
 
+    async def save_run_if_non_terminal(self, run: IntegrationRun) -> bool: ...
+
     async def save_task(self, task: A2ATaskRecord) -> A2ATaskRecord: ...
+
+    async def save_task_if_non_terminal(self, task: A2ATaskRecord) -> bool: ...
 
     async def get_task(self, a2a_task_id: str) -> A2ATaskRecord | None: ...
 
@@ -85,6 +94,14 @@ class InMemoryIntegrationStore:
             self._runs[run.external_run_id] = run.model_copy(deep=True)
             return self._runs[run.external_run_id].model_copy(deep=True)
 
+    async def save_run_if_non_terminal(self, run: IntegrationRun) -> bool:
+        async with self._lock:
+            current = self._runs.get(run.external_run_id)
+            if current is None or current.state in TERMINAL_RUN_STATES:
+                return False
+            self._runs[run.external_run_id] = run.model_copy(deep=True)
+            return True
+
     async def save_task(self, task: A2ATaskRecord) -> A2ATaskRecord:
         async with self._lock:
             conflicting = next(
@@ -97,6 +114,14 @@ class InMemoryIntegrationStore:
             self._tasks[task.a2a_task_id] = task.model_copy(deep=True)
             return self._tasks[task.a2a_task_id].model_copy(deep=True)
 
+    async def save_task_if_non_terminal(self, task: A2ATaskRecord) -> bool:
+        async with self._lock:
+            current = self._tasks.get(task.a2a_task_id)
+            if current is None or current.state in TERMINAL_RUN_STATES:
+                return False
+            self._tasks[task.a2a_task_id] = task.model_copy(deep=True)
+            return True
+
     async def get_task(self, a2a_task_id: str) -> A2ATaskRecord | None:
         async with self._lock:
             task = self._tasks.get(a2a_task_id)
@@ -108,8 +133,6 @@ class InMemoryIntegrationStore:
             return task.model_copy(deep=True) if task else None
 
     async def non_terminal_tasks(self) -> list[A2ATaskRecord]:
-        from CoScientist.integrations.codesynapse.models import TERMINAL_RUN_STATES
-
         async with self._lock:
             return [
                 task.model_copy(deep=True)

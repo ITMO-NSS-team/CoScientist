@@ -7,7 +7,6 @@ from a2a.server.request_handlers import DefaultRequestHandler
 from fastapi import HTTPException
 
 from CoScientist.integrations.codesynapse.a2a_adapter import FacadeAgentExecutor, FacadeTaskStore, make_agent_card
-from CoScientist.integrations.codesynapse.auth import CodesynapseJWTVerifier
 from CoScientist.integrations.codesynapse.control_api import StoreCapabilityValidator, make_control_router
 from CoScientist.integrations.codesynapse.delivery import TraceDeliveryClient, TraceOutboxDispatcher
 from CoScientist.integrations.codesynapse.executor import ManagerPipelineExecutor
@@ -23,7 +22,7 @@ def create_app(
     facade: CodesynapseFacade | None = None,
     store=None,
 ):
-    """Create a full A2A 0.3 façade plus private control-plane endpoints."""
+    """Create the standard A2A façade for the CoScientist research pipeline."""
 
     settings = settings or CodesynapseIntegrationSettings()
     missing = settings.missing_readiness_requirements()
@@ -40,7 +39,7 @@ def create_app(
     if store is None:
         raise ValueError("store is required when injecting a façade")
 
-    if facade is not None and getattr(facade, "_delivery_factory", None) is None:
+    if getattr(facade, "_delivery_factory", None) is None:
         def delivery_factory(request):
             if not request.trace_callback_url or not request.trace_capability_token:
                 return None
@@ -54,13 +53,8 @@ def create_app(
 
         facade.set_delivery_factory(delivery_factory)
 
-    verifier = (
-        CodesynapseJWTVerifier(jwks_url=settings.jwks_url, issuer="codesynapse", audience="coscientist")
-        if settings.jwks_url
-        else None
-    )
     handler = DefaultRequestHandler(
-        agent_executor=FacadeAgentExecutor(facade, verifier=verifier),
+        agent_executor=FacadeAgentExecutor(facade),
         task_store=FacadeTaskStore(facade),
     )
     app = A2AFastAPIApplication(
@@ -68,7 +62,6 @@ def create_app(
         http_handler=handler,
     ).build()
     app.include_router(make_control_router(facade, store, StoreCapabilityValidator(store)))
-
     async def prepare_storage() -> None:
         if database is not None:
             await apply_indexes(database)

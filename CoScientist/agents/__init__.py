@@ -5,6 +5,7 @@ callbacks, prompts, HITL, A2A exposure). This module builds the in-process
 system once and re-exports the agent instances under their historical names so
 existing imports keep working.
 """
+import os
 from typing import Any
 
 _AGENT_NAMES = {
@@ -32,11 +33,13 @@ def _get_system():
     global _system
     if _system is None:
         from CoScientist.assembly import build_system
-        from CoScientist.logging import multi_agent_tracer
-        from opik.integrations.adk import track_adk_agent_recursive
 
         _system = build_system()
-        track_adk_agent_recursive(_system.root, multi_agent_tracer)
+        if not os.getenv("A2A_DISABLE_OPIK"):
+            from CoScientist.logging import multi_agent_tracer
+            from opik.integrations.adk import track_adk_agent_recursive
+
+            track_adk_agent_recursive(_system.root, multi_agent_tracer)
     return _system
 
 

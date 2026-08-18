@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import json
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -35,6 +36,19 @@ class ArtifactPart(BaseModel):
     data: dict[str, Any] | None = None
     artifact_id: str | None = None
     checksum_sha256: str | None = None
+
+    @model_validator(mode="after")
+    def validate_payload_or_reference(self) -> "ArtifactPart":
+        values = [self.text is not None, self.data is not None, self.artifact_id is not None]
+        if sum(values) != 1:
+            raise ValueError("artifact part must contain exactly one inline payload or artifact reference")
+        if self.text is not None and len(self.text.encode("utf-8")) > 512 * 1024:
+            raise ValueError("inline artifact text exceeds 512 KiB")
+        if self.data is not None and len(json.dumps(self.data, separators=(",", ":")).encode("utf-8")) > 512 * 1024:
+            raise ValueError("inline artifact data exceeds 512 KiB")
+        if self.artifact_id is not None and not self.checksum_sha256:
+            raise ValueError("artifact references require checksum_sha256")
+        return self
 
 
 class TerminalArtifacts(BaseModel):
@@ -92,6 +106,7 @@ class A2ATaskRecord(BaseModel):
 class TraceEvent(BaseModel):
     """One externally visible, ordered fact about a CoScientist run."""
 
+    schema_version: str = "coscientist-v1"
     event_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     sequence: int = Field(gt=0)

@@ -1,8 +1,10 @@
 import asyncio
 
+import CoScientist.integrations.codesynapse.facade as facade_module
+
 from CoScientist.hitl.models import HITLAction, HITLRequest
 from CoScientist.integrations.codesynapse.facade import CodesynapseFacade, StartRequest
-from CoScientist.integrations.codesynapse.models import RunState
+from CoScientist.integrations.codesynapse.models import ArtifactPart, RunState
 from CoScientist.integrations.codesynapse.store import InMemoryIntegrationStore
 
 
@@ -105,29 +107,154 @@ def test_facade_cancel_returns_terminal_cancelled_task():
     asyncio.run(scenario())
 
 
-def test_facade_flushes_trace_outbox_after_each_recorded_event():
+def test_facade_cancel_does_not_wait_for_executor_and_preserves_cancelled_state():
     async def scenario():
-        flushed = []
+        started = asyncio.Event()
+        release = asyncio.Event()
 
-        class Dispatcher:
-            async def flush_run(self, run_id):
-                flushed.append(run_id)
-                return 1
+        class CancellationResistantExecutor:
+            async def execute(self, request, hitl_handler):
+                started.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    # A transport can defer cancellation while it finishes its
+                    # own cleanup. The A2A cancel response must not wait for it.
+                    await release.wait()
+                return "late report"
 
         facade = CodesynapseFacade(
-            store=InMemoryIntegrationStore(),
-            executor=_Executor(),
-            delivery_factory=lambda request: Dispatcher(),
+            store=InMemoryIntegrationStore(), executor=CancellationResistantExecutor()
         )
-        await facade.start(
+        task = await facade.start(
             StartRequest(
                 external_run_id="external-1", tenant_id="tenant-1", project_id="project-1",
                 research_request="Find a hypothesis",
+            )
+        )
+        await started.wait()
+        job = facade._jobs[task.a2a_task_id]
+        cancel_task = asyncio.create_task(facade.cancel(task.a2a_task_id))
+
+        try:
+            assert await asyncio.wait_for(asyncio.shield(cancel_task), timeout=0.05)
+            cancelled = await facade.get_task(task.a2a_task_id)
+            assert cancelled.state is RunState.CANCELLED
+        finally:
+            release.set()
+            await asyncio.gather(cancel_task, job, return_exceptions=True)
+
+        terminal = await facade.get_task(task.a2a_task_id)
+        assert terminal.state is RunState.CANCELLED
+
+    asyncio.run(scenario())
+
+
+def test_facade_delivers_trace_events_with_capability_without_jwt():
+    async def scenario():
+        delivered_run_ids = []
+
+        class Executor:
+            async def execute(self, request, hitl_handler):
+                return "# Report"
+
+        class Dispatcher:
+            async def flush_run(self, run_id):
+                delivered_run_ids.append(run_id)
+
+        def delivery_factory(request):
+            assert request.trace_callback_url == "http://codesynapse.internal/events"
+            assert request.trace_capability_token == "trace-capability"
+            return Dispatcher()
+
+        facade = CodesynapseFacade(
+            store=InMemoryIntegrationStore(),
+            executor=Executor(),
+            delivery_factory=delivery_factory,
+        )
+        await facade.start(
+            StartRequest(
+                external_run_id="external-1",
+                tenant_id="root",
+                project_id="project-1",
+                research_request="Find a hypothesis",
+                trace_callback_url="http://codesynapse.internal/events",
+                trace_capability_token="trace-capability",
             ),
             run_in_background=False,
         )
 
-        assert len(flushed) >= 2
+        assert len(delivered_run_ids) >= 2
+
+    asyncio.run(scenario())
+
+
+def test_large_final_report_becomes_capability_backed_artifact(monkeypatch):
+    captured = {}
+
+    class ArtifactClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def upload_text(self, **kwargs):
+            captured["upload"] = kwargs
+            return ArtifactPart(
+                name=kwargs["name"],
+                mime_type=kwargs["mime_type"],
+                artifact_id="artifact-1",
+                checksum_sha256="a" * 64,
+            )
+
+    monkeypatch.setattr(facade_module, "CodesynapseArtifactClient", ArtifactClient)
+    request = StartRequest(
+        external_run_id="external-1",
+        tenant_id="root",
+        project_id="project-1",
+        research_request="Find a hypothesis",
+        artifact_upload_url="http://codesynapse.internal/artifacts/grant",
+        artifact_finalize_url="http://codesynapse.internal/artifacts/finalize",
+        artifact_capability_token="artifact-capability",
+    )
+
+    part = asyncio.run(CodesynapseFacade._report_part(request, "x" * (512 * 1024 + 1)))
+
+    assert part.artifact_id == "artifact-1"
+    assert captured["capability_token"] == "artifact-capability"
+
+
+def test_cancel_by_run_uses_durable_mapping_after_process_restart():
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingExecutor:
+            async def execute(self, request, hitl_handler):
+                started.set()
+                await release.wait()
+                return "report"
+
+        store = InMemoryIntegrationStore()
+        first = CodesynapseFacade(store=store, executor=BlockingExecutor())
+        await first.start(
+            StartRequest(
+                external_run_id="external-1",
+                coscientist_run_id="run-1",
+                tenant_id="root",
+                project_id="project-1",
+                research_request="Find a hypothesis",
+            )
+        )
+        await started.wait()
+        restarted = CodesynapseFacade(store=store, executor=BlockingExecutor())
+
+        assert await restarted.cancel_by_run("run-1")
+
+        task = await store.get_task_by_external_run("external-1")
+        assert task.state is RunState.CANCELLED
+        release.set()
+        await asyncio.gather(*first._jobs.values(), return_exceptions=True)
+        terminal = await store.get_task_by_external_run("external-1")
+        assert terminal.state is RunState.CANCELLED
 
     asyncio.run(scenario())
 

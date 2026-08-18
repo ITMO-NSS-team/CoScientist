@@ -104,7 +104,6 @@ pydantic==2.12.5
 pydantic-settings==2.13.1
 pydantic_core==2.41.5
 Pygments==2.19.2
-PyJWT==2.12.1
 pyOpenSSL==26.0.0
 pyparsing==3.3.2
 pymongo>=4.6.3

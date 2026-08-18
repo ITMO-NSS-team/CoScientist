@@ -1,10 +1,8 @@
 import asyncio
+import hashlib
 from types import SimpleNamespace
 
-import pytest
-
 from CoScientist.integrations.codesynapse.a2a_adapter import FacadeAgentExecutor, task_from_record
-from CoScientist.integrations.codesynapse.auth import claims_from_payload, sha256_json, sha256_text
 from CoScientist.integrations.codesynapse.facade import CodesynapseFacade
 from CoScientist.integrations.codesynapse.models import A2ATaskRecord, ArtifactPart, RunState, TerminalArtifacts
 from CoScientist.integrations.codesynapse.store import InMemoryIntegrationStore
@@ -45,26 +43,8 @@ def test_interrupted_record_becomes_a2a_failed_task_with_structured_error():
     assert task.artifacts[0].parts[0].root.data["error_code"] == "interrupted"
 
 
-def test_signed_a2a_context_must_bind_all_mutable_run_inputs():
+def test_a2a_adapter_starts_a_task_without_codesynapse_metadata():
     async def scenario():
-        request_text = "Find a hypothesis"
-        integration_context = {"artifact": "s3://bucket/input"}
-        trace_token = "trace-capability"
-        control_hash = sha256_text("control-capability")
-        claims = claims_from_payload({
-            "iss": "codesynapse", "aud": "coscientist", "tenant_id": "tenant-1",
-            "project_id": "project-1", "external_run_id": "external-1",
-            "research_request_sha256": sha256_text(request_text),
-            "context_sha256": sha256_json(integration_context),
-            "trace_callback_url": "http://codesynapse/internal/trace",
-            "trace_capability_token_hash": sha256_text(trace_token),
-            "control_token_hash": control_hash,
-        })
-
-        class Verifier:
-            async def verify(self, token):
-                return claims
-
         class Executor:
             async def execute(self, request, hitl_handler):
                 return "report"
@@ -76,20 +56,121 @@ def test_signed_a2a_context_must_bind_all_mutable_run_inputs():
                 events.append(event)
 
         request_context = SimpleNamespace(
-            metadata={
-                "integration_jwt": "signed", "external_run_id": "external-1", "tenant_id": "tenant-1",
-                "project_id": "project-1", "context": integration_context,
-                "trace_callback_url": "http://codesynapse/internal/trace", "trace_capability_token": trace_token,
-                "control_token_hash": control_hash,
-            },
-            task_id="task-1", context_id="context-1", get_user_input=lambda: request_text,
+            metadata={},
+            task_id="task-1",
+            context_id="context-1",
+            get_user_input=lambda: "Find a hypothesis",
         )
-        adapter = FacadeAgentExecutor(CodesynapseFacade(store=InMemoryIntegrationStore(), executor=Executor()), verifier=Verifier())
-        await adapter.execute(request_context, Queue())
-        assert events[0].status.state == "working"
 
-        request_context.metadata["context"] = {"artifact": "s3://attacker/input"}
-        with pytest.raises(ValueError, match="does not bind"):
-            await adapter.execute(request_context, Queue())
+        store = InMemoryIntegrationStore()
+        adapter = FacadeAgentExecutor(CodesynapseFacade(store=store, executor=Executor()))
+        await adapter.execute(request_context, Queue())
+
+        assert events[0].status.state == "working"
+        assert (await store.get_run("task-1")).tenant_id == "root"
+
+    asyncio.run(scenario())
+
+
+def test_a2a_adapter_hashes_raw_control_capability_without_jwt():
+    async def scenario():
+        class Executor:
+            async def execute(self, request, hitl_handler):
+                return "report"
+
+        class Queue:
+            async def enqueue_event(self, event):
+                return None
+
+        store = InMemoryIntegrationStore()
+        adapter = FacadeAgentExecutor(CodesynapseFacade(store=store, executor=Executor()))
+        request_context = SimpleNamespace(
+            metadata={
+                "external_run_id": "external-1",
+                "tenant_id": "root",
+                "project_id": "project-1",
+                "control_capability_token": "control-capability",
+            },
+            task_id="task-1",
+            context_id="context-1",
+            get_user_input=lambda: "Find a hypothesis",
+        )
+
+        await adapter.execute(request_context, Queue())
+
+        run = await store.get_run("external-1")
+        assert run.tenant_id == "root"
+        assert run.project_id == "project-1"
+        assert run.control_token_hash == hashlib.sha256(b"control-capability").hexdigest()
+
+    asyncio.run(scenario())
+
+
+def test_a2a_adapter_passes_trace_capability_without_jwt():
+    async def scenario():
+        requests = []
+
+        class Executor:
+            async def execute(self, request, hitl_handler):
+                requests.append(request)
+                return "report"
+
+        class Queue:
+            async def enqueue_event(self, event):
+                return None
+
+        adapter = FacadeAgentExecutor(CodesynapseFacade(store=InMemoryIntegrationStore(), executor=Executor()))
+        request_context = SimpleNamespace(
+            metadata={
+                "external_run_id": "external-1",
+                "tenant_id": "root",
+                "project_id": "project-1",
+                "trace_callback_url": "http://codesynapse.internal/events",
+                "trace_capability_token": "trace-capability",
+            },
+            task_id="task-1",
+            context_id="context-1",
+            get_user_input=lambda: "Find a hypothesis",
+        )
+
+        await adapter.execute(request_context, Queue())
+        await asyncio.sleep(0)
+
+        assert requests[0].trace_callback_url == "http://codesynapse.internal/events"
+        assert requests[0].trace_capability_token == "trace-capability"
+
+    asyncio.run(scenario())
+
+
+def test_a2a_adapter_passes_artifact_capability_without_jwt():
+    async def scenario():
+        requests = []
+
+        class Executor:
+            async def execute(self, request, hitl_handler):
+                requests.append(request)
+                return "report"
+
+        class Queue:
+            async def enqueue_event(self, event):
+                return None
+
+        adapter = FacadeAgentExecutor(CodesynapseFacade(store=InMemoryIntegrationStore(), executor=Executor()))
+        request_context = SimpleNamespace(
+            metadata={
+                "artifact_upload_url": "http://codesynapse.internal/artifacts/grant",
+                "artifact_finalize_url": "http://codesynapse.internal/artifacts/finalize",
+                "artifact_capability_token": "artifact-capability",
+            },
+            task_id="task-1",
+            context_id="context-1",
+            get_user_input=lambda: "Find a hypothesis",
+        )
+
+        await adapter.execute(request_context, Queue())
+        await asyncio.sleep(0)
+
+        assert requests[0].artifact_upload_url.endswith("/grant")
+        assert requests[0].artifact_capability_token == "artifact-capability"
 
     asyncio.run(scenario())

@@ -12,13 +12,16 @@ services:
       CODESYNAPSE_ENABLED: "true"
       CODESYNAPSE_MONGO_URI: ${CODESYNAPSE_MONGO_URI:?set the dedicated CoScientist MongoDB URI}
       CODESYNAPSE_MONGO_DATABASE: ${CODESYNAPSE_MONGO_DATABASE:-coscientist}
-      CODESYNAPSE_JWKS_URL: ${CODESYNAPSE_JWKS_URL:?set internal Codesynapse JWKS URL}
       CODESYNAPSE_A2A_PUBLIC_URL: ${CODESYNAPSE_A2A_PUBLIC_URL:-http://coscientist-facade:8010}
+      MCP__PAPERS_SEARCH_URL: http://papers-search-mcp-server:7331/mcp
+      MCP__PAPER_ANALYSIS_URL: http://paper-analysis-mcp-server:7331/mcp
       A2A_DISABLE_OPIK: ${A2A_DISABLE_OPIK:-1}
     networks:
       - codesynapse-internal
     expose:
       - "8010"
+    ports:
+      - "${CODESYNAPSE_A2A_PORT:-8010}:8010"
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:8010/readyz > /dev/null"]
       interval: 10s

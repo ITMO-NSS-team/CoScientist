@@ -11,6 +11,8 @@ services:
     ports:
       - "7331:7331"
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
     healthcheck:
       test:
         - CMD
@@ -33,6 +35,8 @@ services:
     env_file:
       - ./chemical-mcp-server/.env
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
     healthcheck:
       test:
         - CMD
@@ -53,6 +57,8 @@ services:
     env_file:
       - ./dataset-collection-mcp-server/.env
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
     healthcheck:
       test:
         - CMD
@@ -73,6 +79,8 @@ services:
     env_file:
       - ./paper-analysis-mcp-server/.env
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
     healthcheck:
       test:
         - CMD
@@ -83,3 +91,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+networks:
+  codesynapse-internal:
+    external: true
+    name: ${CODESYNAPSE_INTERNAL_NETWORK:-codesynapse-internal}

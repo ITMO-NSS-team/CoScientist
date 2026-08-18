@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
+from uuid import uuid4
 
 from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution import RequestContext
@@ -20,7 +22,6 @@ from a2a.types import (
     TextPart,
 )
 
-from CoScientist.integrations.codesynapse.auth import sha256_json, sha256_text
 from CoScientist.integrations.codesynapse.facade import CodesynapseFacade, StartRequest
 from CoScientist.integrations.codesynapse.models import A2ATaskRecord, ArtifactPart, RunState
 
@@ -40,7 +41,15 @@ def _artifact_parts(part: ArtifactPart) -> list[Any]:
         return [TextPart(text=part.text)]
     if part.data is not None:
         return [DataPart(data=part.data)]
-    return [DataPart(data={"artifact_id": part.artifact_id, "checksum_sha256": part.checksum_sha256})]
+    return [
+        DataPart(
+            data={
+                "artifact_id": part.artifact_id,
+                "checksum_sha256": part.checksum_sha256,
+                "mime_type": part.mime_type,
+            }
+        )
+    ]
 
 
 def task_from_record(record: A2ATaskRecord, *, context_id: str) -> Task:
@@ -68,19 +77,14 @@ def task_from_record(record: A2ATaskRecord, *, context_id: str) -> Task:
         context_id=context_id,
         status=TaskStatus(state=_a2a_state(record.state)),
         artifacts=artifacts or None,
-        metadata={
-            "external_run_id": record.external_run_id,
-            "coscientist_run_id": record.coscientist_run_id,
-        },
     )
 
 
 class FacadeTaskStore(TaskStore):
     """A2A task store view backed by the façade's durable task repository."""
 
-    def __init__(self, facade: CodesynapseFacade, verifier=None) -> None:
+    def __init__(self, facade: CodesynapseFacade) -> None:
         self._facade = facade
-        self._verifier = verifier
 
     async def save(self, task: Task, context=None) -> None:  # A2A persists through the façade instead.
         return None
@@ -96,54 +100,59 @@ class FacadeTaskStore(TaskStore):
 class FacadeAgentExecutor(AgentExecutor):
     """Starts a façade task and immediately publishes its A2A ``working`` view."""
 
-    def __init__(self, facade: CodesynapseFacade, verifier=None) -> None:
+    def __init__(self, facade: CodesynapseFacade) -> None:
         self._facade = facade
-        self._verifier = verifier
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        metadata = context.metadata
-        claims = None
-        if self._verifier is not None:
-            encoded_token = metadata.get("integration_jwt")
-            if not encoded_token:
-                raise ValueError("Codesynapse metadata requires integration_jwt")
-            claims = await self._verifier.verify(str(encoded_token))
-        for name in ("external_run_id", "tenant_id", "project_id"):
-            if not metadata.get(name):
-                raise ValueError(f"Codesynapse metadata requires {name}")
-        if claims is not None and any(
-            getattr(claims, name) != str(metadata[name])
-            for name in ("external_run_id", "tenant_id", "project_id")
-        ):
-            raise ValueError("JWT scope does not match A2A metadata")
+        metadata = context.metadata if isinstance(context.metadata, dict) else {}
         research_request = context.get_user_input()
-        integration_context = metadata.get("context") or {}
+        integration_context = metadata.get("context")
         if not isinstance(integration_context, dict):
-            raise ValueError("Codesynapse metadata context must be a JSON object")
-        if claims is not None:
-            trace_callback_url = str(metadata.get("trace_callback_url") or "")
-            trace_capability_token = str(metadata.get("trace_capability_token") or "")
-            control_token_hash = str(metadata.get("control_token_hash") or "")
-            signed_values_match = (
-                claims.research_request_sha256 == sha256_text(research_request)
-                and claims.context_sha256 == sha256_json(integration_context)
-                and claims.trace_callback_url == trace_callback_url
-                and claims.trace_capability_token_hash == sha256_text(trace_capability_token)
-                and claims.control_token_hash == control_token_hash
-            )
-            if not signed_values_match:
-                raise ValueError("JWT does not bind the supplied Codesynapse context")
+            integration_context = {}
+        a2a_task_id = str(context.task_id or uuid4())
+        external_run_id = str(metadata.get("external_run_id") or a2a_task_id)
+        project_id = str(metadata.get("project_id") or context.context_id or a2a_task_id)
         record = await self._facade.start(
             StartRequest(
-                external_run_id=str(metadata["external_run_id"]),
-                tenant_id=str(metadata["tenant_id"]),
-                project_id=str(metadata["project_id"]),
+                external_run_id=external_run_id,
+                tenant_id=str(metadata.get("tenant_id") or "root"),
+                project_id=project_id,
                 research_request=research_request,
                 context=integration_context,
-                control_token_hash=metadata.get("control_token_hash"),
-                a2a_task_id=context.task_id,
-                trace_callback_url=metadata.get("trace_callback_url"),
-                trace_capability_token=metadata.get("trace_capability_token"),
+                control_token_hash=(
+                    hashlib.sha256(str(metadata["control_capability_token"]).encode("utf-8")).hexdigest()
+                    if metadata.get("control_capability_token")
+                    else None
+                ),
+                trace_callback_url=(
+                    str(metadata["trace_callback_url"])
+                    if metadata.get("trace_callback_url") and metadata.get("trace_capability_token")
+                    else None
+                ),
+                trace_capability_token=(
+                    str(metadata["trace_capability_token"])
+                    if metadata.get("trace_callback_url") and metadata.get("trace_capability_token")
+                    else None
+                ),
+                artifact_upload_url=(
+                    str(metadata["artifact_upload_url"])
+                    if metadata.get("artifact_upload_url") and metadata.get("artifact_finalize_url")
+                    and metadata.get("artifact_capability_token")
+                    else None
+                ),
+                artifact_finalize_url=(
+                    str(metadata["artifact_finalize_url"])
+                    if metadata.get("artifact_upload_url") and metadata.get("artifact_finalize_url")
+                    and metadata.get("artifact_capability_token")
+                    else None
+                ),
+                artifact_capability_token=(
+                    str(metadata["artifact_capability_token"])
+                    if metadata.get("artifact_upload_url") and metadata.get("artifact_finalize_url")
+                    and metadata.get("artifact_capability_token")
+                    else None
+                ),
+                a2a_task_id=a2a_task_id,
             )
         )
         await event_queue.enqueue_event(task_from_record(record, context_id=context.context_id or record.coscientist_run_id))
@@ -162,7 +171,7 @@ def make_agent_card(url: str) -> AgentCard:
 
     return AgentCard(
         name="coscientist",
-        description="Long-running scientific research pipeline with Codesynapse HITL and task polling.",
+        description="Long-running scientific research pipeline with standard A2A task polling.",
         url=url,
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=False),

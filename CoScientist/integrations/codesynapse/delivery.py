@@ -14,7 +14,7 @@ PostCallable = Callable[..., Awaitable[Any]]
 
 
 class TraceDeliveryClient:
-    """Small injectable client; callers retain retry scheduling in the outbox worker."""
+    """Deliver a batch using a per-run capability, never a JWT."""
 
     def __init__(self, *, callback_url: str, capability_token: str, post: PostCallable | None = None) -> None:
         self._callback_url = callback_url
@@ -35,16 +35,15 @@ class TraceDeliveryClient:
 
 
 class TraceOutboxDispatcher:
-    """Flush one run sequentially; retries are safe because delivery is at-least-once."""
+    """Flush one run in sequence; delivery is safe to retry after a failure."""
 
     def __init__(self, store, client: TraceDeliveryClient) -> None:
         self._store = store
         self._client = client
 
     async def flush_run(self, run_id: str) -> int:
-        events = await self._store.pending_events(run_id)
         delivered_count = 0
-        for batch in batch_events(events):
+        for batch in batch_events(await self._store.pending_events(run_id)):
             if not await self._client.deliver(batch):
                 break
             await self._store.mark_events_delivered([event.event_id for event in batch])

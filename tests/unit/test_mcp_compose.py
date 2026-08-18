@@ -8,6 +8,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PATH = ROOT / "mcp-servers" / "docker-compose.yml"
+FACADE_COMPOSE_PATH = ROOT / "docker" / "docker-compose.codesynapse-facade.yml"
 
 EXPECTED = {
     "papers-search-mcp-server": {
@@ -86,3 +87,13 @@ def test_paper_analysis_non_secret_settings_are_startup_safe() -> None:
         "HOSTS_PORTS__OPENCHEMIE_PORT",
     ):
         assert int(values[key]) > 0
+
+
+def test_local_mcps_share_the_codesynapse_network_with_the_facade() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    facade = yaml.safe_load(FACADE_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+    assert compose["networks"]["codesynapse-internal"]["external"] is True
+    assert facade["services"]["coscientist-facade"]["ports"] == ["${CODESYNAPSE_A2A_PORT:-8010}:8010"]
+    for service in compose["services"].values():
+        assert service["networks"] == ["codesynapse-internal"]

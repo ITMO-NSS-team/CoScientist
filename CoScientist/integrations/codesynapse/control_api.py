@@ -1,4 +1,4 @@
-"""Internal control-plane endpoints used only by Codesynapse."""
+"""Capability-protected internal control-plane endpoints for Codesynapse."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from CoScientist.hitl.models import HITLResponse
 
 
 class RunCapabilityValidator:
-    """Validate a short-lived per-run bearer capability by stored hash."""
+    """Validate a short-lived per-run bearer capability by its stored hash."""
 
     def __init__(self, token_hashes: Mapping[str, str]) -> None:
         self._token_hashes = dict(token_hashes)
@@ -28,7 +28,7 @@ class RunCapabilityValidator:
 
 
 class StoreCapabilityValidator:
-    """Resolve the per-run capability hash from the durable CoScientist store."""
+    """Resolve a per-run control capability hash from durable façade state."""
 
     def __init__(self, store) -> None:
         self._store = store
@@ -44,7 +44,7 @@ class StoreCapabilityValidator:
 
 
 def make_control_router(facade, store, validator) -> APIRouter:
-    """Build internal routes for HITL resolution, cancellation and trace replay."""
+    """Build idempotent HITL, cancellation and trace-replay endpoints."""
 
     router = APIRouter(prefix="/internal/runs")
 
@@ -53,10 +53,15 @@ def make_control_router(facade, store, validator) -> APIRouter:
             raise HTTPException(status_code=401, detail="invalid run capability")
 
     @router.post("/{run_id}/hitl/{request_id}/resolve", status_code=204)
-    async def resolve_hitl(run_id: str, request_id: str, response: HITLResponse, authorization: str | None = Header(default=None)):
+    async def resolve_hitl(
+        run_id: str,
+        request_id: str,
+        response: HITLResponse,
+        authorization: str | None = Header(default=None),
+    ):
         await require_capability(run_id, authorization)
-        if not await facade.resolve_hitl(run_id, request_id, response):
-            raise HTTPException(status_code=404, detail="pending HITL request not found")
+        # Codesynapse persists an answer before delivery and can safely replay it.
+        await facade.resolve_hitl(run_id, request_id, response)
         return Response(status_code=204)
 
     @router.post("/{run_id}/cancel", status_code=204)

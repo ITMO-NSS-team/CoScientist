@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from CoScientist.integrations.codesynapse.executor import PipelineExecutor
+from CoScientist.integrations.codesynapse.artifact_client import CodesynapseArtifactClient
 from CoScientist.integrations.codesynapse.hitl import CodesynapseHITLHandler, HITLRequestTimeout
 from CoScientist.integrations.codesynapse.models import (
     A2ATaskRecord,
     ArtifactPart,
     IntegrationRun,
     RunState,
+    TERMINAL_RUN_STATES,
     TerminalArtifacts,
 )
 from CoScientist.integrations.codesynapse.state import transition
@@ -35,6 +37,9 @@ class StartRequest(BaseModel):
     control_token_hash: str | None = None
     trace_callback_url: str | None = Field(default=None, exclude=True)
     trace_capability_token: str | None = Field(default=None, exclude=True)
+    artifact_upload_url: str | None = Field(default=None, exclude=True)
+    artifact_finalize_url: str | None = Field(default=None, exclude=True)
+    artifact_capability_token: str | None = Field(default=None, exclude=True)
     trace_recorder: object | None = Field(default=None, exclude=True)
     a2a_task_id: str | None = None
 
@@ -47,7 +52,7 @@ class CodesynapseFacade:
         *,
         store: IntegrationStore,
         executor: PipelineExecutor,
-        delivery_factory: Callable[[StartRequest], object] | None = None,
+        delivery_factory: Callable[[StartRequest], object | None] | None = None,
         lease_ttl_seconds: float = 3600.0,
     ) -> None:
         self._store = store
@@ -57,12 +62,13 @@ class CodesynapseFacade:
         self._handlers: dict[str, CodesynapseHITLHandler] = {}
         self._task_ids_by_run: dict[str, str] = {}
         self._cancelling_tasks: set[str] = set()
+        self._task_locks: dict[str, asyncio.Lock] = {}
         self._start_lock = asyncio.Lock()
         self._lease_owner_id = str(uuid4())
         self._lease_ttl_seconds = lease_ttl_seconds
 
-    def set_delivery_factory(self, delivery_factory: Callable[[StartRequest], object]) -> None:
-        """Attach the transport adapter without coupling façade state to HTTP."""
+    def set_delivery_factory(self, delivery_factory: Callable[[StartRequest], object | None]) -> None:
+        """Attach trace delivery without coupling durable state to HTTP transport."""
 
         self._delivery_factory = delivery_factory
 
@@ -142,46 +148,52 @@ class CodesynapseFacade:
     async def cancel(self, a2a_task_id: str) -> bool:
         """Idempotently cancel a live task and publish a terminal cancelled view."""
 
-        task = await self._store.get_task(a2a_task_id)
-        if task is None:
-            return False
-        if task.state in {RunState.COMPLETED, RunState.FAILED, RunState.CANCELLED, RunState.INTERRUPTED}:
-            return task.state == RunState.CANCELLED
-        run = await self._store.get_run(task.external_run_id)
-        if run is not None and run.state in {RunState.RUNNING, RunState.WAITING_FOR_HUMAN}:
-            run.state = transition(run.state, RunState.CANCELLING)
-            run.updated_at = datetime.now(timezone.utc)
-            await self._store.save_run(run)
-        handler = self._handlers.get(task.coscientist_run_id)
-        if handler is not None:
-            await handler.cancel_pending()
-        self._cancelling_tasks.add(a2a_task_id)
-        job = self._jobs.pop(a2a_task_id, None)
-        if job is not None:
-            job.cancel()
-            await asyncio.gather(job, return_exceptions=True)
-        persisted_task = await self._store.get_task(a2a_task_id)
-        if persisted_task is not None and persisted_task.state in {
-            RunState.COMPLETED,
-            RunState.FAILED,
-            RunState.CANCELLED,
-            RunState.INTERRUPTED,
-        }:
-            return persisted_task.state == RunState.CANCELLED
-        if run is not None:
-            run.state = RunState.CANCELLED
-            run.terminal_reason = "cancelled"
-            run.updated_at = datetime.now(timezone.utc)
-            await self._store.save_run(run)
-        await self._store.save_task(
-            self._error_task(
+        lock = self._task_locks.setdefault(a2a_task_id, asyncio.Lock())
+        async with lock:
+            task = await self._store.get_task(a2a_task_id)
+            if task is None:
+                return False
+            if task.state in TERMINAL_RUN_STATES:
+                return task.state == RunState.CANCELLED
+            run = await self._store.get_run(task.external_run_id)
+            handler = self._handlers.get(task.coscientist_run_id)
+            if handler is not None:
+                await handler.cancel_pending()
+
+            # The persisted task is the cancellation fence.  It is written
+            # before cancelling the in-memory job, so a slow executor cannot
+            # later replace the A2A terminal state with a late result.
+            self._cancelling_tasks.add(a2a_task_id)
+            cancellation_task = self._error_task(
                 task.a2a_task_id,
                 task.external_run_id,
                 task.coscientist_run_id,
                 RunState.CANCELLED,
                 "cancelled",
             )
-        )
+            if not await self._store.save_task_if_non_terminal(cancellation_task):
+                self._cancelling_tasks.discard(a2a_task_id)
+                current = await self._store.get_task(a2a_task_id)
+                return current is not None and current.state == RunState.CANCELLED
+            if run is not None and run.state not in TERMINAL_RUN_STATES:
+                if run.state in {RunState.RUNNING, RunState.WAITING_FOR_HUMAN}:
+                    run.state = transition(run.state, RunState.CANCELLING)
+                run.state = transition(run.state, RunState.CANCELLED)
+                run.terminal_reason = "cancelled"
+                run.updated_at = datetime.now(timezone.utc)
+                await self._store.save_run_if_non_terminal(run)
+                await TraceRecorder(
+                    self._store,
+                    run_id=task.coscientist_run_id,
+                    tenant_id=run.tenant_id,
+                    project_id=run.project_id,
+                ).emit("run.cancelled", data={"error_code": "cancelled"})
+
+            # A2A cancellation is an acknowledgement, not a join on the
+            # scientific pipeline.  _execute performs eventual cleanup.
+            job = self._jobs.get(a2a_task_id)
+            if job is not None:
+                job.cancel()
         return True
 
     async def resolve_hitl(self, coscientist_run_id: str, request_id: str, response) -> bool:
@@ -190,6 +202,9 @@ class CodesynapseFacade:
 
     async def cancel_by_run(self, coscientist_run_id: str) -> bool:
         task_id = self._task_ids_by_run.get(coscientist_run_id)
+        if task_id is None:
+            run = await self._store.get_run_by_coscientist_run(coscientist_run_id)
+            task_id = run.a2a_task_id if run is not None else None
         return await self.cancel(task_id) if task_id else False
 
     async def _execute(self, request: StartRequest, a2a_task_id: str, coscientist_run_id: str) -> None:
@@ -197,43 +212,49 @@ class CodesynapseFacade:
             request.external_run_id, self._lease_owner_id, self._lease_ttl_seconds
         ):
             return
-        run = await self._store.get_run(request.external_run_id)
-        if run is None:
-            await self._store.release_run_lease(request.external_run_id, self._lease_owner_id)
-            return
-        run.state = transition(run.state, RunState.RUNNING)
-        run.updated_at = datetime.now(timezone.utc)
-        await self._store.save_run(run)
-        dispatcher = self._delivery_factory(request) if self._delivery_factory is not None else None
-
-        async def flush_trace_event(event) -> None:
-            if dispatcher is not None:
-                await dispatcher.flush_run(coscientist_run_id)
-
-        recorder = TraceRecorder(
-            self._store,
-            run_id=coscientist_run_id,
-            tenant_id=request.tenant_id,
-            project_id=request.project_id,
-            on_event=flush_trace_event if dispatcher is not None else None,
-        )
-        async def emit_hitl_event(event_type: str, **fields: Any) -> None:
-            current = await self._store.get_run(request.external_run_id)
-            if current is not None:
-                if event_type == "hitl.requested" and current.state == RunState.RUNNING:
-                    current.state = transition(current.state, RunState.WAITING_FOR_HUMAN)
-                    await self._store.save_run(current)
-                elif event_type in {"hitl.resolved", "hitl.expired"} and current.state == RunState.WAITING_FOR_HUMAN:
-                    current.state = transition(current.state, RunState.RUNNING)
-                    await self._store.save_run(current)
-            await recorder.emit(event_type, **fields)
-
-        handler = CodesynapseHITLHandler(run_id=coscientist_run_id, emit=emit_hitl_event)
-        self._handlers[coscientist_run_id] = handler
-        await recorder.emit("run.started", data={"external_run_id": request.external_run_id})
+        lock = self._task_locks.setdefault(a2a_task_id, asyncio.Lock())
         try:
+            async with lock:
+                run = await self._store.get_run(request.external_run_id)
+                task = await self._store.get_task(a2a_task_id)
+                if run is None or task is None or run.state in TERMINAL_RUN_STATES or task.state in TERMINAL_RUN_STATES:
+                    return
+                run.state = transition(run.state, RunState.RUNNING)
+                run.updated_at = datetime.now(timezone.utc)
+                if not await self._store.save_run_if_non_terminal(run):
+                    return
+
+            dispatcher = self._delivery_factory(request) if self._delivery_factory is not None else None
+
+            async def flush_trace_event(event) -> None:
+                if dispatcher is not None:
+                    await dispatcher.flush_run(coscientist_run_id)
+
+            recorder = TraceRecorder(
+                self._store,
+                run_id=coscientist_run_id,
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                on_event=flush_trace_event if dispatcher is not None else None,
+            )
+
+            async def emit_hitl_event(event_type: str, **fields: Any) -> None:
+                current = await self._store.get_run(request.external_run_id)
+                if current is not None:
+                    if event_type == "hitl.requested" and current.state == RunState.RUNNING:
+                        current.state = transition(current.state, RunState.WAITING_FOR_HUMAN)
+                        await self._store.save_run_if_non_terminal(current)
+                    elif event_type in {"hitl.resolved", "hitl.expired"} and current.state == RunState.WAITING_FOR_HUMAN:
+                        current.state = transition(current.state, RunState.RUNNING)
+                        await self._store.save_run_if_non_terminal(current)
+                await recorder.emit(event_type, **fields)
+
+            handler = CodesynapseHITLHandler(run_id=coscientist_run_id, emit=emit_hitl_event)
+            self._handlers[coscientist_run_id] = handler
+            await recorder.emit("run.started", data={"external_run_id": request.external_run_id})
             execution_request = request.model_copy(update={"coscientist_run_id": coscientist_run_id, "trace_recorder": recorder})
             report = await self._executor.execute(execution_request, handler)
+            report_part = await self._report_part(request, report)
             run.state = transition(run.state, RunState.COMPLETED)
             task = A2ATaskRecord(
                 a2a_task_id=a2a_task_id,
@@ -242,10 +263,11 @@ class CodesynapseFacade:
                 state=RunState.COMPLETED,
                 artifacts=TerminalArtifacts(
                     state=RunState.COMPLETED,
-                    final_report=ArtifactPart(name="final_report", mime_type="text/markdown", text=report),
+                    final_report=report_part,
                 ),
             )
-            await recorder.emit("run.completed")
+            event_type = "run.completed"
+            event_data: dict[str, Any] = {}
         except asyncio.CancelledError:
             cancelled = a2a_task_id in self._cancelling_tasks
             state = RunState.CANCELLED if cancelled else RunState.INTERRUPTED
@@ -253,24 +275,50 @@ class CodesynapseFacade:
             run.state = state
             run.terminal_reason = error_code
             task = self._error_task(a2a_task_id, request.external_run_id, coscientist_run_id, state, error_code)
-            await recorder.emit("run.cancelled" if cancelled else "run.failed", data={"error_code": error_code})
+            event_type = "run.cancelled" if cancelled else "run.failed"
+            event_data = {"error_code": error_code}
         except HITLRequestTimeout as exc:
             run.state = RunState.FAILED
             task = self._error_task(a2a_task_id, request.external_run_id, coscientist_run_id, RunState.FAILED, "hitl_timeout", str(exc))
-            await recorder.emit("run.failed", data={"error_code": "hitl_timeout", "message": str(exc)})
+            event_type = "run.failed"
+            event_data = {"error_code": "hitl_timeout", "message": str(exc)}
         except Exception as exc:  # terminal failures are surfaced as structured error artifacts
             run.state = RunState.FAILED
             task = self._error_task(a2a_task_id, request.external_run_id, coscientist_run_id, RunState.FAILED, "execution_failed", str(exc))
-            await recorder.emit("run.failed", data={"error_code": "execution_failed", "message": str(exc)})
+            event_type = "run.failed"
+            event_data = {"error_code": "execution_failed", "message": str(exc)}
+
         try:
-            run.updated_at = datetime.now(timezone.utc)
-            await self._store.save_run(run)
-            await self._store.save_task(task)
+            async with lock:
+                persisted_task = await self._store.get_task(a2a_task_id)
+                if persisted_task is not None and persisted_task.state == RunState.CANCELLED:
+                    return
+                if not await self._store.save_task_if_non_terminal(task):
+                    return
+                run.updated_at = datetime.now(timezone.utc)
+                await self._store.save_run_if_non_terminal(run)
+            await recorder.emit(event_type, data=event_data)
         finally:
             await self._store.release_run_lease(request.external_run_id, self._lease_owner_id)
             self._jobs.pop(a2a_task_id, None)
             self._handlers.pop(coscientist_run_id, None)
             self._cancelling_tasks.discard(a2a_task_id)
+            self._task_locks.pop(a2a_task_id, None)
+
+    @staticmethod
+    async def _report_part(request: StartRequest, report: str) -> ArtifactPart:
+        if len(report.encode("utf-8")) <= 512 * 1024:
+            return ArtifactPart(name="final_report", mime_type="text/markdown", text=report)
+        return await CodesynapseArtifactClient(
+            upload_request_url=request.artifact_upload_url or "",
+            finalize_url=request.artifact_finalize_url or "",
+            capability_token=request.artifact_capability_token or "",
+        ).upload_text(
+            name="final_report",
+            filename="final_report.md",
+            text=report,
+            mime_type="text/markdown",
+        )
 
     @staticmethod
     def _error_task(
