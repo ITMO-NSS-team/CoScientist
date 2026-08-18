@@ -188,7 +188,7 @@ ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
 *db.json
 
-roadmap.txt
+session_snapshots/
 workspace/
 # Execution-graph run snapshots
 graph_runs/

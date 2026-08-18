@@ -20,9 +20,9 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 import httpx
-
+import time
+import sys
 from google.adk.tools import BaseTool, ToolContext
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -173,7 +173,7 @@ class CoderToolset(BaseToolset):
         (from the session id, else random) and store it. Read at call time so it
         doesn't depend on import order.
         """
-        fixed = os.getenv("CODER_WORKSPACE_ID")
+        fixed = settings.web.coder_workspace_id or os.getenv("CODER_WORKSPACE_ID")
         if fixed:
             safe = re.sub(r"[^A-Za-z0-9_\-]", "", fixed)[:48] or "shared"
             return f"ws_{safe}"
@@ -222,7 +222,7 @@ class CoderToolset(BaseToolset):
         return it and skip execution), or None to proceed.
         """
         matched = _requires_approval(command)
-        if matched is None or self._hitl_handler is None:
+        if matched is None or self._hitl_handler is None or not settings.web.hitl_enabled:
             return None
 
         # Imported lazily to keep the toolset usable without the HITL package.
@@ -744,12 +744,9 @@ class CoderToolset(BaseToolset):
         return await self.execute_bash(cmd, timeout=600, tool_context=tool_context)
 
 
-# When HITL is enabled, gate outward-facing/destructive commands behind human
-# approval (git push, installs, recursive deletes, network fetches, etc.).
-_hitl_handler = None
-if settings.hitl.enabled:
-    from CoScientist.hitl.handler import ConsoleHITLHandler
-    _hitl_handler = ConsoleHITLHandler()
+# Gate outward-facing/destructive commands behind human approval when HITL is active.
+from CoScientist.hitl.handler import ConsoleHITLHandler, DelegatingHITLHandler
+_hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 
 coder_toolset = CoderToolset(hitl_handler=_hitl_handler)
 coder_toolset_instance = coder_toolset.get_tools(None)
@@ -767,7 +764,7 @@ def seed_coder_workspace(callback_context, llm_request=None):
     orchestrator runs (e.g. standalone A2A), and an explicit CODER_WORKSPACE_ID
     pin still wins over both.
     """
-    if os.getenv("CODER_WORKSPACE_ID"):
+    if settings.web.coder_workspace_id or os.getenv("CODER_WORKSPACE_ID"):
         return None
     state = callback_context.state
     if state.get(_WORKSPACE_STATE_KEY):
@@ -785,3 +782,4 @@ def seed_coder_workspace(callback_context, llm_request=None):
         safe = re.sub(r"[^A-Za-z0-9_-]", "", str(sid))[:48] or "session"
         state[_WORKSPACE_STATE_KEY] = f"ws_{safe}"
     return None
+

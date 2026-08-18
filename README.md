@@ -94,9 +94,16 @@ Executes computational experiments via FEDOT.MAS. It:
 - Validates hypotheses computationally
 
 ### TaskExecutorAgent
-A sequential agent that combines tool retrieval and execution:
-1. Retrieves relevant MCP servers
-2. Executes experiments using FEDOT.MAS
+The execution router — the single entry point for work that must actually run.
+It executes nothing itself; it picks a path and delegates:
+1. **ToolPipelineAgent** — the ready-made-tools path: retrieves relevant MCP
+   servers, deploys them, and runs the experiment with them.
+2. **CoderAgent** — the engineering path: writes and runs code in the sandbox
+   when no existing tool covers the task.
+
+When the pipeline reports `NO_MATCHING_TOOL`, the router re-issues the same task
+to the coder itself, so the orchestrator never has to guess up front whether a
+ready tool exists.
 
 ## Key Features
 
