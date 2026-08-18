@@ -108,6 +108,44 @@ def _research_id(graph: Any) -> str:
     return str(full.get("research_id") or "")
 
 
+#: Bookkeeping attrs that say nothing about what was found.
+_EVIDENCE_SKIP = frozenset({"subtype", "reliability", "commit_note", "source",
+                            "hypothesis", "hypothesis_id", "verification_method",
+                            "confirmation_criteria", "evidence_type"})
+
+
+def _evidence_text(node: Dict[str, Any], budget: int = 1200) -> str:
+    """Everything an Evidence node actually says, not just its `content`.
+
+    Workers record results under whatever key fits the result — `metrics`,
+    `threshold_check`, `value`, `description` — and reading only `content` made a
+    node full of measurements arrive here as an empty string. The judge then
+    concluded, correctly given what it was shown, that no evidence existed, and
+    a hypothesis whose criteria had in fact all passed was set aside.
+    """
+    attrs = node.get("attrs") or {}
+    content = str(attrs.get("content") or "").strip()
+
+    # Numbers and verdicts first: the budget must not be spent on file paths
+    # before the judge has seen what was measured.
+    priority = ("metrics", "threshold_check", "description", "finding", "summary",
+                "value", "metric", "observation", "architecture", "generation")
+
+    def order(key: str) -> tuple:
+        return (priority.index(key) if key in priority else len(priority), key)
+
+    rest = []
+    for key in sorted(attrs, key=order):
+        if key in _EVIDENCE_SKIP or key == "content":
+            continue
+        value = attrs[key]
+        if value in (None, "", [], {}):
+            continue
+        rest.append(f"{key}={value}")
+    text = "; ".join([t for t in [content, *rest] if t]) or "(no attributes recorded)"
+    return text[:budget] + ("…" if len(text) > budget else "")
+
+
 def _build_user(slice_: Dict[str, Any], hid: str) -> str:
     """Render the focused judging prompt from the hypothesis' context slice."""
     by_id = {n["id"]: n for n in slice_.get("nodes", [])}
@@ -128,7 +166,7 @@ def _build_user(slice_: Dict[str, Any], hid: str) -> str:
         if evs:
             lines.append(f"{label} EVIDENCE:")
             lines += [f"- {e['id']} ({(e.get('attrs') or {}).get('subtype','')}): "
-                      f"{(e.get('attrs') or {}).get('content','')}" for e in evs]
+                      f"{_evidence_text(e)}" for e in evs]
             lines.append("")
     return "\n".join(lines)
 
