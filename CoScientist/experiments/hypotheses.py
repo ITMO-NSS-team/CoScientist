@@ -134,18 +134,46 @@ def bootstrap_research_question_if_empty(callback_context: CallbackContext) -> N
 
 
 def persist_experiment_em_request(callback_context: CallbackContext) -> None:
-    """before_agent on ToolRetriever: capture EM ask before tool-prep overwrites it."""
+    """before_agent on ToolRetriever: capture the original ask once; do not
+    overwrite it with hypothesis prose. A new orchestrator_root_goal clears leftover inventory."""
     state = callback_context.state
-    existing = str(state.get("experiment_source_request") or "").strip()
-    if existing and not _is_tool_prep_noise(existing):
+    root = str(state.get("orchestrator_root_goal") or "").strip()
+    ask = root if root and not _is_tool_prep_noise(root) else _resolve_em_ask(callback_context)
+    if not ask:
         return
-    ask = _resolve_em_ask(callback_context)
-    if ask:
-        state["experiment_source_request"] = ask
-        # New EM ask → allow HypothesesAgent to seed once for this stage.
-        state["_em_hypotheses_seeded"] = False
-        state[_FORCE_COMMIT_KEY] = False
-        audit(logger, f"EXPERIMENT_EM_REQUEST_PERSISTED chars={len(ask)}")
+    existing = str(state.get("experiment_source_request") or "").strip()
+    if existing == ask:
+        return
+    if existing and not _is_tool_prep_noise(existing):
+        # Keep the original ask unless the orchestrator root goal is a new request.
+        if not (root and not _is_tool_prep_noise(root) and root != existing):
+            return
+        ask = root
+    _clear_leftover_inventory(state)
+    state["experiment_source_request"] = ask
+    state["_em_hypotheses_seeded"] = False
+    state[_FORCE_COMMIT_KEY] = False
+    audit(logger, f"EXPERIMENT_EM_REQUEST_PERSISTED chars={len(ask)}")
+
+
+def _clear_leftover_inventory(state: Any) -> None:
+    """Drop retrieved tools from a prior ask so leftover MCP cannot fake cover."""
+    from CoScientist.experiments.context.builder import (
+        DISCOVERED_CAPABILITIES_KEY,
+        RETRIEVED_CAPABILITIES_KEY,
+    )
+
+    state[DISCOVERED_CAPABILITIES_KEY] = None
+    state[RETRIEVED_CAPABILITIES_KEY] = None
+    state["accumulated_tools"] = []
+    state["filtered_tools"] = []
+    state["retrieval_queries"] = []
+    try:
+        from CoScientist.tools.retrieval_tools import clear_session_accumulated_tools
+
+        clear_session_accumulated_tools()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def seed_hypotheses_from_em_request(
@@ -164,10 +192,41 @@ def seed_hypotheses_from_em_request(
         return
     if not str(state.get("experiment_source_request") or "").strip():
         state["experiment_source_request"] = ask
+    ops = state.get("experiment_operations") or []
+    if not (isinstance(ops, list) and ops):
+        raw = state.get("research_frame")
+        if raw:
+            try:
+                from CoScientist.context_init.agent import coerce_frame
+                from CoScientist.context_init.commit import frame_operations
+                ops = frame_operations(coerce_frame(raw))
+            except Exception:  # noqa: BLE001
+                ops = []
+    op_block = ""
+    if isinstance(ops, list) and ops:
+        lines = []
+        for item in ops:
+            if isinstance(item, dict) and item.get("statement"):
+                lines.append(
+                    f"- {item.get('operation_id') or 'OP'}: {item['statement']}"
+                )
+            elif isinstance(item, str) and item.strip():
+                lines.append(f"- {item.strip()}")
+        if lines:
+            op_block = (
+                "AUTHORITATIVE operations (one hypothesis per slot; "
+                "H1 matches OP-1, H2 matches OP-2, …). Do not invent extra "
+                "endpoints and do not skip a slot:\n"
+                + "\n".join(lines)
+                + "\n"
+            )
     prompt = (
         "Generate falsifiable scientific hypotheses for the computational experiment below.\n"
-        "Prefer one distinct hypothesis per distinct target/endpoint in the ask "
-        "(e.g. BTK / KRAS / Parkinson / lipid metabolism → separate Hs).\n"
+        f"{op_block}"
+        "Prefer one distinct hypothesis per distinct operation the user asked to "
+        "execute (numbered/separated steps in ASK, or AUTHORITATIVE operations "
+        "above). Do not invent extra endpoints beyond those operations. Skip a "
+        "narrative-only report step — that is ResultAggregator, not a hypothesis.\n"
         "CRITICAL — keep research_commit SMALL and reliable:\n"
         "- Commit Hypothesis nodes ONLY (no VerificationMethod / ConfirmationCriteria "
         "in the same call). Add VM/CC later in separate small commits if needed.\n"
@@ -196,23 +255,12 @@ def _parse_payload(raw: Any) -> Any:
         return raw
     if not isinstance(raw, str):
         return None
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        lines = lines[1:-1] if lines and lines[-1].strip().startswith("```") else lines[1:]
-        text = "\n".join(lines).strip()
+    from CoScientist.experiments.runtime.shared import parse_fenced_json
+
     try:
-        return json.loads(text)
+        return parse_fenced_json(raw, prefer_list=True)
     except json.JSONDecodeError:
-        start = text.find("[")
-        if start < 0:
-            start = text.find("{")
-        if start < 0:
-            return None
-        try:
-            return json.JSONDecoder().raw_decode(text[start:])[0]
-        except json.JSONDecodeError:
-            return None
+        return None
 
 
 def _as_ref_list(payload: Any) -> list[Any]:

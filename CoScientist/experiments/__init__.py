@@ -1,4 +1,4 @@
-"""Experiment Module v0 public API."""
+"""Experiment Module public API."""
 
 from CoScientist.config.settings import ExperimentsSettings
 

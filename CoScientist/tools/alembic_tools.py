@@ -13,7 +13,9 @@ earlier build via ``list_mcp_builds``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -24,13 +26,14 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
-
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows fallback for local development
     fcntl = None  # type: ignore[assignment]
 
 from google.adk.tools import ToolContext
+
+logger = logging.getLogger(__name__)
 
 # /<root>/CoScientist/tools/alembic_tools.py -> /<root>
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -75,10 +78,11 @@ _WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "http://localhost:800
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
 
-# Patterns over start_chain.py / alembic.main output.
+# Patterns over start_chain.py output. Keep these tight: cloned READMEs often
+# contain the words "image" / "container" and used to poison job metadata.
 _URL_RE = re.compile(r"url\s*:\s*(http://\S+/mcp)")
-_IMAGE_RE = re.compile(r"image\s*:\s*(\S+)")
-_CONTAINER_RE = re.compile(r"container\s*:\s*(\S+)")
+_IMAGE_RE = re.compile(r"image\s*:\s*(alembic-tool:\S+)")
+_CONTAINER_RE = re.compile(r"container\s*:\s*(alembic-serve-\S+)")
 _STAGE_RE = re.compile(r"STAGE (\d) — (\S+)")
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -230,6 +234,27 @@ def _reuse_snapshot(rec: Dict[str, Any], *, idempotent: bool = False) -> Dict[st
             "Pass force_rebuild=true to rebuild."
         )
     return snap
+
+
+def _first_reusable_same_repo(repo_url: str) -> Dict[str, Any] | None:
+    """Prefer a live build, then the most recent successful serve for this repo.
+
+    Caller must hold ``_LOCK``.
+    """
+    same = [
+        value
+        for value in _JOBS.values()
+        if _repo_identity(value["repo_url"]) == _repo_identity(repo_url)
+    ]
+    for existing in same:
+        _refresh_recovered_job(existing)
+    for existing in reversed(same):
+        if existing["status"] == "running":
+            return _reuse_snapshot(existing)
+    for existing in reversed(same):
+        if existing["status"] == "done" and str(existing.get("mcp_url") or "").startswith("http"):
+            return _reuse_snapshot(existing)
+    return None
 
 
 def _read_log(rec: Dict[str, Any]) -> str:
@@ -474,23 +499,17 @@ async def build_mcp_server(
                                 ),
                             }
                         return _reuse_snapshot(existing, idempotent=True)
+                    # New experiment run_id → new key, but the same repo may
+                    # already be served. Reuse that MCP instead of a 30+ min rebuild.
+                    if not force_rebuild:
+                        reused = _first_reusable_same_repo(repo_url)
+                        if reused is not None:
+                            return reused
 
                 if idempotency_key is None and not force_rebuild:
-                    # Preserve the original API: prefer a live build, then the
-                    # most recent successful build for this repository.
-                    same = [
-                        value
-                        for value in _JOBS.values()
-                        if _repo_identity(value["repo_url"]) == _repo_identity(repo_url)
-                    ]
-                    for existing in same:
-                        _refresh_recovered_job(existing)
-                    for existing in reversed(same):
-                        if existing["status"] == "running":
-                            return _reuse_snapshot(existing)
-                    for existing in reversed(same):
-                        if existing["status"] == "done":
-                            return _reuse_snapshot(existing)
+                    reused = _first_reusable_same_repo(repo_url)
+                    if reused is not None:
+                        return reused
 
                 repo_prefix = re.sub(r"[^A-Za-z0-9._-]", "-", _repo_name(repo_url))
                 job_id = f"{repo_prefix}-{secrets.token_hex(3)}"
@@ -528,6 +547,130 @@ async def build_mcp_server(
         f"other work, and call check_mcp_build('{job_id}') later."
     )
     return result
+
+
+def peek_mcp_build(job_id: str) -> Dict[str, Any]:
+    """Sync snapshot of one job (no wait). Reloads durable metadata if needed."""
+    with _LOCK:
+        rec = _JOBS.get(job_id)
+        if rec is None:
+            _load_jobs_from_disk(merge=True)
+            rec = _JOBS.get(job_id)
+        if rec is None:
+            return {
+                "status": "error",
+                "error": (
+                    f"unknown job_id {job_id!r} — use list_mcp_builds() "
+                    "to see the builds known to this registry."
+                ),
+            }
+        _refresh_recovered_job(rec)
+        return _snapshot(rec, with_log_tail=rec["status"] != "running")
+
+
+def wait_mcp_build(
+    job_id: str,
+    *,
+    timeout_s: float = 1800.0,
+    poll_s: float = 5.0,
+) -> Dict[str, Any]:
+    """Block until a build is done/failed/error, or ``timeout_s`` elapses.
+
+    Experiment Module uses this so the executor never records a premature
+    failure while Docker is still building. Interactive McpBuilder turns
+    keep the async protocol (return immediately, check later).
+    """
+    deadline = time.time() + max(0.0, float(timeout_s))
+    poll = max(0.05, float(poll_s))
+    last = peek_mcp_build(job_id)
+    while last.get("status") == "running":
+        if time.time() >= deadline:
+            out = dict(last)
+            out["wait_timed_out"] = True
+            out["note"] = (
+                f"Build still running after {timeout_s:.0f}s — "
+                f"reuse job {job_id}; do not start a new build."
+            )
+            return out
+        time.sleep(poll)
+        last = peek_mcp_build(job_id)
+    return last
+
+
+def list_served_mcp_tools(mcp_url: str, timeout_s: float = 8.0) -> list[dict[str, Any]]:
+    """Best-effort ``tools/list`` against a served FastMCP endpoint.
+
+    Used after WAIT_DONE so post-build Fedot sees real tool names instead of
+    the ``alembic_built_tool`` placeholder. Never raises — empty list on miss.
+    """
+    url = (mcp_url or "").strip()
+    if not url.startswith("http"):
+        return []
+    timeout_s = max(1.0, float(timeout_s))
+
+    async def _list() -> list[dict[str, Any]]:
+        from mcp import ClientSession
+        try:
+            from mcp.client.streamable_http import streamable_http_client as _http_client
+        except ImportError:  # older mcp SDK
+            from mcp.client.streamable_http import streamablehttp_client as _http_client
+
+        async with _http_client(url) as streams:
+            read, write = streams[0], streams[1]
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed = await session.list_tools()
+                out: list[dict[str, Any]] = []
+                for tool in listed.tools or []:
+                    name = str(getattr(tool, "name", "") or "").strip()
+                    if not name:
+                        continue
+                    item: dict[str, Any] = {
+                        "name": name,
+                        "description": str(getattr(tool, "description", "") or "")[:500],
+                    }
+                    schema = getattr(tool, "inputSchema", None) or getattr(
+                        tool, "input_schema", None
+                    )
+                    if schema:
+                        item["input_schema"] = schema
+                    out.append(item)
+                return out
+
+    async def _list_with_timeout() -> list[dict[str, Any]]:
+        return await asyncio.wait_for(_list(), timeout=timeout_s)
+
+    def _run_isolated() -> list[dict[str, Any]]:
+        return asyncio.run(_list_with_timeout())
+
+    try:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return _run_isolated()
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run_isolated).result(timeout=timeout_s + 2)
+    except Exception as exc:
+        logger.warning("list_served_mcp_tools failed url=%s err=%s", url, exc)
+        return []
+
+
+def enrich_snapshot_with_tools(snap: dict[str, Any], timeout_s: float = 8.0) -> dict[str, Any]:
+    """Attach ``tools`` from a live MCP when the build snapshot omitted them."""
+    if not isinstance(snap, dict) or snap.get("status") != "done":
+        return snap
+    existing = snap.get("tools") or snap.get("mcp_tools")
+    if isinstance(existing, list) and existing:
+        return snap
+    url = str(snap.get("mcp_url") or "").strip()
+    tools = list_served_mcp_tools(url, timeout_s=timeout_s)
+    if not tools:
+        return snap
+    out = dict(snap)
+    out["tools"] = tools
+    return out
 
 
 async def check_mcp_build(
@@ -675,5 +818,7 @@ except OSError:
 
 
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
+           "peek_mcp_build", "wait_mcp_build", "list_served_mcp_tools",
+           "enrich_snapshot_with_tools",
            "web_build_log_file", "web_build_snapshot", "web_list_builds",
            "parse_event_line", "reload_mcp_builds"]

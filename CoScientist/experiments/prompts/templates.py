@@ -32,14 +32,10 @@ def experiment_tool_retriever(ctx: PromptContext) -> str:
         """One capability-discovery pass before ending.
 <<TOOLS>>
 Query construction:
-- One short English retrieve_tools query per distinct OPERATION facet
-  (e.g. "candidate molecule generation", "toxicity prediction",
-  "docking/affinity", "activity data fetch", "synthesizability") — not the
-  disease name alone, not meta labels ("TEP", "smoke", "experiment").
-- If the ask says Generate / Suggest molecules / design compounds, ALWAYS
-  include "candidate molecule generation" among the first queries.
-- Cover every distinct facet; do not skip a facet because another chemistry
-  query already returned tools. Typically 2–4 retrieve_tools calls (hard budget 5).
+- One short English retrieve_tools query per distinct computational OPERATION
+  in the original user ask — not the disease name, paper title, or meta labels.
+- Cover every distinct operation; do not skip a facet because another query
+  already returned tools. Typically 2–4 retrieve_tools calls (hard budget 5).
   Do not invent tool names.
 Match exact operation + schema; same-domain similarity is not coverage.
 Stop after the pass; briefly name exact ready tools and any unmatched facets.
@@ -60,11 +56,14 @@ Authoritative context (sole MCP inventory; ignore tool names from chat):
 
 If revision_feedback is non-empty, fix those issues first.
 MCP tools ONLY from available_mcp_capabilities (exact server_id+tool).
+Research/medical tools ONLY from available_research_capabilities /
+available_medical_capabilities (exact tool name; mcp_servers=[]).
 
 CLOSED ENUMS (literals only):
-- route: fedot_mas|react_tools|coder|alembic_build
-  (alembic_build ONLY if route_alembic and a fitting repo_candidates[].url;
-   ignore listed repos that do not fit)
+- route: fedot_mas|react_tools|coder|alembic_build|research|medical
+  (alembic_build requires route_alembic=true AND repo_url copied verbatim
+   from a fitting repo_candidates[].url; ignore listed repos that do not fit
+   the task's operation)
 - post_build_route (alembic_build only): fedot_mas|react_tools
 - mcp_servers[].source: registry|explicit|alembic
 - mcp_servers[].health: unknown|healthy|unhealthy
@@ -76,7 +75,7 @@ CLOSED ENUMS (literals only):
 - design.baselines[].kind: method|model|prior_result|external
 - design.metrics[].direction: maximize|minimize|compare
 - design.analysis_artifacts[].role: code|config|metrics_table|report
-- design.analysis_artifacts[].prepare_via: coder|mcp|existing
+- design.analysis_artifacts[].prepare_via: coder|mcp|existing|research|medical
 - mcp_servers: name, server_id, tools, source, health — no description
 - launch_params / tools[].input_schema: JSON object *string* when schema wants
   a string, e.g. "{\"case\":\"alzheimer\",\"num\":10,\"upload_results_to_s3\":true}"
@@ -87,39 +86,80 @@ SCIENCE-FIRST:
    task (design.hypothesis_ref or also_tests). Do NOT invent extra hypotheses.
    If hypothesis_refs is empty (should be rare), use one H1 restating
    source_request — still no free-form multi-H invent.
-2. Each task needs hypothesis_ref, experiment_question, dataset, baselines≥1,
-   metrics≥1, analysis_artifacts≥1. dataset.ref usually null; URLs in notes.
+2. Each task needs hypothesis_ref, operation_ref (when operations is non-empty),
+   experiment_question, dataset, baselines≥1, metrics≥1, analysis_artifacts≥1. dataset.ref usually null; URLs in notes.
    Never invent placeholder hosts (example.com/org/net, localhost), s3://artifacts,
-   or dummy filenames (public_ld50_data.csv). Prefer inventory/tool outputs or
+   or dummy filenames. Prefer inventory/tool outputs or
    omit the URL; generators use input_data=[] + launch_params.
+   Do not invent dataset refs or files that are not in inventory/tool outputs.
    task_artifact inputs need full DataRef + producer in depends_on:
    kind=task_artifact, source_task_id, source_artifact_id (semantic filename).
    Never invent kind=artifact or a bare location/path string.
 3. 1–8 tasks; total_est_duration_min = sum of task durations.
-   Multi-part asks (several Generate/Suggest targets/endpoints): one non-optional
-   task per distinct target (e.g. KRAS + BTK + PCSK9 + neuro → EXP-1…EXP-4).
-   Do not collapse them into a single generation task.
+   experiment_context.operations is AUTHORITATIVE when non-empty: one non-optional
+   task per operation_id. Copy statement into design.experiment_question.
+   Set design.operation_ref to that OP-n. Inventory chooses the route only —
+   do not merge, drop, or invent slots, and do not rewrite the slot into a
+   different leftover tool. Multi-part asks without operations: one non-optional
+   task per distinct target. Do not collapse them into a single generation task.
 4. EXACT SCOPE: plan only operations in source_request. Inventory ≠ checklist —
    unused matching tools are not errors. Do not add docking/toxicity/reporting
-   tasks unless asked. Do not invent a final coder synthesis/aggregation task
-   unless source_request asks for a report deliverable. design.baselines is
-   metadata, not a fetch task.
+   tasks unless asked. NEVER add a narrative task whose only job is to write
+   a report / synthesize findings / выводы — that is ResultAggregator after
+   compute, not start_task(coder|fedot|alembic|research). Do not invent a
+   final coder synthesis/aggregation task. design.baselines is metadata, not
+   a fetch task. Do not add a literature/PDB/reference-SMILES task unless
+   source_request itself asks for that evidence-gathering (route rule 2).
+   Docking/generation that the ask already covers take pdb_id and SMILES in
+   launch_params — do not prepend papers in front of covered compute.
    Field ownership: risks/assumptions only on plan root; depends_on on the task
    (not input_data); DataRef uses kind+location fields only (no role/path_or_tool).
+   If THIS operation has no exact inventory tool name, no family tool, and no
+   fitting repo_candidate: required route=coder (last resort for that operation).
+   Leftover MCP for a different operation is not coverage. Copy
+   experiment_context.constraints (from the research frame) into
+   assumptions/risks when they constrain methods; do not re-elicit the frame.
+   On critique revise for uncovered operations or hypothesis_refs: ADD a
+   non-optional task for that slot; do not drop other frame operations
+   to make the ids fit.
 5. plan.hypothesis = short summary; details in hypotheses + task design.
 6. methods MUST be a JSON array of strings, never one numbered prose string.
    Hypotheses: only schema fields — no type/test_strategy/testable_prediction.
 7. post_build_route ONLY with route=alembic_build; else omit/null.
    Task ids: EXP-1…EXP-n (not T1).
 
-Route (exact MCP first):
-1) inventory covers SAME operation → fedot_mas (react_tools only if FEDOT off)
-   Bind exact inventory server_id+tool. Empty mcp_servers is invalid — bind or
-   use coder. Do not swap a different-family tool "because chemistry".
-2) else if route_alembic + fitting repo → alembic_build
-3) else → coder
-Every task MUST set route. Coder only when no inventory tool covers that same
-operation — do not reimplement covered ops. Same-domain similarity ≠ coverage.
+Route (exact coverage first):
+1) available_mcp_capabilities covers SAME operation → fedot_mas
+   (react_tools only if FEDOT off). Bind exact inventory server_id+tool.
+   Do not swap a different-family tool "because chemistry".
+   If available_mcp_capabilities is non-empty, the plan MUST include ≥1
+   fedot_mas/react_tools task for those compute operations. Research/medical
+   cannot replace generate/dock/tox MCP coverage.
+2) available_research_capabilities covers SAME operation (literature search,
+   paper retrieve/download, web evidence) AND source_request itself asks for
+   that evidence-gathering — route=research, mcp_servers=[].
+   Bind the family tool name on design.analysis_artifacts.path_or_tool
+   (prepare_via=research). Evidence artifact role=report or data (notes/citations).
+   Do not prepend a research task in front of covered compute.
+3) available_medical_capabilities covers SAME operation (PubMed/PICO/taxonomy/
+   DICOM) AND source_request asks for clinical/PubMed/DICOM evidence →
+   route=medical, mcp_servers=[]. Bind via prepare_via=medical.
+4) else check route_alembic + repo_candidates:
+   if route_alembic=true AND a repo_candidates[].url fits this task's
+   operation → route=alembic_build, repo_url=<that exact url>,
+   post_build_route=fedot_mas (react_tools if FEDOT off), mcp_servers=[].
+   This is PREFERRED over coder when a repo fits — do not fall back to coder
+   just because mcp_servers would be empty.
+5) else (no MCP, research, medical, or fitting repo for THIS operation) → coder.
+Every task MUST set route. Coder when no capability covers that same
+operation AND no repo_candidate fits — leftover inventory for a different
+operation is not coverage; do not omit the operation and do not reimplement
+a named ready MCP.
+Same-domain similarity ≠ coverage.
+A mixed ask (evidence gathering AND computation) is ONE plan with separate
+tasks per operation: research/medical for covered evidence steps, fedot_mas
+for covered compute steps, coder for uncovered implementable steps.
+Do not send a covered evidence step to coder.
 
 Contract:
 - Copy experiment_run_id + source_request verbatim; plan_id stable; revision≥1.
@@ -129,6 +169,10 @@ Contract:
 - fedot_mas/react_tools: ≥1 real inventory server+tool (source=registry).
   Canonical S3 bucket+key only. prepare_via=mcp → path_or_tool = inventory tool
   name (never a filename). Do not invent demoted_to_coder warnings.
+- research/medical: mcp_servers=[] always; prepare_via=research|medical;
+  path_or_tool = exact family tool name from available_*_capabilities.
+  Required evidence is a notes/citations/report artifact (workspace file OK;
+  S3 not required). Narrative-only tasks with no bound family tool are forbidden.
 - success_criteria = execution verification, not scientific claim status.
 - expected_artifacts for fedot/react with a bound inventory tool: required
   evidence MUST reflect what that tool produces (schema/description; role=data).
@@ -155,6 +199,42 @@ Minimal coder task:
   "media_type":"application/json","required":true,"description":"…"}],
  "est_duration_min":30,"warnings":[],"depends_on":[],"optional":false}
 
+Minimal research task (mcp_servers MUST be empty):
+{"id":"EXP-2","name":"…","description":"…","rationale":"…","route":"research",
+ "design":{"hypothesis_ref":"H1","experiment_question":"…",
+  "dataset":{"name":"…","ref":null,"notes":"…"},
+  "baselines":[{"name":"…","kind":"prior_result","ref":null}],
+  "metrics":[{"name":"…","direction":"compare","threshold":0,"test":null}],
+  "analysis_artifacts":[{"name":"lit_notes.md","role":"report","prepare_via":"research",
+   "path_or_tool":"search_papers"}]},
+ "mcp_servers":[],"repo_url":null,"post_build_route":null,"input_data":[],
+ "launch_params":"{}",
+ "success_criteria":[{"criterion_id":"C1","description":"lit_notes.md exists with citations",
+  "kind":"artifact_exists","metric":null,"operator":null,"target":null,
+  "required":true,"verification":"Confirm lit_notes.md in outputs"}],
+ "expected_artifacts":[{"name":"lit_notes.md","role":"report",
+  "media_type":"text/markdown","required":true,"description":"…"}],
+ "est_duration_min":20,"warnings":[],"depends_on":[],"optional":false}
+
+Minimal alembic_build task (repo_url MUST come verbatim from repo_candidates):
+{"id":"EXP-2","name":"…","description":"…","rationale":"…","route":"alembic_build",
+ "design":{"hypothesis_ref":"H1","experiment_question":"…",
+  "dataset":{"name":"…","ref":null,"notes":"…"},
+  "baselines":[{"name":"…","kind":"method","ref":null}],
+  "metrics":[{"name":"…","direction":"compare","threshold":0,"test":null}],
+  "analysis_artifacts":[{"name":"mcp_server","role":"code","prepare_via":"mcp",
+   "path_or_tool":"mcp_server"}]},
+ "mcp_servers":[],"repo_url":"https://github.com/<owner>/<repo>",
+ "post_build_route":"fedot_mas","input_data":[],"launch_params":"{}",
+ "success_criteria":[{"criterion_id":"C1","description":"MCP server built and healthy",
+  "kind":"execution","metric":null,"operator":null,"target":null,
+  "required":true,"verification":"outputs.mcp_url reachable"}],
+ "expected_artifacts":[{"name":"mcp_server","role":"mcp_server",
+  "media_type":"application/json","required":true,"description":"…"}],
+ "est_duration_min":30,"warnings":[],"depends_on":[],"optional":false}
+mcp_servers=[] at plan time even here — runtime injects the built server after
+Alembic succeeds; never invent tools/servers for an alembic_build task.
+
 Top-level: schema_version, plan_id, experiment_run_id, revision, source_request,
 goal, hypothesis, hypotheses, methods, context_digest, context_refs, tasks,
 risks, assumptions, total_est_duration_min, created_at (UTC ISO-8601 Z).
@@ -175,6 +255,9 @@ Routes: <<AGENTS>>
 2) start_task(ready task) → envelope with task/attempt/route_agent.
 3) Call that route AgentTool ONCE; FedotAgent(request="<JSON string>") —
    serialize experiment_active_envelope; never another route for the attempt.
+   ResearchAgent / MedicalAgent: same JSON request; they use their own
+   toolsets (not task mcp_servers). After return, record_result with a
+   notes/citations artifact (workspace file OK; S3 not required).
 4) record_result FIRST (before retry/fallback/skip/next start) with verbatim
    task_id/attempt_id from start_task. Payload keys only:
    status,summary,outputs,criteria_checks[{criterion_id,passed,observed,
@@ -183,12 +266,22 @@ Routes: <<AGENTS>>
    missing science or simulated/hardcoded/placeholder fabrication
    (partial/failure + warnings). Soft-match captures by name/role+ext — URL
    materialization warnings ≠ scientific fail.
+   ResearchAgent/MedicalAgent: if they returned tool output (papers, citations,
+   notes), record_result status=success or partial — never error/failure for
+   "insufficient literature". Put gaps in warnings. Durable S3/file evidence
+   on compute routes is success/partial even if criterion ids are missing.
    If record_result status=error, fix payload and resubmit same attempt.
 5) retry_pending→retry_task+start_task; fallback_pending→fallback_task then
    start_task SAME task_id; never switch route mid-attempt or start another
    task until recorded.
-6) After alembic success: record outputs.mcp_url; runtime reopens same task on
-   post_build_route — start_task again before calling that route.
+6) Alembic (route_agent=McpBuilderAgent): success ONLY with outputs.mcp_url
+   (http URL). If the builder is still running, do NOT record_result(failure)
+   and do NOT fallback_task to coder — the runtime waits on the Docker job.
+   After alembic success: runtime reopens same task on post_build_route —
+   start_task again before calling that route. FedotAgent/ExperimentAgent
+   request MUST be the scientific ask + mcp_url (runtime overwrites it);
+   never a local .py script name. After MCP is served, do NOT fallback_task
+   to CoderAgent — retry post_build or honest failure.
 7) skip_task=optional only; amend_task=unstarted only (criteria→review).
 8) After EVERY record_result: read returned phase. If phase is still
    execution → immediately get_experiment_plan and start_task the next ready
@@ -209,10 +302,14 @@ def experiment_fedot_route(ctx: PromptContext) -> str:
         """FedotAgent: one scoped attempt.
 Envelope: {experiment_active_envelope?}
 <<TOOLS>>
-If tools miss the task → NO_MATCHING_TOOL (no FEDOT). Else fedot_tool once with
-goal, resolved inputs, launch_params, criteria, artifacts; upload_results_to_s3
-true when schema allows. Prefer resolved_inputs/upstream_bindings. No second
-call; never fabricate.
+If this attempt is post-Alembic (mcp_servers source=alembic / mcp_url in the
+envelope): call those MCP tools via fedot_tool once. Never NO_MATCHING_TOOL,
+never recommend CoderAgent, never invent a local .py script as the task.
+Missing input files → honest failure.
+If tools miss a non-Alembic task → NO_MATCHING_TOOL (no FEDOT). Else fedot_tool
+once with goal, resolved inputs, launch_params, criteria, artifacts;
+upload_results_to_s3 true when schema allows. Prefer resolved_inputs/
+upstream_bindings. No second call; never fabricate.
 """,
         TOOLS=ctx.render_tools(),
     )

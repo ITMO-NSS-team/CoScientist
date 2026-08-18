@@ -53,7 +53,12 @@ class ExperimentControlToolset(BaseToolset):
         result: dict[str, Any],
         tool_context: ToolContext,
     ) -> dict[str, Any]:
-        """Validate/store TaskResult; downgrade incomplete success to retryable failure."""
+        """Validate/store TaskResult; downgrade incomplete success to retryable failure.
+
+        Durable family evidence (S3 key / workspace file / mcp_url / structured
+        MCP outputs) is accepted even when planner artifact or criterion names
+        differ — name mismatch alone must not fallback to Coder.
+        """
         try:
             return state_machine.record_result(tool_context.state, task_id, attempt_id, result)
         except ExperimentRuntimeError as exc:

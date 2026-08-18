@@ -77,3 +77,18 @@ def test_explicit_pin_wins():
         assert CoderToolset._workspace_id(_sub_ctx({})) == "ws_a2a_shared"
     finally:
         os.environ.pop("CODER_WORKSPACE_ID", None)
+
+
+def test_write_file_rejects_markdown_as_path():
+    """LLM sometimes passes README body as file_path → ENAMETOOLONG crash."""
+    import asyncio
+
+    toolset = CoderToolset()
+    state = {}
+    seed_coder_workspace(_orch_ctx(state, "adk-write-guard"))
+    ctx = _sub_ctx(state)
+
+    bad = "# Title\n\n" + ("x" * 200)
+    result = asyncio.run(toolset.write_file(bad, "ok", tool_context=ctx))
+    assert result["status"] == "error"
+    assert "Invalid file_path" in result["error"]

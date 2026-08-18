@@ -852,7 +852,11 @@ _EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
     # before Hypotheses/Plan/Coder burn budget on unrelated inventory.
     ("assess_experiment_inventory_feasibility", "after_agent", f"{_EM}.runtime:assess_experiment_inventory_feasibility"),
     ("skip_when_experiment_not_feasible", "before_agent", f"{_EM}.runtime:skip_when_experiment_not_feasible"),
+    ("skip_when_experiment_stage_complete", "before_agent", f"{_EM}.runtime:skip_when_experiment_stage_complete"),
     ("guard_experiment_route", "before_tool", f"{_EM}.runtime:guard_route_agent_tool"),
+    ("pin_alembic_build_args", "before_tool", f"{_EM}.runtime:pin_alembic_build_args"),
+    ("pin_fedot_alembic_task", "before_tool", f"{_EM}.runtime:pin_fedot_alembic_task"),
+    ("await_alembic_job_if_experiment", "after_tool", f"{_EM}.runtime:await_alembic_job_if_experiment"),
     ("force_molecule_generator_s3_upload", "before_tool", f"{_EM}.runtime:force_molecule_generator_s3_upload"),
     ("mark_experiment_route_returned", "after_tool", f"{_EM}.runtime:on_route_agent_returned"),
     ("enforce_pending_record_result", "after_model", f"{_EM}.runtime:enforce_pending_record_result"),
@@ -860,7 +864,7 @@ _EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
     ("rewrite_mismatched_control_action", "after_model", f"{_EM}.runtime:rewrite_mismatched_control_action"),
     # Collapse parallel ExperimentModuleAgent fan-out into one merged request.
     ("coalesce_experiment_module_calls", "after_model", f"{_EM}.runtime:coalesce_experiment_module_calls"),
-    # Give the module the first shot before literature research (state-keyed, not keyword-keyed).
+    ("suppress_experiment_module_after_completed", "after_model", f"{_EM}.runtime:suppress_experiment_module_after_completed"),
     ("enforce_experiment_module_first", "after_model", f"{_EM}.runtime:enforce_experiment_module_first"),
 )
 

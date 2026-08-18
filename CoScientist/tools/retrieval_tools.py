@@ -78,32 +78,40 @@ def _merge_accumulated_tools(
                 "description": (tool_result.description or "")[:_ACCUM_DESC_CAP],
                 "input_schema": tool_result.input_schema,
                 "score": tool_result.score,
+                "url": getattr(tool_result, "url", None),
                 "tool_index": last_idx,
                 "retrieval_query": query,
             }
             by_key[key] = row
             last_idx += 1
-        elif not existing.get("input_schema") and tool_result.input_schema:
-            existing["input_schema"] = tool_result.input_schema
+        else:
+            if not existing.get("input_schema") and tool_result.input_schema:
+                existing["input_schema"] = tool_result.input_schema
+            if not existing.get("url") and getattr(tool_result, "url", None):
+                existing["url"] = tool_result.url
     # Stable order by tool_index for reranker index alignment.
     return sorted(by_key.values(), key=lambda t: int(t.get("tool_index") or 0))
 
 
 async def _fetch_full_tool_meta(server_ids) -> Dict[tuple, Dict[str, Any]]:
-    """Map ``(server_id, tool_name) -> {description, input_schema}`` from the registry.
-
-    The RAG retrieval path returns a truncated description chunk and no schema;
-    the full, authoritative tool metadata lives in the Postgres registry. We
-    fetch it once per unique server. Best-effort: a server that fails to resolve
-    is simply skipped (the caller falls back to the RAG chunk).
-    """
+    """Map ``(server_id, tool_name) -> {description, input_schema, url}`` from the registry."""
     meta: Dict[tuple, Dict[str, Any]] = {}
     if not server_ids:
         return meta
     postgres = PostgresClient(settings.postgres)
     try:
         await postgres.initialize()
+        server_urls: Dict[str, str] = {}
         for sid in server_ids:
+            try:
+                srv = await postgres.get_server(sid)
+            except Exception as exc:
+                _logger.warning("retrieve_tools: could not fetch server %r: %s", sid, exc)
+                srv = None
+            url = getattr(srv, "url", None) if srv is not None else None
+            protocol = getattr(srv, "protocol", None) if srv is not None else None
+            if protocol == "http" and isinstance(url, str) and url.startswith("http"):
+                server_urls[sid] = url
             try:
                 tools = await postgres.get_tools_by_server(sid)
             except Exception as exc:
@@ -118,12 +126,12 @@ async def _fetch_full_tool_meta(server_ids) -> Dict[tuple, Dict[str, Any]]:
                     continue
                 schema = getattr(t, "input_schema", None)
                 if schema is not None and not isinstance(schema, dict):
-                    # pydantic model / other -> plain dict for JSON serialisation
                     dump = getattr(schema, "model_dump", None)
                     schema = dump() if callable(dump) else getattr(schema, "__dict__", None)
                 meta[(sid, name)] = {
                     "description": getattr(t, "description", None),
                     "input_schema": schema,
+                    "url": server_urls.get(sid),
                 }
     finally:
         await postgres.close()
@@ -192,6 +200,7 @@ class RetrievalToolSet(BaseToolset):
                     description=full_meta.get((r.server_id, r.name), {}).get("description") or r.description,
                     input_schema=full_meta.get((r.server_id, r.name), {}).get("input_schema"),
                     score=r.rerank_score,
+                    url=full_meta.get((r.server_id, r.name), {}).get("url"),
                 )
                 for r in retrieved_tools
             ]

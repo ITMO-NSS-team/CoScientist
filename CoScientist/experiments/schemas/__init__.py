@@ -1,9 +1,14 @@
 """Public Experiment Module contracts."""
 
-from .models import (
-    BLOCKING_SEVERITIES,
+from CoScientist.experiments.reporting.models import (
     ArtifactRef,
     CriterionCheck,
+    ScientificCheck,
+    TaskResult,
+    artifact_name_from_location,
+)
+from .models import (
+    BLOCKING_SEVERITIES,
     CritiqueIssue,
     DataRef,
     DesignAnalysisArtifact,
@@ -18,10 +23,8 @@ from .models import (
     MCPServerRef,
     MCPToolRef,
     PlanCritique,
-    ScientificCheck,
     SuccessCriterion,
     TaskDesign,
-    TaskResult,
     is_presigned_url,
     utc_now,
 )
@@ -48,6 +51,7 @@ __all__ = [
     "SuccessCriterion",
     "TaskDesign",
     "TaskResult",
+    "artifact_name_from_location",
     "is_presigned_url",
     "utc_now",
 ]

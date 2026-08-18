@@ -1,6 +1,10 @@
-"""Experiment Module v0 control plane."""
+"""Experiment Module control plane."""
 
-from .coalesce import coalesce_experiment_module_calls, enforce_experiment_module_first
+from .coalesce import (
+    coalesce_experiment_module_calls,
+    enforce_experiment_module_first,
+    suppress_experiment_module_after_completed,
+)
 from .guards import (
     NO_MATCHING_TOOL_STATE_KEY,
     RECORD_REQUIRED_MESSAGE,
@@ -11,8 +15,12 @@ from .guards import (
     force_molecule_generator_s3_upload,
     guard_route_agent_tool,
     on_route_agent_returned,
+    pin_alembic_build_args,
+    pin_fedot_alembic_task,
+    await_alembic_job_if_experiment,
     rewrite_mismatched_control_action,
     skip_when_experiment_not_feasible,
+    skip_when_experiment_stage_complete,
 )
 from .state_machine import (
     ExperimentRuntimeError,
@@ -42,6 +50,7 @@ __all__ = [
     "assess_experiment_inventory_feasibility",
     "coalesce_experiment_module_calls",
     "enforce_experiment_module_first",
+    "suppress_experiment_module_after_completed",
     "enforce_continue_until_reporting",
     "enforce_pending_record_result",
     "experiment_control_toolset",
@@ -54,10 +63,14 @@ __all__ = [
     "mark_result_review",
     "mark_route_returned",
     "on_route_agent_returned",
+    "pin_alembic_build_args",
+    "pin_fedot_alembic_task",
+    "await_alembic_job_if_experiment",
     "record_result",
     "retry_task",
     "rewrite_mismatched_control_action",
     "skip_task",
     "skip_when_experiment_not_feasible",
+    "skip_when_experiment_stage_complete",
     "start_task",
 ]

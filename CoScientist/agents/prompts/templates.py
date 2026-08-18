@@ -165,7 +165,9 @@ Your role is to generate plausible, scientifically grounded hypotheses that can 
 ### Instructions:
 
 1. Understand the task and its constraints.
-2. Propose a small set (2–5) of distinct, realistic hypotheses or approaches.
+2. Propose hypotheses that can be tested by the DISTINCT operations in the
+   user's ask (one hypothesis per distinct operation the user asked to execute).
+   Do not invent extra endpoints beyond those operations.
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
 5. If relevant, briefly note assumptions or required conditions.
@@ -279,6 +281,9 @@ RULES
 --------------------------------------------------
 
 <<PREFER_LINE>>- Stop once sufficient evidence is obtained
+- If a literature tool returned papers or hits, finish with those findings.
+  Do not mark the task FAILED for "insufficient literature" after a tool hit;
+  state remaining gaps in the notes.
 - Clearly communicate uncertainty or conflicting findings
 - Never hallucinate papers, repositories, or citations — if you cannot find the
   exact source the user named, say so rather than substituting a different one
@@ -976,22 +981,27 @@ its code -> build and serve a FastMCP server in Docker).
 
 <<TOOLS>>
 
+## repo_url comes from your request
+Your caller's request JSON always carries the exact repo_url to build —
+read it from there. Never invent, guess, or reuse a repo_url from an example
+in a tool description (including whitead/synspace); never ask the caller for
+one — it is already in your request payload. Pass that exact URL to
+build_mcp_server; never substitute a different repository.
+
 ## The build is a long, asynchronous job — protocol
-A full build takes TENS OF MINUTES. You never wait for it inline:
+A full build takes TENS OF MINUTES.
 1. Before starting a new build, ALWAYS call list_mcp_builds() first to check
    whether this repository already has a build in this process.
 2. If there is no existing build for the repository (or the caller explicitly
-   asked to rebuild), call build_mcp_server(repo_url). It returns immediately
-   with a job_id — report the job_id back and say the build is running; do
-   NOT poll check_mcp_build in a tight loop waiting for it to finish.
-3. On a later turn (a fresh delegation, a follow-up message), use the job_id
-   you (or list_mcp_builds) already have and call check_mcp_build(job_id) —
-   or list_mcp_builds() if the job_id was lost — to see the current state:
-   still "running" (report the stage and that it is still building), "failed"
-   (report the error), or "done".
-4. Once a build reports "done", hand back the concrete result: mcp_url (the
-   served MCP endpoint), image, and container. That is the deliverable — do
-   not just say "the build succeeded" without these fields.
+   asked to rebuild), call build_mcp_server(repo_url) WITHOUT force_rebuild.
+   Do not pass force_rebuild=true unless the caller explicitly asked to rebuild.
+3. If build_mcp_server returns status=done with mcp_url, that is the
+   deliverable — report mcp_url, image, and container immediately. The runtime
+   may have waited for the Docker job; do not start another build.
+4. If it returns status=running with a job_id, report the job_id and that the
+   build is still running. Do NOT invent success. Do NOT fallback to another
+   repo. On a later turn call check_mcp_build(job_id).
+5. On failed: report the error and the job_id. Do not silently switch repos.
 
 ## Do not rebuild for nothing
 - Never start a new build for a repository that already has a running or done
@@ -1281,6 +1291,12 @@ def orchestrator(ctx: PromptContext) -> str:
             "   A second call is allowed only for a later, separate scientific stage\n"
             "   after the previous experiment result was accepted."
         )
+        steps.append(
+            "If the research graph already holds a seeded frame (question,\n"
+            "   constraints, budgets, confirmation criteria), honour it — do not\n"
+            "   re-elicit the frame. Pass the original user ask to the module; it\n"
+            "   reads graph constraints itself."
+        )
         if not has_retrieval:
             steps.append(
                 "You do NOT discover MCP tools yourself — ExperimentModuleAgent's\n"
@@ -1294,10 +1310,12 @@ def orchestrator(ctx: PromptContext) -> str:
             # code, sandbox shells, named repos/URLs to RUN, and FEDOT loops are
             # Executor routes INSIDE the module, not orchestrator lanes.
             infra_clause = (
-                "\n   The ONE exception is turning a repository into a REUSABLE MCP\n"
-                "   tool server (infrastructure, not an experiment): that goes to\n"
-                "   McpBuilderAgent directly. A one-off RUN of repo code is still\n"
-                "   ExperimentModuleAgent."
+                "\n   The ONE exception is an EXPLICIT ask to wrap/register/build a\n"
+                "   REUSABLE MCP tool server (infrastructure, not an experiment):\n"
+                "   that goes to McpBuilderAgent. A named package or repo to RUN\n"
+                "   (pubchempy, synspace, 'implement using library X', a GitHub URL\n"
+                "   without wrap/register wording) is ExperimentModuleAgent — never\n"
+                "   a first hop to McpBuilderAgent."
                 if has_mcp_builder else ""
             )
             steps.append(
@@ -1868,6 +1886,12 @@ def context_init(ctx: PromptContext) -> str:
   «100 / 100») там, где это применимо.
 - В каждом блоке заполни usage — одну фразу, как блок используется дальше.
 - Поле original_request заполни исходным запросом пользователя дословно.
+- Поле operations — обязательный список исполнимых слотов. Если в запросе есть
+  пронумерованные или отдельные шаги того, что нужно СДЕЛАТЬ — скопируй каждый
+  в operations[] как {"operation_id": "OP-n", "statement": "<шаг дословно>"}.
+  Не сливай два шага, не выдумывай новые endpoints. Пропусти только
+  нарративный отчёт / выводы / write-up — его пишет ResultAggregator.
+  Если запрос — одно действие, operations может содержать один элемент.
 - Отвечай ТОЛЬКО валидным JSON без пояснений и без обрамления ```.
 
 ОБРАБОТКА ОТВЕТОВ ОПЕРАТОРА (при перегенерации после ревью):
@@ -1881,6 +1905,9 @@ def context_init(ctx: PromptContext) -> str:
 обязательные блоки и их поля):
 {
   "original_request": "<исходный запрос пользователя дословно>",
+  "operations": [
+    {"operation_id": "OP-1", "statement": "<первый исполнимый шаг из запроса>"}
+  ],
   "blocks": [
     {
       "title": "Вопрос исследования",

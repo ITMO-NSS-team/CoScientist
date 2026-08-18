@@ -1,75 +1,107 @@
-"""Inventory indexing + capability-family helpers (critique advisory, MCP repair bind/demote).
+"""Inventory indexing + bind-by-name/score (no ask→family regex).
 
-Repair: demote empty MCP → coder only when inventory empty or no tool covers a requested
-capability. Prefer the primary operation of the ask.
+Cover = this-run retrieve returned **compute MCP** tools. Empty fedot/react
+binds from exact name in the task text, else highest retrieval score.
+Promote coder → MCP/family only when THIS task names that tool. Unnamed
+coder stays required coder (or alembic if a repo fits) even if leftover
+inventory exists for a different operation.
+
+Research/medical families are declared route-agent capabilities (not RAG MCP).
+They must not count as compute coverage for feasibility.
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
-# request ↔ inventory tool text. Order docs-only; repair uses PRIMARY_CAP_PRIORITY.
-CAPABILITY_SPECS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
-    (
-        "docking",
-        re.compile(r"\b(dock|docking|vina|affinity\s*score|докинг|аффинност)", re.I),
-        re.compile(r"\b(dock|docking|vina|affinity)\b|докинг|аффин", re.I),
-    ),
-    (
-        "toxicity_profile",
-        re.compile(
-            r"\b(toxic|toxicity|ld50|ld₅₀|dili|hepato|cardio.?toxic|carcinogen|"
-            r"токсич|гепато|кардиот|канцер|ld\s*50)\b", re.I),
-        re.compile(
-            r"\b(toxic|toxicity|ld50|dili|hepato|cardio|carcinogen|"
-            r"molecule[_\s]?profile|general[_\s]?toxicity)\b|токсич|гепато|кардиот|канцер",
-            re.I),
-    ),
-    (
-        "molecule_generation",
-        re.compile(
-            r"\b("
-            r"generat\w*\s+\w*\s*candidat|generat\w*.{0,40}mol\w*|"
-            r"de\s*novo|generate_case_mols|generate_mols|"
-            r"drug[_\s-]?like\s+mol\w*|new\s+drug\w*|suggest\s+\w*\s*mol\w*|"
-            r"генерац\w*\s+молекул|кандидат\w*"
-            r")\b", re.I),
-        re.compile(
-            r"\b(generate[_\s]?case[_\s]?mols|generate[_\s]?mols|generat\w*\s+mol|"
-            r"molecule generation|gan)\b", re.I),
-    ),
-    (
-        "molecular_properties",
-        re.compile(
-            r"\b(synthesizab|sa\s*score|molecular\s+propert|smiles2prop|дескриптор|"
-            r"синтезируем\w*|synspace)\b", re.I),
-        re.compile(r"\b(smiles2prop|molecular\s+propert|descriptor|sa\s*score|synthesiz|synspace)\b", re.I),
-    ),
-    (
-        "chemical_clustering",
-        re.compile(r"\b(cluster|clustering|chemical.?space|butina|tsne|кластер)", re.I),
-        re.compile(r"\b(cluster|clustering|butina|tsne|chemical.?space)\b", re.I),
-    ),
-    (
-        "dataset_curation",
-        re.compile(r"\b(dataset.?overview|curat|metabolite.?selection|dedup|обзор\s+датасет)\b", re.I),
-        re.compile(r"\b(dataset.?overview|curat|dedup|metabolite.?selection)\b", re.I),
-    ),
-    (
-        "medchem_filter",
-        re.compile(r"\b(medchem|apply.?medchem.?filter|фильтр\w*\s+medchem)\b", re.I),
-        re.compile(r"\b(medchem|apply.?medchem)\b", re.I),
-    ),
-)
+from typing import Any, Iterable, Mapping
 
-# Multi-family asks: bind primary op (not first regex hit).
-PRIMARY_CAP_PRIORITY: tuple[str, ...] = (
-    "molecule_generation", "chemical_clustering", "dataset_curation",
-    "toxicity_profile", "medchem_filter", "molecular_properties", "docking",
+
+FAMILY_MCP = "mcp"
+FAMILY_RESEARCH = "research"
+FAMILY_MEDICAL = "medical"
+
+RESEARCH_SERVER_ID = "__research__"
+MEDICAL_SERVER_ID = "__medical__"
+_SYNTHETIC_SERVER_IDS = frozenset({RESEARCH_SERVER_ID, MEDICAL_SERVER_ID})
+
+# Tool names + purposes from CoScientist.assembly.bindings ToolDoc entries
+# for ResearchAgent / MedicalAgent. Coverage is still name/score bind, not
+# ask-phrase tables.
+_DECLARED_FAMILY_TOOLS: tuple[tuple[str, str, str, str], ...] = (
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "tavily_search",
+     "General web search."),
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "tavily_extract",
+     "Read the content of specific pages/URLs."),
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "tavily_crawl",
+     "Crawl a site starting from a URL when one page is not enough."),
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_chemistry_database",
+     "RAG search over an internal scientific literature database."),
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_my_papers",
+     "Answers questions using user-uploaded or previously downloaded papers."),
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "search_papers",
+     "Searches scientific papers in OpenAlex using metadata and search filters."),
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "download_papers_from_search",
+     "Searches and downloads papers for downstream analysis."),
+    (FAMILY_MEDICAL, MEDICAL_SERVER_ID, "search_pubmed",
+     "Find peer-reviewed literature on a clinical topic, drug, condition, or intervention."),
+    (FAMILY_MEDICAL, MEDICAL_SERVER_ID, "get_pico",
+     "Extract Population / Intervention / Comparison / Outcome from a paper abstract."),
+    (FAMILY_MEDICAL, MEDICAL_SERVER_ID, "get_study_taxonomy",
+     "Classify a paper's study design (observational vs experimental vs literature review)."),
+    (FAMILY_MEDICAL, MEDICAL_SERVER_ID, "analyze_medical_image",
+     "Interpret an uploaded DICOM or image file; differential diagnosis and ICD-10."),
 )
 
 
-def index_inventory_tools(available_tools: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Map tool name → {tool, server_id, description} (first wins)."""
+def declared_family_capabilities(*families: str) -> list[dict[str, Any]]:
+    """Static research/medical tool descriptors for planner context."""
+    want = {str(item).strip() for item in families if str(item).strip()} or {
+        FAMILY_RESEARCH, FAMILY_MEDICAL,
+    }
+    out: list[dict[str, Any]] = []
+    for family, server_id, tool, description in _DECLARED_FAMILY_TOOLS:
+        if family not in want:
+            continue
+        out.append({
+            "family": family,
+            "tool": tool,
+            "server_id": server_id,
+            "description": description,
+            "input_schema": {},
+            "score": None,
+            "url": None,
+        })
+    return out
+
+
+def row_family(item: Mapping[str, Any] | None) -> str:
+    if not isinstance(item, Mapping):
+        return FAMILY_MCP
+    family = str(item.get("family") or "").strip()
+    if family in {FAMILY_MCP, FAMILY_RESEARCH, FAMILY_MEDICAL}:
+        return family
+    server_id = str(item.get("server_id") or "").strip()
+    if server_id == RESEARCH_SERVER_ID:
+        return FAMILY_RESEARCH
+    if server_id == MEDICAL_SERVER_ID:
+        return FAMILY_MEDICAL
+    return FAMILY_MCP
+
+
+def index_inventory_tools(
+    available_tools: Iterable[dict[str, Any]],
+    *,
+    families: Iterable[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Map tool name → inventory row (higher retrieval score wins).
+
+    Default families={mcp}: RAG compute tools only. Pass research/medical to
+    index declared route-agent capabilities.
+    """
+    allow = (
+        {FAMILY_MCP}
+        if families is None
+        else {str(item).strip() for item in families if str(item).strip()}
+    )
     out: dict[str, dict[str, Any]] = {}
     for item in available_tools:
         if not isinstance(item, dict):
@@ -78,117 +110,175 @@ def index_inventory_tools(available_tools: Iterable[dict[str, Any]]) -> dict[str
         server_id = str(item.get("server_id") or "").strip()
         if not tool or not server_id:
             continue
-        out.setdefault(tool, {"tool": tool, "server_id": server_id, "description": item.get("description") or ""})
+        family = row_family(item)
+        if family not in allow:
+            continue
+        if family == FAMILY_MCP and server_id in _SYNTHETIC_SERVER_IDS:
+            continue
+        row = {
+            "family": family,
+            "tool": tool,
+            "server_id": server_id,
+            "description": item.get("description") or "",
+            "input_schema": item.get("input_schema"),
+            "score": item.get("score"),
+            "url": item.get("url"),
+        }
+        prior = out.get(tool)
+        if prior is None or float(row.get("score") or 0) > float(prior.get("score") or 0):
+            out[tool] = row
     return out
 
 
 def inventory_pairs(inventory: Iterable[dict[str, Any]]) -> set[tuple[str, str]]:
-    """Exact (server_id, tool) pairs for registry feasibility checks."""
+    """Exact (server_id, tool) pairs for registry feasibility checks (MCP only)."""
     return {
         (str(item["server_id"]), str(item.get("tool") or item.get("name")))
         for item in inventory
-        if isinstance(item, dict) and item.get("server_id") and (item.get("tool") or item.get("name"))
+        if isinstance(item, dict)
+        and item.get("server_id")
+        and (item.get("tool") or item.get("name"))
+        and row_family(item) == FAMILY_MCP
+        and str(item.get("server_id") or "") not in _SYNTHETIC_SERVER_IDS
     }
 
 
-def request_capabilities(request: str) -> set[str]:
-    text = request or ""
-    return {name for name, req_re, _ in CAPABILITY_SPECS if req_re.search(text)}
+def inventory_nonempty(available_tools: Iterable[dict[str, Any]] | Mapping[str, Any] | None) -> bool:
+    """True when this-run retrieve left at least one compute MCP (server_id, tool)."""
+    if not available_tools:
+        return False
+    if isinstance(available_tools, Mapping):
+        first = next(iter(available_tools.values()), None)
+        if isinstance(first, dict) and first.get("server_id") and row_family(first) == FAMILY_MCP:
+            if str(first.get("server_id") or "") not in _SYNTHETIC_SERVER_IDS:
+                return True
+        if isinstance(first, dict):
+            return bool(index_inventory_tools(list(available_tools.values())))
+        return False
+    return bool(index_inventory_tools(available_tools))
 
 
-# Lightweight engineering cue so pure coding asks (no chem family, no git URL)
-# still count as computable — EM must not early-exit those into Research.
-_ENGINEERING_ASK_RE = re.compile(
-    r"(?:"
-    r"\b(?:implement|sandbox|jupyter|notebook|git\s+clone|repository)\b|"
-    r"\bwrite\s+(?:a\s+)?(?:python\s+)?(?:script|code|program)\b|"
-    r"\b(?:python|bash)\s+script\b|"
-    r"напиши\s+код|реализуй\s+код|репозитор"
-    r")",
-    re.I,
-)
-
-
-def ask_has_computational_signal(request: str) -> bool:
-    """True when the ask is in EM's compute/engineering lane (chem family, repo
-    URL, or an engineering cue) — used to decide an early NO_MATCHING_TOOL
-    verdict when the module was routed here structurally (see
-    ``runtime.guards.assess_experiment_inventory_feasibility``)."""
-    from CoScientist.experiments.context.builder import extract_repo_candidates
-
-    text = (request or "").strip()
+def _named_match(text: str, by_tool: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     if not text:
-        return False
-    if request_capabilities(text):
-        return True
-    if extract_repo_candidates(text):
-        return True
-    return bool(_ENGINEERING_ASK_RE.search(text))
-
-
-def tool_capabilities(tool_name: str, description: str = "") -> set[str]:
-    blob = f"{str(tool_name or '').replace('_', ' ')} {description}"
-    return {name for name, _, tool_re in CAPABILITY_SPECS if tool_re.search(blob)}
-
-
-def is_paper_demo_tool(tool_name: str, description: str = "") -> bool:
-    blob = f"{tool_name} {description}".lower()
-    return bool(re.search(
-        r"\b(reproduce_figure|paper\s+fig|characterised molecules|characterized molecules|"
-        r"six characterised|demo.?only)\b", blob,
-    ))
-
-
-def inventory_covers_capabilities(by_tool: dict[str, dict[str, Any]], needed: set[str]) -> bool:
-    """True when a non-demo inventory tool covers any needed family."""
-    if not needed or not by_tool:
-        return False
+        return None
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text):
+        if token in by_tool:
+            return by_tool[token]
+    low = text.lower().replace("-", "_")
     for tool, item in by_tool.items():
-        if is_paper_demo_tool(tool, str(item.get("description") or "")):
-            continue
-        if tool_capabilities(tool, str(item.get("description") or "")) & needed:
-            return True
-    return False
+        if tool.lower() in low:
+            return item
+    return None
 
 
 def match_inventory_tool(
     blob: str, by_tool: dict[str, dict[str, Any]], *, source_request: str = "",
 ) -> dict[str, Any] | None:
-    """Pick inventory tool for empty MCP bind: exact name, else PRIMARY_CAP_PRIORITY."""
+    """Pick inventory tool: exact name in task text, else highest retrieval score."""
+    if not by_tool:
+        return None
     task_text = (blob or "").strip()
     request = (source_request or "").strip()
     combined = f"{task_text}\n{request}".strip()
-    if not combined or not by_tool:
-        return None
     for text in (task_text, combined):
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text):
-            if token in by_tool:
-                return by_tool[token]
-        low = text.lower().replace("-", "_")
-        for tool, item in by_tool.items():
-            if tool.lower() in low:
-                return item
-    # Family bind needs a task-local capability signal (not plan-level alone).
-    task_caps = request_capabilities(task_text) if task_text else set()
-    if not task_caps:
+        if hit := _named_match(text, by_tool):
+            return hit
+    ranked = sorted(
+        by_tool.values(),
+        key=lambda item: float(item.get("score") or 0),
+        reverse=True,
+    )
+    return ranked[0] if ranked else None
+
+
+def match_named_inventory_tool(
+    blob: str, by_tool: dict[str, dict[str, Any]], *, source_request: str = "",
+) -> dict[str, Any] | None:
+    """Like match_inventory_tool but never fall back to max retrieval score."""
+    if not by_tool:
         return None
-    needed = request_capabilities(combined)
-    if not needed:
-        return None
-    preferred = [c for c in PRIMARY_CAP_PRIORITY if c in needed and c in task_caps]
-    preferred += [c for c in PRIMARY_CAP_PRIORITY if c in needed and c not in task_caps]
-    for cap in preferred:
-        for tool, item in by_tool.items():
-            if is_paper_demo_tool(tool, str(item.get("description") or "")):
-                continue
-            if cap in tool_capabilities(tool, str(item.get("description") or "")):
-                return item
+    task_text = (blob or "").strip()
+    request = (source_request or "").strip()
+    combined = f"{task_text}\n{request}".strip()
+    for text in (task_text, combined):
+        if hit := _named_match(text, by_tool):
+            return hit
     return None
 
 
+_SLOT_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9]{3,}")
+
+
+def _slot_tokens(text: str) -> set[str]:
+    return {token.lower() for token in _SLOT_TOKEN_RE.findall(text or "")}
+
+
+def _tool_name_tokens(tool: str) -> set[str]:
+    return {
+        part for part in str(tool or "").lower().replace("-", "_").split("_")
+        if len(part) >= 4
+    }
+
+
+def slot_tool_score(statement: str, item: Mapping[str, Any]) -> int:
+    """Lexical overlap of a frame slot with one inventory row (no domain tables)."""
+    stmt = _slot_tokens(statement)
+    if not stmt:
+        return 0
+    name_hits = sum(1 for token in _tool_name_tokens(str(item.get("tool") or "")) if token in stmt)
+    desc_hits = sum(
+        1 for token in _slot_tokens(str(item.get("description") or ""))
+        if len(token) >= 6 and token in stmt
+    )
+    return name_hits * 2 + desc_hits
+
+
+def match_slot_inventory_tool(
+    blob: str, by_tool: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Named match, else a unique lexical fit of this slot to this-run inventory."""
+    if not by_tool:
+        return None
+    if hit := match_named_inventory_tool(blob, by_tool):
+        return hit
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for item in by_tool.values():
+        score = slot_tool_score(blob, item)
+        if score >= 2:
+            ranked.append((score, item))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda pair: (pair[0], float(pair[1].get("score") or 0)), reverse=True)
+    best_score, best = ranked[0]
+    tied = [item for score, item in ranked if score == best_score]
+    if len(tied) == 1:
+        return best
+    tied.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+    return tied[0]
+
+
+def match_named_family_capability(blob: str) -> dict[str, Any] | None:
+    """First research/medical tool name appearing in *task* text.
+
+    Does not consult source_request: mixed asks mention several families, and
+    per-task routing must follow this task's text, not the whole brief.
+    """
+    rows = declared_family_capabilities(FAMILY_RESEARCH, FAMILY_MEDICAL)
+    by_tool = index_inventory_tools(
+        rows, families={FAMILY_RESEARCH, FAMILY_MEDICAL},
+    )
+    return match_named_inventory_tool(blob, by_tool)
+
+
 __all__ = [
-    "CAPABILITY_SPECS", "PRIMARY_CAP_PRIORITY", "ask_has_computational_signal",
-    "index_inventory_tools", "inventory_covers_capabilities", "inventory_pairs",
-    "is_paper_demo_tool", "match_inventory_tool", "request_capabilities",
-    "tool_capabilities",
+    "FAMILY_MEDICAL",
+    "FAMILY_RESEARCH",
+    "declared_family_capabilities",
+    "index_inventory_tools",
+    "inventory_nonempty",
+    "inventory_pairs",
+    "match_inventory_tool",
+    "match_named_family_capability",
+    "match_named_inventory_tool",
+    "match_slot_inventory_tool",
 ]

@@ -26,6 +26,38 @@ logger.setLevel(logging.INFO)
 
 _AUTO_APPROVE_TRUTHY = frozenset({"1", "true", "yes", "on"})
 _OK_TASK_STATUSES = frozenset({"done", "done_with_warnings", "skipped"})
+_EVIDENCE_ROUTES = frozenset({"research", "medical"})
+
+
+def result_tasks_ok(runtime: dict[str, Any] | None) -> bool:
+    """Compute tasks must succeed. Failed literature/medical is ok if unused as input."""
+    tasks = (runtime or {}).get("tasks") or {}
+    rows = [row for row in tasks.values() if isinstance(row, dict)]
+    if not rows:
+        return False
+    consumers: set[str] = set()
+    for row in rows:
+        dump = row.get("task") if isinstance(row.get("task"), dict) else {}
+        for item in dump.get("input_data") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("kind") or "") != "task_artifact":
+                continue
+            src = str(item.get("source_task_id") or "").strip()
+            if src:
+                consumers.add(src)
+    for task_id, row in tasks.items():
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "")
+        if status in _OK_TASK_STATUSES:
+            continue
+        route = str(row.get("planned_route") or (row.get("task") or {}).get("route") or "")
+        tid = str((row.get("task") or {}).get("id") or task_id)
+        if route in _EVIDENCE_ROUTES and tid not in consumers:
+            continue
+        return False
+    return True
 
 
 _audit = functools.partial(audit, logger)
@@ -75,19 +107,9 @@ def _json_payload(value: Any) -> Any:
         return value.model_dump(mode="json")
     if not isinstance(value, str):
         return value
-    text = value.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        lines = lines[1:-1] if lines and lines[-1].strip().startswith("```") else lines[1:]
-        text = "\n".join(lines).strip()
-    decoder = json.JSONDecoder()
-    try:
-        return decoder.raw_decode(text)[0]
-    except json.JSONDecodeError:
-        start = text.find("{")
-        if start < 0:
-            raise
-        return decoder.raw_decode(text[start:])[0]
+    from CoScientist.experiments.runtime.shared import parse_fenced_json
+
+    return parse_fenced_json(value)
 
 
 def _stamp_context_invariants(payload: Any, context: dict[str, Any]) -> Any:
@@ -319,6 +341,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
                 preferred_tools=context.get("preferred_mcp_capabilities"), previous_plan=previous,
                 hypothesis_refs=context.get("hypothesis_refs") or [],
                 repo_candidates=context.get("repo_candidates") or [],
+                operations=context.get("operations") or [],
             )
             if errs := _context_invariant_errors(plan, context):
                 raise PlanValidationError("ExperimentPlan context invariants failed", errors=errs)
@@ -376,8 +399,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
         user_id, session_id = session_key(ctx)
         runtime = state.get("experiment_runtime") or {}
         runtime["phase"] = "awaiting_result_review"
-        statuses = [str(t.get("status")) for t in (runtime.get("tasks") or {}).values() if isinstance(t, dict)]
-        tasks_ok = bool(statuses) and all(s in _OK_TASK_STATUSES for s in statuses)
+        tasks_ok = result_tasks_ok(runtime)
         # Materialize canonical ArtifactRef locations before HITL / auto-approve.
         rendered = render_experiment_results(state)
 
@@ -420,4 +442,5 @@ __all__ = [
     "fail_closed_handler",
     "render_experiment_plan",
     "render_experiment_results",
+    "result_tasks_ok",
 ]

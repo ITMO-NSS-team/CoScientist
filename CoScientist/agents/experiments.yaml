@@ -31,14 +31,17 @@
 #        route; no orchestrator→Coder bypass = no shadow science).
 #      - Infrastructure (repo→reusable MCP server) → McpBuilderAgent top-level
 #        (not an experiment; does not need hypotheses/plan-HITL/TaskResult).
-#      - Literature/knowledge → ResearchAgent; clinical → MedicalAgent.
+#      - Literature/knowledge → ResearchAgent only after NO_MATCHING_TOOL;
+#        never in the same turn as ExperimentModuleAgent (Dual EM). Clinical →
+#        MedicalAgent. Mixed lit+compute stays inside EM (Executor research route).
 #      Orch has NO retrieval (single inventory lives in ToolPreparer) and does
 #      NOT keyword-rewrite briefs: research-vs-compute is decided by the module
 #      from its own inventory (NO_MATCHING_TOOL → orch falls back to Research).
 #  10. After ToolPreparer, assess_experiment_inventory_feasibility early-exits
-#      with NO_MATCHING_TOOL when the ask has no compute signal (chem capability /
-#      repo / engineering cue), so unrelated inventory cannot drag Hypotheses→
-#      Plan→Coder; remaining EM children skip via skip_when_experiment_not_feasible.
+#      with NO_MATCHING_TOOL when gate-routed AND compute MCP inventory is empty
+#      (declared research/medical families are not compute coverage), so leftover
+#      retrieve cannot drag Hypotheses→Plan→Coder; remaining EM children skip
+#      via skip_when_experiment_not_feasible. Mixed lit+compute stays in EM.
 #      Only applies to asks that enforce_experiment_module_first structurally
 #      rerouted from ResearchAgent (flagged via GATE_ROUTED_STATE_KEY) — an
 #      orchestrator call to the module made on purpose is always trusted.
@@ -48,7 +51,11 @@ defaults:
   model: main
 
 pipeline:
-  pre: []
+  # ContextInit seeds the research frame into the graph BEFORE the orchestrator.
+  # EM reads that frame (constraints + operations) and does not re-elicit it.
+  # Headless runs skip HITL review and still seed the drafted frame.
+  # Numbered asks still parse from text if the frame has no operations.
+  pre: [ContextInitAgent]
   post: [ResultAggregatorAgent]
 
 agents:
@@ -80,6 +87,7 @@ agents:
       # → orch falls back to Research on the next turn).
       after_model:
         - coalesce_experiment_module_calls
+        - suppress_experiment_module_after_completed
         - enforce_experiment_module_first
         - guard_unknown_tools
     hitl: true
@@ -91,6 +99,22 @@ agents:
         name: Orchestrate
         description: Coordinate scientific research agents to solve complex tasks
         tags: [orchestration, science, multi-agent]
+
+  # ── Context initialization (pre-stage) — science frame, not experiment plan ─
+  ContextInitAgent:
+    class: custom:context_init_session
+    enabled: ${context_init.enabled}
+    description: >-
+      агент инициализации контекста — превращает исследовательский вопрос в
+      структурированную рамку (вопрос, профиль, ограничения, бюджеты,
+      инструменты, эмпирическая база, условия подтверждения, модель стоимости),
+      согласует её с оператором и заполняет граф исследования до старта.
+    prompt: context_init
+    output_key: research_frame
+    output_schema: research_frame
+    hitl: true
+    callbacks:
+      after_model: [sanitize_json_output]
 
   # ── Direct subordinates ────────────────────────────────────────────────────
   PlannerAgent:
@@ -151,7 +175,7 @@ agents:
     output_key: hypotheses
     tools: [graph, research_graph]
     callbacks:
-      before_agent: [skip_when_experiment_not_feasible, bootstrap_research_question_if_empty, inject_research_context]
+      before_agent: [skip_when_experiment_stage_complete, skip_when_experiment_not_feasible, bootstrap_research_question_if_empty, inject_research_context]
       before_model: [seed_hypotheses_from_em_request]
       after_model: [enforce_hypothesis_research_commit, normalize_em_hypothesis_commit, guard_unknown_tools]
       after_tool: [capture_hypotheses_after_research_commit]
@@ -162,7 +186,8 @@ agents:
     description: >-
       retrieves scientific knowledge and searches/downloads literature
       (web, RAG, paper search). Open-ended search only — it cannot read
-      a specific code repository.
+      a specific code repository. Also ExperimentExecutorAgent route when
+      start_task returns route_agent=ResearchAgent.
     routing: >-
       when OPEN-ENDED external knowledge or literature is required, the problem
       cannot be solved computationally, or claims need literature validation. If
@@ -198,8 +223,9 @@ agents:
     description: >-
       Plans, reviews, executes and reports one computational experiment with
       task/attempt state, finite fallback and artifact lineage. Owns tool
-      discovery (ToolPreparer), hypotheses, plan HITL, MCP/FEDOT/Coder/McpBuilder
-      routing, and result HITL. Primary choice for ANY computational ask.
+      discovery (ToolPreparer), hypotheses, plan HITL, MCP/FEDOT/Coder/Alembic/
+      Research/Medical routing, and result HITL. Primary choice for ANY
+      computational ask (mixed evidence+compute stays in one plan).
     routing: >-
       for ANY computational / engineering stage: molecules, docking, properties,
       simulations, custom code, named repos/URLs, FEDOT loops, or MCP gaps.
@@ -237,7 +263,7 @@ agents:
     output_key: experiment_plan
     hitl: true
     callbacks:
-      before_agent: [skip_when_experiment_not_feasible, build_experiment_context]
+      before_agent: [skip_when_experiment_stage_complete, skip_when_experiment_not_feasible, build_experiment_context]
       before_model: [skip_retriever_context]
       after_model: [sanitize_json_output]
     options:
@@ -256,9 +282,11 @@ agents:
       - ExperimentAgent
       - CoderAgent
       - McpBuilderAgent
+      - ResearchAgent
+      - MedicalAgent
     output_key: experiment_execution_summary
     callbacks:
-      before_agent: [skip_when_experiment_not_feasible, skip_executor_without_runtime]
+      before_agent: [skip_when_experiment_stage_complete, skip_when_experiment_not_feasible, skip_executor_without_runtime]
       before_tool: [guard_experiment_route]
       after_tool: [mark_experiment_route_returned]
       after_model: [enforce_pending_record_result, rewrite_mismatched_control_action, enforce_continue_until_reporting]
@@ -271,7 +299,7 @@ agents:
     output_key: experiment_summary
     hitl: true
     callbacks:
-      before_agent: [skip_when_experiment_not_feasible]
+      before_agent: [skip_when_experiment_stage_complete, skip_when_experiment_not_feasible]
     options:
       review_kind: result
 
@@ -348,6 +376,8 @@ agents:
     description: >-
       answers medical/clinical questions: PubMed literature search, PICO
       extraction, study taxonomy, and DICOM image analysis.
+      Also ExperimentExecutorAgent route when start_task returns
+      route_agent=MedicalAgent.
     routing: >-
       when the task involves clinical questions, medical literature, or patient
       data; if the user uploaded a medical image (DICOM/scan), pass its artifact_id.
@@ -380,22 +410,23 @@ agents:
       generates and validates tools from its code, and serves a FastMCP
       server in Docker.
     routing: >-
-      when the needed capability exists only as CODE in a repository and must
-      be turned into a reusable MCP tool/service. NOT for a one-off run of
-      that code (that is CoderAgent) and NOT for calling an MCP tool that
-      already exists (that is ExperimentModuleAgent). Hallmark: "turn repo X into
-      an MCP server / tool we can call."
+      ONLY when the user explicitly asks to wrap/register/build a REUSABLE MCP
+      tool server from a repository (infrastructure). Do NOT use this for
+      "find a library and compute", a named package (pubchempy, synspace), or
+      a GitHub URL to RUN — those go to ExperimentModuleAgent. Hallmark:
+      "turn repo X into a reusable MCP server / register this as an MCP tool."
     planning: |-
-      choose when a repository's capability needs to become a callable MCP
-      tool server rather than a one-off run:
-          * building/serving a new MCP tool from a scientific GitHub repo
-          → Use ONLY to produce a reusable tool server; a single run of the
-            code belongs to CoderAgent, and calling an already-built MCP tool
-            belongs to ExperimentModuleAgent.
+      choose ONLY when the user explicitly wants a reusable MCP tool server:
+          * "wrap / register / build an MCP server from repo X"
+          → A one-off RUN of a named package or repo is ExperimentModuleAgent
+            (Alembic is an Executor route inside the module). Calling an
+            already-built MCP tool is also ExperimentModuleAgent.
     prompt: mcp_builder
     tools: [alembic]
     output_key: mcp_build_results
     callbacks:
+      before_tool: [pin_alembic_build_args]
+      after_tool: [await_alembic_job_if_experiment]
       after_model: [guard_unknown_tools]
     a2a:
       key: mcp_builder
@@ -412,6 +443,7 @@ agents:
     description: Agent to find and prepare relevant mcp servers for current task
     children: [ParallelToolSearcherAgent, FullSetToolReranker, WebToolsDeployerAgent]
     callbacks:
+      before_agent: [skip_when_experiment_stage_complete]
       # Early NO_MATCHING_TOOL when ask has no compute signal (avoids lit→hypotheses).
       after_agent: [assess_experiment_inventory_feasibility]
 
@@ -428,12 +460,13 @@ agents:
   ToolRetrieverAgent:
     class: llm
     description: Agent to retrieve relevant MCP servers from RAG database of MCP tools for given task.
-    prompt: tool_retriever
+    prompt: experiment_tool_retriever
     tools: [retrieval]
     output_key: retrieved_tools
     callbacks:
       # Capture EM scientific ask before tool-prep siblings overwrite user_content.
-      before_agent: [persist_experiment_em_request]
+      before_agent: [persist_experiment_em_request, reset_experiment_retrieval_budget]
+      after_model: [enforce_experiment_retrieval_budget]
       # Durable EM inventory: persist full retrieval before rerank clears it.
       after_agent: [persist_experiment_retrieved_capabilities]
 
@@ -498,3 +531,4 @@ agents:
     output_key: fedot_results
     callbacks:
       before_agent: [redirect_when_no_tools, refuse_when_fedot_deliverable, before_get_task, inject_research_context]
+      before_tool: [pin_fedot_alembic_task]

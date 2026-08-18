@@ -285,10 +285,16 @@ class ExperimentsSettings(BaseModel):
     fallback_alembic_build: list[str] = Field(
         default_factory=lambda: ["alembic_build", "coder"]
     )
+    fallback_research: list[str] = Field(default_factory=lambda: ["research"])
+    fallback_medical: list[str] = Field(default_factory=lambda: ["medical"])
 
+    alembic_timeout_s: float = Field(default=1800.0, gt=0)
+    alembic_poll_s: float = Field(default=5.0, gt=0)
     fedot_timeout_s: float = Field(default=600.0, gt=0)
     react_timeout_s: float = Field(default=600.0, gt=0)
     coder_timeout_s: float = Field(default=7200.0, gt=0)
+    research_timeout_s: float = Field(default=600.0, gt=0)
+    medical_timeout_s: float = Field(default=600.0, gt=0)
     plan_review_timeout_s: float = Field(default=300.0, gt=0)
     result_review_timeout_s: float = Field(default=300.0, gt=0)
     complexity_warning_tasks: int = Field(default=6, ge=1, le=8)

@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, Iterable
 from uuid import uuid4
 
 from google.adk.agents.callback_context import CallbackContext
@@ -16,7 +16,7 @@ from google.genai import types
 from CoScientist.experiments.runtime.shared import audit
 
 logger = logging.getLogger(__name__)
-_MAX_RETRIEVAL_CALLS = 4
+_MAX_RETRIEVAL_CALLS = 5
 _DESC_LIMIT = 400
 _PROMPT_DESC_LIMIT = 220
 _CLEAR_ON_NEW_RUN = (
@@ -25,6 +25,8 @@ _CLEAR_ON_NEW_RUN = (
     "experiment_last_route_response", "experiment_active_envelope",
     "experiment_plan_validation_errors", "experiment_plan_review_paused",
     "experiment_no_matching_tool", "experiment_execution_summary",
+    "experiment_repo_candidates",
+    "accumulated_tools", "filtered_tools", "retrieval_queries",
 )
 DISCOVERED_CAPABILITIES_KEY = "experiment_discovered_capabilities"  # survives attempt clears
 RETRIEVED_CAPABILITIES_KEY = "experiment_retrieved_capabilities"  # pre-rerank full set
@@ -57,7 +59,7 @@ _REPO_URL_RE = re.compile(
 )
 _PROMPT_OPTIONAL_KEYS = (
     "research_focus_id", "research_context", "hypotheses", "hypothesis_refs", "prior_results",
-    "data_refs", "constraints", "explicit_mcp_servers", "repo_candidates",
+    "data_refs", "constraints", "operations", "explicit_mcp_servers", "repo_candidates",
     "revision_feedback", "unresolved_gaps",
 )
 
@@ -120,6 +122,52 @@ def _user_text(callback_context: CallbackContext) -> str:
     parts = getattr(content, "parts", None) if content is not None else None
     return "\n".join(c for p in (parts or []) if (c := getattr(p, "text", ""))).strip()
 
+
+def _constraints_from_state(state: Any) -> list[dict[str, Any]]:
+    """Prefer explicit experiment_constraints; else the ContextInit research_frame."""
+    existing = state.get("experiment_constraints") if hasattr(state, "get") else None
+    if isinstance(existing, list) and existing:
+        return [item for item in existing if isinstance(item, dict)]
+    raw = state.get("research_frame") if hasattr(state, "get") else None
+    if not raw:
+        return []
+    try:
+        from CoScientist.context_init.agent import coerce_frame
+        from CoScientist.context_init.commit import frame_constraint_rows
+        return frame_constraint_rows(coerce_frame(raw))
+    except Exception:  # noqa: BLE001 — missing/invalid frame must not block planning
+        return []
+
+
+def _operations_from_state(state: Any, source_request: str = "") -> list[dict[str, str]]:
+    """Committed ops, then ContextInit frame, then numbered steps in the ask."""
+    from CoScientist.context_init.operations import (
+        normalize_operation_rows,
+        parse_numbered_operations,
+    )
+
+    existing = state.get("experiment_operations") if hasattr(state, "get") else None
+    rows = normalize_operation_rows(existing)
+    if rows:
+        return rows
+    raw = state.get("research_frame") if hasattr(state, "get") else None
+    if raw:
+        try:
+            from CoScientist.context_init.agent import coerce_frame
+            from CoScientist.context_init.commit import frame_operations
+            rows = frame_operations(coerce_frame(raw))
+            if rows:
+                return rows
+        except Exception:  # noqa: BLE001 — missing/invalid frame must not block planning
+            rows = []
+    ask = source_request or (
+        str(state.get("experiment_source_request") or "") if hasattr(state, "get") else ""
+    )
+    parsed = parse_numbered_operations(ask) if ask else []
+    if len(parsed) >= 2:
+        return normalize_operation_rows([op.model_dump() for op in parsed])
+    return []
+
 def extract_repo_candidates(
     source_request: str, *, limit: int = _MAX_REPO_CANDIDATES,
 ) -> list[dict[str, str]]:
@@ -148,6 +196,115 @@ def extract_repo_candidates(
             break
     return out
 
+
+def _merge_repo_candidates(
+    *groups: list[dict[str, Any]], limit: int = _MAX_REPO_CANDIDATES,
+) -> list[dict[str, Any]]:
+    """Dedupe by normalized URL; earlier groups win order priority."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group or []:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip().rstrip("/")
+            if not url:
+                continue
+            key = url.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def _inventory_covers_ask(
+    planner_caps: list[dict[str, Any]],
+    source_request: str,
+    operations: Iterable[Any] = (),
+) -> bool:
+    """True when this-run retrieve covers the ask enough to skip GitHub search.
+
+    Frame operations + nonempty inventory → covered (leftover isolation is
+    persist-clear on a new ask). Without operations, the ask itself must name
+    an inventory tool — leftover tox does not cover an MD/generate ask.
+    """
+    from CoScientist.context_init.operations import normalize_operation_rows
+    from CoScientist.experiments.capabilities.inventory import (
+        index_inventory_tools,
+        match_named_inventory_tool,
+    )
+
+    by_tool = index_inventory_tools(planner_caps)
+    if not by_tool:
+        return False
+    ops = normalize_operation_rows(list(operations or []))
+    if ops:
+        return True
+    return match_named_inventory_tool(source_request, by_tool) is not None
+
+
+def resolve_repo_candidates(
+    source_request: str,
+    *,
+    planner_caps: list[dict[str, Any]] | None = None,
+    route_alembic: bool = False,
+    cached: list[dict[str, Any]] | None = None,
+    search: bool | None = None,
+    search_limit: int = 5,
+    operations: Iterable[Any] = (),
+) -> list[dict[str, Any]]:
+    """Ask URLs + optional GitHub search when Alembic is on and inventory is empty.
+
+    ``search=None`` → search when there are no this-run compute tools, or when
+    there are no frame operations and the ask does not name an inventory tool.
+    Pass ``search=False`` in unit tests to skip the network.
+    """
+    if not route_alembic:
+        return []
+    from_ask = extract_repo_candidates(source_request)
+    caps = list(planner_caps or [])
+    do_search = (
+        (not _inventory_covers_ask(caps, source_request, operations))
+        if search is None else bool(search)
+    )
+    if not do_search:
+        return from_ask[:_MAX_REPO_CANDIDATES]
+
+    if cached:
+        merged = _merge_repo_candidates(from_ask, list(cached))
+        if len(merged) >= min(search_limit, _MAX_REPO_CANDIDATES):
+            return merged[:_MAX_REPO_CANDIDATES]
+
+    from CoScientist.experiments.capabilities.repo_searcher import search_repos_sync
+
+    found: list[dict[str, Any]] = []
+    try:
+        result = search_repos_sync(source_request, limit=search_limit)
+        found = [c.to_context_item() for c in result.candidates]
+        if result.errors:
+            audit(
+                logger,
+                f"EXPERIMENT_REPO_SEARCH_ERRORS n={len(result.errors)} "
+                f"sample={result.errors[0][:160]}",
+                level=logging.WARNING,
+            )
+        audit(
+            logger,
+            f"EXPERIMENT_REPO_SEARCH hit={len(found)} raw={result.total_raw} "
+            f"queries={result.search_queries}",
+            stdout=(
+                f"EXPERIMENT_REPO_SEARCH hit={len(found)} "
+                f"urls={[c.get('url') for c in found[:3]]}"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("repo search failed: %s", exc)
+        audit(logger, f"EXPERIMENT_REPO_SEARCH_FAILED err={exc}", level=logging.WARNING)
+
+    return _merge_repo_candidates(from_ask, found, list(cached or []))[:_MAX_REPO_CANDIDATES]
 
 def _statement_from_hypothesis_body(body: str) -> str:
     """Prefer *Statement:* from system-HypothesesAgent prose; else first content line."""
@@ -261,6 +418,7 @@ def _normalize_capabilities(items: Any) -> list[dict[str, Any]]:
             "description": str(item.get("description") or "")[:_DESC_LIMIT],
             "input_schema": _bounded(schema, 40) if isinstance(schema, dict) else {},
             "score": item.get("score"),
+            "url": item.get("url"),
         })
         if len(out) >= 20:
             break
@@ -271,6 +429,8 @@ def _cap_for_prompt(cap: dict[str, Any]) -> dict[str, Any]:
         "tool": cap["tool"], "server_id": cap["server_id"],
         "description": str(cap.get("description") or "")[:_PROMPT_DESC_LIMIT],
     }
+    if family := str(cap.get("family") or "").strip():
+        row["family"] = family
     row.update(_schema_brief(cap.get("input_schema")))
     return row
 
@@ -284,6 +444,12 @@ def _prompt_context(context: dict[str, Any]) -> str:
         "route_alembic": bool(context.get("route_alembic")),
         "route_fedot": bool(context.get("route_fedot")),
         "available_mcp_capabilities": [_cap_for_prompt(c) for c in available],
+        "available_research_capabilities": [
+            _cap_for_prompt(c) for c in (context.get("available_research_capabilities") or [])
+        ],
+        "available_medical_capabilities": [
+            _cap_for_prompt(c) for c in (context.get("available_medical_capabilities") or [])
+        ],
     }
     for key in _PROMPT_OPTIONAL_KEYS:
         if (val := context.get(key)) not in (None, "", [], {}):
@@ -331,15 +497,17 @@ def _session_accumulated_raw(callback_context: CallbackContext | None = None) ->
         pass
     return []
 
+
 def stash_experiment_retrieved_capabilities(callback_context: CallbackContext) -> None:
     """Snapshot accumulated retrieval into durable inventory (merge, never shrink)."""
+    ask = str(callback_context.state.get("experiment_source_request") or "").strip()
     caps = _merge_capabilities(
         _session_accumulated_raw(callback_context), callback_context.state.get("accumulated_tools"),
     )
-    if caps:
-        callback_context.state[RETRIEVED_CAPABILITIES_KEY] = _merge_capabilities(
-            callback_context.state.get(RETRIEVED_CAPABILITIES_KEY), caps,
-        )
+    if not caps and not ask:
+        return
+    prior = callback_context.state.get(RETRIEVED_CAPABILITIES_KEY)
+    callback_context.state[RETRIEVED_CAPABILITIES_KEY] = _merge_capabilities(prior, caps)
 
 def snapshot_experiment_discovered_capabilities(callback_context: CallbackContext) -> None:
     """Persist registry tools so attempt clears do not erase critique inventory."""
@@ -374,8 +542,14 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         previous_context = {}
     if not isinstance(previous_runtime, dict):
         previous_runtime = {}
+    # One accepted experiment per session until HITL asks for replan.
+    # A second EM hop after phase=completed must not wipe the runtime
+    # (that is what started a fresh plan and the start_task loop).
+    if previous_runtime.get("phase") == "completed":
+        return
+    persisted = str(state.get("experiment_source_request") or "").strip()
     prev_request = str(
-        state.get("experiment_source_request") or previous_context.get("source_request") or ""
+        persisted or previous_context.get("source_request") or ""
     ).strip()
     critique = state.get("experiment_plan_critique") or {}
     if not isinstance(critique, dict):
@@ -386,7 +560,7 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         or critique.get("verdict") == "revise"
         or previous_runtime.get("phase") == "awaiting_review"
     )
-    source_request = prev_request if planning_revision and prev_request else (user_text or prev_request)
+    source_request = persisted or (prev_request if planning_revision and prev_request else (user_text or prev_request))
     same_request = bool(source_request) and source_request == prev_request
     revising = planning_revision and same_request
     run_id = previous_context.get("experiment_run_id") if revising else f"EXRUN-{uuid4().hex}"
@@ -417,7 +591,6 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
     preferred = _normalize_capabilities(state.get("filtered_tools")) if not mid_attempt else []
     if not preferred:
         preferred = _normalize_capabilities(state.get(DISCOVERED_CAPABILITIES_KEY))
-    # Planner inventory = full retrieval union; preferred stays rerank keep-set.
     planner_caps = capabilities if capabilities else preferred
     research_context = str(state.get("research_context") or "")[:4000]
     gaps = _bounded(state.get("experiment_unresolved_gaps") or [], 20)
@@ -428,6 +601,11 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         if gap not in gaps:
             gaps = [*gaps, gap][:20]
     from CoScientist.config import get_settings
+    from CoScientist.experiments.capabilities.inventory import (
+        FAMILY_MEDICAL,
+        FAMILY_RESEARCH,
+        declared_family_capabilities,
+    )
     experiments = get_settings().experiments
     revision_feedback: list[dict[str, Any]] = []
     if state.get("experiment_plan_validation_errors"):
@@ -438,19 +616,40 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         revision_feedback.append({
             "kind": "critique", "issues": _bounded(critique.get("issues") or [], 12),
         })
+    cached_repos = state.get("experiment_repo_candidates")
+    if not isinstance(cached_repos, list):
+        cached_repos = previous_context.get("repo_candidates") if (revising or same_request) else []
+    if not isinstance(cached_repos, list):
+        cached_repos = []
+    operations = _operations_from_state(state, source_request)
+    repo_candidates = resolve_repo_candidates(
+        source_request,
+        planner_caps=planner_caps,
+        route_alembic=bool(experiments.route_alembic),
+        cached=cached_repos if (revising or same_request) else None,
+        operations=operations,
+    )
+    if repo_candidates:
+        state["experiment_repo_candidates"] = repo_candidates
+    constraints = _constraints_from_state(state)
+    if operations:
+        state["experiment_operations"] = operations
     context = {
         "experiment_run_id": run_id, "source_request": source_request,
         "research_focus_id": state.get("research_focus_id"), "research_context": research_context,
-        "hypotheses": _bounded(state.get("hypotheses") or [], 5),
+        "hypotheses": _bounded(state.get("hypotheses") or [], 8),
         "hypothesis_refs": extract_hypothesis_refs(source_request, legacy_hypotheses=state.get("hypotheses")),
+        "operations": _bounded(operations, 8),
         "prior_results": _bounded(state.get("experiment_task_results") or [], 8),
         "data_refs": _bounded(state.get("experiment_data_refs") or [], 20),
-        "constraints": _bounded(state.get("experiment_constraints") or [], 20),
+        "constraints": _bounded(constraints, 20),
         "available_mcp_capabilities": planner_caps,
+        "available_research_capabilities": declared_family_capabilities(FAMILY_RESEARCH),
+        "available_medical_capabilities": declared_family_capabilities(FAMILY_MEDICAL),
         "preferred_mcp_capabilities": preferred if preferred else planner_caps,
         "critique_mcp_capabilities": capabilities if capabilities else planner_caps,
         "explicit_mcp_servers": _bounded(state.get("experiment_explicit_mcps") or [], 20),
-        "repo_candidates": extract_repo_candidates(source_request) if experiments.route_alembic else [],
+        "repo_candidates": repo_candidates,
         "revision_feedback": revision_feedback, "unresolved_gaps": gaps[:20],
         "context_digest": research_context[:1500] or source_request[:1500],
         "route_alembic": bool(experiments.route_alembic), "route_fedot": bool(experiments.route_fedot),
@@ -464,9 +663,11 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
 
 
 __all__ = [
-    "DISCOVERED_CAPABILITIES_KEY", "PLANNER_CONTEXT_KEY", "RETRIEVED_CAPABILITIES_KEY",
+    "DISCOVERED_CAPABILITIES_KEY", "RETRIEVED_CAPABILITIES_KEY",
     "build_experiment_context", "enforce_experiment_retrieval_budget",
-    "extract_hypothesis_refs", "extract_repo_candidates", "reset_experiment_retrieval_budget",
+    "extract_hypothesis_refs", "extract_repo_candidates",
+    "resolve_repo_candidates",
+    "reset_experiment_retrieval_budget",
     "skip_executor_without_runtime", "snapshot_experiment_discovered_capabilities",
     "stash_experiment_retrieved_capabilities",
 ]

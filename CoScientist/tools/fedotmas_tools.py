@@ -62,6 +62,13 @@ class FedotMASToolset(BaseToolset):
         """
         state = tool_context.state if tool_context is not None else {}
         filtered_tools = state.get('filtered_tools', [])
+        from CoScientist.experiments.runtime.alembic_bridge import (
+            alembic_post_build_context,
+            compose_alembic_fedot_task,
+        )
+        alembic_ctx = alembic_post_build_context(state)
+        if alembic_ctx:
+            task_description = compose_alembic_fedot_task(alembic_ctx, task_description)
         # The Experiment Module owns anti-duplication through its task/attempt
         # state machine and AgentTool route guard.  Its path must not consult
         # the legacy session-scoped FEDOT deliverable flag.

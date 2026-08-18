@@ -387,6 +387,8 @@ agents:
     tools: [alembic]
     output_key: mcp_build_results
     callbacks:
+      before_tool: [pin_alembic_build_args]
+      after_tool: [await_alembic_job_if_experiment]
       after_model: [guard_unknown_tools]
     a2a:
       key: mcp_builder

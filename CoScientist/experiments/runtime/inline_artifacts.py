@@ -1,4 +1,4 @@
-"""Materialize structured inline route results as v0 workspace artifacts."""
+"""Materialize structured inline route results as workspace artifacts."""
 from __future__ import annotations
 
 import csv
@@ -68,6 +68,36 @@ def _encode_payload(
         return None
 
 
+def has_structured_family_outputs(outputs: Mapping[str, Any] | None) -> bool:
+    """True when MCP/Fedot returned computable family evidence, not a status string.
+
+    A single scalar (``n_molecules=10``) is not enough — generate/dock still
+    need an S3/file table. Two+ numeric fields or a non-empty list/object is.
+    """
+    if not isinstance(outputs, Mapping) or not outputs:
+        return False
+    skip = {"mcp_url", "mcp_endpoint"}
+    items = {k: v for k, v in outputs.items() if str(k) not in skip}
+    if not items:
+        return False
+
+    def _rich(value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return True
+        if isinstance(value, (list, tuple, Mapping)) and value:
+            return True
+        return False
+
+    rich = [v for v in items.values() if _rich(v)]
+    if not rich:
+        return False
+    if any(isinstance(v, (list, tuple, Mapping)) and v for v in rich):
+        return True
+    return len(items) >= 2
+
+
 def _write_artifact(
     *,
     task_id: str,
@@ -87,6 +117,7 @@ def _write_artifact(
     destination.write_bytes(payload)
     artifact = {
         "name": name,
+        "role": "data",
         "workspace_path": str(destination.resolve()),
         "media_type": media_type,
         "size_bytes": len(payload),
@@ -149,6 +180,11 @@ def materialize_outputs_as_artifacts(
         return []
     present = {str(item.get("name") or "") for item in (existing or []) if isinstance(item, Mapping)}
     created: list[dict[str, Any]] = []
+    outputs = dict(outputs)
+    if "mcp_endpoint" not in outputs and "mcp_url" in outputs:
+        outputs["mcp_endpoint"] = outputs["mcp_url"]
+    if "mcp_url" not in outputs and "mcp_endpoint" in outputs:
+        outputs["mcp_url"] = outputs["mcp_endpoint"]
     for spec in expected_artifacts:
         name = str(spec.get("name") or "")
         if not name or name in present or name not in outputs:
@@ -166,7 +202,26 @@ def materialize_outputs_as_artifacts(
         ):
             created.append(artifact)
             present.add(name)
+    # Persist the whole outputs blob when the planner invented a filename the
+    # MCP never used (cluster_assignments.csv vs total_clusters_identified).
+    family_name = "family_outputs.json"
+    if family_name not in present and has_structured_family_outputs(outputs):
+        encoded = _encode_payload(dict(outputs), name=family_name, media_type="application/json")
+        if encoded is not None:
+            payload, media_type = encoded
+            if artifact := _write_artifact(
+                task_id=task_id,
+                attempt_id=attempt_id,
+                name=family_name,
+                media_type=media_type,
+                payload=payload,
+                producer_tool=producer_tool,
+            ):
+                created.append(artifact)
     return created
 
 
-__all__ = ["materialize_inline_result", "materialize_outputs_as_artifacts"]
+__all__ = [
+    "materialize_inline_result",
+    "materialize_outputs_as_artifacts",
+]

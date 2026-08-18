@@ -1,40 +1,53 @@
-"""Deterministic v0 task/attempt state machine (ADK session is the store)."""
+"""Deterministic task/attempt state machine (ADK session is the store)."""
 from __future__ import annotations
 
 import copy
 import functools
-import html
 import logging
-import mimetypes
 from datetime import timedelta
-from pathlib import Path
-from typing import Any, Callable, MutableMapping
+from typing import Any, Callable, Mapping, MutableMapping
 from uuid import uuid4
 
 from CoScientist.config import get_settings
 from CoScientist.config.settings import ExperimentsSettings
 from CoScientist.experiments.schemas import (
-    ArtifactRef,
     CriterionCheck,
     ExecutionRoute,
     ExperimentPlan,
     ExperimentTask,
     TaskResult,
-    is_presigned_url,
     utc_now,
 )
-from CoScientist.experiments.schemas.models import artifact_name_from_location
-from CoScientist.experiments.runtime.shared import (
-    FABRICATION_MARKERS,
-    MOLECULE_GENERATOR_TOOLS,
-    artifact_name_key,
-    audit,
+from CoScientist.experiments.runtime.artifacts import (
+    ARTIFACT_KEYS,
+    EVIDENCE_AGENT_ROUTES,
+    append_notes_artifact,
+    attest_durable_criteria,
+    captured_delta,
+    criteria_valid,
+    find_artifact,
+    has_durable_family_evidence,
+    normalise_artifacts,
+    required_artifacts_present,
+    route_response_text,
+    runtime_has_durable_data_evidence,
+    task_requires_managed_s3,
 )
+from CoScientist.experiments.runtime.errors import ExperimentRuntimeError
+from CoScientist.experiments.runtime.readiness import TERMINAL_TASK_STATES, refresh_readiness
+from CoScientist.experiments.runtime.routing import (
+    fill_server_urls,
+    inventory_covers_task,
+    match_session_inventory_tool,
+    mcp_routes_tried,
+    session_inventory_nonempty,
+    task_coverage_blob,
+)
+from CoScientist.experiments.runtime.shared import FABRICATION_MARKERS, audit
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-_ARTIFACT_KEYS = ("mcp_artifacts", "fedot_artifacts", "coder_artifacts")
 _AMEND_FIELDS = frozenset({
     "route",
     "mcp_servers",
@@ -98,12 +111,52 @@ def _downgrade_fabricated_success(result: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _coerce_alembic_mcp_success(
+    attempt: Mapping[str, Any], result: dict[str, Any],
+) -> dict[str, Any]:
+    """MCP URL means the build attempt succeeded — reopen post_build, never partial."""
+    if str(attempt.get("route") or "") != ExecutionRoute.ALEMBIC_BUILD.value:
+        return result
+    from CoScientist.experiments.runtime.alembic_bridge import harvest_alembic_mcp_url
+
+    outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+    snap = attempt.get("alembic_snapshot")
+    mcp_url = harvest_alembic_mcp_url(
+        outputs,
+        result.get("summary"),
+        snap,
+        repo_url=str((attempt.get("task") or {}).get("repo_url") or "").strip() or None,
+    )
+    if not str(mcp_url).startswith("http"):
+        return result
+    checks = []
+    for item in result.get("criteria_checks") or []:
+        if isinstance(item, dict):
+            checks.append({**item, "passed": True})
+        else:
+            checks.append(item)
+    warnings = [
+        w for w in (result.get("warnings") or [])
+        if "downgraded_from_success" not in str(w)
+    ]
+    warnings.append("coerced_alembic_mcp_success")
+    return {
+        **result,
+        "status": "success",
+        "outputs": {**outputs, "mcp_url": mcp_url, "mcp_endpoint": mcp_url},
+        "criteria_checks": checks,
+        "warnings": warnings,
+    }
+
+
 RUNTIME_KEY = "experiment_runtime"
 ROUTE_AGENT_BY_ROUTE = {
     ExecutionRoute.FEDOT_MAS.value: "FedotAgent",
     ExecutionRoute.REACT_TOOLS.value: "ExperimentAgent",
     ExecutionRoute.CODER.value: "CoderAgent",
     ExecutionRoute.ALEMBIC_BUILD.value: "McpBuilderAgent",
+    ExecutionRoute.RESEARCH.value: "ResearchAgent",
+    ExecutionRoute.MEDICAL.value: "MedicalAgent",
 }
 # Defaults; prefer resolve_fallback_chains(settings) so EXPERIMENTS__FALLBACK_* apply.
 FALLBACK_CHAINS = {
@@ -115,18 +168,9 @@ FALLBACK_CHAINS = {
     ExecutionRoute.REACT_TOOLS.value: [ExecutionRoute.REACT_TOOLS.value, ExecutionRoute.CODER.value],
     ExecutionRoute.CODER.value: [ExecutionRoute.CODER.value],
     ExecutionRoute.ALEMBIC_BUILD.value: [ExecutionRoute.ALEMBIC_BUILD.value, ExecutionRoute.CODER.value],
+    ExecutionRoute.RESEARCH.value: [ExecutionRoute.RESEARCH.value],
+    ExecutionRoute.MEDICAL.value: [ExecutionRoute.MEDICAL.value],
 }
-TERMINAL_TASK_STATES = frozenset({"done", "done_with_warnings", "failed", "skipped", "blocked"})
-SUCCESS_DEPENDENCY_STATES = frozenset({"done", "done_with_warnings", "skipped"})
-
-
-class ExperimentRuntimeError(ValueError):
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
-
-    def as_dict(self) -> dict[str, Any]:
-        return {"status": "error", "error_code": self.code, "message": str(self)}
 
 
 def _settings(value: ExperimentsSettings | None) -> ExperimentsSettings:
@@ -141,6 +185,8 @@ def resolve_fallback_chains(settings: ExperimentsSettings | None = None) -> dict
         ExecutionRoute.REACT_TOOLS.value: list(cfg.fallback_react_tools),
         ExecutionRoute.CODER.value: list(cfg.fallback_coder),
         ExecutionRoute.ALEMBIC_BUILD.value: list(cfg.fallback_alembic_build),
+        ExecutionRoute.RESEARCH.value: list(cfg.fallback_research),
+        ExecutionRoute.MEDICAL.value: list(cfg.fallback_medical),
     }
 
 
@@ -159,48 +205,6 @@ def _task(runtime: dict[str, Any], task_id: str) -> dict[str, Any]:
 _audit = functools.partial(audit, logger)
 
 
-def _artifact_suffix(name: str) -> str:
-    return Path(str(name)).suffix.lower()
-
-
-def _artifact_extension_compatible(captured: str, expected: str) -> bool:
-    """Suffixes agree, expected has no suffix, or both look tabular."""
-    c_suf, e_suf = _artifact_suffix(captured), _artifact_suffix(expected)
-    if not e_suf or not c_suf or c_suf == e_suf:
-        return True
-    tabular = {".csv", ".tsv", ".txt"}
-    return c_suf in tabular and e_suf in tabular
-
-
-def _match_expected_artifact(
-    name: str,
-    expected: list[Any],
-    *,
-    role: str | None = None,
-    claimed_names: set[str] | None = None,
-) -> Any | None:
-    claimed = claimed_names or set()
-    pool = [item for item in expected if item.name not in claimed]
-    if (exact := next((item for item in pool if item.name == name), None)) is not None:
-        return exact
-    if key := artifact_name_key(name):
-        soft = [item for item in pool if artifact_name_key(item.name) == key]
-        if len(soft) == 1:
-            return soft[0]
-    # UUID tool filenames vs semantic plan names: unique role(+ext) remaining expected.
-    role_key = (role or "data").strip().lower()
-    same_role = [
-        item for item in pool
-        if str(getattr(item, "role", "data") or "data").strip().lower() == role_key
-    ]
-    compatible = [item for item in same_role if _artifact_extension_compatible(name, item.name)]
-    if len(compatible) == 1:
-        return compatible[0]
-    if role_key == "data" and len(same_role) == 1:
-        return same_role[0]
-    return None
-
-
 def _publish_active_tasks(state: MutableMapping[str, Any], runtime: dict[str, Any]) -> None:
     state["active_tasks"] = [
         {
@@ -217,17 +221,18 @@ def _publish_active_tasks(state: MutableMapping[str, Any], runtime: dict[str, An
     ]
 
 
-def _refresh_readiness(runtime: dict[str, Any]) -> None:
-    tasks = runtime["tasks"]
-    for task_id in runtime["task_order"]:
-        task = tasks[task_id]
-        if task["status"] != "pending":
-            continue
-        deps = [tasks[dep]["status"] for dep in task["task"]["depends_on"]]
-        if any(status in {"failed", "blocked"} for status in deps):
-            task["status"], task["last_message"] = "blocked", "A required dependency failed."
-        elif all(status in SUCCESS_DEPENDENCY_STATES for status in deps):
-            task["status"] = "ready"
+def _block_unstartable(
+    state: MutableMapping[str, Any], task_id: str, exc: ExperimentRuntimeError,
+) -> None:
+    """A ready task that cannot resolve required inputs is terminal, not retryable-ready."""
+    runtime = _runtime(state)
+    task_runtime = _task(runtime, task_id)
+    if task_runtime["status"] in TERMINAL_TASK_STATES:
+        return
+    task_runtime["status"] = "blocked"
+    task_runtime["last_message"] = str(exc)
+    _sync_after_mutation(state, runtime)
+    _audit(f"EXPERIMENT_TASK_BLOCKED task_id={task_id} reason={exc.code}")
 
 
 def _clear_active(state: MutableMapping[str, Any], runtime: dict[str, Any]) -> None:
@@ -246,7 +251,7 @@ def _sync_after_mutation(
 ) -> None:
     if clear_active:
         _clear_active(state, runtime)
-    _refresh_readiness(runtime)
+    refresh_readiness(runtime)
     _finish_if_terminal(runtime)
     _publish_active_tasks(state, runtime)
 
@@ -285,7 +290,7 @@ def initialize_runtime(
         "results": [],
         "result_review_feedback": None,
     }
-    _refresh_readiness(runtime)
+    refresh_readiness(runtime)
     state[RUNTIME_KEY] = runtime
     state["experiment_plan"] = runtime["plan"]
     state["experiment_task_results"] = []
@@ -303,9 +308,9 @@ def approve_plan(state: MutableMapping[str, Any]) -> dict[str, Any]:
         raise ExperimentRuntimeError("critique_revise", "Plan cannot be approved while deterministic critique requires revision.")
     runtime["approved"] = True
     runtime["phase"] = "execution"
-    _refresh_readiness(runtime)
+    refresh_readiness(runtime)
     _publish_active_tasks(state, runtime)
-    return {"status": "success", "phase": "execution", "plan_id": runtime["plan_id"]}
+    return {"status": "success", "phase": runtime["phase"], "plan_id": runtime["plan_id"]}
 
 
 def get_experiment_plan(state: MutableMapping[str, Any]) -> dict[str, Any]:
@@ -340,6 +345,8 @@ def _route_timeout(settings: ExperimentsSettings, route: str) -> float:
         ExecutionRoute.REACT_TOOLS.value: settings.react_timeout_s,
         ExecutionRoute.CODER.value: settings.coder_timeout_s,
         ExecutionRoute.ALEMBIC_BUILD.value: settings.coder_timeout_s,
+        ExecutionRoute.RESEARCH.value: settings.research_timeout_s,
+        ExecutionRoute.MEDICAL.value: settings.medical_timeout_s,
     }[route]
 
 
@@ -348,41 +355,12 @@ def _route_enabled(route: str, settings: ExperimentsSettings) -> bool:
         return settings.route_fedot
     if route == ExecutionRoute.ALEMBIC_BUILD.value:
         return settings.route_alembic
-    return route in {ExecutionRoute.REACT_TOOLS.value, ExecutionRoute.CODER.value}
-
-
-def _find_artifact(
-    runtime: dict[str, Any],
-    artifact_ref: str,
-    *,
-    source_task_id: str | None = None,
-) -> dict[str, Any]:
-    """Resolve prior-task artifact by ART-* id or expected name (latest wins)."""
-    want = str(artifact_ref or "").strip()
-    if not want:
-        raise ExperimentRuntimeError("artifact_not_found", "Required artifact ref is empty.")
-
-    matches: list[dict[str, Any]] = []
-    for result in runtime.get("results") or []:
-        if source_task_id and result.get("task_id") != source_task_id:
-            continue
-        if result.get("status") not in {"success", "partial"}:
-            continue
-        for artifact in result.get("artifacts") or []:
-            if not isinstance(artifact, dict):
-                continue
-            if artifact.get("artifact_id") == want:
-                return artifact
-            name = str(artifact.get("name") or "")
-            if name == want or Path(name).name == Path(want).name:
-                matches.append(artifact)
-            elif artifact_name_key(name) and artifact_name_key(name) == artifact_name_key(want):
-                matches.append(artifact)
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        return matches[-1]
-    raise ExperimentRuntimeError("artifact_not_found", f"Required artifact {want!r} does not exist.")
+    return route in {
+        ExecutionRoute.REACT_TOOLS.value,
+        ExecutionRoute.CODER.value,
+        ExecutionRoute.RESEARCH.value,
+        ExecutionRoute.MEDICAL.value,
+    }
 
 
 def _resolve_attempt_id(runtime: dict[str, Any], task_id: str, attempt_id: str) -> str:
@@ -436,7 +414,7 @@ def _resolve_inputs(
             if data_ref.kind == "s3":
                 item["resolved_url"], item["expires_at"] = presign(str(data_ref.bucket), str(data_ref.s3_key), expiration), expires_at
             elif data_ref.kind == "task_artifact":
-                artifact = _find_artifact(
+                artifact = find_artifact(
                     runtime,
                     str(data_ref.source_artifact_id),
                     source_task_id=str(data_ref.source_task_id) if data_ref.source_task_id else None,
@@ -461,12 +439,8 @@ def _resolve_inputs(
     return resolved
 
 
-def _uses_molecule_generator(task: ExperimentTask) -> bool:
-    return any(tool.name in MOLECULE_GENERATOR_TOOLS for server in task.mcp_servers for tool in server.tools)
-
-
 def force_managed_s3_launch_params(launch_params: dict[str, Any] | None, *, require: bool) -> dict[str, Any]:
-    """Ensure molecule generators persist a managed S3 artifact for v0 lineage."""
+    """Ensure tools whose schema offers S3 upload persist a managed artifact."""
     params = copy.deepcopy(launch_params or {})
     if require:
         params["upload_results_to_s3"] = True
@@ -509,7 +483,7 @@ def start_task(
     if runtime.get("active_attempt_id"):
         raise ExperimentRuntimeError("task_already_running", "v0 permits only one running task at a time.")
 
-    _refresh_readiness(runtime)
+    refresh_readiness(runtime)
     if task_runtime["status"] != "ready":
         raise ExperimentRuntimeError("task_not_ready", f"Task {task_id} must be ready, got {task_runtime['status']!r}.")
     route = task_runtime["current_route"]
@@ -527,10 +501,69 @@ def start_task(
         raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
 
     task_model = ExperimentTask.model_validate(task_runtime["task"])
+    if route == ExecutionRoute.CODER.value:
+        from CoScientist.experiments.capabilities.inventory import match_named_family_capability
+
+        blob = task_coverage_blob(state, task_model)
+        if family_hit := match_named_family_capability(blob):
+            route = str(family_hit["family"])
+            if not _route_enabled(route, cfg):
+                raise ExperimentRuntimeError(
+                    "route_disabled", f"Route {route!r} is disabled for Experiment Module v0.",
+                )
+            dumped = task_model.model_dump(mode="json")
+            dumped["route"] = route
+            dumped["mcp_servers"] = []
+            dumped.pop("post_build_route", None)
+            for art in (dumped.get("design") or {}).get("analysis_artifacts") or []:
+                if isinstance(art, dict):
+                    art["prepare_via"] = route
+                    if family_hit.get("tool"):
+                        art["path_or_tool"] = family_hit["tool"]
+            task_model = ExperimentTask.model_validate(dumped)
+            task_runtime["task"] = task_model.model_dump(mode="json")
+            task_runtime["current_route"] = route
+            task_runtime["route_history"].append({
+                "route": route,
+                "reason": f"named_family_rewrote_coder:{family_hit.get('tool')}",
+            })
+            _audit(f"EXPERIMENT_CODER_REWRITTEN_TO_FAMILY task_id={task_id} route={route}")
+        elif mcp_routes_tried(task_runtime) and inventory_covers_task(state, task_model):
+            _audit(
+                f"EXPERIMENT_SKIP_CODER_INVENTORY task_id={task_id} "
+                "reason=mcp_routes_exhausted"
+            )
+            return _complete_as_skipped(
+                state, task_id,
+                "Ready MCP inventory already tried; coder is disabled for this slot.",
+            )
+        elif session_inventory_nonempty(state) and (
+            matched := match_session_inventory_tool(state, task_model, blob)
+        ):
+            route = ExecutionRoute.FEDOT_MAS.value if cfg.route_fedot else ExecutionRoute.REACT_TOOLS.value
+            if not _route_enabled(route, cfg):
+                raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
+            task_runtime["current_route"] = route
+            task_runtime["route_history"].append({"route": route, "reason": "inventory_rewrote_coder"})
+            url = str(matched.get("url") or "").strip() or None
+            dumped = task_model.model_dump(mode="json")
+            dumped["route"] = route
+            dumped["mcp_servers"] = [{
+                "name": matched["server_id"],
+                "server_id": matched["server_id"],
+                "url": url,
+                "tools": [{"name": matched["tool"], "input_schema": matched.get("input_schema")}],
+                "source": "registry",
+                "health": "unknown",
+            }]
+            task_model = ExperimentTask.model_validate(dumped)
+            task_runtime["task"] = task_model.model_dump(mode="json")
+            _audit(f"EXPERIMENT_CODER_REWRITTEN_TO_INVENTORY task_id={task_id} route={route}")
     if route == ExecutionRoute.CODER.value and task_runtime["planned_route"] == ExecutionRoute.CODER.value and task_model.mcp_servers and not cfg.route_coder_mcp:
         raise ExperimentRuntimeError("route_disabled", "Direct MCP-to-Coder mode is disabled.")
 
-    if _uses_molecule_generator(task_model):
+    task_model = fill_server_urls(task_model, state)
+    if task_requires_managed_s3(task_model):
         task_model = task_model.model_copy(update={"launch_params": force_managed_s3_launch_params(task_model.launch_params, require=True)})
         task_runtime["task"] = task_model.model_dump(mode="json")
 
@@ -539,7 +572,14 @@ def start_task(
     filtered_tools, deployed_mcps = _scope_tools(task_model)
     if route == ExecutionRoute.CODER.value and not cfg.route_coder_mcp:
         filtered_tools, deployed_mcps = [], []
-    resolved_inputs = _resolve_inputs(runtime, task_model, route=route, settings=cfg, presign=presign)
+    if route in {ExecutionRoute.RESEARCH.value, ExecutionRoute.MEDICAL.value}:
+        filtered_tools, deployed_mcps = [], []
+    try:
+        resolved_inputs = _resolve_inputs(runtime, task_model, route=route, settings=cfg, presign=presign)
+    except ExperimentRuntimeError as exc:
+        if exc.code in {"artifact_not_found", "input_resolution_failed"}:
+            _block_unstartable(state, task_id, exc)
+        raise
     from CoScientist.tools.fedot_artifact_handoff import seed_upstream_from_resolved_inputs
 
     upstream_bindings = seed_upstream_from_resolved_inputs(
@@ -553,7 +593,7 @@ def start_task(
         "route": route,
         "route_returned": False,
         "started_at": started_at,
-        "artifact_cursor": {key: len(state.get(key) or []) for key in _ARTIFACT_KEYS} | {"workspace_started_at": started_at},
+        "artifact_cursor": {key: len(state.get(key) or []) for key in ARTIFACT_KEYS} | {"workspace_started_at": started_at},
         "tool_scope": {"filtered_tools": copy.deepcopy(filtered_tools), "deployed_mcps": copy.deepcopy(deployed_mcps)},
     }
     task_runtime["attempts"][attempt_id] = attempt
@@ -600,188 +640,6 @@ def mark_route_returned(state: MutableMapping[str, Any], route_agent: str) -> No
     attempt["route_returned"] = True
     attempt["route_agent"] = route_agent
     runtime["last_route_agent"] = route_agent
-
-
-def _captured_delta(state: MutableMapping[str, Any], attempt: dict[str, Any]) -> list[dict[str, Any]]:
-    cursor = attempt["artifact_cursor"]
-    return [
-        copy.deepcopy(item)
-        for key in _ARTIFACT_KEYS
-        for item in (state.get(key) or [])[int(cursor.get(key, 0)):]
-        if isinstance(item, dict)
-    ]
-
-
-def _materialize_signed_artifact(url: str, *, task_id: str, attempt_id: str, name: str) -> str | None:
-    """Copy URL-only signed output into the report workspace."""
-    try:
-        import requests
-        folder = Path(get_settings().code_exec.workspace_root) / "experiment_artifacts" / task_id / attempt_id
-        folder.mkdir(parents=True, exist_ok=True)
-        destination = folder / (Path(name).name or f"artifact-{uuid4().hex}")
-        response = requests.get(html.unescape(url), timeout=30)
-        response.raise_for_status()
-        destination.write_bytes(response.content)
-        return str(destination)
-    except Exception:
-        return None
-
-
-def _normalise_artifacts(
-    raw_artifacts: list[dict[str, Any]],
-    *,
-    runtime: dict[str, Any],
-    task_runtime: dict[str, Any],
-    attempt: dict[str, Any],
-) -> tuple[list[ArtifactRef], list[str]]:
-    task = ExperimentTask.model_validate(task_runtime["task"])
-    expected = task.expected_artifacts
-    artifacts, warnings = [], []
-    seen: set[tuple[Any, ...]] = set()
-    claimed_names: set[str] = set()
-
-    for raw in raw_artifacts:
-        name = artifact_name_from_location(raw)
-        role_hint = raw.get("role") or "data"
-        match = _match_expected_artifact(
-            name, expected, role=str(role_hint), claimed_names=claimed_names
-        )
-        role = match.role if match else role_hint
-        if match is not None:
-            name = match.name
-            claimed_names.add(match.name)
-
-        bucket = raw.get("bucket") or raw.get("bucket_name")
-        s3_key = raw.get("s3_key") or raw.get("results_s3_key")
-        workspace_path = raw.get("workspace_path")
-        external_url = raw.get("external_url") or raw.get("url")
-        durability = raw.get("durability")
-
-        if s3_key and not bucket:
-            bucket = get_settings().s3.bucket_name
-
-        if bucket and s3_key:
-            external_url, durability = None, "managed"
-            location_key = ("s3", bucket, s3_key)
-        elif workspace_path:
-            external_url, durability = None, durability or "workspace"
-            location_key = ("workspace", workspace_path)
-        elif external_url and is_presigned_url(external_url):
-            if not (materialized := _materialize_signed_artifact(str(external_url), task_id=task.id, attempt_id=attempt["attempt_id"], name=name)):
-                warnings.append(f"Could not materialize signed artifact {name!r}.")
-                continue
-            workspace_path, external_url, durability = materialized, None, "workspace"
-            location_key = ("workspace", workspace_path)
-        elif external_url:
-            durability = durability or "transient"
-            location_key = ("external", str(external_url))
-        else:
-            warnings.append(f"Captured artifact {name!r} has no canonical location.")
-            continue
-
-        if location_key in seen:
-            continue
-        seen.add(location_key)
-        artifacts.append(
-            ArtifactRef(
-                artifact_id=raw.get("artifact_id") or f"ART-{uuid4().hex}",
-                plan_id=runtime["plan_id"],
-                task_id=task.id,
-                attempt_id=attempt["attempt_id"],
-                role=role,
-                name=name,
-                bucket=bucket if s3_key else None,
-                s3_key=s3_key,
-                workspace_path=workspace_path,
-                external_url=external_url,
-                media_type=raw.get("media_type") or mimetypes.guess_type(name)[0],
-                size_bytes=raw.get("size_bytes"),
-                checksum_sha256=raw.get("checksum_sha256"),
-                producer_route=attempt["route"],
-                producer_tool=raw.get("producer_tool") or raw.get("tool"),
-                derived_from=raw.get("derived_from") or [],
-                created_at=utc_now(),
-                durability=durability,
-            )
-        )
-    return artifacts, warnings
-
-
-def _artifact_exists(artifact: ArtifactRef) -> bool:
-    return bool(artifact.bucket and artifact.s3_key) or (Path(artifact.workspace_path).is_file() if artifact.workspace_path else bool(artifact.external_url))
-
-
-def _artifact_matches(artifact: ArtifactRef, expected: Any) -> bool:
-    return artifact.name == expected.name or artifact_name_key(artifact.name) == artifact_name_key(expected.name)
-
-
-def _evidence_expected_artifacts(task: ExperimentTask, *, route: str) -> list:
-    """Artifacts gated on this attempt (alembic build: MCP evidence only)."""
-    required = [item for item in task.expected_artifacts if item.required]
-    if route != ExecutionRoute.ALEMBIC_BUILD.value:
-        return required
-    return [
-        item for item in required
-        if item.role == "mcp_server" or item.name in {"mcp_endpoint", "mcp_url"}
-    ]
-
-
-def _evidence_success_criteria(task: ExperimentTask, *, route: str) -> list:
-    """Criteria gated on this attempt (alembic build: execution only)."""
-    required = [item for item in task.success_criteria if item.required]
-    if route != ExecutionRoute.ALEMBIC_BUILD.value:
-        return required
-    return [item for item in required if item.kind == "execution"]
-
-
-def _required_artifacts_present(
-    task: ExperimentTask,
-    artifacts: list[ArtifactRef],
-    *,
-    route: str | None = None,
-) -> tuple[bool, list[str]]:
-    missing, claimed = [], set()
-    expected_items = (
-        _evidence_expected_artifacts(task, route=route)
-        if route is not None
-        else [item for item in task.expected_artifacts if item.required]
-    )
-    for expected in expected_items:
-        hit = next(
-            (
-                a
-                for a in artifacts
-                if a.artifact_id not in claimed and _artifact_exists(a) and _artifact_matches(a, expected)
-            ),
-            None,
-        )
-        if hit is None:
-            missing.append(expected.name)
-        else:
-            claimed.add(hit.artifact_id)
-    return not missing, missing
-
-
-def _criteria_valid(
-    task: ExperimentTask,
-    checks: list[CriterionCheck],
-    *,
-    route: str | None = None,
-) -> tuple[bool, list[str]]:
-    by_id = {check.criterion_id: check for check in checks}
-    if unknown := set(by_id) - {c.criterion_id for c in task.success_criteria}:
-        raise ExperimentRuntimeError("criterion_unknown", f"Unknown criterion checks: {sorted(unknown)}.")
-    required = (
-        _evidence_success_criteria(task, route=route)
-        if route is not None
-        else [c for c in task.success_criteria if c.required]
-    )
-    failed = [
-        c.criterion_id
-        for c in required
-        if c.criterion_id not in by_id or by_id[c.criterion_id].passed is not True
-    ]
-    return not failed, failed
 
 
 def _next_fallback(
@@ -848,12 +706,44 @@ def record_result(
     if (status := result.get("status")) not in {"success", "partial", "failure"}:
         raise ExperimentRuntimeError("result_status", "Result status must be success, partial, or failure.")
 
-    result = _downgrade_fabricated_success(result)
+    if str(attempt.get("route") or "") == ExecutionRoute.ALEMBIC_BUILD.value:
+        job_id = str(attempt.get("alembic_job_id") or "").strip()
+        if job_id:
+            from CoScientist.tools.alembic_tools import peek_mcp_build
+
+            snap = peek_mcp_build(job_id)
+            if snap.get("status") == "running":
+                raise ExperimentRuntimeError(
+                    "alembic_build_running",
+                    f"Alembic job {job_id} is still running; do not record_result "
+                    "until the build is done or failed. Reuse this job_id — do not fallback to coder.",
+                )
+
+    if str(attempt.get("route") or "") != ExecutionRoute.ALEMBIC_BUILD.value:
+        result = _downgrade_fabricated_success(result)
+    result = _coerce_alembic_mcp_success(attempt, result)
     status = result["status"]
 
     task = ExperimentTask.model_validate(task_runtime["task"])
-    checks = [CriterionCheck.model_validate(item) for item in (result.get("criteria_checks") or [])]
-    raw_artifacts = _captured_delta(state, attempt)
+    known_criteria = {c.criterion_id for c in task.success_criteria}
+    raw_checks = [
+        dict(item) if isinstance(item, dict) else item
+        for item in (result.get("criteria_checks") or [])
+    ]
+    for check in raw_checks:
+        if not isinstance(check, dict):
+            continue
+        cid = str(check.get("criterion_id") or "").strip()
+        if cid in known_criteria:
+            continue
+        prefixed = f"{task.id}-{cid}"
+        if prefixed in known_criteria:
+            check["criterion_id"] = prefixed
+        elif len(known_criteria) == 1:
+            check["criterion_id"] = next(iter(known_criteria))
+    result = {**result, "criteria_checks": raw_checks}
+    checks = [CriterionCheck.model_validate(item) for item in raw_checks]
+    raw_artifacts = captured_delta(state, attempt)
     raw_artifacts.extend(copy.deepcopy(item) for item in (result.get("artifacts") or []) if isinstance(item, dict))
     outputs = result.get("outputs") or {}
     if isinstance(outputs, dict) and outputs:
@@ -868,10 +758,58 @@ def record_result(
             )
         )
 
-    artifacts, artifact_warnings = _normalise_artifacts(raw_artifacts, runtime=runtime, task_runtime=task_runtime, attempt=attempt)
     attempt_route = str(attempt.get("route") or task_runtime.get("current_route") or "")
-    artifacts_ok, missing_artifacts = _required_artifacts_present(task, artifacts, route=attempt_route)
-    criteria_ok, failed_criteria = _criteria_valid(task, checks, route=attempt_route)
+    if attempt_route in EVIDENCE_AGENT_ROUTES and (
+        attempt.get("family_tool_called") or status in {"success", "partial"}
+    ):
+        append_notes_artifact(
+            task=task, attempt=attempt, raw_artifacts=raw_artifacts,
+            text=route_response_text(state, result),
+        )
+
+    artifacts, artifact_warnings = normalise_artifacts(raw_artifacts, runtime=runtime, task_runtime=task_runtime, attempt=attempt)
+    artifacts_ok, missing_artifacts = required_artifacts_present(task, artifacts, route=attempt_route)
+    criteria_ok, failed_criteria = criteria_valid(task, checks, route=attempt_route)
+    durable_ok = has_durable_family_evidence(
+        task, artifacts, route=attempt_route,
+        outputs=outputs if isinstance(outputs, dict) else {},
+    )
+    if durable_ok:
+        checks = attest_durable_criteria(task, checks)
+        result = {**result, "criteria_checks": [c.model_dump(mode="json") for c in checks]}
+        if not artifacts_ok:
+            artifacts_ok, missing_artifacts = True, []
+            artifact_warnings.append(
+                "accepted_via_durable_family_evidence: S3/file/mcp_url present; "
+                "planner artifact names are not required."
+            )
+        criteria_ok, failed_criteria = criteria_valid(task, checks, route=attempt_route)
+        if status == "failure" and criteria_ok and artifacts_ok:
+            status = "partial"
+            result = {
+                **result,
+                "status": "partial",
+                "error_code": None,
+                "retryable": False,
+                "warnings": [
+                    *(result.get("warnings") or []),
+                    "accepted_via_durable_family_evidence: relabeled failure after real evidence",
+                ],
+            }
+            artifact_warnings.append(
+                "accepted_via_durable_family_evidence: relabeled failure after real evidence"
+            )
+    if status == "success" and any(c.passed is not True for c in checks):
+        status = "failure"
+        result = {
+            **result,
+            "status": "failure",
+            "error_code": result.get("error_code") or "criteria_failed",
+            "error_message": result.get("error_message") or (
+                "success requires all supplied criteria checks to pass"
+            ),
+            "retryable": True,
+        }
     if status in {"success", "partial"} and (not criteria_ok or not artifacts_ok):
         raise ExperimentRuntimeError(
             "result_incomplete",
@@ -909,10 +847,15 @@ def record_result(
         if attempt["route"] == ExecutionRoute.ALEMBIC_BUILD.value:
             from CoScientist.experiments.runtime.alembic_bridge import (
                 apply_alembic_success,
-                extract_mcp_url,
+                harvest_alembic_mcp_url,
             )
 
-            mcp_url = extract_mcp_url(outputs if isinstance(outputs, dict) else {})
+            mcp_url = harvest_alembic_mcp_url(
+                outputs if isinstance(outputs, dict) else {},
+                result.get("summary"),
+                attempt.get("alembic_snapshot"),
+                repo_url=str(task.repo_url or "").strip() or None,
+            )
             if not mcp_url:
                 raise ExperimentRuntimeError(
                     "alembic_mcp_url_missing",
@@ -997,8 +940,83 @@ def fallback_task(
     task_runtime = _task(runtime, task_id)
     if task_runtime["status"] != "fallback_pending":
         raise ExperimentRuntimeError("fallback_not_allowed", "fallback_task requires fallback_pending state.")
-    if (route := _next_fallback(task_runtime)) is None:
+    if str(task_runtime.get("current_route") or "") == ExecutionRoute.ALEMBIC_BUILD.value:
+        job_id = ""
+        for aid in reversed(task_runtime.get("attempt_order") or []):
+            att = (task_runtime.get("attempts") or {}).get(aid) or {}
+            if str(att.get("alembic_job_id") or "").strip():
+                job_id = str(att["alembic_job_id"]).strip()
+                break
+        if job_id:
+            from CoScientist.tools.alembic_tools import peek_mcp_build
+
+            snap = peek_mcp_build(job_id)
+            if snap.get("status") == "running":
+                raise ExperimentRuntimeError(
+                    "alembic_build_running",
+                    f"Alembic job {job_id} is still running; stay on alembic_build "
+                    "(retry_task), do not fallback to coder.",
+                )
+            live = str(snap.get("mcp_url") or "").strip()
+            if snap.get("status") == "done" and live.startswith("http"):
+                from CoScientist.experiments.runtime.alembic_bridge import apply_alembic_success
+
+                post = apply_alembic_success(
+                    state, runtime, task_runtime, mcp_url=live,
+                    outputs={"mcp_url": live, "mcp_endpoint": live},
+                )
+                _sync_after_mutation(state, runtime, clear_active=True)
+                state["deployed_mcps"] = copy.deepcopy(
+                    (task_runtime.get("task") or {}).get("mcp_servers") or []
+                )
+                return {
+                    "status": "success",
+                    "task_id": task_id,
+                    "route": post["post_build_route"],
+                    "next_action": "start_task",
+                    "must_start_task_id": task_id,
+                    "post_build": post,
+                    "message": (
+                        f"Alembic MCP ready at {live}; continuing via "
+                        f"{post['post_build_route']}. Call start_task('{task_id}') next."
+                    ),
+                }
+    route = _next_fallback(task_runtime)
+    if route is None or route == ExecutionRoute.CODER.value:
+        from CoScientist.experiments.runtime.alembic_bridge import mcp_url_from_task_runtime
+
+        if mcp_url := mcp_url_from_task_runtime(task_runtime):
+            raise ExperimentRuntimeError(
+                "alembic_mcp_ready",
+                f"Alembic MCP is already served at {mcp_url}; do not fallback to "
+                "coder. Retry the post-build route or record an honest failure.",
+            )
+    if route is None:
         raise ExperimentRuntimeError("fallback_exhausted", "No acyclic fallback route remains.")
+    if route == ExecutionRoute.CODER.value:
+        if runtime_has_durable_data_evidence(runtime, task_id):
+            raise ExperimentRuntimeError(
+                "evidence_already_present",
+                "Durable family evidence already exists for this task; "
+                "do not fallback to coder. record_result(success) instead.",
+            )
+        task_model = ExperimentTask.model_validate(task_runtime["task"])
+        if inventory_covers_task(state, task_model):
+            _audit(
+                f"EXPERIMENT_SKIP_CODER_INVENTORY task_id={task_id} "
+                "reason=fallback_blocked"
+            )
+            skipped = _complete_as_skipped(
+                state, task_id,
+                "Ready MCP inventory already tried; coder is disabled for this slot.",
+            )
+            skipped.update({
+                "task_id": task_id,
+                "route": task_runtime["current_route"],
+                "next_action": "get_experiment_plan",
+                "message": skipped["task_result"]["summary"],
+            })
+            return skipped
     if not _route_enabled(route, cfg):
         raise ExperimentRuntimeError("route_disabled", f"Fallback route {route!r} is disabled.")
     task_runtime["current_route"] = route
@@ -1016,16 +1034,11 @@ def fallback_task(
     }
 
 
-def skip_task(
-    state: MutableMapping[str, Any], task_id: str, reason: str
+def _complete_as_skipped(
+    state: MutableMapping[str, Any], task_id: str, reason: str,
 ) -> dict[str, Any]:
     runtime = _runtime(state)
     task_runtime = _task(runtime, task_id)
-    task = ExperimentTask.model_validate(task_runtime["task"])
-    if not task.optional:
-        raise ExperimentRuntimeError("skip_required", "Only optional v0 tasks may be skipped without human amendment.")
-    if task_runtime["status"] not in {"pending", "ready"}:
-        raise ExperimentRuntimeError("skip_not_allowed", f"Cannot skip task in {task_runtime['status']!r} state.")
     attempt_id = f"ATT-{uuid4().hex}"
     now = utc_now()
     result = TaskResult(
@@ -1058,6 +1071,19 @@ def skip_task(
     result_json = _store_result(state, runtime, result)
     _sync_after_mutation(state, runtime)
     return {"status": "success", "task_result": result_json}
+
+
+def skip_task(
+    state: MutableMapping[str, Any], task_id: str, reason: str
+) -> dict[str, Any]:
+    runtime = _runtime(state)
+    task_runtime = _task(runtime, task_id)
+    task = ExperimentTask.model_validate(task_runtime["task"])
+    if not task.optional:
+        raise ExperimentRuntimeError("skip_required", "Only optional v0 tasks may be skipped without human amendment.")
+    if task_runtime["status"] not in {"pending", "ready"}:
+        raise ExperimentRuntimeError("skip_not_allowed", f"Cannot skip task in {task_runtime['status']!r} state.")
+    return _complete_as_skipped(state, task_id, reason)
 
 
 def amend_task(
@@ -1120,7 +1146,6 @@ __all__ = [
     "approve_plan",
     "fallback_task",
     "force_managed_s3_launch_params",
-    "fabrication_signals",
     "generate_presigned_s3_url",
     "get_experiment_plan",
     "initialize_runtime",
@@ -1132,3 +1157,4 @@ __all__ = [
     "skip_task",
     "start_task",
 ]
+
