@@ -114,7 +114,14 @@ def summarize(data: Dict[str, Any], *, path: str = "", user_id: str = "",
                      "procedure": _attr(m, "procedure", "method", "description",
                                         "method_type")[:400]}
                     for m in methods],
-        "tools": sorted({_attr(t, "name") or t.get("id") for t in tools if t}),
+        # Carry WHERE each tool is, not just what it is called. A later run gets
+        # this instead of the graph itself, and a name alone ("GOLEM") leaves its
+        # coder — which starts in a clean environment — to guess or, as happened,
+        # to write its own replacement.
+        "tools": sorted({
+            (lambda n, loc: f"{n} — {loc}" if loc else n)(
+                _attr(t, "name") or t.get("id"), _attr(t, "location")[:200])
+            for t in tools if t}),
     }
     text = " ".join([question, _attr(root, "domain") if root else ""]
                     + [h["formulation"] for h in record["hypotheses"]]
