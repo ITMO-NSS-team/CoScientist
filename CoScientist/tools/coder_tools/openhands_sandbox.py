@@ -47,11 +47,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional
 
 import httpx
@@ -133,11 +135,45 @@ def _api(base_url: str) -> str:
 # ---------------------------------------------------------------------------
 
 class _SessionRegistry:
-    """Thread-safe ``session key -> sandbox id`` map, process-local."""
+    """Thread-safe ``session key -> sandbox id`` map, mirrored to disk.
+
+    Each task runs in its OWN container with its OWN /workspace, so the binding
+    is the only thing that lets a follow-up call land where the previous one left
+    its files. Keeping it in memory alone meant a server restart silently
+    provisioned a fresh container: the work was still in the old one, the new
+    task saw an empty workspace, and nothing reported that the two were
+    different machines.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._bindings: Dict[str, str] = {}
+        self._path = Path(os.getenv(
+            "SANDBOX_BINDINGS_FILE",
+            os.path.join(os.getenv("RESEARCH_GRAPH_DIR", "./graph_runs"),
+                         "sandbox_bindings.json")))
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            if self._path.exists():
+                data = json.loads(self._path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._bindings = {str(k): str(v) for k, v in data.items() if v}
+                    logger.info("Restored %d sandbox binding(s) from %s",
+                                len(self._bindings), self._path)
+        except Exception:  # noqa: BLE001 — a bad file must not stop the process
+            logger.warning("Could not read sandbox bindings from %s", self._path,
+                           exc_info=True)
+
+    def _save(self) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self._bindings, indent=1), encoding="utf-8")
+            os.replace(tmp, self._path)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not persist sandbox bindings", exc_info=True)
 
     def get(self, session: str) -> Optional[str]:
         with self._lock:
@@ -145,11 +181,17 @@ class _SessionRegistry:
 
     def set(self, session: str, sandbox_id: str) -> None:
         with self._lock:
+            if self._bindings.get(session) == sandbox_id:
+                return
             self._bindings[session] = sandbox_id
+            self._save()
 
     def drop(self, session: str) -> Optional[str]:
         with self._lock:
-            return self._bindings.pop(session, None)
+            previous = self._bindings.pop(session, None)
+            if previous is not None:
+                self._save()
+            return previous
 
     def snapshot(self) -> Dict[str, str]:
         with self._lock:
