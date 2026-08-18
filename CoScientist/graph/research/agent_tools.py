@@ -20,6 +20,7 @@ request).
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -60,6 +61,32 @@ def _recent_tool_calls(agent: str, limit: int = 6) -> List[Dict[str, Any]]:
         out.append({"exec_id": h.get("id"), "tool": h.get("label"),
                     "result": (h.get("output") or "")[:400]})
     return out
+
+
+def _as_op_list(value: Any, field: str) -> Optional[List[Dict[str, Any]]]:
+    """Coerce a commit argument into the list of operations it was meant to be.
+
+    Accepts what models actually send: the list itself, a JSON string holding
+    that list, or a single operation object. Raises ValueError with a message
+    the agent can act on when the value cannot be one.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field}: expected a JSON array of objects, got a "
+                             f"string that is not valid JSON ({exc.msg})") from exc
+    if isinstance(value, dict):          # one op passed unwrapped
+        value = [value]
+    if not isinstance(value, list):
+        raise ValueError(f"{field}: expected a list of objects, got "
+                         f"{type(value).__name__}")
+    bad = [i for i, item in enumerate(value) if not isinstance(item, dict)]
+    if bad:
+        raise ValueError(f"{field}: items {bad} are not objects")
+    return value
 
 
 def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str) -> Optional[List[Dict[str, Any]]]:
@@ -216,12 +243,34 @@ class ResearchGraphToolset(BaseToolset):
             focus = (tool_context.state or {}).get(FOCUS_STATE_KEY)
         except Exception:  # noqa: BLE001
             focus = None
-        research_graph = get_research_graph(tool_context)
-        agent = _agent(tool_context)
-        result = research_graph.commit(
-            source=agent, nodes=_attach_provenance(nodes, agent), edges=edges,
-            status_updates=status_updates, autolink_focus=focus,
-        )
+
+        # Models routinely hand structured arguments over as a JSON STRING. That
+        # used to reach the store as text and raise deep inside it — and the
+        # exception escaped the tool, killing the delegation chain up to the
+        # orchestrator and losing a run that had already produced its result.
+        # Parse what was meant, and if anything still fails, hand the agent an
+        # error it can act on instead of ending the run.
+        try:
+            nodes, edges, status_updates = (_as_op_list(nodes, "nodes"),
+                                            _as_op_list(edges, "edges"),
+                                            _as_op_list(status_updates, "status_updates"))
+        except ValueError as exc:
+            return {"ok": False, "errors": [str(exc)],
+                    "hint": "pass nodes/edges/status_updates as JSON arrays of "
+                            "objects (not a string, not a single object)"}
+
+        try:
+            research_graph = get_research_graph(tool_context)
+            agent = _agent(tool_context)
+            result = research_graph.commit(
+                source=agent, nodes=_attach_provenance(nodes, agent), edges=edges,
+                status_updates=status_updates, autolink_focus=focus,
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad payload must not end the run
+            logger.exception("research_commit failed")
+            return {"ok": False, "errors": [f"{type(exc).__name__}: {exc}"],
+                    "hint": "the commit was rejected, nothing was written — fix "
+                            "the payload and call research_commit again"}
         if result.ok:
             _refresh_context_state(tool_context, self._is_root)
         return result.model_dump(exclude_none=True)
