@@ -78,33 +78,38 @@ GOLEM-траекторий и статического контроля; обу�
 
 ## Проверка MCP для новой базы
 
-Для вопросов к базе научных работ предусмотрен MCP `paper-analysis` с
-инструментом `explore_chemistry_database(task)`. Его ожидаемый путь подключения
-задаётся переменной `MCP__PAPER_ANALYSIS_URL`; дополнительный MCP поиска статей
-использует `MCP__PAPERS_SEARCH_URL`.
+Для вопросов к базе научных работ используется MCP `paper-analysis`. В новой
+версии endpoint `MCP__PAPER_ANALYSIS_URL` фактически экспортирует инструмент
+`explore_scientific_database(task)` (старое имя в CoScientist было
+`explore_chemistry_database`). Дополнительный endpoint поиска статей
+`MCP__PAPERS_SEARCH_URL` экспортирует `search_papers` и
+`download_papers_from_search`.
 
 Фактическая проверка текущего окружения 19 августа 2026:
 
 | Проверка | Результат |
 |---|---|
-| `MCP__PAPER_ANALYSIS_URL` в `.env` | не задана |
-| `MCP__PAPERS_SEARCH_URL` в `.env` | не задана |
-| Создание toolset `paper_analysis` | пропущено как optional-конфигурация |
-| Локальные TCP-порты `5433`, `7331`, `7332`, `7333` | connection refused |
-| Docker daemon | не запущен/недоступен |
-| Вызов вопроса к новой базе | не выполнен: MCP endpoint отсутствует |
+| `MCP__PAPER_ANALYSIS_URL` | `http://10.32.11.45:7334/mcp`, доступен через VPN |
+| `MCP__PAPERS_SEARCH_URL` | `http://10.32.11.45:7331/mcp`, доступен через VPN |
+| MCP `initialize` + `tools/list` | успешно, protocol `2025-11-25` |
+| Инструменты базы | `explore_scientific_database`, `explore_my_papers`, `find_papers_in_db`, `find_relevant_data_in_db` |
+| Прямой вызов новой базы | успешно, ответ получен |
+| Содержательная релевантность ответа | неуспешно: возвращены нерелевантные microfluidics/клеточные ML-материалы |
+| MCP-реестр `retrieve_tools` | недоступен: PostgreSQL `localhost:5433` не запущен |
 
-Итог: на момент проверки MCP **не отработал**, поскольку не был подключён и
-сервис базы не был доступен. Это инфраструктурный блокер, а не отрицательный
-ответ базы и не результат содержательной проверки качества RAG. В checkpoint
-прогонах также не было доступных инструментов, поэтому все запланированные
-задачи получили fallback-маршрут `coder`.
+Итог: после подключения VPN MCP **технически отработал** — handshake и вызов
+инструмента успешны. Однако текущая база не вернула релевантные публикации по
+Case 2 и явно сообщила, что таких материалов среди найденных фрагментов нет.
+Отдельно остаётся недоступен MCP-реестр инструментов PostgreSQL, поэтому
+автоматический `retrieve_tools` в planner-е по-прежнему не работает.
 
 ## Как завершить end-to-end проверку MCP
 
-1. Запустить или предоставить URL сервиса `paper-analysis` с доступом к новой
-   Chroma-базе и embedding/reranker-сервисам.
-2. Добавить в локальный `.env` (не коммитить):
+1. Для planner-а исправить/оставить совместимым имя
+   `explore_scientific_database` (фикс добавлен в prompt CoScientist).
+2. Поднять MCP-реестр PostgreSQL/Qdrant и embedding/reranker-сервисы, чтобы
+   `retrieve_tools` перестал возвращать connection refused.
+3. Добавить URL в локальный `.env` (не коммитить):
 
    ```dotenv
    MCP__PAPER_ANALYSIS_URL=http://<host>:7331/mcp
@@ -112,12 +117,12 @@ GOLEM-траекторий и статического контроля; обу�
    MCP__PAPERS_SEARCH_URL=http://<host>:<port>/mcp
    ```
 
-3. Выполнить минимум один предметный вопрос, например: «Какие работы в базе
+4. Выполнить минимум один предметный вопрос, например: «Какие работы в базе
    описывают генерацию SMILES с conditional VAE или transformer для molecular
    optimization?». Успешный ответ должен содержать непустые `answer` и
    `metadata` с `text_context` и `image_context`, а не fallback
    `Could not extract any data from DB.`
-4. Повторить вопрос, использованный в Case 2, и зафиксировать raw MCP-ответ,
+5. Повторить вопрос, использованный в Case 2, и зафиксировать raw MCP-ответ,
    время, число retrieved chunks и ошибки сервиса. После этого можно запускать
    полный экспериментальный pipeline только после отдельного одобрения review.
 

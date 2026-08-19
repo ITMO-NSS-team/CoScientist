@@ -129,9 +129,14 @@ REGISTRY.register_tool(ToolEntry(
     runtime_resolved=True,
     docs=(
         ToolDoc(
+            name="explore_scientific_database",
+            signature="explore_scientific_database(task)",
+            purpose="RAG search over the internal scientific literature database.",
+        ),
+        ToolDoc(
             name="explore_chemistry_database",
-            signature="explore_chemistry_database(question)",
-            purpose="RAG search over an internal scientific literature database.",
+            signature="explore_chemistry_database(task)",
+            purpose="Legacy name for the internal scientific literature database tool.",
         ),
         ToolDoc(
             name="explore_my_papers",
