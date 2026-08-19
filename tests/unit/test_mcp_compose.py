@@ -95,5 +95,6 @@ def test_local_mcps_share_the_codesynapse_network_with_the_facade() -> None:
 
     assert compose["networks"]["codesynapse-internal"]["external"] is True
     assert facade["services"]["coscientist-facade"]["ports"] == ["${CODESYNAPSE_A2A_PORT:-8010}:8010"]
+    assert facade["services"]["coscientist-facade"]["environment"]["HITL__ENABLED"] == "false"
     for service in compose["services"].values():
         assert service["networks"] == ["codesynapse-internal"]

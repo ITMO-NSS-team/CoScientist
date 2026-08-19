@@ -136,7 +136,7 @@ REGISTRY.register_tool(ToolEntry(
         ToolDoc(
             name="retrieve_tools",
             signature="retrieve_tools(query)",
-            purpose="Retrieves tools from MCP servers using RAG.",
+            purpose="Retrieves tools from the local MCP registry.",
         ),
         ToolDoc(
             name="get_server_info",

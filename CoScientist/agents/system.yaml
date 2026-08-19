@@ -313,7 +313,7 @@ agents:
 
   ToolRetrieverAgent:
     class: llm
-    description: Agent to retrieve relevant MCP servers from RAG database of MCP tools for given task.
+    description: Agent to retrieve relevant locally configured MCP tools for a given task.
     prompt: tool_retriever
     tools: [retrieval]
     output_key: retrieved_tools

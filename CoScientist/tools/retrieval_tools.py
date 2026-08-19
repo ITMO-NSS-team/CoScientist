@@ -9,17 +9,11 @@ from google.adk.agents.readonly_context import ReadonlyContext
 
 from CoScientist.storage import RetrievalToolResult
 
-from rag_tools import create_manager, MCPServer
-from rag_tools.storage import PostgresClient
-from rag_tools.config.settings import get_settings
-from rag_tools.retrieval import APIEmbedder, APIReranker, BM25Reranker, HybridReranker
-from rag_tools.storage.models import RetrievalResult
-
-settings = get_settings()
+from CoScientist.tools.local_mcp_registry import local_server, local_tool_results
 
 
 class RetrievalToolSet(BaseToolset):
-    """Toolset for rag tool usage"""
+    """Toolset for discovery from the local MCP registry."""
     def __init__(self, prefix: str = "rag_"):
         super().__init__()
         self.tool_name_prefix = prefix
@@ -42,40 +36,18 @@ class RetrievalToolSet(BaseToolset):
                                     tool_context: ToolContext = None
                                     ) -> Dict[str, Any]:
         """
-        Tool for retrieving MCP tools from DB using RAG. 
+        Tool for retrieving MCP tools from the static local registry.
         
         Args:
-            query: query to use for tools lookup in database using RAG.
+            query: preserved lookup query for compatibility with the agent contract.
         
         Returns:
-            List ot the most relevant tools in db which can be used to solve the task .
+            Locally configured MCP tools which can be used to solve the task.
         """
-        embedder = APIEmbedder(settings.api_embedding)
-        api_reranker = APIReranker(settings.api_reranker)
-        bm2_reranker = BM25Reranker(settings.bm_reranker)
-        reranker = HybridReranker([api_reranker, bm2_reranker], settings.hybrid_reranker)
-        manager = await create_manager(settings, embedder, reranker)
-
-        try:
-            retrieved_tools: List[RetrievalResult] = await manager.retrieve_tools(
-                query=query,
-                top_k=settings.rag.default_top_k,
-                rerank=True,
-                rerank_top_k=settings.rag.rerank_top_k,
-                min_score=settings.rag.min_relevance_score)
-
-            results = [
-                RetrievalToolResult(
-                    tool=r.name,
-                    server_id=r.server_id,
-                    description=r.description,
-                    score=r.rerank_score,
-                )
-                for r in retrieved_tools
-            ]
-        finally:
-            # Always release the manager's DB/HTTP connections, even on error.
-            await manager.close()
+        # MVP: the four local Compose MCP services are the complete catalogue.
+        # ``query`` remains part of the public tool contract for the later RAG
+        # implementation, but no remote registry is contacted here.
+        results = list(local_tool_results())
 
         if tool_context is None:
             return {
@@ -123,12 +95,7 @@ class RetrievalToolSet(BaseToolset):
             Server metadata.
         """
 
-        postgres = PostgresClient(settings.postgres)
-        await postgres.initialize()
-
-        server: MCPServer = await postgres.get_server(server_id)
-
-        await postgres.close()
+        server = local_server(server_id)
 
         return {
             "status": "success",

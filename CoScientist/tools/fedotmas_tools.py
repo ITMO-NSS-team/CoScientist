@@ -9,11 +9,7 @@ from google.adk.agents.readonly_context import ReadonlyContext
 
 from fedotmas import MAS, HttpMCPServer
 
-from rag_tools import MCPServer
-from rag_tools.storage import PostgresClient
-from rag_tools.config.settings import get_settings
-
-settings = get_settings()
+from CoScientist.tools.local_mcp_registry import local_server
 
 class FedotMASToolset(BaseToolset):
     """Toolset for fedotmas usage"""
@@ -45,15 +41,9 @@ class FedotMASToolset(BaseToolset):
         """
         state = tool_context.state if tool_context is not None else {}
 
-        postgres = PostgresClient(settings.postgres)
-        await postgres.initialize()
-        try:
-            filtered_tools = state.get('filtered_tools', [])
-            server_ids = set([t['server_id'] for t in filtered_tools])
-            servers: List[MCPServer] = [await postgres.get_server(server_id) for server_id in server_ids]
-        finally:
-            # Always release the DB connection, even if a lookup raised.
-            await postgres.close()
+        filtered_tools = state.get('filtered_tools', [])
+        server_ids = {tool['server_id'] for tool in filtered_tools}
+        servers = [local_server(server_id) for server_id in server_ids]
 
         servers = [server for server in servers if (server is not None and server.protocol == 'http')]
         servers_payload = {server.name: HttpMCPServer(url=server.url, description=server.description)
