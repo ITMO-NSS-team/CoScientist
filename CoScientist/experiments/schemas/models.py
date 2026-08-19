@@ -18,10 +18,24 @@ from pydantic import (
 )
 from pydantic.json_schema import WithJsonSchema
 
-# When True (default), empty/unspecified baselines/metrics are invented so weak
-# planners still parse. When False, sentinels preserve "unspecified*" so critique
-# completeness majors can fire. See EXPERIMENTS__LENIENT_PLANNER.
+# Kept for callers / env (EXPERIMENTS__LENIENT_PLANNER). Design lists are no
+# longer invented: empty stays empty; unspecified* names are dropped.
 _LENIENT_PLANNER: ContextVar[bool] = ContextVar("experiment_lenient_planner", default=True)
+
+_DESIGN_PLACEHOLDERS = frozenset({
+    "comparative reference method",
+    "primary_outcome",
+    "task dataset",
+    "analysis.py",
+    "what measurable outcome does this task produce?",
+    "operation-specified method",
+    "operation inputs",
+})
+
+
+def is_design_placeholder(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return (not text) or text.startswith("unspecified") or text in _DESIGN_PLACEHOLDERS
 
 
 def set_lenient_planner(enabled: bool) -> Token:
@@ -595,11 +609,7 @@ def _coerce_analysis_role(value: Any) -> str:
     return aliases.get(text, text)
 
 
-def _coerce_nonempty_baselines(value: Any) -> list[Any]:
-    lenient = lenient_planner_enabled()
-    invent_default = [{"name": "comparative reference method", "kind": "method", "ref": None}]
-    strict_default = [{"name": "unspecified", "kind": "method", "ref": None}]
-    default = invent_default if lenient else strict_default
+def _coerce_optional_baselines(value: Any) -> list[Any]:
     kind_aliases = {
         "report": "prior_result",
         "paper": "external",
@@ -616,49 +626,44 @@ def _coerce_nonempty_baselines(value: Any) -> list[Any]:
     }
     allowed = {"method", "model", "prior_result", "external"}
     if not isinstance(value, list) or not value:
-        return default
+        return []
     out: list[Any] = []
     for item in value:
         if isinstance(item, dict):
             raw = dict(item)
             name = str(raw.get("name") or "").strip()
-            if not name or name.lower().startswith("unspecified"):
-                raw["name"] = "comparative reference method" if lenient else (name or "unspecified")
+            if is_design_placeholder(name):
+                continue
             kind = str(raw.get("kind") or "method").strip().lower()
             if kind not in allowed:
                 kind = kind_aliases.get(kind, "method")
             raw["kind"] = kind
             out.append(raw)
-        else:
+        elif not is_design_placeholder(item):
             out.append(item)
-    return out or default
+    return out
 
 
-def _coerce_nonempty_metrics(value: Any) -> list[Any]:
-    lenient = lenient_planner_enabled()
-    invent_default = [{"name": "primary_outcome", "direction": "compare", "threshold": None, "test": None}]
-    strict_default = [{"name": "unspecified", "direction": "compare", "threshold": None, "test": None}]
-    default = invent_default if lenient else strict_default
+def _coerce_optional_metrics(value: Any) -> list[Any]:
     if not isinstance(value, list) or not value:
-        return default
+        return []
     out: list[Any] = []
     for item in value:
         if isinstance(item, dict):
             raw = dict(item)
-            # operator belongs on success_criteria, not design.metrics
             raw.pop("operator", None)
             name = str(raw.get("name") or "").strip()
-            if not name or name.lower().startswith("unspecified"):
-                raw["name"] = "primary_outcome" if lenient else (name or "unspecified")
+            if is_design_placeholder(name):
+                continue
             raw.setdefault("direction", "compare")
             out.append(raw)
-        else:
+        elif not is_design_placeholder(item):
             out.append(item)
-    return out or default
+    return out
 
 
 class DesignDataset(StrictModel):
-    name: str = Field(min_length=1)
+    name: str = ""
     ref: Annotated[
         DataRef | None,
         BeforeValidator(_coerce_design_dataset_ref),
@@ -723,26 +728,29 @@ class DesignAnalysisArtifact(StrictModel):
     path_or_tool: str | None = None
 
 
-def _coerce_nonempty_analysis_artifacts(value: Any) -> list[Any]:
-    if isinstance(value, list) and value:
-        fixed: list[Any] = []
-        for item in value:
-            if isinstance(item, dict):
-                row = dict(item)
-                if not str(row.get("name") or "").strip():
-                    row["name"] = str(row.get("path_or_tool") or "analysis.py").strip() or "analysis.py"
-                fixed.append(row)
-            else:
-                fixed.append(item)
-        return fixed
-    return [
-        {
-            "name": "analysis.py",
-            "role": "code",
-            "prepare_via": "coder",
-            "path_or_tool": "analysis.py",
-        }
-    ]
+def _coerce_optional_analysis_artifacts(value: Any) -> list[Any]:
+    if not isinstance(value, list) or not value:
+        return []
+    fixed: list[Any] = []
+    for item in value:
+        if isinstance(item, dict):
+            row = dict(item)
+            name = str(row.get("name") or "").strip()
+            path = str(row.get("path_or_tool") or "").strip()
+            if is_design_placeholder(name):
+                if is_design_placeholder(path):
+                    continue
+                row["name"] = path
+            elif not name and path and not is_design_placeholder(path):
+                row["name"] = path
+            elif not name:
+                continue
+            if is_design_placeholder(row.get("path_or_tool")):
+                row["path_or_tool"] = None
+            fixed.append(row)
+        elif not is_design_placeholder(item):
+            fixed.append(item)
+    return fixed
 
 
 class TaskDesign(StrictModel):
@@ -754,20 +762,20 @@ class TaskDesign(StrictModel):
         str,
         BeforeValidator(lambda v: "" if v is None else str(v).strip()),
     ] = ""
-    experiment_question: str = Field(min_length=1)
-    dataset: DesignDataset
+    experiment_question: str = ""
+    dataset: DesignDataset = Field(default_factory=DesignDataset)
     baselines: Annotated[
         list[DesignBaseline],
-        BeforeValidator(_coerce_nonempty_baselines),
-    ] = Field(min_length=1)
+        BeforeValidator(_coerce_optional_baselines),
+    ] = Field(default_factory=list)
     metrics: Annotated[
         list[DesignMetric],
-        BeforeValidator(_coerce_nonempty_metrics),
-    ] = Field(min_length=1)
+        BeforeValidator(_coerce_optional_metrics),
+    ] = Field(default_factory=list)
     analysis_artifacts: Annotated[
         list[DesignAnalysisArtifact],
-        BeforeValidator(_coerce_nonempty_analysis_artifacts),
-    ] = Field(min_length=1)
+        BeforeValidator(_coerce_optional_analysis_artifacts),
+    ] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -775,16 +783,13 @@ class TaskDesign(StrictModel):
         if not isinstance(data, dict):
             return data
         data = dict(data)
-        # Fill bare design shells so nested required fields don't fail first.
-        if not str(data.get("experiment_question") or "").strip():
-            data["experiment_question"] = "What measurable outcome does this task produce?"
+        if is_design_placeholder(data.get("experiment_question")):
+            data["experiment_question"] = ""
         ds = data.get("dataset")
-        if not isinstance(ds, dict) or not str(ds.get("name") or "").strip():
-            data["dataset"] = {
-                "name": str((ds or {}).get("name") if isinstance(ds, dict) else "") or "task dataset",
-                "ref": (ds or {}).get("ref") if isinstance(ds, dict) else None,
-                "notes": (ds or {}).get("notes") if isinstance(ds, dict) else None,
-            }
+        if not isinstance(ds, dict):
+            data["dataset"] = {"name": "", "ref": None, "notes": None}
+        elif is_design_placeholder(ds.get("name")):
+            data["dataset"] = {**ds, "name": ""}
         if data.get("hypothesis_ref") is None:
             return data
         primary, extras = _split_hypothesis_list(data.get("hypothesis_ref"))
@@ -1284,6 +1289,7 @@ __all__ = [
     "TaskDesign",
     "TaskResult",
     "artifact_name_from_location",
+    "is_design_placeholder",
     "is_presigned_url",
     "lenient_planner_enabled",
     "reset_lenient_planner",

@@ -280,21 +280,21 @@ def critique_plan(
         for task in plan.tasks:
             d, tid = task.design, task.id
             for field, sug in (
-                ("baselines", "List ≥1 baseline method/model/prior_result/external comparator."),
-                ("metrics", "List ≥1 evaluation metric with direction."),
-                ("analysis_artifacts", "Stub ≥1 code/config/metrics_table/report analysis artifact."),
+                ("baselines", "Optional: name a real comparator if one exists."),
+                ("metrics", "Optional: name a metric only when a threshold is known."),
+                ("analysis_artifacts", "Optional: list files this task will actually produce."),
             ):
                 if not getattr(d, field):
-                    co("blocker", f"{tid} design.{field} is empty.", sug, tid)
+                    co("minor", f"{tid} design.{field} is empty.", sug, tid)
             if not d.dataset.name.strip():
-                co("major", f"{tid} design.dataset.name is missing.",
-                   "Name the dataset/benchmark used to test this hypothesis.", tid)
+                co("minor", f"{tid} design.dataset.name is missing.",
+                   "Name the dataset/benchmark if one is already known.", tid)
             for field, sug in (
                 ("baselines", "Replace placeholder with a concrete baseline."),
                 ("metrics", "Replace placeholder with a concrete metric and direction."),
             ):
                 if any(x.name.strip().lower().startswith("unspecified") for x in getattr(d, field)):
-                    co("major", f"{tid} design.{field} still has an unspecified placeholder.", sug, tid)
+                    co("minor", f"{tid} design.{field} still has an unspecified placeholder.", sug, tid)
 
         ctx = _normalize_hypothesis_ids(hypothesis_refs)
         plan_h = _normalize_hypothesis_ids([{"hypothesis_id": h.hypothesis_id} for h in plan.hypotheses])
@@ -558,6 +558,8 @@ def validate_and_critique_plan(
         ) from exc
     finally:
         reset_lenient_planner(token)
+    from CoScientist.experiments.critique.design_fill import fill_experiment_design
+    plan = fill_experiment_design(plan, operations=operations)
     return plan, critique_plan(
         plan, settings=settings, available_tools=inventory,
         preferred_tools=None if preferred_tools is None else list(preferred_tools),

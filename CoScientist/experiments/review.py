@@ -143,6 +143,13 @@ def _esc(text: str, n: int | None = None) -> str:
     return out[:n] if n is not None else out
 
 
+def _design_cell(value: Any, n: int | None = None) -> str:
+    from CoScientist.experiments.schemas import is_design_placeholder
+    if is_design_placeholder(value):
+        return "—"
+    return _esc(str(value).replace("\n", " "), n)
+
+
 def render_experiment_plan(plan: ExperimentPlan) -> str:
     L = [
         f"# Experiment plan · revision {plan.revision}", f"Goal: {plan.goal}",
@@ -158,13 +165,13 @@ def render_experiment_plan(plan: ExperimentPlan) -> str:
     ]
     for t in plan.tasks:
         d = t.design
-        bl = "; ".join(f"{b.name} ({b.kind})" for b in d.baselines)
-        mt = "; ".join(f"{m.name}/{m.direction}" + (f" [{m.test}]" if m.test else "") for m in d.metrics)
-        ar = "; ".join(f"{a.name} ({a.role}/{a.prepare_via})" for a in d.analysis_artifacts)
-        q = _esc(d.experiment_question.replace("\n", " "), 120)
+        bl = "; ".join(f"{b.name} ({b.kind})" for b in d.baselines) if d.baselines else ""
+        mt = "; ".join(f"{m.name}/{m.direction}" + (f" [{m.test}]" if m.test else "") for m in d.metrics) if d.metrics else ""
+        ar = "; ".join(f"{a.name} ({a.role}/{a.prepare_via})" for a in d.analysis_artifacts) if d.analysis_artifacts else ""
         L.append(
-            f"| {t.id} | `{d.hypothesis_ref}` | {q} | {_esc(d.dataset.name)} "
-            f"| {_esc(bl, 100)} | {_esc(mt, 100)} | {_esc(ar, 100)} | `{t.route.value}` |"
+            f"| {t.id} | `{d.hypothesis_ref}` | {_design_cell(d.experiment_question, 120)} "
+            f"| {_design_cell(d.dataset.name)} | {_design_cell(bl, 100)} "
+            f"| {_design_cell(mt, 100)} | {_design_cell(ar, 100)} | `{t.route.value}` |"
         )
     for t in plan.tasks:
         d = t.design
@@ -177,11 +184,12 @@ def render_experiment_plan(plan: ExperimentPlan) -> str:
         if t.route.value == "alembic_build":
             L += [f"Repo URL: {t.repo_url}", f"Post-build route: `{t.post_build_route}`"]
         L += [
-            f"Hypothesis: `{d.hypothesis_ref}`{also}", f"Question: {d.experiment_question}",
-            f"Dataset: {d.dataset.name}{notes}",
-            f"Baselines: {'; '.join(f'{b.name} ({b.kind})' for b in d.baselines)}",
-            f"Metrics: {'; '.join(f'{m.name} ({m.direction})' for m in d.metrics)}",
-            f"Analysis artifacts: {'; '.join(f'{a.name} [{a.role}]' for a in d.analysis_artifacts)}",
+            f"Hypothesis: `{d.hypothesis_ref}`{also}",
+            f"Question: {_design_cell(d.experiment_question)}",
+            f"Dataset: {_design_cell(d.dataset.name)}{notes if d.dataset.name else ''}",
+            f"Baselines: {_design_cell('; '.join(f'{b.name} ({b.kind})' for b in d.baselines))}",
+            f"Metrics: {_design_cell('; '.join(f'{m.name} ({m.direction})' for m in d.metrics))}",
+            f"Analysis artifacts: {_design_cell('; '.join(f'{a.name} [{a.role}]' for a in d.analysis_artifacts))}",
             f"Task: {t.description}", f"MCP/tools: {'; '.join(tools) if tools else 'none'}",
             f"Inputs: {len(t.input_data)}", f"Success criteria: {criteria}",
             f"Expected artifacts: {arts}", f"Duration: {t.est_duration_min} min",
@@ -403,6 +411,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
             approve_plan(state)
             _publish_approved_plan_to_graph(ctx, state)
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=headless_auto plan_id={plan.plan_id} phase=execution")
+            _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
             return _auto_approve_response()
 
         response = await self.hitl_handler.handle_request(self._hitl(
@@ -414,6 +423,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
             approve_plan(state)
             _publish_approved_plan_to_graph(ctx, state)
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=human plan_id={plan.plan_id} phase=execution")
+            _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
         return response
 
     async def _review_result(self, ctx: InvocationContext, _output_text: Any) -> HITLResponse:

@@ -25,6 +25,7 @@ from .models import (
     PlanCritique,
     SuccessCriterion,
     TaskDesign,
+    is_design_placeholder,
     is_presigned_url,
     utc_now,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "TaskDesign",
     "TaskResult",
     "artifact_name_from_location",
+    "is_design_placeholder",
     "is_presigned_url",
     "utc_now",
 ]
