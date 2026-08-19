@@ -311,9 +311,13 @@ def _refs_from_research_graph(callback_context: CallbackContext) -> list[dict[st
         g = store.full_graph()
     except Exception:  # noqa: BLE001
         return []
+    # Missing status (unit-test fakes / legacy nodes) counts as still-active.
+    active = frozenset({"formulated", "under_verification", ""})
     out: list[dict[str, str]] = []
     for node_id, data in g.nodes(data=True):
         if data.get("type") != "Hypothesis":
+            continue
+        if str(data.get("status") or "") not in active:
             continue
         attrs = data.get("attrs") or {}
         statement = str(attrs.get("formulation") or attrs.get("label") or "").strip()
@@ -710,12 +714,14 @@ def commit_experiment_hypotheses(callback_context: CallbackContext) -> None:
         r for r in (state.get(_PENDING_FC_KEY) or [])
         if isinstance(r, dict) and r.get("statement")
     ]
-    # Prefer the richest non-empty source (old max-by-length heuristic). When
+    # Fixed source order — first non-empty wins: graph nodes (authoritative,
+    # written via research_commit) → stashed successful FC refs → structured
+    # node payloads → prose extraction. No richest-wins length heuristic. When
     # every channel is empty, fall back to a single H1 built from the EM ask.
-    candidates = [
-        c for c in (from_graph, from_fc, from_nodes, from_struct, from_text) if c
-    ]
-    refs = max(candidates, key=len) if candidates else []
+    refs = next(
+        (c for c in (from_graph, from_fc, from_nodes, from_struct, from_text) if c),
+        [],
+    )
     if not refs:
         ask = (
             _resolve_em_ask(callback_context)

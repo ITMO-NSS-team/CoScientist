@@ -307,9 +307,9 @@ def critique_plan(
         if ctx:
             if miss := [h for h in ctx if h not in req]:
                 co("major", f"Context hypothesis_refs uncovered by non-optional task design: {', '.join(miss)}.",
-                   "Add a non-optional task for that operation (research/fedot/coder as "
-                   "coverage dictates) and set design.hypothesis_ref. Do not drop other "
-                   "source_request operations to make the ids fit.")
+                   "Link each leftover id on an existing required task via "
+                   "design.hypothesis_ref or also_tests. Do not add another "
+                   "required task for the same operation_ref.")
             if plan_h and (mp := [h for h in ctx if h not in plan_h]):
                 add(category="consistency", severity="major",
                     message=f"plan.hypotheses omits context hypothesis ids: {', '.join(mp)}.",

@@ -202,10 +202,10 @@ agents:
     tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
     output_key: search_results
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
+      before_agent: [before_get_task, inject_research_context, reset_research_searches]
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
-      after_tool: [log_research_tool_calls]
+      after_tool: [log_research_tool_calls, count_research_searches]
       after_model: [guard_unknown_tools]
     hitl: true
     a2a:
@@ -512,7 +512,7 @@ agents:
       Also ExperimentExecutorAgent route when start_task returns
       route_agent=ExperimentAgent.
     prompt: experiment_react
-    tools: [dynamic_tools, task_tracker, graph, research_graph]
+    tools: [dynamic_tools, graph, research_graph]
     output_key: fedot_results
     callbacks:
       before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
@@ -526,8 +526,8 @@ agents:
       Agent to invoke FEDOT.MAS for solving given task. Uses MCP tools.
       Also ExperimentExecutorAgent route when start_task returns
       route_agent=FedotAgent.
-    prompt: fedot
-    tools: [fedot, task_tracker, graph]
+    prompt: experiment_fedot_route
+    tools: [fedot, graph]
     output_key: fedot_results
     callbacks:
       before_agent: [redirect_when_no_tools, refuse_when_fedot_deliverable, before_get_task, inject_research_context]

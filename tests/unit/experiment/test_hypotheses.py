@@ -403,15 +403,15 @@ def test_commit_experiment_hypotheses_prefers_graph_style_nodes():
 
 
 def test_commit_experiment_hypotheses_source_priority(monkeypatch):
-    """Max-by-length among non-empty sources; length beats source reliability.
+    """Fixed source order — first non-empty wins: graph → FC → nodes/struct → text.
 
-    Restores the pre-Task-7 heuristic: the LONGEST candidate list wins
-    (3 prose refs beat 1 graph node; 3 struct refs beat 1 FC ref). Empty
-    sources are ignored; if all are empty, a separate test covers H1 fallback.
+    The graph is authoritative regardless of how rich the prose channel is
+    (no max-by-length heuristic). Empty sources are skipped; if all are empty,
+    a separate test covers the H1 fallback.
     """
     from CoScientist.experiments.hypotheses import commit_experiment_hypotheses
 
-    # Case 1: prose regex parse (3 refs) beats the research graph (1 node).
+    # Case 1: the research graph (1 node) beats a richer prose parse (3 refs).
     _patch_research_graph(monkeypatch, ["Graph-committed hypothesis."])
     prose = (
         "Hypothesis 1: Prose candidate one works.\n"
@@ -421,14 +421,10 @@ def test_commit_experiment_hypotheses_source_priority(monkeypatch):
     state: dict = {"hypotheses": prose}
     commit_experiment_hypotheses(SimpleNamespace(state=state, user_content=None))
     statements = [r["statement"] for r in state["hypothesis_refs"]]
-    assert statements == [
-        "Prose candidate one works.",
-        "Prose candidate two works.",
-        "Prose candidate three works.",
-    ]
+    assert statements == ["Graph-committed hypothesis."]
 
-    # Case 2: structured output (3 refs) beats the FC stash (1 ref).
-    _patch_research_graph(monkeypatch, [])  # graph empty for this case
+    # Case 2: empty graph → the FC stash (1 ref) beats richer structured output.
+    _patch_research_graph(monkeypatch, [])
     state2: dict = {
         "hypotheses": json.dumps(
             [
@@ -443,11 +439,25 @@ def test_commit_experiment_hypotheses_source_priority(monkeypatch):
     }
     commit_experiment_hypotheses(SimpleNamespace(state=state2, user_content=None))
     statements2 = [r["statement"] for r in state2["hypothesis_refs"]]
-    assert statements2 == ["Struct one.", "Struct two.", "Struct three."]
+    assert statements2 == ["FC-committed hypothesis."]
+
+    # Case 3: empty graph and FC → structured output wins over prose.
+    _patch_research_graph(monkeypatch, [])
+    state3: dict = {
+        "hypotheses": json.dumps(
+            [
+                {"hypothesis_id": "H1", "statement": "Struct one."},
+                {"hypothesis_id": "H2", "statement": "Struct two."},
+            ]
+        ),
+    }
+    commit_experiment_hypotheses(SimpleNamespace(state=state3, user_content=None))
+    statements3 = [r["statement"] for r in state3["hypothesis_refs"]]
+    assert statements3 == ["Struct one.", "Struct two."]
 
 
 def test_commit_experiment_hypotheses_prefers_graph_over_text(monkeypatch):
-    """When lengths tie at 1, max() keeps the first equal candidate (graph)."""
+    """The graph is first in the fixed source order — it beats prose."""
     from CoScientist.experiments.hypotheses import commit_experiment_hypotheses
 
     _patch_research_graph(monkeypatch, ["Only graph hypothesis."])
@@ -461,7 +471,7 @@ def test_commit_experiment_hypotheses_prefers_graph_over_text(monkeypatch):
 
 
 def test_commit_experiment_hypotheses_prefers_fc_over_struct(monkeypatch):
-    """Equal-length FC and struct: max() keeps FC (earlier in the candidate list)."""
+    """FC (successful research_commit stash) precedes struct in the fixed order."""
     from CoScientist.experiments.hypotheses import commit_experiment_hypotheses
 
     _patch_research_graph(monkeypatch, [])
@@ -482,8 +492,8 @@ def test_commit_experiment_hypotheses_prefers_fc_over_struct(monkeypatch):
     assert statements == ["FC alpha.", "FC beta."]
 
 
-def test_commit_experiment_hypotheses_prefers_longer_text_over_graph(monkeypatch):
-    """Explicit max-by-length: 5 prose refs beat 1 graph node."""
+def test_commit_experiment_hypotheses_graph_beats_longer_text(monkeypatch):
+    """Graph-first is absolute: 1 graph node beats 5 prose refs."""
     from CoScientist.experiments.hypotheses import commit_experiment_hypotheses
 
     _patch_research_graph(monkeypatch, ["Only graph hypothesis."])
@@ -493,9 +503,23 @@ def test_commit_experiment_hypotheses_prefers_longer_text_over_graph(monkeypatch
     state: dict = {"hypotheses": prose}
     commit_experiment_hypotheses(SimpleNamespace(state=state, user_content=None))
     refs = state["hypothesis_refs"]
-    assert len(refs) == 5
-    assert refs[0]["statement"] == "Prose filler number 1 works."
-    assert refs[-1]["statement"] == "Prose filler number 5 works."
+    assert len(refs) == 1
+    assert refs[0]["hypothesis_id"] == "H1"
+    assert refs[0]["statement"] == "Only graph hypothesis."
+
+
+def test_commit_experiment_hypotheses_skips_postponed_graph_nodes(monkeypatch):
+    from CoScientist.experiments.hypotheses import commit_experiment_hypotheses
+
+    _patch_research_graph(
+        monkeypatch,
+        ["Active KRAS hypothesis.", "Postponed leftover duplicate."],
+        statuses=["formulated", "postponed"],
+    )
+    state: dict = {"hypotheses": ""}
+    commit_experiment_hypotheses(SimpleNamespace(state=state, user_content=None))
+    refs = state["hypothesis_refs"]
+    assert [r["statement"] for r in refs] == ["Active KRAS hypothesis."]
 
 
 def test_commit_experiment_hypotheses_all_sources_empty_falls_back_to_h1(monkeypatch):

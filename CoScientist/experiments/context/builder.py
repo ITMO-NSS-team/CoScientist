@@ -59,9 +59,13 @@ _REPO_URL_RE = re.compile(
 )
 _PROMPT_OPTIONAL_KEYS = (
     "research_focus_id", "research_context", "hypotheses", "hypothesis_refs", "prior_results",
+    "prior_evidence", "confirmation_criteria",
     "data_refs", "constraints", "operations", "explicit_mcp_servers", "repo_candidates",
     "revision_feedback", "unresolved_gaps",
 )
+# Hypothesis statuses that still need experimental verification (typed read —
+# refuted/postponed/confirmed nodes must not force new plan coverage).
+_SNAPSHOT_ACTIVE_H_STATUSES = frozenset({"formulated", "under_verification"})
 
 def _invocation_session(callback_context: CallbackContext) -> Any:
     inv = getattr(callback_context, "_invocation_context", None) or getattr(
@@ -121,6 +125,129 @@ def _user_text(callback_context: CallbackContext) -> str:
     content = getattr(callback_context, "user_content", None)
     parts = getattr(content, "parts", None) if content is not None else None
     return "\n".join(c for p in (parts or []) if (c := getattr(p, "text", ""))).strip()
+
+
+def _artifact_ref(node_attrs: dict[str, Any]) -> str:
+    for key in ("source_ref", "path", "location", "url"):
+        if val := str(node_attrs.get(key) or "").strip():
+            return val
+    return ""
+
+
+def research_graph_snapshot(callback_context: CallbackContext) -> dict[str, Any]:
+    """Typed, deterministic snapshot of the session research graph for the planner.
+
+    Reads nodes BY TYPE (no prose parsing): active Hypothesis nodes committed by
+    HypothesesAgent, the ContextInit frame star (Constraint / EmpiricalBase /
+    ConfirmationCriteria) and prior Evidence/GeneratedData facts. Best-effort by
+    contract: a disabled, empty or broken graph yields {} and planning proceeds
+    on the session/text fallbacks — the snapshot must never raise.
+    """
+    try:
+        from CoScientist.config import get_settings
+
+        if not get_settings().research_graph.enabled:
+            return {}
+    except Exception:  # noqa: BLE001
+        return {}
+    # No ADK session (bare unit-test contexts) → no session-scoped graph.
+    if _invocation_session(callback_context) is None:
+        return {}
+    try:
+        from CoScientist.graph.research.store import get_research_graph
+
+        store = get_research_graph(callback_context)
+        if store.is_empty():
+            return {}
+        nodes = store.full().get("nodes", []) or []
+        rendered = str(store.overview().get("rendered") or "")
+    except Exception:  # noqa: BLE001
+        return {}
+
+    hypothesis_refs: list[dict[str, str]] = []
+    constraints: list[dict[str, Any]] = []
+    criteria: list[dict[str, Any]] = []
+    data_refs: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        ntype = node.get("type")
+        attrs = node.get("attrs") or {}
+        status = str(node.get("status") or "")
+        if ntype == "Hypothesis":
+            if status not in _SNAPSHOT_ACTIVE_H_STATUSES:
+                continue
+            statement = str(attrs.get("formulation") or attrs.get("label") or "").strip()
+            if not statement or len(hypothesis_refs) >= _MAX_HYPOTHESIS_REFS:
+                continue
+            hid = str(node.get("id") or "").strip().upper()
+            if not re.fullmatch(r"H\d+", hid):
+                hid = f"H{len(hypothesis_refs) + 1}"
+            hypothesis_refs.append({
+                "hypothesis_id": hid,
+                "statement": re.sub(r"\s+", " ", statement)[:800],
+            })
+        elif ntype == "Constraint":
+            if content := str(attrs.get("content") or "").strip():
+                constraints.append({
+                    "kind": "constraint",
+                    "subtype": str(attrs.get("subtype") or ""),
+                    "content": content[:_DESC_LIMIT],
+                })
+        elif ntype == "ConfirmationCriteria":
+            row = {k: v for k, v in attrs.items() if v not in (None, "", [], {})}
+            if row:
+                criteria.append(_bounded(row, 8))
+        elif ntype == "EmpiricalBase":
+            if ref := _artifact_ref(attrs):
+                data_refs.append({
+                    "kind": "empirical_base",
+                    "base_type": str(attrs.get("base_type") or ""),
+                    "source_ref": ref,
+                })
+        elif ntype in ("Evidence", "GeneratedData"):
+            content = str(attrs.get("content") or attrs.get("description") or "").strip()
+            ref = _artifact_ref(attrs)
+            if not content and not ref:
+                continue
+            evidence.append({
+                "node_id": str(node.get("id") or ""),
+                "kind": "generated_data" if ntype == "GeneratedData" else "evidence",
+                "subtype": str(attrs.get("subtype") or ""),
+                "content": content[:_DESC_LIMIT],
+                "source_ref": ref,
+                "status": status,
+            })
+    snapshot = {
+        "hypothesis_refs": hypothesis_refs[:_MAX_HYPOTHESIS_REFS],
+        "constraints": constraints[:20],
+        "confirmation_criteria": criteria[:8],
+        "data_refs": data_refs[:20],
+        "prior_evidence": evidence[:8],
+        "rendered": rendered[:4000],
+    }
+    return {key: value for key, value in snapshot.items() if value}
+
+
+def _merge_constraint_rows(
+    frame_rows: list[dict[str, Any]], graph_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Frame rows first, then graph-only rows; dedup by (subtype, content)."""
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in [*frame_rows, *graph_rows]:
+        if not isinstance(row, dict):
+            continue
+        key = (
+            str(row.get("subtype") or "").strip().lower(),
+            re.sub(r"\s+", " ", str(row.get("content") or "").strip().lower()),
+        )
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
 
 
 def _constraints_from_state(state: Any) -> list[dict[str, Any]]:
@@ -452,6 +579,8 @@ def _prompt_context(context: dict[str, Any]) -> str:
         ],
     }
     for key in _PROMPT_OPTIONAL_KEYS:
+        if key == "hypotheses" and context.get("hypothesis_refs"):
+            continue
         if (val := context.get(key)) not in (None, "", [], {}):
             slim[key] = val
     preferred = context.get("preferred_mcp_capabilities") or []
@@ -592,6 +721,12 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
     if not preferred:
         preferred = _normalize_capabilities(state.get(DISCOVERED_CAPABILITIES_KEY))
     planner_caps = capabilities if capabilities else preferred
+    # Graph-first science input: typed nodes committed by previous agents
+    # (ContextInit frame, HypothesesAgent H, prior Evidence). Empty when the
+    # graph is disabled/empty — session/text fallbacks below still apply.
+    snapshot = research_graph_snapshot(callback_context)
+    # Typed snapshot fields go into the planner JSON. Do not also dump the
+    # whole-graph prose overview — it duplicates nodes and blows the first turn.
     research_context = str(state.get("research_context") or "")[:4000]
     gaps = _bounded(state.get("experiment_unresolved_gaps") or [], 20)
     if not isinstance(gaps, list):
@@ -631,17 +766,45 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
     )
     if repo_candidates:
         state["experiment_repo_candidates"] = repo_candidates
-    constraints = _constraints_from_state(state)
+    constraints = _merge_constraint_rows(
+        _constraints_from_state(state), snapshot.get("constraints") or [],
+    )
     if operations:
         state["experiment_operations"] = operations
+    # Hypotheses source order is fixed: graph nodes → refs already published by
+    # the HypothesesAgent bridge → text/legacy extraction as the last fallback.
+    published_refs = [
+        r for r in (state.get("hypothesis_refs") or [])
+        if isinstance(r, dict) and str(r.get("statement") or "").strip()
+    ]
+    hypothesis_refs = (
+        snapshot.get("hypothesis_refs")
+        or published_refs
+        or extract_hypothesis_refs(source_request, legacy_hypotheses=state.get("hypotheses"))
+    )
+    session_data_refs = [
+        r for r in (state.get("experiment_data_refs") or []) if isinstance(r, dict)
+    ]
+    seen_data_refs = {
+        str(r.get("source_ref") or r.get("ref") or "").strip() for r in session_data_refs
+    }
+    data_refs = [
+        *session_data_refs,
+        *[
+            row for row in (snapshot.get("data_refs") or [])
+            if str(row.get("source_ref") or "").strip() not in seen_data_refs
+        ],
+    ]
     context = {
         "experiment_run_id": run_id, "source_request": source_request,
         "research_focus_id": state.get("research_focus_id"), "research_context": research_context,
         "hypotheses": _bounded(state.get("hypotheses") or [], 8),
-        "hypothesis_refs": extract_hypothesis_refs(source_request, legacy_hypotheses=state.get("hypotheses")),
+        "hypothesis_refs": hypothesis_refs,
         "operations": _bounded(operations, 8),
         "prior_results": _bounded(state.get("experiment_task_results") or [], 8),
-        "data_refs": _bounded(state.get("experiment_data_refs") or [], 20),
+        "prior_evidence": _bounded(snapshot.get("prior_evidence") or [], 8),
+        "confirmation_criteria": _bounded(snapshot.get("confirmation_criteria") or [], 8),
+        "data_refs": _bounded(data_refs, 20),
         "constraints": _bounded(constraints, 20),
         "available_mcp_capabilities": planner_caps,
         "available_research_capabilities": declared_family_capabilities(FAMILY_RESEARCH),
@@ -666,6 +829,7 @@ __all__ = [
     "DISCOVERED_CAPABILITIES_KEY", "RETRIEVED_CAPABILITIES_KEY",
     "build_experiment_context", "enforce_experiment_retrieval_budget",
     "extract_hypothesis_refs", "extract_repo_candidates",
+    "research_graph_snapshot",
     "resolve_repo_candidates",
     "reset_experiment_retrieval_budget",
     "skip_executor_without_runtime", "snapshot_experiment_discovered_capabilities",

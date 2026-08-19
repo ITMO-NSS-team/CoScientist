@@ -131,6 +131,17 @@ class SessionAgent(LlmAgent):
         pipeline moves on. Default: nothing."""
         return iter(())
 
+    def _should_run_review(self) -> bool:
+        """Whether this turn enters ``_review_decision``.
+
+        Default: only when a handler is wired *and* the global HITL switch is
+        on. Experiment plan/result review overrides this so deterministic
+        validate + ``initialize_runtime`` still run in headless smokes
+        (``HITL__ENABLED`` off, ``COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE=1``).
+        """
+        from CoScientist.config import get_settings
+        return bool(self.hitl_handler and get_settings().web.hitl_enabled)
+
     async def _review_decision(self, ctx: InvocationContext, output_text) -> HITLResponse:
         """One review round with the human; returns the final decision.
 
@@ -262,16 +273,16 @@ class SessionAgent(LlmAgent):
 
                 logger.info("%s: plan critic approved the output", self.name)
 
-            from CoScientist.config import get_settings
-            hitl_on = bool(self.hitl_handler and get_settings().web.hitl_enabled)
-
-            if not hitl_on or final_event is None:
-                # No HITL or not a final event (e.g. tool call): just pass and exit
-                if not hitl_on:
-                    logger.info(
-                        "%s: HITL disabled (hitl_enabled=False) — "
-                        "output passed through without human review", self.name,
-                    )
+            if not self._should_run_review():
+                # No HITL (or a subclass that opted out): pass the model output
+                # through. Do not treat a missing final-event flag as "skip
+                # review" — some providers emit the plan as a non-final text
+                # event; subclasses that must review still get the usable text
+                # below after synthesizing a final event.
+                logger.info(
+                    "%s: HITL disabled (hitl_enabled=False) — "
+                    "output passed through without human review", self.name,
+                )
                 if final_event is not None:
                     yield final_event
                     for extra in self._post_final_events(ctx, output_text):

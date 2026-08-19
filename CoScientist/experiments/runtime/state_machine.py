@@ -37,7 +37,6 @@ from CoScientist.experiments.runtime.errors import ExperimentRuntimeError
 from CoScientist.experiments.runtime.readiness import TERMINAL_TASK_STATES, refresh_readiness
 from CoScientist.experiments.runtime.routing import (
     fill_server_urls,
-    inventory_covers_task,
     match_session_inventory_tool,
     mcp_routes_tried,
     session_inventory_nonempty,
@@ -501,7 +500,7 @@ def start_task(
         raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
 
     task_model = ExperimentTask.model_validate(task_runtime["task"])
-    if route == ExecutionRoute.CODER.value:
+    if route == ExecutionRoute.CODER.value and not mcp_routes_tried(task_runtime):
         from CoScientist.experiments.capabilities.inventory import match_named_family_capability
 
         blob = task_coverage_blob(state, task_model)
@@ -528,15 +527,6 @@ def start_task(
                 "reason": f"named_family_rewrote_coder:{family_hit.get('tool')}",
             })
             _audit(f"EXPERIMENT_CODER_REWRITTEN_TO_FAMILY task_id={task_id} route={route}")
-        elif mcp_routes_tried(task_runtime) and inventory_covers_task(state, task_model):
-            _audit(
-                f"EXPERIMENT_SKIP_CODER_INVENTORY task_id={task_id} "
-                "reason=mcp_routes_exhausted"
-            )
-            return _complete_as_skipped(
-                state, task_id,
-                "Ready MCP inventory already tried; coder is disabled for this slot.",
-            )
         elif session_inventory_nonempty(state) and (
             matched := match_session_inventory_tool(state, task_model, blob)
         ):
@@ -1000,23 +990,6 @@ def fallback_task(
                 "Durable family evidence already exists for this task; "
                 "do not fallback to coder. record_result(success) instead.",
             )
-        task_model = ExperimentTask.model_validate(task_runtime["task"])
-        if inventory_covers_task(state, task_model):
-            _audit(
-                f"EXPERIMENT_SKIP_CODER_INVENTORY task_id={task_id} "
-                "reason=fallback_blocked"
-            )
-            skipped = _complete_as_skipped(
-                state, task_id,
-                "Ready MCP inventory already tried; coder is disabled for this slot.",
-            )
-            skipped.update({
-                "task_id": task_id,
-                "route": task_runtime["current_route"],
-                "next_action": "get_experiment_plan",
-                "message": skipped["task_result"]["summary"],
-            })
-            return skipped
     if not _route_enabled(route, cfg):
         raise ExperimentRuntimeError("route_disabled", f"Fallback route {route!r} is disabled.")
     task_runtime["current_route"] = route

@@ -890,6 +890,18 @@ def _web_search_limiter():
     return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
 
 
+def _count_research_searches():
+    from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
+    from CoScientist.config import get_settings
+    return SearchLimiter(max_searches=get_settings().web.max_searches).record_search_result
+
+
+def _reset_research_searches():
+    from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
+    from CoScientist.config import get_settings
+    return SearchLimiter(max_searches=get_settings().web.max_searches).reset_search_budget
+
+
 def _sanitize_json_output():
     from CoScientist.agents.callbacks import sanitize_json_output
     return sanitize_json_output
@@ -1014,6 +1026,8 @@ _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model(
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
+_cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research_searches())
+_cb("reset_research_searches", "before_agent", factory=lambda ctx: _reset_research_searches())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 # End the planner's turn once its plan is registered, so it cannot loop

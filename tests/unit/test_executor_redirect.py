@@ -17,6 +17,7 @@ from CoScientist.agents.callbacks import (  # noqa: E402
     after_tool_reranker_agent,
     make_unknown_tool_guard,
     redirect_when_no_tools,
+    resolve_hallucinated_tool,
 )
 from CoScientist.agents.callbacks.tool_callbacks import (  # noqa: E402
     NO_MATCHING_TOOL_TOKEN,
@@ -125,3 +126,43 @@ def test_plain_text_response_passes_through():
     guard = make_unknown_tool_guard(_CODER_TOOLS)
     resp = LlmResponse(content=types.Content(role="model", parts=[types.Part(text="done")]))
     assert guard(SimpleNamespace(agent_name="CoderAgent"), resp) is None
+
+
+_RESEARCH_TOOLS = [
+    "download_papers_from_search",
+    "explore_chemistry_database",
+    "explore_my_papers",
+    "search_papers",
+    "tavily_search",
+]
+
+
+def test_explore_scientific_database_rewrites_to_search_papers():
+    assert resolve_hallucinated_tool(
+        "explore_scientific_database", _RESEARCH_TOOLS,
+    ) == "search_papers"
+    guard = make_unknown_tool_guard(_RESEARCH_TOOLS)
+    out = guard(
+        SimpleNamespace(agent_name="ResearchAgent"),
+        _fc_response(
+            "explore_scientific_database",
+            {"task": "Review GSK-3β inhibitor literature"},
+        ),
+    )
+    assert out is not None
+    fc = out.content.parts[0].function_call
+    assert fc.name == "search_papers"
+    assert fc.args["query"] == "Review GSK-3β inhibitor literature"
+    assert "do not exist" not in str(getattr(out.content.parts[0], "text", "") or "")
+
+
+def test_unknown_tool_prefers_alias_over_fuzzy_chemistry_name():
+    """Nearest string is explore_chemistry_database; literature intent wins."""
+    assert resolve_hallucinated_tool(
+        "explore_scientific_database",
+        ["explore_chemistry_database"],
+    ) == "explore_chemistry_database"
+
+
+def test_shell_program_is_not_rewritten_to_a_nearby_tool():
+    assert resolve_hallucinated_tool("find", _CODER_TOOLS) is None

@@ -119,9 +119,10 @@ SCIENCE-FIRST:
    Leftover MCP for a different operation is not coverage. Copy
    experiment_context.constraints (from the research frame) into
    assumptions/risks when they constrain methods; do not re-elicit the frame.
-   On critique revise for uncovered operations or hypothesis_refs: ADD a
-   non-optional task for that slot; do not drop other frame operations
-   to make the ids fit.
+   On critique revise: uncovered OP-n → add one required task for that
+   operation_id. Uncovered hypothesis_refs → hang them on an existing
+   required task (also_tests); do not add a second required task for the
+   same operation_ref. Do not drop other frame operations to make ids fit.
 5. plan.hypothesis = short summary; details in hypotheses + task design.
 6. methods MUST be a JSON array of strings, never one numbered prose string.
    Hypotheses: only schema fields — no type/test_strategy/testable_prediction.

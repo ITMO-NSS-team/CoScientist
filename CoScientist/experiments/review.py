@@ -29,6 +29,20 @@ _OK_TASK_STATUSES = frozenset({"done", "done_with_warnings", "skipped"})
 _EVIDENCE_ROUTES = frozenset({"research", "medical"})
 
 
+def _publish_approved_plan_to_graph(ctx: InvocationContext, state: Any) -> None:
+    """Best-effort: mirror the approved plan into the research graph
+    (VerificationMethod per task + Hypothesis —tested_by→ VM). A graph failure
+    must never break the approve itself."""
+    try:
+        from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+        from CoScientist.graph.research.store import get_research_graph
+
+        publish_plan_to_graph(get_research_graph(ctx), state)
+    except Exception as exc:  # noqa: BLE001 — approve wins over graph mirroring
+        audit(logger, f"EXPERIMENT_GRAPH_PLAN_PUBLISH_FAILED error={exc}",
+              level=logging.WARNING)
+
+
 def result_tasks_ok(runtime: dict[str, Any] | None) -> bool:
     """Compute tasks must succeed. Failed literature/medical is ok if unused as input."""
     tasks = (runtime or {}).get("tasks") or {}
@@ -264,6 +278,12 @@ class ExperimentReviewSessionAgent(SessionAgent):
         self._deterministic_revisions = 0
         self._inventory_blocker_hits = 0
 
+    def _should_run_review(self) -> bool:
+        # Deterministic schema/critique + initialize_runtime live in
+        # ``_review_plan``. They must run even when the global HITL switch is
+        # off; headless auto-approve then skips the human console.
+        return self.hitl_handler is not None
+
     def _review_output(self, output_text: Any) -> str:
         if self.review_kind != "plan":
             return str(output_text)
@@ -381,6 +401,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
         initialize_runtime(state, plan, critique=critique_json)
         if _headless_auto_approve():
             approve_plan(state)
+            _publish_approved_plan_to_graph(ctx, state)
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=headless_auto plan_id={plan.plan_id} phase=execution")
             return _auto_approve_response()
 
@@ -391,6 +412,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
         ))
         if response.approved:
             approve_plan(state)
+            _publish_approved_plan_to_graph(ctx, state)
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=human plan_id={plan.plan_id} phase=execution")
         return response
 

@@ -245,10 +245,10 @@ agents:
     output_key: search_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
+      before_agent: [before_get_task, inject_research_context, reset_research_searches]
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
-      after_tool: [log_research_tool_calls]
+      after_tool: [log_research_tool_calls, count_research_searches]
       after_model: [guard_unknown_tools]
     hitl: true
     a2a:

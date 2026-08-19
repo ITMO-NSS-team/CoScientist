@@ -301,9 +301,13 @@ def _alembic_started_state() -> dict:
 class _FakeResearchGraph:
     """Minimal stand-in for the research graph store used by hypotheses.py."""
 
-    def __init__(self, hypothesis_statements: list[str]):
+    def __init__(self, hypothesis_statements: list[str], statuses: list[str] | None = None):
         self._nodes = [
-            (f"H{i}", {"type": "Hypothesis", "attrs": {"formulation": s}})
+            (f"H{i}", {
+                "type": "Hypothesis",
+                "status": (statuses[i - 1] if statuses and i <= len(statuses) else ""),
+                "attrs": {"formulation": s},
+            })
             for i, s in enumerate(hypothesis_statements, start=1)
         ]
 
@@ -311,10 +315,12 @@ class _FakeResearchGraph:
         return list(self._nodes)
 
 
-def _patch_research_graph(monkeypatch, statements: list[str]) -> None:
+def _patch_research_graph(
+    monkeypatch, statements: list[str], statuses: list[str] | None = None,
+) -> None:
     import CoScientist.graph.research.store as research_store
 
-    graph = _FakeResearchGraph(statements)
+    graph = _FakeResearchGraph(statements, statuses=statuses)
     monkeypatch.setattr(
         research_store,
         "get_research_graph",

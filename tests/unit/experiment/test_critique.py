@@ -352,3 +352,31 @@ def test_critique_flags_uncovered_frame_operations():
         i.severity == "major" and "Frame operations uncovered" in i.message and "OP-2" in i.message
         for i in critique.issues
     )
+
+
+def test_critique_allows_multiple_hypotheses_on_one_operation_via_also_tests():
+    task = _task("EXP-1")
+    task["design"]["hypothesis_ref"] = "H1"
+    task["design"]["also_tests"] = ["H2", "H3"]
+    task["design"]["operation_ref"] = "OP-1"
+    plan = _plan(
+        task,
+        hypotheses=[
+            {"hypothesis_id": "H1", "statement": "Claim one."},
+            {"hypothesis_id": "H2", "statement": "Claim two."},
+            {"hypothesis_id": "H3", "statement": "Claim three."},
+        ],
+    )
+    critique = critique_plan(
+        plan,
+        settings=ExperimentsSettings(),
+        available_tools=_inventory(),
+        hypothesis_refs=[
+            {"hypothesis_id": "H1", "statement": "Claim one."},
+            {"hypothesis_id": "H2", "statement": "Claim two."},
+            {"hypothesis_id": "H3", "statement": "Claim three."},
+        ],
+        operations=[{"operation_id": "OP-1", "statement": "Suggest molecules."}],
+    )
+    assert not any("uncovered by non-optional" in i.message for i in critique.issues)
+    assert not any("share the same operation_ref" in i.message for i in critique.issues)

@@ -110,15 +110,25 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert "ResearchAgent" in config.agent("ExperimentExecutorAgent").subordinates
     assert "MedicalAgent" in config.agent("ExperimentExecutorAgent").subordinates
     assert "ResearchAgent" in orch.subordinates
+    research = config.agent("ResearchAgent")
+    assert "reset_research_searches" in research.callbacks.before_agent
+    assert research.callbacks.after_tool == [
+        "log_research_tool_calls",
+        "count_research_searches",
+    ]
     assert "MedicalAgent" in orch.subordinates
     mcp_builder = config.agent("McpBuilderAgent")
     assert mcp_builder.callbacks.before_tool == ["pin_alembic_build_args"]
     assert mcp_builder.callbacks.after_tool == ["await_alembic_job_if_experiment"]
-    fedot_before = config.agent("FedotAgent").callbacks.before_agent
+    fedot = config.agent("FedotAgent")
+    fedot_before = fedot.callbacks.before_agent
     assert "refuse_when_fedot_deliverable" in fedot_before
     assert "inject_upstream_artifacts" not in fedot_before
     assert "refuse_when_fedot_deliverable" in config.agent("CoderAgent").callbacks.before_agent
-    assert config.agent("FedotAgent").callbacks.before_tool == ["pin_fedot_alembic_task"]
+    assert fedot.callbacks.before_tool == ["pin_fedot_alembic_task"]
+    assert fedot.prompt == "experiment_fedot_route"
+    assert "task_tracker" not in (fedot.tools or [])
+    assert "task_tracker" not in (config.agent("ExperimentAgent").tools or [])
     assert config.agent("ExperimentExecutorAgent").callbacks.before_tool == [
         "guard_experiment_route"
     ]
@@ -181,10 +191,29 @@ def test_planner_and_coder_prompts_cover_multi_h_and_anti_fabrication():
     assert "different-family" in planner
     assert "Cover every distinct operation" in retriever
     assert "one non-optional" in planner and "distinct target" in planner
+    assert "also_tests" in planner
+    assert "Uncovered hypothesis_refs" in planner
     assert "ANTI-FABRICATION" in coder
     assert "hardcoded" in coder.lower()
     assert "simulated/hardcoded" in executor.lower() or "fabricated" in executor.lower()
     assert "phase is still" in executor and "reporting" in executor
+
+
+def test_research_prompt_opens_literature_with_search_papers():
+    from unittest.mock import MagicMock
+
+    from CoScientist.agents.prompts.templates import research
+
+    ctx = MagicMock()
+    ctx.has_tool.side_effect = lambda key: key in {"paper_analysis", "papers_search"}
+    ctx.render_tools.return_value = ""
+    ctx.render_hitl.return_value = ""
+    prompt = research(ctx)
+    assert "call `search_papers` first" in prompt
+    assert "ALWAYS call `explore_chemistry_database`" not in prompt
+    assert "Do not open a literature review with this tool" in prompt
+    assert "Never invent tool names" in prompt
+    assert "immediately fall back to `tavily_search`" in prompt
 
 
 def test_fedot_tool_skips_legacy_hard_stop_for_experiment_runtime(monkeypatch):

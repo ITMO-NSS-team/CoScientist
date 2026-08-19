@@ -260,3 +260,131 @@ def test_planner_context_reads_numbered_frame_operations():
     assert ids == ["OP-1", "OP-2", "OP-3", "OP-4", "OP-5", "OP-6"]
     assert "Fit six predictive models" in ops[3]["statement"]
     assert not any("Conclusions and limitations" in row["statement"] for row in ops)
+
+
+# ── research_graph_snapshot (Task: graph-first snapshot) ─────────────────────
+
+class _FakeSnapshotGraph:
+    """Minimal research store stand-in exposing full()/overview()/is_empty()."""
+
+    def __init__(self, nodes, *, rendered="rendered overview"):
+        self._nodes = nodes
+        self._rendered = rendered
+
+    def is_empty(self):
+        return not self._nodes
+
+    def full(self):
+        return {"nodes": self._nodes}
+
+    def overview(self):
+        return {"rendered": self._rendered, "nodes": self._nodes}
+
+
+def _snapshot_ctx(monkeypatch, store, *, enabled=True):
+    import CoScientist.graph.research.store as research_store
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.context import builder
+
+    monkeypatch.setattr(get_settings().research_graph, "enabled", enabled, raising=False)
+    monkeypatch.setattr(research_store, "get_research_graph", lambda ctx: store)
+    # research_graph_snapshot requires an ADK session; fake a truthy one.
+    monkeypatch.setattr(builder, "_invocation_session", lambda ctx: object())
+    return SimpleNamespace(state={}, user_content=None)
+
+
+def test_research_graph_snapshot_reads_typed_nodes(monkeypatch):
+    from CoScientist.experiments.context.builder import research_graph_snapshot
+
+    nodes = [
+        {"id": "H1", "type": "Hypothesis", "status": "formulated",
+         "attrs": {"formulation": "Compound X inhibits target Y."}},
+        {"id": "H2", "type": "Hypothesis", "status": "refuted",
+         "attrs": {"formulation": "Refuted idea should be skipped."}},
+        {"id": "C1", "type": "Constraint", "status": "active",
+         "attrs": {"subtype": "budget", "content": "Stay under 4 GPU-hours."}},
+        {"id": "CC1", "type": "ConfirmationCriteria", "status": "not_met",
+         "attrs": {"metric": "auc", "threshold": 0.8}},
+        {"id": "EB1", "type": "EmpiricalBase", "status": "active",
+         "attrs": {"base_type": "dataset", "source_ref": "s3://bucket/data.csv"}},
+        {"id": "E1", "type": "Evidence", "status": "obtained",
+         "attrs": {"subtype": "computational", "content": "Prior AUC 0.72.",
+                   "source_ref": "s3://bucket/run1.json"}},
+    ]
+    ctx = _snapshot_ctx(monkeypatch, _FakeSnapshotGraph(nodes))
+    snap = research_graph_snapshot(ctx)
+
+    assert [h["hypothesis_id"] for h in snap["hypothesis_refs"]] == ["H1"]
+    assert snap["hypothesis_refs"][0]["statement"] == "Compound X inhibits target Y."
+    assert snap["constraints"][0]["content"] == "Stay under 4 GPU-hours."
+    assert snap["confirmation_criteria"][0]["threshold"] == 0.8
+    assert snap["data_refs"][0]["source_ref"] == "s3://bucket/data.csv"
+    assert snap["prior_evidence"][0]["node_id"] == "E1"
+    assert snap["rendered"] == "rendered overview"
+
+
+def test_research_graph_snapshot_empty_when_disabled(monkeypatch):
+    from CoScientist.experiments.context.builder import research_graph_snapshot
+
+    nodes = [{"id": "H1", "type": "Hypothesis", "status": "formulated",
+              "attrs": {"formulation": "Ignored while disabled."}}]
+    ctx = _snapshot_ctx(monkeypatch, _FakeSnapshotGraph(nodes), enabled=False)
+    assert research_graph_snapshot(ctx) == {}
+
+
+def test_research_graph_snapshot_empty_graph(monkeypatch):
+    from CoScientist.experiments.context.builder import research_graph_snapshot
+
+    ctx = _snapshot_ctx(monkeypatch, _FakeSnapshotGraph([]))
+    assert research_graph_snapshot(ctx) == {}
+
+
+def test_research_graph_snapshot_swallows_store_errors(monkeypatch):
+    from CoScientist.experiments.context.builder import research_graph_snapshot
+
+    class _Boom:
+        def is_empty(self):
+            raise RuntimeError("graph unavailable")
+
+    ctx = _snapshot_ctx(monkeypatch, _Boom())
+    assert research_graph_snapshot(ctx) == {}
+
+
+def test_build_experiment_context_prefers_graph_hypotheses(monkeypatch):
+    from CoScientist.experiments.context.builder import build_experiment_context
+
+    nodes = [
+        {"id": "H1", "type": "Hypothesis", "status": "formulated",
+         "attrs": {"formulation": "Graph hypothesis wins."}},
+        {"id": "E1", "type": "Evidence", "status": "obtained",
+         "attrs": {"subtype": "computational", "content": "Prior fact.",
+                   "source_ref": "s3://b/e.json"}},
+    ]
+    ctx = _snapshot_ctx(monkeypatch, _FakeSnapshotGraph(nodes))
+    ctx.state["filtered_tools"] = []
+    # A rich prose ask that would otherwise dominate hypothesis extraction.
+    ctx.state["experiment_source_request"] = (
+        "Hypothesis 1: Prose one.\nHypothesis 2: Prose two.\nHypothesis 3: Prose three."
+    )
+    build_experiment_context(ctx)
+    context = ctx.state["experiment_context"]
+    assert [h["hypothesis_id"] for h in context["hypothesis_refs"]] == ["H1"]
+    assert context["hypothesis_refs"][0]["statement"] == "Graph hypothesis wins."
+    assert context["prior_evidence"][0]["content"] == "Prior fact."
+    prompt = ctx.state["experiment_planner_context"]
+    assert '"hypothesis_refs"' in prompt
+    assert '"hypotheses"' not in prompt
+    assert "rendered overview" not in prompt
+
+
+def test_build_experiment_context_falls_back_without_graph(monkeypatch):
+    from CoScientist.experiments.context.builder import build_experiment_context
+
+    ctx = _snapshot_ctx(monkeypatch, _FakeSnapshotGraph([]))
+    ask = "Hypothesis 1: Prose one works.\nHypothesis 2: Prose two works."
+    ctx.state.update({"filtered_tools": [], "experiment_source_request": ask})
+    ctx.user_content = SimpleNamespace(parts=[SimpleNamespace(text=ask)])
+    build_experiment_context(ctx)
+    refs = ctx.state["experiment_context"]["hypothesis_refs"]
+    assert [r["hypothesis_id"] for r in refs] == ["H1", "H2"]
+    assert refs[0]["statement"] == "Prose one works."

@@ -955,26 +955,40 @@ def test_record_result_accepts_s3_csv_when_planner_name_differs():
     assert state["experiment_runtime"]["tasks"]["EXP-1"]["status"] == "done"
 
 
-def test_fallback_skips_coder_when_bound_inventory_tool_already_tried():
+def test_fallback_reaches_coder_when_bound_inventory_tool_already_tried():
     from CoScientist.experiments.context.builder import RETRIEVED_CAPABILITIES_KEY
 
     task = _task("EXP-1")
     task["description"] = "Train AutoML models to predict LD50 and impute gaps."
     state = _approved_state(_plan(task))
-    start_task(state, "EXP-1")
-    mark_route_returned(state, "FedotAgent")
-    runtime_task = state["experiment_runtime"]["tasks"]["EXP-1"]
-    runtime_task["status"] = "fallback_pending"
-    runtime_task["current_route"] = "react_tools"
-    runtime_task["route_history"].append({"route": "react_tools", "reason": "test"})
     state[RETRIEVED_CAPABILITIES_KEY] = [{
         "tool": "estimate_property",
         "server_id": "srv-chem",
         "description": "ready MCP",
     }]
-    skipped = fallback_task(state, "EXP-1", "want coder")
-    assert skipped["task_result"]["status"] == "skipped"
-    assert state["experiment_runtime"]["tasks"]["EXP-1"]["status"] == "skipped"
+    fail = {
+        "status": "failure",
+        "summary": "Ready MCP returned no usable output.",
+        "criteria_checks": [],
+        "error_code": "empty_result",
+        "error_message": "empty result",
+        "retryable": False,
+    }
+    first = start_task(state, "EXP-1")
+    mark_route_returned(state, "FedotAgent")
+    record_result(state, "EXP-1", first["attempt_id"], fail)
+    assert fallback_task(state, "EXP-1", "FEDOT empty")["route"] == "react_tools"
+    second = start_task(state, "EXP-1")
+    assert second["route_agent"] == "ExperimentAgent"
+    mark_route_returned(state, "ExperimentAgent")
+    record_result(state, "EXP-1", second["attempt_id"], fail)
+    fallback = fallback_task(state, "EXP-1", "want coder")
+    assert fallback["route"] == "coder"
+    assert fallback.get("must_start_task_id") == "EXP-1"
+    assert state["experiment_runtime"]["tasks"]["EXP-1"]["status"] == "ready"
+    started = start_task(state, "EXP-1")
+    assert started["status"] == "success"
+    assert started["route_agent"] == "CoderAgent"
 
 
 def test_start_task_ignores_stuffed_tool_name_when_operation_unnamed():

@@ -354,38 +354,45 @@ def research(ctx: PromptContext) -> str:
 
     steps, n = [], 1
     if paper_analysis:
-        # 1) If user has uploaded papers (S3 keys) analyse them first.
         steps.append(
             f"{n}. For the user's uploaded papers: use `explore_my_papers` ONLY when you "
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_chemistry_database first
-        steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_chemistry_database` before other literature tools. "
-            "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
-        )
-    n += 1
-    
-    # 3) Use papers search
+
     if papers_search:
         steps.append(
-            f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-        + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
-        + " When calling `download_papers_from_search`, aim to find at least *10* "
-        "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
-        "as a single space-separated string, no quotes around phrases. "
-        "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
-        "do not paraphrase, stem, or replace Unicode symbols."
-        "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
+            f"{n}. For a literature / publication / citation review, call `search_papers` "
+            "first (exact name) even when no user papers are uploaded. Never invent names "
+            "such as `explore_scientific_database`. OpenAlex indexes n-grams: pass keywords "
+            "as a single space-separated string, no quotes around phrases. "
+            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
+            "do not paraphrase, stem, or replace Unicode symbols."
+        )
+        n += 1
+        steps.append(
+            f"{n}. If evidence is still insufficient or full text is required: use "
+            "`download_papers_from_search`"
+            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+            + " Aim to find at least *10* papers that might contain the answer. "
+            "If no papers found, retry up to 3 times with shorter or differently-split "
+            "phrase combinations."
         )
         n += 1
 
-    # 4) Final fallback to tavily
+    if paper_analysis:
+        steps.append(
+            f"{n}. Use `explore_chemistry_database` only for chemical-composition / "
+            "internal chemistry-RAG questions, or after `search_papers` if the corpus "
+            "is still insufficient. Do not open a literature review with this tool."
+        )
+        n += 1
+
     if lit:
         steps.append(
-            f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. "
-            "Never use Tavily before the literature tools."
+            f"{n}. If `search_papers` or `download_papers_from_search` error (429, SSL, "
+            "timeout, empty), immediately fall back to `tavily_search`. Do not stop after "
+            "a failed literature-tool call. Never use Tavily before the first literature attempt."
         )
     else:
         steps.append(
@@ -431,6 +438,8 @@ RULES
 - Synthesize findings instead of copying abstracts
 - Be concise, try to fit the answer within 2000 characters
 - Use tools to answer, it is prohibited to answer directly without them
+- Never invent tool names. Copy them exactly from the tool list.
+  `explore_scientific_database` is not a tool; for papers use `search_papers`.
 
 --------------------------------------------------
 OUTPUT FORMAT

@@ -21,6 +21,23 @@ def _call(operation, *args, **kwargs) -> dict[str, Any]:
         return {"status": "error", "error_code": "validation_error", "message": str(exc)}
 
 
+def _mirror_result_to_graph(tool_context: ToolContext, task_id: str, stored: dict[str, Any]) -> None:
+    """Best-effort: mirror a recorded TaskResult into the research graph
+    (Evidence/GeneratedData + VerificationMethod status). Never raises."""
+    try:
+        from CoScientist.experiments.runtime.graph_bridge import publish_result_to_graph
+        from CoScientist.graph.research.store import get_research_graph
+
+        task_result = stored.get("task_result")
+        if not isinstance(task_result, dict):
+            return
+        publish_result_to_graph(
+            get_research_graph(tool_context), tool_context.state, task_id, task_result,
+        )
+    except Exception:  # noqa: BLE001 — the recorded result always wins
+        pass
+
+
 class ExperimentControlToolset(BaseToolset):
     """The only write surface for experiment task/attempt lifecycle."""
 
@@ -60,7 +77,9 @@ class ExperimentControlToolset(BaseToolset):
         differ — name mismatch alone must not fallback to Coder.
         """
         try:
-            return state_machine.record_result(tool_context.state, task_id, attempt_id, result)
+            stored = state_machine.record_result(tool_context.state, task_id, attempt_id, result)
+            _mirror_result_to_graph(tool_context, task_id, stored)
+            return stored
         except ExperimentRuntimeError as exc:
             if exc.code != "result_incomplete" or result.get("status") not in {"success", "partial"}:
                 return exc.as_dict()
@@ -73,6 +92,7 @@ class ExperimentControlToolset(BaseToolset):
             }
             stored = state_machine.record_result(tool_context.state, task_id, attempt_id, downgraded)
             stored.update({"downgraded_from": result.get("status"), "downgrade_reason": "result_incomplete"})
+            _mirror_result_to_graph(tool_context, task_id, stored)
             return stored
         except Exception as exc:
             return {"status": "error", "error_code": "validation_error", "message": str(exc)}
