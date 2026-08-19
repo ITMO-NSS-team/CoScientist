@@ -76,7 +76,7 @@ agents:
       - McpBuilderAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
-      before_agent: [before_get_task, inject_graph_root, inject_research_context, inject_upstream_artifacts]
+      before_agent: [before_get_task, inject_graph_root, inject_research_context]
       # Catch hallucinated tool calls (e.g. the orchestrator inventing a
       # sub-agent's `execute_bash`) and correct them, instead of ADK raising
       # ValueError('Tool not found') and crashing the whole run.
@@ -245,10 +245,10 @@ agents:
     output_key: search_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context, reset_research_searches]
+      before_agent: [before_get_task, inject_research_context]
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
-      after_tool: [log_research_tool_calls, count_research_searches]
+      after_tool: [log_research_tool_calls]
       after_model: [guard_unknown_tools]
     hitl: true
     a2a:
@@ -308,12 +308,7 @@ agents:
     routing: >-
       when the result can be obtained by RUNNING AN EXISTING tool/service.
       Hallmark: "compute/run X using tools we already have."
-    planning: |-
-      Use this as your primary choice for ANY task that can be calculated. 
-      This agent has comprehensive capabilities and must be prioritized over searching whenever possible: 
-        - Any computational task requiring tools
-        - Solves all tasks involving chemistry
-    children: [ToolPreparerAgent, FedotAgent]
+    children: [ToolPreparerAgent, ExperimentAgent]
 
   CoderAgent:
     class: llm
@@ -346,10 +341,7 @@ agents:
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
-      # refuse_when_fedot_deliverable: block a redundant Coder re-entry after
-      # FEDOT already captured the deliverable (never fires while the current
-      # step's tool-match verdict shows genuinely new/different work pending).
-      before_agent: [refuse_when_fedot_deliverable, inject_research_context, inject_dataset_context]
+      before_agent: [inject_research_context, inject_dataset_context]
       #before_model: [hitl_before_model]
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
       # corrective message instead of letting ADK crash the whole run.
@@ -448,8 +440,6 @@ agents:
     tools: [alembic]
     output_key: mcp_build_results
     callbacks:
-      before_tool: [pin_alembic_build_args]
-      after_tool: [await_alembic_job_if_experiment]
       after_model: [guard_unknown_tools]
     a2a:
       key: mcp_builder
@@ -493,10 +483,7 @@ agents:
       before_model: [skip_retriever_context]
       # Not every provider honours response_format: strip prose/```json fences
       # around the JSON before ADK's strict output_schema validation.
-      # collect_reranked_tools_from_model reads scores from the response body —
-      # output_key is often still invisible in after_agent (false best_score=0).
-      after_model: [sanitize_json_output, collect_reranked_tools_from_model]
-      # Fallback if after_model could not parse; no-op when after_model already applied.
+      after_model: [sanitize_json_output]
       after_agent: [collect_reranked_tools]
 
   ToolWebSearcherAgent:
@@ -541,17 +528,15 @@ agents:
       # MinIO PNGs) into state['mcp_artifacts'] so the report collector downloads them.
       after_tool: [capture_mcp_artifacts]
 
-  # TaskExecutorAgent's child (see above). ExperimentAgent above is kept built
-  # but unattached as a fallback path (dynamic_tools ReAct instead of FEDOT.MAS).
+  # Disabled for now — FEDOT.MAS isn't reliable yet. Kept (built, not attached)
+  # so the agent, its prompt and the `fedot` tool stay available; re-enable by
+  # setting enabled: true and making it (instead of ExperimentAgent) the child.
   FedotAgent:
     class: llm
-    enabled: true
+    enabled: false
     description: Agent to invoke FEDOT.MAS for solving given task. Uses MCP tools
     prompt: fedot
     tools: [fedot, task_tracker, graph]
     output_key: fedot_results
     callbacks:
-      # inject_upstream_artifacts: expose columns from a prior MCP artifact
-      # (e.g. generated SMILES) as authoritative inputs for this step's task.
-      # refuse_when_fedot_deliverable: see CoderAgent above — same predicate.
-      before_agent: [redirect_when_no_tools, refuse_when_fedot_deliverable, before_get_task, inject_upstream_artifacts]
+      before_agent: [redirect_when_no_tools, before_get_task]

@@ -27,17 +27,10 @@ def get_multi_agent_tracer():
     if cache_key in _tracers:
         return _tracers[cache_key]
 
-    url_override = settings.opik.url_override
     if api_key:
         os.environ["OPIK_API_KEY"] = api_key
     else:
         os.environ.pop("OPIK_API_KEY", None)
-    if url_override:
-        os.environ["OPIK_URL_OVERRIDE"] = url_override
-    else:
-        os.environ.pop("OPIK_URL_OVERRIDE", None)
-    if project_name:
-        os.environ["OPIK_PROJECT_NAME"] = project_name
 
     import opik
 

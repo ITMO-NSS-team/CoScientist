@@ -13,7 +13,7 @@ from CoScientist.context_init.agent import (
     frame_to_form,
 )
 from CoScientist.context_init.commit import frame_to_init_kwargs, seed_frame
-from CoScientist.context_init.models import CANONICAL_FRAME_BLOCKS, FrameOperation, ResearchFrame
+from CoScientist.context_init.models import CANONICAL_FRAME_BLOCKS, ResearchFrame
 from CoScientist.graph.research import schema
 from CoScientist.graph.research.store import ResearchGraphStore
 
@@ -163,56 +163,3 @@ def test_context_init_agent_cannot_write_others_nodes():
         "ContextInitAgent", "Hypothesis", "formulated", {})
     assert schema.validate_edge(
         "ContextInitAgent", "supports", "Evidence", "Hypothesis")
-
-
-def test_numbered_ask_becomes_frame_operations_and_skips_report():
-    from CoScientist.context_init.agent import coerce_frame
-    from CoScientist.context_init.operations import parse_numbered_operations
-
-    ask = (
-        "Task 4.1. Endpoint profile of plant metabolites. Scientific question. "
-        "Can discarded biomass yield useful compounds? What is required (full cycle). "
-        "1. Literature. Review publications on chemical composition; note data gaps. "
-        "2. Data. Select compounds with experimental presence; standardize structures. "
-        "3. Clustering. Split by molecular similarity; interpret each cluster. "
-        "4. Models. Build predictive models and impute missing endpoint values. "
-        "5. Applicability domain. Quantify reliability for each predicted value. "
-        "6. General toxicity. For the densest cluster predict several toxicity endpoints. "
-        "7. Report. Conclusions with applicability limits; discussion of limitations."
-    )
-    rows = parse_numbered_operations(ask)
-    assert [r.operation_id for r in rows] == ["OP-1", "OP-2", "OP-3", "OP-4", "OP-5", "OP-6"]
-    assert rows[0].statement.startswith("Literature.")
-    assert "Build predictive models" in rows[3].statement
-    frame = coerce_frame({"original_request": ask, "blocks": [], "operations": [
-        {"operation_id": "OP-1", "statement": "one collapsed slot"},
-    ]})
-    assert [op.operation_id for op in frame.operations] == [
-        "OP-1", "OP-2", "OP-3", "OP-4", "OP-5", "OP-6",
-    ]
-
-
-def test_is_evidence_operation_literature_not_mixed_compute():
-    from CoScientist.context_init.operations import is_evidence_operation
-
-    assert is_evidence_operation(
-        "Литература и постановка. Обзор публикаций по химическому составу."
-    )
-    assert is_evidence_operation("Review published literature on the compound class")
-    assert not is_evidence_operation(
-        "Curate a metabolite dataset from literature, then cluster."
-    )
-    assert not is_evidence_operation(
-        "Кластеризация. Разбиение по молекулярному сходству."
-    )
-
-
-def test_apply_form_values_can_edit_operations():
-    from CoScientist.context_init.operations import OPS_FORM_BLOCK
-
-    f = ResearchFrame.blank("q")
-    f.operations = [FrameOperation(operation_id="OP-1", statement="old slot")]
-    out = apply_form_values(f, {OPS_FORM_BLOCK: {"OP-1": "edited literature review"}})
-    assert len(out.operations) == 1
-    assert out.operations[0].statement == "edited literature review"
-

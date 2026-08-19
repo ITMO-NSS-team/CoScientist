@@ -38,28 +38,12 @@ PROJECT_ROOT     = Path(__file__).resolve().parents[2]
 BASE_DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 TOOL_REPO        = "alembic-tool"
 PORT_RANGE       = (20000, 30000)
-def _default_env_file() -> Path:
-    """Prefer CoScientist/.env (project secrets) over a repo-root .env."""
-    for candidate in (
-        PROJECT_ROOT / "CoScientist" / ".env",
-        PROJECT_ROOT / ".env",
-    ):
-        if candidate.exists():
-            return candidate
-    return PROJECT_ROOT / "CoScientist" / ".env"
-
-
-DEFAULT_ENV_FILE = _default_env_file()
+DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
 PASSTHROUGH_ENV = (
     # LLM / agent providers
     "OPENROUTER_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY",
     "GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
-    # OpenAI-compatible gateways (aitunnel, local proxies, …). Without these,
-    # LiteLLM defaults to api.openai.com even when OPENAI_API_KEY is a
-    # non-OpenAI token — and the default MODEL is openrouter/… which then
-    # fails with provider "Access denied by security policy".
-    "OPENAI_API_BASE", "OPENAI_BASE_URL",
     "MODEL", "MODEL_TEMPERATURE", "MODEL_TOP_P",
     "ALEMBIC_TARGET_TASK", "ALEMBIC_TASKS", "STAGE_RESET", "DEBUGGING_ROUNDS",
     "MCP_URLS", "OR_APP_NAME", "FEDOTMAS_DEFAULT_MODEL",

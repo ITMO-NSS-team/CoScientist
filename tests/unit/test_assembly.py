@@ -251,7 +251,7 @@ def test_task_executor_is_a_router_over_both_execution_paths(config, system):
     # router (no A2A card of its own).
     pipeline = config.agent("ToolPipelineAgent")
     assert pipeline.cls == "sequential"
-    assert pipeline.children == ["ToolPreparerAgent", "FedotAgent"]
+    assert pipeline.children == ["ToolPreparerAgent", "ExperimentAgent"]
     assert pipeline.a2a is None
 
     # Execution has ONE entry point on the orchestrator's roster.
