@@ -278,7 +278,9 @@ def build_system(
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,
-                sub_agents=[built[c] for c in cfg.children],
+                sub_agents=[
+                    built[c] for c in cfg.children if config.agent(c).is_enabled()
+                ],
                 **cfg.options,
             )
         else:  # custom:<key>

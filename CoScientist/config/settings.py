@@ -26,6 +26,9 @@ class LLMSettings(BaseModel):
     scenario_url: Optional[str] = None
     main_model: Optional[str] = None
     scenario_model: Optional[str] = None
+    # Passed to LiteLLM for every ADK model call. This prevents an unavailable
+    # provider from holding an external A2A task indefinitely.
+    request_timeout_seconds: float = 90.0
 
     # Dedicated model for the CoderAgent (a stronger model handles its multi-step
     # engineering / tool-use better). Falls back to main_model if unset. The
@@ -124,6 +127,9 @@ class S3Settings(BaseModel):
     access_key: Optional[str] = None
     secret_key: Optional[str] = None
     bucket_name: Optional[str] = None
+    # Cleanup is best effort. It must never hold the external A2A result open
+    # behind a slow or unavailable object-store endpoint.
+    cleanup_timeout_seconds: float = 5.0
 
 
 # =========================

@@ -23,6 +23,59 @@ class SessionAgent(LlmAgent):
     result_state_key: Optional[str] = None
     correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
 
+    @staticmethod
+    def _fallback_plan(ctx: InvocationContext) -> list[dict]:
+        """Create a minimal executable plan when the planner skipped its tool.
+
+        Tool calling is probabilistic even when the instruction explicitly requires
+        ``create_plan``.  The orchestration layer, however, requires durable tasks
+        to continue.  This fallback is deliberately narrow: it is used only for
+        the PlannerAgent's ``active_tasks`` contract and is persisted through the
+        normal task tracker just like a model-generated plan.
+        """
+        query = "the user's request"
+        for event in reversed(getattr(ctx.session, "events", ())):
+            content = getattr(event, "content", None)
+            if not content or getattr(content, "role", None) != "user":
+                continue
+            for part in getattr(content, "parts", ()):
+                text = getattr(part, "text", None)
+                if text:
+                    query = text.strip()
+                    break
+            if query != "the user's request":
+                break
+
+        return [{
+            "title": "Investigate the user request",
+            "description": f"Investigate and answer: {query}",
+            "assignee": "ResearchAgent",
+            "notes": (
+                "Automatically created because PlannerAgent completed without "
+                "calling create_plan."
+            ),
+        }]
+
+    def _ensure_result_state(self, ctx: InvocationContext) -> None:
+        """Ensure the planner has a serializable, executable result state."""
+        if self.result_state_key != "active_tasks":
+            return
+        if self.result_state_key in ctx.session.state:
+            return
+
+        class _StateContext:
+            def __init__(self, state):
+                self.state = state
+
+        outcome = task_tracker_instance.create_plan(
+            self._fallback_plan(ctx), _StateContext(ctx.session.state)
+        )
+        if outcome.get("result") != "success":
+            raise RuntimeError(
+                f"SessionAgent '{self.name}' could not create fallback plan: "
+                f"{outcome.get('message', 'unknown error')}"
+            )
+
     def _apply_state_result(
         self,
         ctx: InvocationContext,
@@ -33,6 +86,8 @@ class SessionAgent(LlmAgent):
             return
 
         state = ctx.session.state
+        if self.result_state_key not in state:
+            self._ensure_result_state(ctx)
         if self.result_state_key not in state:
             raise RuntimeError(
                 f"SessionAgent '{self.name}' cannot return its result: "

@@ -84,6 +84,17 @@ def test_all_agents_built_under_their_names(config, system):
         assert system.agent(name).name == name
 
 
+def test_disabled_sequential_child_is_not_attached(config):
+    """Composite wiring must honour the same enabled flag as AgentTool wiring."""
+    raw = copy.deepcopy(config.model_dump(by_alias=True))
+    raw["agents"]["PlannerAgent"]["enabled"] = False
+    disabled = SystemConfig.model_validate(raw)
+
+    root = build_system(disabled).root
+
+    assert [child.name for child in root.sub_agents] == ["OrchestratorAgent"]
+
+
 def test_orchestrator_roster_matches_prompt_and_tools(config, system):
     orchestrator = system.agent("OrchestratorAgent")
     enabled = [a.name for a in config.enabled_subordinates("OrchestratorAgent")]

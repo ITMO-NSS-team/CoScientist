@@ -98,19 +98,27 @@ hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler()) if hitl_enabled else 
 # The CoderAgent runs on a dedicated (stronger) model — its multi-step tool-use
 # benefits from more capability. Falls back to the main model when unset.
 #
-# Routing mirrors the other agents exactly: the provider prefix in the model
-# string (e.g. "openrouter/qwen/...") selects the provider/base-URL, and the
-# global `litellm.api_key` (set above) carries the key. We deliberately do NOT
-# pass `api_base` here — doing so makes litellm strip the provider prefix, fail
-# to re-infer the provider, and spam "Provider List: ..." warnings.
+# The configured URL is the tenant's OpenAI-compatible LLM proxy. The provider
+# prefix identifies the wire protocol, but does not select this endpoint by
+# itself; omitting ``api_base`` silently falls back to api.openai.com.
 CODER_MODEL = settings.llm.coder_model or settings.llm.main_model
 
 
 def make_llm(model: str = MODEL) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the main model (or an override)."""
-    return RetryingLiteLlm(model=model)
+    return RetryingLiteLlm(
+        model=model,
+        api_base=settings.llm.main_url,
+        api_key=settings.llm.openai_api_key,
+        timeout=settings.llm.request_timeout_seconds,
+    )
 
 
 def make_coder_llm() -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the dedicated coder model."""
-    return RetryingLiteLlm(model=CODER_MODEL)
+    return RetryingLiteLlm(
+        model=CODER_MODEL,
+        api_base=settings.llm.main_url,
+        api_key=settings.llm.openai_api_key,
+        timeout=settings.llm.request_timeout_seconds,
+    )

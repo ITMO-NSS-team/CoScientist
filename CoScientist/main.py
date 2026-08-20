@@ -21,6 +21,7 @@ from google.genai import types
 from CoScientist.config import get_settings
 from CoScientist.agents import orchestrator_agent, root_agent
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
+from CoScientist.cleanup import has_uploaded_papers, run_bounded_cleanup
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.hitl import (
     AbstractHITLHandler,
@@ -128,10 +129,24 @@ class CoScientistManager:
 
     async def close(self):
         """Cleanup session-related resources and uploaded paper artifacts."""
-        try:
-            await asyncio.to_thread(cleanup_uploaded_papers, self.user_id, self.session_id)
-        except Exception as exc:
-            logger.error(f"Warning: failed to cleanup uploaded papers for session {self.session_id}: {exc}")
+        if self.session_service is None:
+            return
+        session = await self.session_service.get_session(
+            app_name=self.app_name,
+            user_id=self.user_id,
+            session_id=self.session_id,
+        )
+        # Most façade requests do not upload papers. Avoid a needless S3 list
+        # request on every terminal A2A path; apart from latency this prevents
+        # an unavailable object store from delaying an otherwise complete run.
+        if not has_uploaded_papers(session):
+            return
+        await run_bounded_cleanup(
+            cleanup_uploaded_papers,
+            self.user_id,
+            self.session_id,
+            settings.s3.cleanup_timeout_seconds,
+        )
 
 # Convenience functions
 async def create_manager() -> CoScientistManager:
