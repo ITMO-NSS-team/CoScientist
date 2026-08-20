@@ -951,7 +951,8 @@ def create_app() -> FastAPI:
             "session": session, "user_id": user_id, "session_id": session_id,
             "events": len(events), "nodes": len(graph.get("nodes") or []),
             "speed": speed,
-            "open": f"/?user={user_id}&session={session_id}",
+            "open": f"/?user_id={user_id}&session_id={session_id}",
+            "graph": f"/graph?user_id={user_id}&session_id={session_id}",
         }, status_code=201)
 
     @app.get("/api/users/{user_id}/sessions/{session_id}")

@@ -2013,9 +2013,14 @@
         const data = await apiJson('/api/users');
         knownUsers = data.users || [];
         populateUserSelectors();
-        const savedUserId = localStorage.getItem(USER_STORAGE_KEY);
+        // A replay link carries the session to open: /?user_id=...&session_id=...
+        // Without this the link is inert and lands on whatever was last used.
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlUserId = urlParams.get('user_id') || urlParams.get('user');
+        const urlSessionId = urlParams.get('session_id') || urlParams.get('session');
+        const savedUserId = urlUserId || localStorage.getItem(USER_STORAGE_KEY);
         let savedUser = knownUsers.find(item => item.id === savedUserId);
-        if (data.defaultUsername) {
+        if (data.defaultUsername && !urlUserId) {
           const envNick = data.defaultUsername.trim().toLowerCase();
           const envUser = knownUsers.find(item => item.nickname.toLowerCase() === envNick);
           if (envUser) {
@@ -2033,7 +2038,8 @@
           openIdentityModal();
           return;
         }
-        await ensureUserSession(savedUser, localStorage.getItem(SESSION_STORAGE_KEY));
+        await ensureUserSession(
+          savedUser, urlSessionId || localStorage.getItem(SESSION_STORAGE_KEY));
       } catch (error) {
         addSystemMsg('Failed to initialize local sessions: ' + error.message);
         openIdentityModal();

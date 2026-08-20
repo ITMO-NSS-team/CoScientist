@@ -53,9 +53,11 @@ def main() -> int:
 
     print(f"replaying {args.recording}")
     print(f"  {data['events']} events, {data['nodes']} graph nodes, {data['speed']:g}x")
-    print(f"\nopen and record this:\n  {args.base.rstrip('/')}{data['open']}")
-    print("\nthe graph view is under the 'research · slide' selector; "
-          "set SLIDE_LANG=en before starting the server for English labels")
+    base = args.base.rstrip("/")
+    print(f"\nchat, record this:\n  {base}{data['open']}")
+    print(f"\ngraph, second tab:\n  {base}{data.get('graph', '')}")
+    print("\npick 'research' in the graph view selector; "
+          "start the server with SLIDE_LANG=en for English labels")
     return 0
 
 

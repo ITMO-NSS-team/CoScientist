@@ -111,16 +111,18 @@ class ReplaySession:
     async def run(self) -> None:
         started = time.time()
         try:
-            await self._emit({"type": "status", "text":
-                              f"Replaying a recorded session at {self.speed:g}x — "
-                              f"every event below was produced by the real run."})
+            await self._emit({"type": "status", "status": "processing",
+                              "message": f"Replaying a recorded session at "
+                                         f"{self.speed:g}x. Every event below was "
+                                         f"produced by the real run."})
             await asyncio.gather(self._play_events(), self._grow_graph())
-            await self._emit({"type": "status", "text": "Replay complete."})
+            await self._emit({"type": "status", "status": "idle",
+                              "message": "Replay complete."})
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a demo must not take the server down
             logger.exception("replay failed")
-            await self._emit({"type": "error", "text": f"replay failed: {exc}"})
+            await self._emit({"type": "error", "message": f"replay failed: {exc}"})
         finally:
             logger.info("replay of %s finished in %.1fs", self.source,
                         time.time() - started)
@@ -129,15 +131,87 @@ class ReplaySession:
         event = {**event, REPLAY_FLAG: self.source}
         self.runtime.record_event(self.key, event)
 
+    @staticmethod
+    def _to_ui(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Recorded agent event -> the shape the browser dispatches on.
+
+        The transcript is written by the agent-event logger, which keys on
+        ``kind``; the UI switches on ``type`` and would silently drop anything
+        else. Nothing is invented here: author, text, tool name, arguments and
+        result are the recorded ones.
+        """
+        if event.get("type"):                     # already a UI event
+            return dict(event)
+        kind = event.get("kind")
+        author = event.get("agent") or "system"
+        stamp = event.get("ts")
+        if kind in ("text", "message", "agent_text", "thought", "final_response"):
+            text = (event.get("text") or "").strip()
+            if not text:
+                return None
+            return {"type": "agent_event", "author": author, "content": text,
+                    "timestamp": stamp, "is_final": kind == "final_response"}
+        if kind in ("user_input", "user", "user_message", "prompt"):
+            text = (event.get("text") or event.get("message") or "").strip()
+            return {"type": "user_message", "message": text,
+                    "timestamp": stamp} if text else None
+        if kind == "tool_error":
+            return {"type": "tool_activity", "phase": "error", "author": author,
+                    "tool": event.get("tool"), "error": event.get("error"),
+                    "call_id": event.get("call_id") or event.get("id"),
+                    "timestamp": stamp}
+        if kind in ("tool_call", "tool_start"):
+            return {"type": "tool_activity", "phase": "call", "author": author,
+                    "tool": event.get("tool"), "args": event.get("args"),
+                    "call_id": event.get("call_id") or event.get("id"),
+                    "timestamp": stamp}
+        if kind in ("tool_result", "tool_end"):
+            failed = str(event.get("status") or "").lower() in ("error", "failed")
+            out = {"type": "tool_activity", "author": author,
+                   "tool": event.get("tool"),
+                   "call_id": event.get("call_id") or event.get("id"),
+                   "timestamp": stamp}
+            if failed:
+                out["phase"], out["error"] = "error", event.get("result")
+            else:
+                out["phase"], out["result"] = "result", event.get("result")
+            return out
+        return None
+
+    @staticmethod
+    def _pair_tool_calls(events: List[Dict[str, Any]]) -> None:
+        """Give each call and its result a shared id, in place.
+
+        The transcript carries no call id, and the tool panel pairs a response
+        to its call by one. Matching the next result for the same agent and
+        tool reproduces the pairing the run actually had.
+        """
+        pending: Dict[Tuple[str, str], str] = {}
+        counter = 0
+        for event in events:
+            key = (str(event.get("agent")), str(event.get("tool")))
+            kind = event.get("kind")
+            if kind == "tool_call":
+                counter += 1
+                pending[key] = f"replay-{counter}"
+                event["call_id"] = pending[key]
+            elif kind in ("tool_result", "tool_end", "tool_error"):
+                event["call_id"] = pending.pop(key, None)
+
     async def _play_events(self) -> None:
+        self._pair_tool_calls(self.events)
         previous = None
         for event in self.events:
             if self.cancelled:
                 return
+            if event.get("kind") == "tool_start":   # duplicate of tool_call
+                continue
             current = _event_time(event)
             await asyncio.sleep(self._sleep_for(previous, current))
             previous = current if current is not None else previous
-            await self._emit(dict(event))
+            translated = self._to_ui(event)
+            if translated is not None:
+                await self._emit(translated)
 
     async def _grow_graph(self) -> None:
         """Insert nodes and edges into the session's live graph, in recorded order."""
