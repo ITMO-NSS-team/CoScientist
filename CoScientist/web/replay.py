@@ -440,8 +440,12 @@ def load_recording(bundle: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         raise FileNotFoundError(f"no research_active.json under {root}")
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
 
-    candidates = list((root / "events").glob("*.jsonl")) if (root / "events").is_dir() else []
-    candidates += list(root.glob("*.jsonl"))
+    # Deterministic, and ``events.jsonl`` wins: a bundle often keeps a second
+    # transcript beside it (an untrimmed original, a variant), and glob order is
+    # filesystem order, so picking the first match silently played the wrong file.
+    candidates = sorted((root / "events").glob("*.jsonl")) if (root / "events").is_dir() else []
+    candidates += sorted(root.glob("*.jsonl"))
+    candidates.sort(key=lambda p: (p.name != "events.jsonl", p.name))
     if not candidates:
         # A session directory under graph_runs/sessions holds the graph; its UI
         # transcript lives beside it under the web-state tree, keyed the same way.

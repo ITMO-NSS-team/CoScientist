@@ -44,7 +44,10 @@ _COMMIT_HINT = ("Fix the listed items and call research_commit again. "
                 "NOTHING from this call was saved.")
 
 # Attrs consulted (in order) when a short human-readable label is needed.
-_LABEL_ATTRS = ("formulation", "content", "synthesis", "name", "title",
+# ``display`` comes first so a node can carry a short form for the viewer while
+# keeping its full text in the attribute the schema names. Nothing sets it
+# automatically; it is for a record meant to be read on a screen.
+_LABEL_ATTRS = ("display", "formulation", "content", "synthesis", "name", "title",
                 "description", "rule", "threshold", "path")
 
 # Priority words accepted in attrs.priority, most important first.
