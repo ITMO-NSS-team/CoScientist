@@ -27,6 +27,11 @@ def main() -> int:
     ap.add_argument("--speed", type=float, default=120)
     ap.add_argument("--gap", type=float, default=2.5,
                     help="longest pause between two steps, seconds")
+    ap.add_argument("--floor", type=float, default=0.4,
+                    help="shortest pause between two steps, seconds; the "
+                         "recording is bursty and this is what spaces it out")
+    ap.add_argument("--warmup", type=float, default=8.0,
+                    help="seconds before the first event, to open the tabs")
     ap.add_argument("--title", default="Recorded study (replay)")
     ap.add_argument("--user", default="", help="user id; the first one by default")
     ap.add_argument("--base", default="http://127.0.0.1:8000")
@@ -34,6 +39,7 @@ def main() -> int:
 
     payload = json.dumps({
         "bundle": args.recording, "speed": args.speed, "max_gap": args.gap,
+        "min_gap": args.floor, "warmup": args.warmup,
         "title": args.title, "user_id": args.user,
     }).encode()
     request = urllib.request.Request(
@@ -53,6 +59,7 @@ def main() -> int:
 
     print(f"replaying {args.recording}")
     print(f"  {data['events']} events, {data['nodes']} graph nodes, {data['speed']:g}x")
+    print(f"  nothing happens for {args.warmup:g}s — open both tabs now")
     base = args.base.rstrip("/")
     print(f"\nchat, record this:\n  {base}{data['open']}")
     print(f"\ngraph, second tab:\n  {base}{data.get('graph', '')}")

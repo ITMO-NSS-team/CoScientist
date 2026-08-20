@@ -910,6 +910,8 @@ def create_app() -> FastAPI:
         user_id = str(data.get("user_id") or "").strip()
         speed = float(data.get("speed") or 120)
         max_gap = float(data.get("max_gap") or 2.5)
+        min_gap = float(data.get("min_gap") or 0.4)
+        warmup = float(data.get("warmup") if data.get("warmup") is not None else 8.0)
         title = str(data.get("title") or "Recorded study (replay)")
 
         try:
@@ -945,7 +947,7 @@ def create_app() -> FastAPI:
 
         replay = ReplaySession(runtime, user_id, session_id, events=events,
                                graph=graph, speed=speed, max_gap=max_gap,
-                               source=bundle)
+                               min_gap=min_gap, warmup=warmup, source=bundle)
         asyncio.create_task(replay.run())
         return JSONResponse({
             "session": session, "user_id": user_id, "session_id": session_id,

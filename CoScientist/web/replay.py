@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -86,13 +87,20 @@ class ReplaySession:
 
     def __init__(self, runtime, user_id: str, session_id: str, *,
                  events: List[Dict[str, Any]], graph: Dict[str, Any],
-                 speed: float, max_gap: float, source: str) -> None:
+                 speed: float, max_gap: float, source: str,
+                 min_gap: float = 0.4, warmup: float = 8.0) -> None:
         self.runtime = runtime
         self.key = (user_id, session_id)
         self.events = events
         self.graph = graph
         self.speed = max(1.0, float(speed))
         self.max_gap = max(0.0, float(max_gap))
+        # A floor, not only a cap. The recording is bursty -- dozens of events
+        # share a second, then nothing for forty minutes -- and replaying that
+        # faithfully dumps the burst in one frame. The floor spaces the burst
+        # out without reordering it.
+        self.min_gap = max(0.0, float(min_gap))
+        self.warmup = max(0.0, float(warmup))
         self.source = source
         self.cancelled = False
 
@@ -104,13 +112,16 @@ class ReplaySession:
         waits in it, and at any honest speed those are still dead air on stage.
         """
         if previous is None or current is None or current < previous:
-            return 0.35
-        return min(self.max_gap, (current - previous) / self.speed)
+            return self.min_gap
+        return max(self.min_gap,
+                   min(self.max_gap, (current - previous) / self.speed))
 
     # ── the run ──────────────────────────────────────────────────────────────
     async def run(self) -> None:
         started = time.time()
         try:
+            if self.warmup:
+                await asyncio.sleep(self.warmup)
             await self._emit({"type": "status", "status": "processing",
                               "message": f"Replaying a recorded session at "
                                          f"{self.speed:g}x. Every event below was "
@@ -131,8 +142,20 @@ class ReplaySession:
         event = {**event, REPLAY_FLAG: self.source}
         self.runtime.record_event(self.key, event)
 
-    @staticmethod
-    def _to_ui(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    #: The recorded commit payloads carry the study's own Russian text. Half
+    #: translating a JSON blob reads worse than not showing it, so a payload
+    #: with Cyrillic in it is displayed as its size instead. The bundle keeps
+    #: the payload itself.
+    _CYRILLIC = re.compile("[\u0410-\u044f\u0401\u0451]")
+
+    @classmethod
+    def _payload(cls, value: Any) -> Any:
+        if isinstance(value, str) and cls._CYRILLIC.search(value):
+            return f"[{len(value)} chars, not shown in the English recording]"
+        return value
+
+    @classmethod
+    def _to_ui(cls, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Recorded agent event -> the shape the browser dispatches on.
 
         The transcript is written by the agent-event logger, which keys on
@@ -157,12 +180,14 @@ class ReplaySession:
                     "timestamp": stamp} if text else None
         if kind == "tool_error":
             return {"type": "tool_activity", "phase": "error", "author": author,
-                    "tool": event.get("tool"), "error": event.get("error"),
+                    "tool": event.get("tool"),
+                    "error": cls._payload(event.get("error")),
                     "call_id": event.get("call_id") or event.get("id"),
                     "timestamp": stamp}
         if kind in ("tool_call", "tool_start"):
             return {"type": "tool_activity", "phase": "call", "author": author,
-                    "tool": event.get("tool"), "args": event.get("args"),
+                    "tool": event.get("tool"),
+                    "args": cls._payload(event.get("args")),
                     "call_id": event.get("call_id") or event.get("id"),
                     "timestamp": stamp}
         if kind in ("tool_result", "tool_end"):
@@ -172,9 +197,11 @@ class ReplaySession:
                    "call_id": event.get("call_id") or event.get("id"),
                    "timestamp": stamp}
             if failed:
-                out["phase"], out["error"] = "error", event.get("result")
+                out["phase"] = "error"
+                out["error"] = cls._payload(event.get("result"))
             else:
-                out["phase"], out["result"] = "result", event.get("result")
+                out["phase"] = "result"
+                out["result"] = cls._payload(event.get("result"))
             return out
         return None
 
@@ -213,19 +240,36 @@ class ReplaySession:
             if translated is not None:
                 await self._emit(translated)
 
+    def _event_wall_clock(self) -> float:
+        """Seconds the event stream will take, under the current pacing."""
+        total, previous = 0.0, None
+        for event in self.events:
+            if event.get("kind") == "tool_start":
+                continue
+            current = _event_time(event)
+            total += self._sleep_for(previous, current)
+            previous = current if current is not None else previous
+        return total
+
     async def _grow_graph(self) -> None:
         """Insert nodes and edges into the session's live graph, in recorded order."""
+        if self.warmup:
+            await asyncio.sleep(self.warmup)
         from CoScientist.graph.research.store import get_research_graph
         store = get_research_graph(user_id=self.key[0], session_id=self.key[1])
         steps = _graph_steps(self.graph)
         if not steps:
             return
-        previous = None
-        for when, kind, item in steps:
+        # The recorded graph was written in a handful of bursts, so replaying
+        # its own intervals makes it appear almost at once. Spread the
+        # insertions evenly over the projected length of the event stream, in
+        # the recorded order, so the shape grows while the transcript runs.
+        span = self._event_wall_clock()
+        step_delay = max(self.min_gap, span / len(steps)) if span else self.min_gap
+        for _when, kind, item in steps:
             if self.cancelled:
                 return
-            await asyncio.sleep(self._sleep_for(previous, when))
-            previous = when
+            await asyncio.sleep(step_delay)
             try:
                 self._insert(store, kind, item)
             except Exception:  # noqa: BLE001 — one bad item must not stop the show
