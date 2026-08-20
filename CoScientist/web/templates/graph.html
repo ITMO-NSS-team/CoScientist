@@ -409,15 +409,15 @@
       const rows = Object.keys(attrs).map(k =>
         `<div class="attr"><span class="ak">${esc(k)}:</span> ${esc(attrs[k])}</div>`).join("");
       const prov = Array.isArray(n.provenance) ? n.provenance : [];
-      const provHtml = (n.kind === "evidence")
-        ? `<div class="k">provenance — produced by</div>` + (prov.length
-            ? prov.map(p => {
+      // Only shown when there is a trace to show: a heading followed by "no
+      // tool-call trace captured" is a line of furniture on every other card.
+      const provHtml = (n.kind === "evidence" && prov.length)
+        ? `<div class="k">provenance — produced by</div>` + prov.map(p => {
                 const jump = p.exec_id ? ` onclick="jumpToExecution('${esc(String(p.exec_id))}')" title="open this call in the execution log"` : "";
                 return `<div class="prov"${jump}><span class="tool">🛠️ ${esc(p.tool||"call")}</span>`
                   + (p.exec_id ? `<span class="jump">↗ execution log</span>` : "")
                   + (p.result ? `<div class="res">${esc(p.result)}</div>` : "") + `</div>`;
               }).join("")
-            : `<div class="empty">no tool-call trace captured</div>`)
         : "";
       document.getElementById("detail").innerHTML =
         `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
