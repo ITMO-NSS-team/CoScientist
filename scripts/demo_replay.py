@@ -30,7 +30,7 @@ def main() -> int:
     ap.add_argument("--floor", type=float, default=0.4,
                     help="shortest pause between two steps, seconds; the "
                          "recording is bursty and this is what spaces it out")
-    ap.add_argument("--warmup", type=float, default=8.0,
+    ap.add_argument("--warmup", type=float, default=25.0,
                     help="seconds before the first event, to open the tabs")
     ap.add_argument("--title", default="Recorded study (replay)")
     ap.add_argument("--user", default="", help="user id; the first one by default")

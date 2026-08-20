@@ -911,7 +911,7 @@ def create_app() -> FastAPI:
         speed = float(data.get("speed") or 120)
         max_gap = float(data.get("max_gap") or 2.5)
         min_gap = float(data.get("min_gap") or 0.4)
-        warmup = float(data.get("warmup") if data.get("warmup") is not None else 8.0)
+        warmup = float(data.get("warmup") if data.get("warmup") is not None else 25.0)
         title = str(data.get("title") or "Recorded study (replay)")
 
         try:

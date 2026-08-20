@@ -30,6 +30,9 @@ logger = logging.getLogger("CoScientist.web.replay")
 #: live run by anything reading the transcript later.
 REPLAY_FLAG = "replayed_from"
 
+#: Tools that are a question to the operator, not a computation.
+_HITL_TOOLS = ("request_selection", "request_approval")
+
 
 def _load_events(path: Path) -> List[Dict[str, Any]]:
     """Recorded UI events, oldest first. Accepts a JSONL or a JSON array."""
@@ -69,17 +72,48 @@ def _graph_steps(graph: Dict[str, Any]) -> List[Tuple[float, str, Dict[str, Any]
     """
     nodes = graph.get("nodes") or []
     born = {n["id"]: float(n.get("created_at") or 0) for n in nodes if isinstance(n, dict)}
-    steps: List[Tuple[float, str, Dict[str, Any]]] = [
-        (born.get(n["id"], 0.0), "node", n) for n in nodes if isinstance(n, dict)
-    ]
+    steps: List[Tuple[float, str, Dict[str, Any]]] = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        history = [h for h in (n.get("status_history") or []) if isinstance(h, dict)]
+        # A node enters the record at the status it was created with, not at the
+        # one it ended on: replaying the final status makes a hypothesis appear
+        # already confirmed. Later transitions arrive as their own steps.
+        first = dict(n)
+        if history:
+            first["status"] = history[0].get("to") or n.get("status")
+        steps.append((born.get(n["id"], 0.0), "node", first))
+        for change in history[1:]:
+            when = change.get("at")
+            steps.append((float(when) if when else born.get(n["id"], 0.0), "status",
+                          {"id": n["id"], "status": change.get("to"),
+                           "source": change.get("source"),
+                           "reason": change.get("reason")}))
     for e in graph.get("edges") or []:
         if not isinstance(e, dict):
             continue
         t = e.get("created_at")
         t = float(t) if t else max(born.get(e.get("from"), 0.0), born.get(e.get("to"), 0.0))
         steps.append((t, "edge", e))
-    steps.sort(key=lambda s: s[0])
-    return steps
+    # At one instant a node must land before an edge that references it, and a
+    # verdict must land after the conclusion that carries it: the validator wrote
+    # both in the same commit, and a hypothesis turning green before its
+    # conclusion exists reads as the graph knowing the answer in advance.
+    rank = {"node": 0, "edge": 1, "status": 2}
+    steps.sort(key=lambda s: (s[0], rank.get(s[1], 3)))
+    # A status the study passed through in the same instant is churn on screen;
+    # keep only the last of a same-instant run for one node.
+    collapsed: List[Tuple[float, str, Dict[str, Any]]] = []
+    for step in steps:
+        if (step[1] == "status" and collapsed
+                and collapsed[-1][1] == "status"
+                and collapsed[-1][2]["id"] == step[2]["id"]
+                and collapsed[-1][0] == step[0]):
+            collapsed[-1] = step
+            continue
+        collapsed.append(step)
+    return collapsed
 
 
 class ReplaySession:
@@ -88,7 +122,7 @@ class ReplaySession:
     def __init__(self, runtime, user_id: str, session_id: str, *,
                  events: List[Dict[str, Any]], graph: Dict[str, Any],
                  speed: float, max_gap: float, source: str,
-                 min_gap: float = 0.4, warmup: float = 8.0) -> None:
+                 min_gap: float = 0.4, warmup: float = 25.0) -> None:
         self.runtime = runtime
         self.key = (user_id, session_id)
         self.events = events
@@ -141,6 +175,14 @@ class ReplaySession:
     async def _emit(self, event: Dict[str, Any]) -> None:
         event = {**event, REPLAY_FLAG: self.source}
         self.runtime.record_event(self.key, event)
+        # Recording alone leaves an open tab showing the snapshot it connected
+        # with and nothing after it; the fan-out is what makes a replay live.
+        send = getattr(self.runtime, "send", None)
+        if callable(send):
+            try:
+                await send(self.key, event)
+            except Exception:  # noqa: BLE001 — a dead socket must not stop playback
+                logger.debug("replay could not deliver an event", exc_info=True)
 
     #: The recorded commit payloads carry the study's own Russian text. Half
     #: translating a JSON blob reads worse than not showing it, so a payload
@@ -184,6 +226,39 @@ class ReplaySession:
                     "error": cls._payload(event.get("error")),
                     "call_id": event.get("call_id") or event.get("id"),
                     "timestamp": stamp}
+        # The two human-in-the-loop calls are the operator's decision points, and
+        # the browser draws them as a card with buttons rather than as a row in
+        # the tool panel. Message and options are the recorded ones.
+        if kind == "tool_call" and event.get("tool") in _HITL_TOOLS:
+            payload = event.get("args")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except ValueError:
+                    payload = {}
+            payload = payload if isinstance(payload, dict) else {}
+            return {"type": "hitl_request",
+                    "request_id": f"replay-hitl-{event.get('ts')}",
+                    "agent_name": payload.get("agent_name") or author,
+                    "action_type": ("select_option"
+                                    if event["tool"] == "request_selection" else "approve"),
+                    "message": payload.get("message") or "",
+                    "description": payload.get("message") or "",
+                    "options": payload.get("options") or [],
+                    "timestamp": stamp}
+        if kind == "tool_result" and event.get("tool") in _HITL_TOOLS:
+            answer = event.get("result")
+            if isinstance(answer, str):
+                try:
+                    answer = json.loads(answer)
+                except ValueError:
+                    answer = {}
+            answer = answer if isinstance(answer, dict) else {}
+            said = (answer.get("feedback") or answer.get("selected")
+                    or ("approved" if answer.get("approved") else "declined"))
+            return {"type": "agent_event", "author": "human",
+                    "content": f"Operator: {said}", "timestamp": stamp,
+                    "is_final": False}
         if kind in ("tool_call", "tool_start"):
             return {"type": "tool_activity", "phase": "call", "author": author,
                     "tool": event.get("tool"),
@@ -295,6 +370,11 @@ class ReplaySession:
 
     @staticmethod
     def _write(graph, kind: str, item: Dict[str, Any]) -> None:
+        if kind == "status":
+            node = graph.nodes.get(item["id"]) if item["id"] in graph.nodes else None
+            if node is not None and item.get("status"):
+                node["status"] = item["status"]
+            return
         if kind == "node":
             # The whole record goes in as node data, `id` included: the store
             # serialises a node from its attribute dict alone, so an id kept only
