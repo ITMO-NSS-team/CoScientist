@@ -30,6 +30,10 @@ logger = logging.getLogger("CoScientist.web.replay")
 #: live run by anything reading the transcript later.
 REPLAY_FLAG = "replayed_from"
 
+#: Event types the browser renders in the chat column, as opposed to the tool
+#: panel. These are the ones a viewer reads, so they get their own spacing.
+_CHAT_TYPES = ("agent_event", "user_message", "hitl_request")
+
 #: Tools that are a question to the operator, not a computation.
 _HITL_TOOLS = ("request_selection", "request_approval")
 
@@ -122,7 +126,8 @@ class ReplaySession:
     def __init__(self, runtime, user_id: str, session_id: str, *,
                  events: List[Dict[str, Any]], graph: Dict[str, Any],
                  speed: float, max_gap: float, source: str,
-                 min_gap: float = 0.4, warmup: float = 25.0) -> None:
+                 min_gap: float = 0.4, warmup: float = 25.0,
+                 chat_gap: float = 10.0, thoughts: bool = True) -> None:
         self.runtime = runtime
         self.key = (user_id, session_id)
         self.events = events
@@ -135,6 +140,11 @@ class ReplaySession:
         # out without reordering it.
         self.min_gap = max(0.0, float(min_gap))
         self.warmup = max(0.0, float(warmup))
+        # Chat is paced separately from the tool panel. A tool row is a line and
+        # can flow; a message is a paragraph the viewer has to read, and 150
+        # tool calls should not be slowed to its speed.
+        self.chat_gap = max(0.0, float(chat_gap))
+        self.thoughts = bool(thoughts)
         self.source = source
         self.cancelled = False
 
@@ -303,27 +313,51 @@ class ReplaySession:
     async def _play_events(self) -> None:
         self._pair_tool_calls(self.events)
         previous = None
+        last_chat = 0.0
         for event in self.events:
             if self.cancelled:
                 return
             if event.get("kind") == "tool_start":   # duplicate of tool_call
                 continue
+            if not self.thoughts and event.get("kind") == "thought":
+                continue
             current = _event_time(event)
             await asyncio.sleep(self._sleep_for(previous, current))
             previous = current if current is not None else previous
             translated = self._to_ui(event)
-            if translated is not None:
-                await self._emit(translated)
+            if translated is None:
+                continue
+            if translated["type"] in _CHAT_TYPES and self.chat_gap:
+                waited = time.monotonic() - last_chat
+                if last_chat and waited < self.chat_gap:
+                    await asyncio.sleep(self.chat_gap - waited)
+                last_chat = time.monotonic()
+            await self._emit(translated)
 
     def _event_wall_clock(self) -> float:
         """Seconds the event stream will take, under the current pacing."""
-        total, previous = 0.0, None
+        total, previous, since_chat = 0.0, None, None
         for event in self.events:
             if event.get("kind") == "tool_start":
                 continue
+            if not self.thoughts and event.get("kind") == "thought":
+                continue
             current = _event_time(event)
-            total += self._sleep_for(previous, current)
+            step = self._sleep_for(previous, current)
             previous = current if current is not None else previous
+            translated = self._to_ui(event)
+            if translated is None:
+                total += step
+                continue
+            if translated["type"] in _CHAT_TYPES and self.chat_gap:
+                if since_chat is None:
+                    since_chat = 0.0
+                else:
+                    step = max(step, self.chat_gap - since_chat)
+                since_chat = 0.0
+            elif since_chat is not None:
+                since_chat += step
+            total += step
         return total
 
     async def _grow_graph(self) -> None:
