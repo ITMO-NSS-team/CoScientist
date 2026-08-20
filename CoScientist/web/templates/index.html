@@ -354,7 +354,7 @@
     <!-- Right Sidebar: Telemetry -->
     <aside class="w-80 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
       <!-- Telemetry -->
-      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
+      <div class="hidden bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
         <div class="absolute top-3 right-3">
           <span id="telemetry-live"
             class="text-[8px] font-bold text-[#424656] font-mono tracking-tighter uppercase flex items-center gap-1">
@@ -591,7 +591,6 @@
     <div class="flex flex-col gap-2 max-w-2xl msg-enter">
       <div class="flex items-center gap-2">
         <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">System</span>
-        <span class="text-[10px] text-outline-variant font-mono">${ts(timestamp)}</span>
       </div>
       <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
         <p class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>
@@ -709,7 +708,6 @@
       <div class="flex flex-col gap-1">
         <div class="flex items-center gap-2">
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(author)}</span>
-          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
           <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">${linkify(escHtml(text))}</p>
@@ -745,7 +743,6 @@
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(agent || 'agent')}</span>
           <span class="text-[9px] font-mono uppercase tracking-widest text-secondary bg-secondary/10 border border-secondary/20 px-1.5 py-0.5 rounded">Result</span>
           ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml(caller)}</span>` : ''}
-          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="flex flex-col gap-2 bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-secondary/20">
           <div class="${folded ? 'max-h-64 overflow-hidden' : ''}">
@@ -774,7 +771,6 @@
       </div>
       <div class="flex flex-col gap-1 items-end">
         <div class="flex items-center gap-2">
-          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">You</span>
         </div>
         <div class="bg-primary/5 p-4 rounded-xl rounded-tr-none border border-primary/20">
