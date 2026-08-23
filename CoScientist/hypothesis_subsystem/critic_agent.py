@@ -26,11 +26,13 @@ from __future__ import annotations
 
 from opik import track
 
+import asyncio
 import json
 from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+import aiohttp
 import litellm
 from CoScientist.hypothesis_subsystem.moosechem_tool import _extract_json
 from google.adk.agents.callback_context import CallbackContext
@@ -423,6 +425,15 @@ hypothesis across five dimensions and return a structured JSON verdict.
 - **specificity** (0-2): Are variables well-defined with units/scales? Domain clearly scoped?
 - **novelty** (0-2): Is the claim original vs known approaches? Distinguished from alternatives?
 
+## LITERATURE EVIDENCE (when provided)
+When LITERATURE EVIDENCE is present in the prompt:
+- Use it as the PRIMARY source for evaluating consistency and novelty.
+- If the hypothesis makes claims unsupported by the evidence → lower consistency (0-1).
+- If the evidence reveals prior art the hypothesis doesn't acknowledge → lower novelty (0-1).
+- If the evidence directly contradicts the claim → verifiability = 0, reject.
+- Cite specific sources from the evidence in your feedback (e.g., "According to [Source X, Year]...").
+- If NO evidence is provided, evaluate based on internal logical consistency only.
+
 ## Passing threshold (RELAXED)
 A hypothesis passes when BOTH conditions hold:
 - Sum of all five scores ≥ 6 out of 10 — the hypothesis is good "overall".
@@ -452,6 +463,7 @@ class HypothesisInput:
     verification_plan: str
     tools: list
     strategy_type: str = ""
+    evidence_basis: str = ""  # JSON string with references for targeted RAG query
 
 
 @dataclass
@@ -472,9 +484,109 @@ class RAGClient:
     returns an empty list — deploy with a real RAG backend as needed.
     """
 
-    def query(self, text: str, top_k: int = 3) -> list:
+    def query(self, text: str, top_k: int = 3) -> str:
         """Return relevant context chunks for the given query text."""
-        return []
+        return ""
+
+
+class PaperAnalysisRAGClient:
+    """Calls paper-analysis-mcp-server ``explore_chemistry_database`` via HTTP JSON-RPC.
+
+    Uses the same MCP URL as the ResearchAgent (``settings.mcp.paper_analysis_url``)
+    and the same JSON-RPC pattern as :class:`MooseChemMCPTool`. On any failure
+    (missing URL, connection error, timeout) returns an empty string — the critic
+    gracefully degrades to evaluating on internal consistency only.
+    """
+
+    def __init__(self, mcp_url: str | None = None):
+        self._mcp_url = mcp_url
+
+    def query(self, text: str, top_k: int = 3) -> str:
+        """Return evidence text from the literature database, or '' on any failure."""
+        if not self._mcp_url:
+            return ""
+        try:
+            return asyncio.run(self._query_async(text))
+        except Exception:
+            return ""
+
+    async def _query_async(self, text: str) -> str:
+        """Call ``explore_chemistry_database`` via MCP JSON-RPC and return the answer."""
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # 1. Initialize MCP session
+            init_payload = {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "PaperAnalysisRAGClient", "version": "1.0"},
+                },
+                "id": 0,
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            }
+            session_id = None
+            async with session.post(
+                self._mcp_url, json=init_payload, headers=headers
+            ) as resp:
+                if "mcp-session-id" in resp.headers:
+                    session_id = resp.headers["mcp-session-id"]
+
+            # 2. Call explore_chemistry_database
+            call_headers = dict(headers)
+            if session_id:
+                call_headers["mcp-session-id"] = session_id
+            call_payload = {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "explore_chemistry_database",
+                    "arguments": {"task": text},
+                },
+                "id": 1,
+            }
+            async with session.post(
+                self._mcp_url, json=call_payload, headers=call_headers
+            ) as resp:
+                raw_text = await resp.text()
+
+        # 3. Parse FastMCP response: result.content[0].text → JSON → answer
+        data = _parse_mcp_response(raw_text)
+        result = data.get("result", {})
+        content = result.get("content", [])
+        if content and isinstance(content, list):
+            inner_text = content[0].get("text", "{}")
+            try:
+                inner = json.loads(inner_text)
+                return inner.get("answer", inner_text)
+            except json.JSONDecodeError:
+                return inner_text
+        return ""
+
+
+def _parse_mcp_response(raw_text: str) -> Dict[str, Any]:
+    """Parse MCP response — handles both plain JSON and SSE (event/data) format."""
+    raw_text = raw_text.strip()
+    if not raw_text:
+        return {}
+    if raw_text.startswith("event:") or "\ndata:" in raw_text or raw_text.startswith("data:"):
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if line.startswith("data:"):
+                payload = line[len("data:"):].strip()
+                try:
+                    return json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+        return {}
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        return {}
 
 
 @track(name="hypothesis_critique_one")
@@ -490,12 +602,16 @@ class HypothesisCriticAgent:
         model: LLM model identifier (defaults to _CRITIC_MODEL).
     """
 
-    def __init__(self, rag_client: RAGClient | None = None, model: str | None = None):
+    def __init__(self, rag_client: RAGClient | PaperAnalysisRAGClient | None = None, model: str | None = None):
         self._rag = rag_client or RAGClient()
         self._model = model or _CRITIC_MODEL
 
     def critique_one(self, hypothesis: HypothesisInput) -> HypothesisCriticResult:
         """Evaluate a single hypothesis and return a structured verdict.
+
+        Enriches the LLM prompt with literature evidence from the RAG client
+        (paper-analysis-mcp-server) when available. On any failure, returns
+        ``passed=False`` so the hypothesis is revised, not silently approved.
 
         Args:
             hypothesis: The hypothesis to evaluate.
@@ -503,6 +619,29 @@ class HypothesisCriticAgent:
         Returns:
             HypothesisCriticResult with passed/scores/feedback.
         """
+        # 1. Query RAG for literature evidence
+        rag_query = (
+            f"Scientific evidence for claim: {hypothesis.claim}. "
+            f"Domain: {hypothesis.domain}"
+        )
+        evidence_basis = getattr(hypothesis, "evidence_basis", "") or ""
+        if evidence_basis:
+            rag_query += f" References: {evidence_basis}"
+        evidence_block = self._rag.query(rag_query, top_k=3)
+
+        # 2. Build evidence section for the prompt
+        evidence_section = ""
+        if evidence_block:
+            evidence_section = (
+                "\n\nLITERATURE EVIDENCE (from scientific papers database):\n"
+                f"{evidence_block}\n\n"
+                "CRITICAL: Base your evaluation STRICTLY on this evidence. "
+                "If the hypothesis contradicts the evidence, lower consistency. "
+                "If the evidence reveals unacknowledged prior art, lower novelty. "
+                "Cite specific sources in your feedback."
+            )
+
+        # 3. Build user prompt with evidence
         variables_str = hypothesis.variables or "{}"
         user_prompt = (
             f"HYPOTHESIS ID: {hypothesis.id}\n"
@@ -511,7 +650,8 @@ class HypothesisCriticAgent:
             f"VARIABLES: {variables_str}\n"
             f"VERIFICATION PLAN: {hypothesis.verification_plan}\n"
             f"TOOLS: {', '.join(hypothesis.tools) if hypothesis.tools else 'none'}\n"
-            f"STRATEGY: {hypothesis.strategy_type}\n\n"
+            f"STRATEGY: {hypothesis.strategy_type}\n"
+            f"{evidence_section}"
             "Evaluate across all five dimensions. Return strict JSON."
         )
 
@@ -535,12 +675,12 @@ class HypothesisCriticAgent:
                 tool_request=payload.get("tool_request", {}),
             )
         except Exception as exc:
-            print(f"[HypothesisCriticAgent] LLM call failed ({exc!r}); defaulting to permissive pass.")
+            print(f"[HypothesisCriticAgent] LLM call failed ({exc!r}); returning failed verdict for revision.")
             return HypothesisCriticResult(
-                passed=True,
+                passed=False,
                 scores={
-                    "verifiability": 2, "tool_coverage": 2, "consistency": 2,
-                    "specificity": 2, "novelty": 2,
+                    "verifiability": 0, "tool_coverage": 0, "consistency": 0,
+                    "specificity": 0, "novelty": 0,
                 },
-                feedback=f"Critic LLM error: {exc}",
+                feedback=f"Critic evaluation failed: {exc}. Hypothesis requires re-evaluation.",
             )

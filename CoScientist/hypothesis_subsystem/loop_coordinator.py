@@ -16,6 +16,7 @@ import litellm
 from google.adk.tools.tool_context import ToolContext
 from opik import track
 
+from CoScientist.config import get_settings
 from CoScientist.hypothesis_subsystem.moosechem_tool import _extract_json
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ from CoScientist.hypothesis_subsystem.critic_agent import (
     HypothesisCriticAgent,
     HypothesisCriticResult,
     HypothesisInput,
+    PaperAnalysisRAGClient,
     RAGClient,
 )
 from CoScientist.hypothesis_subsystem.audit import HypothesisAuditLogger
@@ -65,7 +67,9 @@ class HypothesisLoopCoordinator:
     def __init__(self, model: str, audit: HypothesisAuditLogger):
         self._model = model
         self._audit = audit
-        self._critic = HypothesisCriticAgent(rag_client=RAGClient(), model=self._model)
+        _paper_analysis_url = getattr(get_settings().mcp, "paper_analysis_url", None)
+        rag_client = PaperAnalysisRAGClient(mcp_url=_paper_analysis_url) if _paper_analysis_url else RAGClient()
+        self._critic = HypothesisCriticAgent(rag_client=rag_client, model=self._model)
 
     @track(name="hypothesis_run_critic_loop")
     async def run_critic_loop(
@@ -257,6 +261,10 @@ class HypothesisLoopCoordinator:
             verification_plan=h.verification_plan,
             tools=h.tools,
             strategy_type=h.strategy_type,
+            evidence_basis=json.dumps([
+                {"title": r.title, "doi": r.doi}
+                for r in (h.evidence_basis or [])
+            ], ensure_ascii=False),
         )
 
     async def _refine_via_llm(self, hypothesis: Hypothesis, result: HypothesisCriticResult,
