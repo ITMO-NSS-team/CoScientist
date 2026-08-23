@@ -49,9 +49,15 @@ def _generate_pubmed_queries(research_question: str, background_survey: str) -> 
 Given a research question and background survey, generate 12 PubMed search queries to build a relevant inspiration corpus.
 
 Rules:
-- Queries must cover ADJACENT methodological areas, NOT direct answers to the question
-- Do NOT repeat specific methods or terms already mentioned in the question or background
-- Each query must be 3-6 words
+- First identify the key SUBJECT-SPECIFIC anchor terms in the question/background
+  (e.g. the organism, taxon, family, or specific compound class named there).
+- Every query MUST include at least one of these anchor terms (or a close synonym),
+  so results stay grounded in the actual subject matter — do NOT drift into
+  generic methodology unrelated to the subject.
+- Within that constraint, queries must cover ADJACENT methodological/topical angles,
+  NOT direct restatements of the research question itself.
+- Do NOT repeat the exact phrasing already used in the question or background.
+- Each query must be 3-6 words.
 - Return ONLY a JSON array of strings, nothing else
 
 Research question: {research_question}
@@ -59,18 +65,31 @@ Background survey: {background_survey}
 
 Example: ["query one", "query two", "query three"]"""
 
-    response = requests.post(
-        f"{LLM_BASE_URL}/chat/completions",
-        headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-        json={"model": LLM_MODEL, "max_tokens": 500,
-              "messages": [{"role": "user", "content": prompt}]},
-        timeout=30,
-    )
-    response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"].strip()
-    start = content.find("[")
-    end = content.rfind("]") + 1
-    return json.loads(content[start:end])
+    # [reliability] Increased timeout (30 -> 90s) + retry with backoff.
+    # OpenRouter occasionally stalls past 30s on this call, forcing a full
+    # build_corpus restart (~60-90s wasted per retry, observed multiple
+    # times in practice). This costs nothing in hypothesis quality.
+    last_exc = None
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
+                json={"model": LLM_MODEL, "max_tokens": 500,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=90,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"].strip()
+            start = content.find("[")
+            end = content.rfind("]") + 1
+            return json.loads(content[start:end])
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(2 ** attempt)  # 1s, 2s backoff
+                continue
+    raise last_exc
 
 
 def _search_pubmed(query: str, max_results: int) -> list[str]:
@@ -265,6 +284,10 @@ def _patch_main_sh(
     # Ускорение без потери качества
     # Reverted to original MOOSE-Chem defaults (was patched to 1 for speed during dev/testing)
     content = re.sub(r'--num_self_explore_steps_each_line \d+', '--num_self_explore_steps_each_line 3', content)
+    # Reverted to 3 for isolation testing (was patched to 5, caused pipeline
+    # failures — investigating whether it's the keep_size change itself or
+    # unrelated LLM question-reformulation between retries).
+    content = re.sub(r'--num_screening_keep_size \d+', '--num_screening_keep_size 3', content)
     # num_screening_window_size оставляем оригинальным (15) — уменьшение до 8 ломает скрининг
     content = re.sub(r'--num_itr_self_refine \d+', '--num_itr_self_refine 3', content)
 
@@ -337,14 +360,42 @@ def _run_moosechem_job(
             import pathlib
             pathlib.Path(os.path.join(moosechem_path, "Logs")).mkdir(exist_ok=True)
 
-            result = subprocess.run(
-                ["bash", main_sh],
-                cwd=moosechem_path,
-                capture_output=True,
-                text=True,
-                timeout=3600,
-                env=env,
-            )
+            # [profiling] Stream stdout line-by-line with timestamps so we can
+            # see which generation stage (Inter-EA Step / Self-explore step /
+            # mutations) takes the most time.
+            from datetime import datetime as _dt
+            timestamped_log_path = os.path.join(moosechem_path, "Logs", "timestamped_run.log")
+            stdout_lines = []
+            # [profiling] Append mode with a run separator — a single test
+            # can trigger many retries of run_moosechem, and each overwrite
+            # ("w" mode) would erase the log of a real, long-running attempt
+            # once a fast cache-hit retry follows it.
+            with open(timestamped_log_path, "a") as _logf:
+                _logf.write(f"\n{'='*80}\n=== NEW RUN: {_dt.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n{'='*80}\n")
+                process = subprocess.Popen(
+                    ["bash", main_sh],
+                    cwd=moosechem_path,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                    bufsize=1,
+                )
+                for line in process.stdout:
+                    ts = _dt.now().strftime("%H:%M:%S")
+                    _logf.write(f"{ts} {line}")
+                    _logf.flush()
+                    stdout_lines.append(line)
+                process.wait(timeout=3600)
+
+            # Minimal shim matching the subprocess.CompletedProcess attributes
+            # used below (result.returncode, result.stdout, result.stderr).
+            class _Result:
+                pass
+            result = _Result()
+            result.returncode = process.returncode
+            result.stdout = "".join(stdout_lines)
+            result.stderr = ""
 
             critic_results = {}
 
@@ -601,8 +652,27 @@ def get_hypotheses(evaluation_path: Optional[str] = None, top_n: int = 5, min_sc
                 "critic_feedback": critic.get("feedback"),
             })
 
-    hypotheses.sort(key=lambda h: h["score"], reverse=True)
-    top = hypotheses[:top_n]
+    # Diversify by inspiration: first take each inspiration's best hypothesis,
+    # then round-robin through remaining ones by score, so top_n hypotheses
+    # aren't dominated by a single over-represented Inter-EA branch.
+    from collections import defaultdict
+    by_insp = defaultdict(list)
+    for h in hypotheses:
+        by_insp[h["inspiration"]].append(h)
+    for insp in by_insp:
+        by_insp[insp].sort(key=lambda h: h["score"], reverse=True)
+
+    top = []
+    round_idx = 0
+    insp_keys = list(by_insp.keys())
+    while len(top) < top_n and any(round_idx < len(by_insp[k]) for k in insp_keys):
+        candidates = [(k, by_insp[k][round_idx]) for k in insp_keys if round_idx < len(by_insp[k])]
+        candidates.sort(key=lambda kv: kv[1]["score"], reverse=True)
+        for _, h in candidates:
+            if len(top) >= top_n:
+                break
+            top.append(h)
+        round_idx += 1
 
     # Загружаем корпус для поиска абстрактов вдохновений
     corpus_path = os.path.join(MOOSECHEM_PATH, "Data", "smart_corpus.json")

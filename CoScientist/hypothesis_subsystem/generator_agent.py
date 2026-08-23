@@ -293,7 +293,7 @@ def build_hypothesis_generator(
             "scoring). Discovers available validation tools and iteratively "
             "refines each hypothesis via a built-in Critic loop."
         ),
-        output_key="generated_hypotheses",
+        #output_key="generated_hypotheses",
         tools=generator_tools,
     )
 
