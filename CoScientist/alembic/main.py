@@ -53,6 +53,7 @@ from alembic.tools import (
 )
 from alembic.tools.venv import ensure_server_packages, install_repo
 from alembic.tools.analysis import decide_layout, symbol_table, target_top_modules, verify_target
+from alembic.staging import stage_task_inputs, task_mounts
 from alembic.tools.codegen import function_param_names, render_code_py, write_server, write_setup_sh
 from alembic.tools.fs import _clone_repo_sync
 from alembic.tools.invoke import check_repo_imports
@@ -124,36 +125,13 @@ _DATA_POLICY = ("\n\nDATA POLICY (absolute): do NOT download any datasets, even 
 
 
 def _stage_task_inputs(tasks: list[dict]) -> None:
-    """Copy each task's example/test_case mount files from the bind-mounted
-    data dir into /mount/input, per the task's mount mapping. Missing files are
-    noted, never fatal (exec-level testing degrades gracefully, R6)."""
-    if not MOUNT_DATA.exists():
-        if tasks and any(_task_mounts(t) for t in tasks):
-            logger.warning("[tasks] no /mount/data bind mount — task input files unavailable.")
-        return
-    for t in tasks:
-        for src, dst in _task_mounts(t):
-            s, d = MOUNT_DATA / src, MOUNT_INPUT / dst
-            if not s.exists():
-                logger.warning(f"[tasks] mount source missing: {s}")
-                continue
-            d.parent.mkdir(parents=True, exist_ok=True)
-            if d.exists() or d.is_symlink():
-                continue
-            # Symlink, not copy — WSI dirs are tens of GB and read-only inputs;
-            # copying them into the container is slow and wastes disk.
-            try:
-                d.symlink_to(s, target_is_directory=s.is_dir())
-            except OSError:
-                (shutil.copytree if s.is_dir() else shutil.copy)(s, d)
+    """Stage each task's example/test_case mount files from the bind-mounted
+    data dir into /mount/input. See :mod:`alembic.staging`."""
+    stage_task_inputs(tasks, MOUNT_DATA, MOUNT_INPUT, warn=logger.warning)
 
 
 def _task_mounts(task: dict) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    for inv in [task.get("example") or {}, *(task.get("test_cases") or {}).values()]:
-        if isinstance(inv, dict):
-            pairs += [(s, d) for s, d in (inv.get("mount") or {}).items()]
-    return pairs
+    return task_mounts(task)
 
 
 def _task_ref(tasks: list[dict]) -> str | None:
