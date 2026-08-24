@@ -14,6 +14,7 @@ find and continue an earlier build via ``list_mcp_builds``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import secrets
@@ -32,6 +33,8 @@ START_CHAIN = PROJECT_ROOT / "CoScientist" / "alembic" / "start_chain.py"
 # Host-side stdout logs of the build subprocesses (the pipeline's own logs live
 # inside the build container; this is the start_chain wrapper output).
 LOG_DIR = PROJECT_ROOT / ".alembic" / "a2a_builds"
+
+logger = logging.getLogger(__name__)
 
 _LOG_TAIL_LINES = 15
 _MAX_JOBS = 200  # cap registry size; evict oldest finished jobs past this
@@ -233,7 +236,47 @@ async def check_mcp_build(
             return {"status": "error",
                     "error": f"unknown job_id {job_id!r} — use list_mcp_builds() "
                              "to see the builds known to this process."}
-        return _snapshot(rec)
+        out = _snapshot(rec)
+    # Outside the lock: publishing talks to the registry over the network.
+    await _publish_to_catalogue(rec, out, tool_context)
+    return out
+
+
+async def _publish_to_catalogue(
+    rec: Dict[str, Any], out: Dict[str, Any], tool_context: Optional[ToolContext]
+) -> None:
+    """Put a finished build's MCP server where the rest of the system can find it.
+
+    Two destinations, both needed: the rag_tools registry, so Retrieve_tools
+    surfaces the tool in later runs and on other machines; and this session's
+    ``deployed_mcps``, so the executor can call it without waiting for a
+    retrieval round. Without this a build is forgotten the moment it finishes.
+
+    Runs once per job and never raises — a registry that is down must not turn a
+    successful build into a failed tool call. The outcome is reported back to
+    the agent in ``registered``.
+    """
+    if out.get("status") != "done" or not out.get("mcp_url") or rec.get("registered"):
+        return
+    rec["registered"] = True  # one attempt per build, however often it is polled
+
+    from CoScientist.tools.registry_bridge import register_and_resolve
+
+    name = _repo_name(rec["repo_url"])
+    state = {"deployed_mcps": list((getattr(tool_context, "state", None) or {}).get(
+        "deployed_mcps") or [])}
+    try:
+        await register_and_resolve(
+            out["mcp_url"], name, state, description=f"Alembic build of {rec['repo_url']}"
+        )
+    except Exception as exc:  # noqa: BLE001 — the build itself succeeded
+        logger.warning("catalogue registration failed for %s: %s", name, exc)
+        out["registered"] = False
+        out["registration_error"] = f"{type(exc).__name__}: {exc}"
+        return
+    if tool_context is not None:
+        tool_context.state["deployed_mcps"] = state["deployed_mcps"]
+    out["registered"] = True
 
 
 async def list_mcp_builds(tool_context: Optional[ToolContext] = None) -> Dict[str, Any]:
