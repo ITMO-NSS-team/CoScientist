@@ -53,6 +53,9 @@ from alembic.targets import detect_gpu, docker_cli
 PROJECT_ROOT     = Path(__file__).resolve().parents[2]
 BASE_DOCKERFILE  = PROJECT_ROOT / "docker" / "alembic" / "Dockerfile"
 TOOL_REPO        = "alembic-tool"
+# Stamped on every build/serve container so a log viewer pointed at a shared
+# daemon can filter to ours instead of showing every container on the host.
+PROJECT_LABEL    = "project=coscientist"
 PORT_RANGE       = (20000, 30000)
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
@@ -160,7 +163,8 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     cname      = f"alembic-build-{repo}-{secrets.token_hex(3)}"
     tool_image = f"{TOOL_REPO}:{repo}"
 
-    cmd = [*docker_cli(context=ns.context), "run", "--name", cname]
+    cmd = [*docker_cli(context=ns.context), "run", "--name", cname,
+           "--label", PROJECT_LABEL]
     if ns.platform:
         cmd += ["--platform", ns.platform]
     if ns.gpus:
@@ -224,7 +228,7 @@ def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
     cname = f"alembic-serve-{repo}-{secrets.token_hex(3)}"
 
     cmd = [*docker_cli(context=ns.context), "run", "-d", "--name", cname,
-           "-p", f"{port}:8000"]
+           "--label", PROJECT_LABEL, "-p", f"{port}:8000"]
     if ns.platform:
         cmd += ["--platform", ns.platform]
     if ns.gpus:
