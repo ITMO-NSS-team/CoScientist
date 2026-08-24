@@ -108,13 +108,9 @@ def _research_id(graph: Any) -> str:
 
 
 def _evidence_text(e: Dict[str, Any]) -> str:
-    """The evidence's `content`, or — when an agent recorded its findings under
-    other attr keys instead (e.g. bibliographic title/authors/journal/year with
-    no `content`, or computational metrics like mean_macro_f1) — a fallback
-    serialization of those attrs, so the judge never sees a blank line for
-    evidence that actually has data. Without this, populated Evidence nodes
-    render as empty and the validator postpones for "no data" even when the
-    graph has real findings attached."""
+    """`content`, or a fallback serialization of other attrs (e.g. bibliographic
+    fields, metrics) when `content` is empty — so populated evidence doesn't
+    read as blank to the judge."""
     attrs = e.get("attrs") or {}
     content = str(attrs.get("content", "")).strip()
     if content:
@@ -129,33 +125,23 @@ _EVIDENCE_EDGE_TYPES = ("supports", "refutes", "refines")
 
 
 def _has_evolved_from(g: Any, hid: str) -> bool:
-    """True if `hid` is itself an evolved hypothesis (points to a parent via
-    `evolved_from`) — the only case the independence checks below apply to."""
+    """True if `hid` points to a parent via `evolved_from` (the only case the
+    independence checks below apply to)."""
     return any(k == "evolved_from" for _, _, k in g.out_edges(hid, keys=True))
 
 
 def _evolved_neighbors(g: Any, hid: str) -> set:
-    """Direct `evolved_from` neighbors of `hid` — its parent (if `hid` is a
-    child) and/or its children (if `hid` is a parent). Legitimate, EXPECTED
-    lineage — not the "unrelated hypothesis" concern `_shared_evidence_hyps`
-    below flags; a parent and its evolved child sharing seed evidence is by
-    design, already handled separately by `_seed_evidence_ids`."""
+    """`hid`'s direct evolved_from lineage (parent and/or children) — expected,
+    legitimate overlap, excluded from `_shared_evidence_hyps` below."""
     out = {v for _, v, k in g.out_edges(hid, keys=True) if k == "evolved_from"}
     inn = {u for u, _, k in g.in_edges(hid, keys=True) if k == "evolved_from"}
     return out | inn
 
 
 def _shared_evidence_hyps(g: Any, hid: str, evidence_ids) -> Dict[str, List[str]]:
-    """Other Hypothesis nodes (excluding `hid` and its evolved_from lineage,
-    see `_evolved_neighbors`) that cite any of `evidence_ids` too — i.e. this
-    hypothesis' confirmation is not independent grounding but shares its
-    source with a sibling. A real case this catches: a mechanistic paper
-    (MRAS-SHOC2 → MAPK reactivation) cited as supporting BOTH a YAP/TAZ
-    hypothesis and a separate NF1/SHOC2 hypothesis — two nominally
-    independent branches resting partly on the same underlying fact. Flag
-    only (see judge_hypothesis) — overlap can be entirely legitimate two
-    hypotheses correctly drawing on the same well-established fact — this is
-    for the report to interpret and present honestly, not a verdict call."""
+    """Other Hypothesis nodes (excluding `hid`'s own lineage) that cite the same
+    evidence — i.e. this confirmation isn't independent of a sibling's. Flag
+    only (see judge_hypothesis); overlap can be entirely legitimate."""
     excluded = _evolved_neighbors(g, hid) | {hid}
     shared: Dict[str, List[str]] = {}
     for eid in evidence_ids:
@@ -170,21 +156,12 @@ def _shared_evidence_hyps(g: Any, hid: str, evidence_ids) -> Dict[str, List[str]
 
 
 def _seed_evidence_ids(g: Any, hid: str):
-    """Evidence NODES created at the exact same instant as `hid` itself
-    (identical `created_at`) — i.e. evidence fabricated in the same breath as
-    the hypothesis it supports, as opposed to evidence that already existed.
-    Deliberately keyed on the EVIDENCE NODE's own timestamp, not the edge's:
-    the edge linking `hid` to a pre-existing piece of evidence is always drawn
-    in the same commit that writes `hid` (that's just how a single commit
-    works), so an edge-timestamp check would wrongly flag genuinely old,
-    independently-found evidence — e.g. a literature fact ResearchAgent
-    recorded long before this hypothesis existed — as "seed" merely because
-    EvolutionAgent cited it while writing the hypothesis. `commit()` stamps
-    one shared timestamp on every node/edge it writes (store.py), so matching
-    on the evidence node's created_at is exact, not heuristic: only evidence
-    EvolutionAgent minted AT THE MOMENT it wrote `hid` counts as seed. For an
-    evolved hypothesis, support limited to that has never been checked against
-    anything independent."""
+    """Evidence nodes created at the exact same instant as `hid` (identical
+    `created_at`) — i.e. minted together with the hypothesis, not pre-existing.
+    Keyed on the evidence NODE's timestamp, not the edge's: the edge is always
+    drawn in the same commit as `hid` regardless of how old the evidence is,
+    so an edge-timestamp check would misfire on genuinely independent,
+    pre-existing evidence."""
     genesis = g.nodes[hid].get("created_at")
     if genesis is None:
         return set()
@@ -207,14 +184,10 @@ _RESTATEMENT_PATTERN = (
 
 
 def _cites_as_restatement(text: str, node_id: str) -> bool:
-    """True if `text` explicitly frames itself as a reinterpretation/re-run of
-    `node_id` (e.g. "interpreting E19 data", "re-analysis of E19") — as
-    opposed to merely citing it alongside other ids as background context
-    (e.g. "structural rationale from E2 ... and E7"), which is ordinary,
-    non-circular citation and must NOT be flagged. Deliberately narrow: it
-    will miss phrasings outside this cue list (a cheap heuristic, not
-    semantic dedup) — under-flagging is the safe failure mode here, since
-    this feeds a check that can block a genuine confirmation."""
+    """True if `text` explicitly frames itself as reinterpreting/re-running
+    `node_id` (e.g. "re-analysis of E19"), as opposed to merely citing it as
+    background. Narrow on purpose — under-flagging is the safe failure mode,
+    since this feeds a check that can block a genuine confirmation."""
     if not node_id:
         return False
     return re.search(_RESTATEMENT_PATTERN + re.escape(node_id) + r"\b",
@@ -222,16 +195,11 @@ def _cites_as_restatement(text: str, node_id: str) -> bool:
 
 
 def _is_restatement(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
-    """True if evidence `a` looks like a restatement of `b` rather than an
-    independent source: `a`'s own text explicitly frames itself as
-    reinterpreting `b` (see `_cites_as_restatement`), or both cite the
-    identical source_ref (same underlying dataset/script/document). A cheap
-    text-level signal, not semantic dedup — it catches an agent citing the
-    same computed number twice under two evidence ids as if that were two
-    confirmations (the failure mode actually observed: H7 confirmed on E19 +
-    E21, where E21 was EvolutionAgent's own restatement of E19's number,
-    captioned "interpreting E19 data" and written the instant H7 was
-    created)."""
+    """True if evidence `a` looks like a restatement of `b`: `a` names `b` as
+    a reinterpretation (see `_cites_as_restatement`), or both share the same
+    `source_ref`. A cheap text-level signal, not semantic dedup — catches an
+    agent citing the same number twice under two evidence ids as if that
+    were two confirmations."""
     attrs_a, attrs_b = a.get("attrs") or {}, b.get("attrs") or {}
     text_a = f"{attrs_a.get('content', '')} {attrs_a.get('source_ref', '')}"
     if _cites_as_restatement(text_a, str(b.get("id", ""))):
@@ -284,17 +252,11 @@ def _claims_superlative(text: str) -> bool:
 
 
 def _has_named_comparator(texts: List[str]) -> bool:
-    """True if any evidence text explicitly frames a head-to-head comparison
-    (e.g. "vs indole", "second-most frequent") rather than only a comparison
-    against a theoretical/uniform baseline. Baseline-comparison phrases are
-    stripped out FIRST (see _BASELINE_COMPARISON_RE) so "vs uniform baseline"
-    doesn't itself satisfy the check via its bare "vs". A cheap text-level
-    signal, not semantic parsing — it will miss a real comparison phrased
-    without one of these cue words (a real GSK-3β run's evidence used exactly
-    this pattern: "vs indole 273: p=6.03e-04"), so a MISS here is only a soft
-    flag on the Conclusion for review, never a verdict downgrade (see
-    judge_hypothesis) — unlike the independence check, this signal is too
-    fuzzy to hard-block on."""
+    """True if any evidence text frames a head-to-head comparison (e.g. "vs
+    indole") rather than only a theoretical/uniform baseline. Baseline
+    phrases are stripped first so a bare "vs uniform baseline" doesn't
+    self-match. Fuzzy text signal — a miss only soft-flags the Conclusion,
+    never downgrades the verdict (see judge_hypothesis)."""
     for t in texts:
         stripped = _BASELINE_COMPARISON_RE.sub(" ", t or "")
         if _COMPARATOR_RE.search(stripped):
@@ -495,11 +457,10 @@ async def judge_hypothesis(
 class BackgroundValidatorPlugin(BasePlugin):
     """Fires fire-and-forget validations when a hypothesis gains evidence.
 
-    The callback NEVER awaits the LLM — it schedules `judge_hypothesis` on the
-    event loop and returns immediately, so the orchestration loop is never
-    blocked (full asynchrony). Dedup includes the research generation and exact
-    evidence identities/polarities, so a hypothesis is re-judged when its
-    evidence changes without leaking state into a later research."""
+    Never awaits the LLM — schedules `judge_hypothesis` on the event loop and
+    returns immediately. Dedup keys on research generation + exact evidence
+    identities/polarities, so a hypothesis is re-judged when its evidence
+    changes, without leaking state into a later research."""
 
     def __init__(self) -> None:
         super().__init__(name="background_validator")
@@ -589,25 +550,14 @@ async def wait_for_validator_settle(callback_context: Any) -> None:
     still `under_verification` one more chance to resolve before the report
     freezes its status in prose.
 
-    BackgroundValidatorPlugin.after_tool_callback (above) only reschedules a
-    judgment on the NEXT `research_commit` tool call. That is fine while the
-    run keeps committing evidence — but ResultAggregatorAgent's own tools are
-    read-only (`research_graph_readonly`), so if whichever agent left a
-    hypothesis `under_verification` (e.g. EvolutionAgent, right after
-    attaching evidence to a freshly evolved child) was the LAST one to touch
-    the graph this run, nothing ever re-triggers it again. It is not "still
-    judging" — it is orphaned: a real observed case had `status_history`
-    stop dead at the "auto: evidence attached" transition, no entry after,
-    ever, because no later `research_commit` happened to re-scan for it.
-
-    This callback actively re-schedules those stragglers through the SAME
-    plugin instance (reusing its `_completed`/`_inflight` dedup, so it never
-    double-judges something genuinely still in flight from elsewhere), then
-    polls, bounded by `_SETTLE_TIMEOUT`, for them to land. Best-effort: never
-    raises, never blocks the report past the timeout — whatever is still
-    `under_verification` when it gives up is exactly what the (now stricter)
-    result_aggregator prompt is instructed to flag as preliminary rather than
-    narrate with confidence."""
+    `after_tool_callback` above only reschedules on the NEXT `research_commit`
+    — but ResultAggregatorAgent's tools are read-only, so a hypothesis left
+    `under_verification` by the last agent to touch the graph is orphaned,
+    never re-triggered. This re-schedules those stragglers through the same
+    plugin instance (reusing its dedup, so nothing double-judges), then polls
+    up to `_SETTLE_TIMEOUT`. Best-effort: never raises, never blocks past the
+    timeout — whatever's still pending when it gives up is left for the
+    result_aggregator prompt to flag as preliminary."""
     if not _enabled():
         return None
     try:
