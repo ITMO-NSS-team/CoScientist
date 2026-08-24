@@ -10,6 +10,7 @@ if the compile gate fails.
 from __future__ import annotations
 
 import ast
+import re
 import shutil
 from pathlib import Path
 
@@ -179,8 +180,30 @@ def write_server(repo_name: str, tool_names: list[str]) -> dict:
     return {"written": str(server), "tools": [s["name"] for s in sigs], "skipped": skipped}
 
 
+# The transcript is recorded in a live build where each command runs with
+# whatever cwd and venv state the previous one left behind. Replayed cold on a
+# clean image those two assumptions break, so the commands are normalised as
+# they are written — not patched afterwards by whoever replays them.
+_PORTABILITY_FIXES = (
+    # `uv venv` does not install pip, but transcripts routinely go on to call
+    # `.venv/bin/pip` directly. Seed it so those commands resolve.
+    (re.compile(r"\buv venv\b(?!\s+--seed)"), "uv venv --seed"),
+    # A relative `cd .alembic/...` resolves against wherever an earlier `cd`
+    # left us. Anchor it to /work, where setup.sh starts.
+    (re.compile(r"(^|&&\s*)cd \.alembic/"), r"\1cd /work/.alembic/"),
+)
+
+
+def portable_command(command: str) -> str:
+    """One recorded env-stage command, rewritten so a cold replay reproduces it."""
+    for pattern, replacement in _PORTABILITY_FIXES:
+        command = pattern.sub(replacement, command)
+    return command
+
+
 def render_setup_sh(commands: list[str]) -> str:
     """setup.sh from the recorded transcript of successful env-stage commands."""
+    commands = [portable_command(c) for c in commands]
     body = "\n".join(commands) if commands else "# (no environment commands were recorded)"
     return ("#!/usr/bin/env bash\n"
             "# Environment setup transcript — the commands that actually succeeded\n"
