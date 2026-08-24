@@ -118,6 +118,28 @@ def _tasks_prompt(tasks: list[dict], propose_extras: bool = False) -> str:
     return "\n".join(lines)
 
 
+def _hints_prompt(hints: str | None) -> str:
+    """A SOFT nudge for the explorer only: free-text describing tool(s) the
+    caller hopes to see mined among the others. No forced name/signature, no
+    plan-gate enforcement — the opposite end of the spectrum from _tasks_prompt
+    (REQUIRED TASKS, exact + gated). Composes with it: required tools stay
+    pinned, this just steers what else gets proposed."""
+    if not hints or not hints.strip():
+        return ""
+    return (
+        "\n\nSUGGESTED DIRECTION (soft, not a requirement): among the tools "
+        "you propose, the caller would especially value something along these "
+        "lines:\n"
+        + hints.strip()
+        + "\nTreat this only as a hint about what would be useful. Do NOT invent "
+        "a tool the repo cannot support, do NOT force any particular name or "
+        "argument signature to match it, and do NOT let it crowd out the repo's "
+        "other important workflow tools. If the repo has real code for it, lean "
+        "toward surfacing that tool (best-first); otherwise ignore the hint. "
+        "Ground every tool in real repo code as usual."
+    )
+
+
 _DATA_POLICY = ("\n\nDATA POLICY (absolute): do NOT download any datasets, even if the "
                 "exploration report or the repo README asks for one. Allowed downloads: "
                 "package dependencies, configs, and pretrained model weights/checkpoints "
@@ -156,12 +178,14 @@ def _task_ref(tasks: list[dict]) -> str | None:
 # Pipeline
 # ══════════════════════════════════════════════════════════════════════════════
 async def run_pipeline(repo_url: str, resume_from: str | None = None,
-                       stop_after: str | None = None, tasks_cli: str | None = None):
+                       stop_after: str | None = None, tasks_cli: str | None = None,
+                       hints_cli: str | None = None):
     set_current_repo(repo_url)
     name = get_repo_name(repo_url)
     base = WORKDIR / name
     session_service = InMemorySessionService()
     tasks = _load_tasks(tasks_cli)
+    hints = hints_cli or config.HINTS
     await emit({"type": "pipeline", "status": "start", "repo": name,
                 "repo_url": repo_url})
 
@@ -180,7 +204,8 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
     sink_id = logger.add(log_file, format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
                          level="DEBUG", encoding="utf-8")
     logger.info(f"[Run] {name} — log → {log_file}"
-                + (f"  ({len(tasks)} target task(s))" if tasks else ""))
+                + (f"  ({len(tasks)} target task(s))" if tasks else "")
+                + ("  (soft hint active)" if hints and hints.strip() else ""))
 
     metrics = _new_metrics()
 
@@ -202,7 +227,8 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
             _banner(1, f"Explorer ({repo_url})")
             plan_ok = await _staged_llm(
                 "explorer", explorer_agent, name, metrics, session_service,
-                message_fn=lambda note: repo_url + _tasks_prompt(tasks, propose_extras=True) + note,
+                message_fn=lambda note: repo_url + _tasks_prompt(tasks, propose_extras=True)
+                                        + _hints_prompt(hints) + note,
                 gate_fn=lambda: _plan_gate(repo_url, tasks),
                 owned=[reports_dir() / "exploration.md", reports_dir() / "plan.json"],
                 required_report="exploration",
@@ -890,7 +916,7 @@ def _report_completion(name: str, base: Path) -> None:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         logger.error("Usage: python -m alembic.main <repo_url> [--resume <stage>] "
-                     "[--until <stage>] [--tasks <spec>]")
+                     "[--until <stage>] [--tasks <spec>] [--hints <text>]")
         logger.error(f"       stages: {', '.join(STAGES)}")
         sys.exit(1)
 
@@ -918,7 +944,8 @@ if __name__ == "__main__":
     try:
         asyncio.run(run_pipeline(sys.argv[1], resume_from=_arg("--resume"),
                                  stop_after=_arg("--until"),
-                                 tasks_cli=_arg("--tasks") or _arg("--target-task")))
+                                 tasks_cli=_arg("--tasks") or _arg("--target-task"),
+                                 hints_cli=_arg("--hints")))
     except Exception:
         logger.exception("Pipeline error:")
         raise
