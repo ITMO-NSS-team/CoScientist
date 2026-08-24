@@ -39,25 +39,16 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-# benchmarks/research/run_benchmark.py → project root is 2 levels up
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 DEFAULT_TASKS_FILE = Path(__file__).resolve().parent / "tasks.jsonl"
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
 
-# How long (seconds) to wait, after the ADK run itself finishes, for the
-# BackgroundValidatorPlugin's fire-and-forget judgments to land — it schedules
-# an async task per unresolved hypothesis and the main run does NOT await it
-# (see CoScientist/graph/research/validator.py), so reading the graph
-# immediately after `manager.run()` returns can catch it mid-flight.
 VALIDATOR_SETTLE_TIMEOUT = 60
 VALIDATOR_POLL_INTERVAL = 2
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Task loading
-# ══════════════════════════════════════════════════════════════════════════════
 @dataclass
 class Task:
     id: str
@@ -85,9 +76,6 @@ def load_tasks(path: Path) -> list[Task]:
     return tasks
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Scoring
-# ══════════════════════════════════════════════════════════════════════════════
 def score_conclusions(synthesis_texts: list[str], check: dict) -> str:
     """One of: pass | fail | manual | no_conclusion.
 
@@ -104,9 +92,6 @@ def score_conclusions(synthesis_texts: list[str], check: dict) -> str:
     return "manual"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# One task run
-# ══════════════════════════════════════════════════════════════════════════════
 async def _wait_for_validator_settle(graph, timeout: float, poll: float) -> bool:
     """Poll until no Hypothesis is left `under_verification` (the
     BackgroundValidatorPlugin has judged everything it was going to), or
@@ -145,7 +130,7 @@ async def run_one_task(task: Task, idx: int, total: int, semaphore: asyncio.Sema
         try:
             await manager.initialize()
             await manager.run(task.question, verbose=False)
-        except Exception as exc:  # noqa: BLE001 — one task's crash must not kill the run
+        except Exception as exc:  # noqa: BLE001
             record["error"] = f"{type(exc).__name__}: {exc}"
             record["elapsed_sec"] = round(time.monotonic() - started, 1)
             print(f"[bench] ↓ done   {task.id}  ERROR: {record['error']}", flush=True)
@@ -153,7 +138,7 @@ async def run_one_task(task: Task, idx: int, total: int, semaphore: asyncio.Sema
         finally:
             try:
                 await manager.close()
-            except Exception:  # noqa: BLE001 — best-effort cleanup
+            except Exception:  # noqa: BLE001
                 pass
         record["elapsed_sec"] = round(time.monotonic() - started, 1)
 
@@ -162,10 +147,6 @@ async def run_one_task(task: Task, idx: int, total: int, semaphore: asyncio.Sema
             record["validator_settled"] = await _wait_for_validator_settle(
                 graph, VALIDATOR_SETTLE_TIMEOUT, VALIDATOR_POLL_INTERVAL
             )
-            # full() is the raw serialized graph (public — used the same way by
-            # validator.py) — one call gets every node's attrs AND status_history
-            # in one shot, including the ValidatorAgent's verdict `reason`, which
-            # overview()/get_context_slice() don't surface.
             raw = graph.full()
             nodes = raw.get("nodes", [])
 
@@ -199,7 +180,7 @@ async def run_one_task(task: Task, idx: int, total: int, semaphore: asyncio.Sema
                 record["conclusions"].append({"id": n.get("id"), "synthesis": text})
 
             record["score"] = score_conclusions(synthesis_texts, task.check)
-        except Exception as exc:  # noqa: BLE001 — grading failure shouldn't hide a real run
+        except Exception as exc:  # noqa: BLE001
             record["error"] = f"grading failed: {type(exc).__name__}: {exc}"
             record["score"] = "error"
 
@@ -209,9 +190,6 @@ async def run_one_task(task: Task, idx: int, total: int, semaphore: asyncio.Sema
         return record
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Aggregation + report
-# ══════════════════════════════════════════════════════════════════════════════
 def aggregate_metrics(records: list[dict]) -> dict:
     n = len(records)
     with_hyp = sum(1 for r in records if r.get("hypotheses"))
@@ -317,9 +295,6 @@ def write_summary(records: list[dict], out: Path) -> None:
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════════
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tasks-file", type=Path, default=DEFAULT_TASKS_FILE,

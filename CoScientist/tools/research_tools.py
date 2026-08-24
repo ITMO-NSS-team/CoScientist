@@ -36,12 +36,6 @@ def _http_mcp_toolset(
     )
 
 
-# Tavily websearch — optional like the toolsets below: without an API key the
-# remote MCP server has nothing to authenticate with, so building it anyway
-# (as before) leaves an agent instructed by its prompt to call `tavily_search`
-# with no live tool by that name behind it — ADK then hard-errors with "Tool
-# not found" instead of the agent adapting, same failure mode _http_mcp_toolset
-# already guards against for paper_analysis/papers_search below.
 websearch_toolset_instance = (
     McpToolset(
         connection_params=StreamableHTTPConnectionParams(

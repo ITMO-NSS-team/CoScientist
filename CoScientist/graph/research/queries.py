@@ -264,7 +264,7 @@ def evolvable_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[str
     for h in _nodes_of(g, "Hypothesis"):
         if _status(g, h) != "postponed":
             continue
-        if _in(g, h, "evolved_from"):  # already has ≥1 evolved child — don't re-fire
+        if _in(g, h, "evolved_from"):
             continue
         evidence_ids = {e for et in _EVIDENCE_EDGES for e in _in(g, h, et)}
         gap = ""

@@ -22,10 +22,6 @@ class ChemServiceClient:
         self.port = port
         self.base_url = f"http://{self.host}:{self.port}"
         self.timeout = timeout
-        # Docking is far heavier than this client's other endpoints (PDF/figure
-        # extraction, SMILES conversion) — falls back to `timeout` if the
-        # caller doesn't pass a dedicated value, but should always be given one
-        # in practice (see calculate_docking_score).
         self.docking_timeout = docking_timeout if docking_timeout is not None else timeout
 
     def _post(

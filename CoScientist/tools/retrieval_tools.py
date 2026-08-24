@@ -185,14 +185,12 @@ class RetrievalToolSet(BaseToolset):
                     {
                         "tool": tool_result.tool,
                         "server_id": tool_result.server_id,
-                        # Capped here (not in the inline response) — this dict is
-                        # re-injected into the rerankers' prompts every turn.
                         "description": (tool_result.description or "")[
                             :_ACCUM_DESC_CAP
                         ],
                         "score": tool_result.score,
                         "tool_index": last_idx,
-                        "retrieval_query": query,  # Track which query found this
+                        "retrieval_query": query,
                     }
                 )
                 last_idx += 1

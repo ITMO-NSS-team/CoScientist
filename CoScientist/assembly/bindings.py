@@ -119,7 +119,7 @@ def _research_graph_readonly():
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
     factory=_websearch,
-    optional=True,  # built only when TAVILY_API_KEY is configured (see research_tools.py)
+    optional=True,
     runtime_resolved=True,  # Tavily MCP — tool surface comes from the remote server
     docs=(
         ToolDoc(
@@ -734,9 +734,6 @@ _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
 # Seed state['research_context'] from the research blackboard (role-dependent).
 _cb("inject_research_context", "before_agent", factory=_inject_research_context)
-# Give straggler hypothesis judgments one more bounded chance to land before
-# ResultAggregatorAgent freezes their status in prose (see validator.py's
-# wait_for_validator_settle for why they can otherwise be orphaned forever).
 _cb("wait_for_validator_settle", "before_agent", factory=lambda ctx: _wait_for_validator_settle())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())

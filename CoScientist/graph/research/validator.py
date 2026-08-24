@@ -261,10 +261,6 @@ def _independent_evidence_ids(by_id: Dict[str, Any], ev_ids) -> set:
 _SUPERLATIVE_RE = re.compile(
     r"\b(?:dominant|dominates?|most (?:frequent|common)|leading|"
     r"outperforms? all|highest[- ]frequency)\b"
-    # Cyrillic stems get no trailing \b: they're deliberately truncated to
-    # match inflected endings (частый/частым/частая/...), and \w* eats the
-    # rest of the word — a trailing \b would fail mid-word since Cyrillic
-    # letters are \w in Python's Unicode-aware re.
     r"|\b(?:сам\w*\s+част\w*|доминир\w*|преоблада\w*)",
     re.IGNORECASE,
 )
@@ -273,11 +269,6 @@ _COMPARATOR_RE = re.compile(
     r"против|чем у|второе место|ближайш\w* конкурент)\b",
     re.IGNORECASE,
 )
-# A "vs/against ... uniform/random/baseline/chance/theoretical/expected/null"
-# phrase is a comparison against a THEORY, not a real competitor — it must
-# not itself count as a comparator match (that is exactly the failure mode
-# this check exists to catch: "binomial test vs uniform baseline: p=1.97e-12"
-# reads as having a "vs", but names no actual runner-up).
 _BASELINE_COMPARISON_RE = re.compile(
     r"\b(?:vs\.?|versus|compared to|against(?: the)?)\s+(?:an?\s+|the\s+)?"
     r"(?:uniform|random|baseline|chance|theoretical|expected|null)\b[\w\s%().,-]*",
@@ -416,14 +407,6 @@ async def judge_hypothesis(
             if et in ("supports", "refutes", "refines"):
                 polarity.setdefault(eid, et)
 
-        # Independence check: collapse evidence that merely restates another
-        # cited item (same underlying source/number under a different id) so
-        # it can't pad the evidence count, and — for an EVOLVED hypothesis —
-        # also drop evidence born in the same commit as the hypothesis itself
-        # (it never faced anything beyond what motivated EvolutionAgent to
-        # write it). A "confirmed" verdict resting on nothing outside that is
-        # not independent confirmation: downgrade it and route it back through
-        # EvolutionAgent (evolve_recommended) for a genuinely separate source.
         circular_reason = ""
         duplicate_evidence: List[str] = []
         supporting_ids = {eid for eid, pol in polarity.items()
@@ -446,25 +429,12 @@ async def judge_hypothesis(
                     status_updates[0]["status"] = verdict
                     status_updates[0]["reason"] = circular_reason[:300]
 
-        # Comparator check: a hypothesis that claims to be THE dominant/
-        # leading/most-frequent option only means something relative to the
-        # actual runner-up. Flag — do NOT block, see _has_named_comparator —
-        # when a superlative claim is confirmed with no evidence that frames
-        # a head-to-head comparison against a named competitor (the failure
-        # mode actually observed: a scaffold "confirmed dominant" via a
-        # binomial test against a uniform 10% baseline, while its real
-        # runner-up sat within a percentage point — a proper head-to-head
-        # test on that pair came back p≈0.5, not significant at all).
         comparator_missing = False
         if verdict == "confirmed" and _claims_superlative(
                 (h.get("attrs") or {}).get("formulation", "")):
             ev_texts = [_evidence_text(by_id[eid]) for eid in supporting_ids if eid in by_id]
             comparator_missing = not _has_named_comparator(ev_texts)
 
-        # Cross-hypothesis grounding check: see _shared_evidence_hyps. Only
-        # meaningful once this hypothesis is actually confirmed — that's the
-        # point at which a reader (or ResultAggregatorAgent) would otherwise
-        # treat it as an independently-established sibling finding.
         shared_evidence_hyps: Dict[str, List[str]] = {}
         if verdict == "confirmed" and supporting_ids:
             shared_evidence_hyps = _shared_evidence_hyps(
@@ -482,16 +452,9 @@ async def judge_hypothesis(
             if comparator_missing:
                 concl_attrs["comparator_check"] = "missing"
             if shared_evidence_hyps:
-                # Sorted for deterministic output — dict iteration order isn't
-                # guaranteed stable across runs/Python versions in a way this
-                # attr's consumers should depend on.
                 concl_attrs["shares_evidence_with"] = {
                     k: sorted(v) for k, v in sorted(shared_evidence_hyps.items())
                 }
-            # The gap EvolutionAgent acts on (graph/research/evolution.py). Only
-            # meaningful on a postponed verdict; only trusted "recommended" if a
-            # concrete gap actually came with it (a bare true with no gap text
-            # is treated as the model not really having one to name).
             if verdict == "postponed":
                 evolve = data.get("evolve")
                 evolve = evolve if isinstance(evolve, dict) else {}
@@ -500,10 +463,6 @@ async def judge_hypothesis(
                 if gap:
                     concl_attrs["evolve_gap"] = gap
                 if circular_reason:
-                    # Overrides whatever the model said — it reasoned under
-                    # "confirmed", so its own evolve judgment (if any) isn't
-                    # about this gap. The next EvolutionAgent pass needs an
-                    # INDEPENDENT source for the SAME claim, not a new sub-claim.
                     concl_attrs["evolve_recommended"] = True
                     concl_attrs["evolve_gap"] = (
                         "independent confirmation: a source for this claim "
@@ -621,8 +580,6 @@ class BackgroundValidatorPlugin(BasePlugin):
 background_validator_plugin = BackgroundValidatorPlugin()
 
 
-# How long the Result Aggregator will wait for straggler judgments before
-# writing the report anyway (best-effort — never blocks the report forever).
 _SETTLE_TIMEOUT = 60.0
 _SETTLE_POLL = 2.0
 
@@ -683,6 +640,6 @@ async def wait_for_validator_settle(callback_context: Any) -> None:
             if time.monotonic() >= deadline:
                 return None
             await asyncio.sleep(_SETTLE_POLL)
-    except Exception:  # noqa: BLE001 — best-effort, must never break the report
+    except Exception:  # noqa: BLE001
         logger.warning("[validator] wait_for_validator_settle failed", exc_info=True)
         return None

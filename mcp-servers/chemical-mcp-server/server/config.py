@@ -21,11 +21,6 @@ class Settings(BaseSettings):
     chem_services_host: str = Field(default="localhost")
     chem_services_port: int = Field(default=8005)
     chem_services_timeout: int = Field(default=60)
-    # Docking is a much heavier computation than the other endpoints on this
-    # client (PDF/figure extraction, SMILES conversion) — 60s is routinely too
-    # short for it, especially with several PDB ids docked at once. Separate
-    # knob so raising it doesn't also make every lightweight call wait longer
-    # to fail when the service is actually down.
     chem_services_docking_timeout: int = Field(default=300)
 
     # Retrosynthesis

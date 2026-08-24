@@ -171,10 +171,6 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      # Order matters: give straggler judgments (see validator.py's
-      # wait_for_validator_settle) a bounded chance to land BEFORE the
-      # overview/digest that inject_research_context bakes into the prompt
-      # is computed, so the injected digest reflects post-settle statuses too.
       before_agent: [wait_for_validator_settle, inject_research_context]
     output_key: final_report
 

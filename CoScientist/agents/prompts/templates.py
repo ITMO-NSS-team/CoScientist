@@ -254,23 +254,9 @@ Update task status to "done" immediately upon completion of each work item.
 # plugin (graph/research/validator.py), not an agent — no prompt template here.
 
 
-# ── EvolutionAgent ───────────────────────────────────────────────────────────
-# MOOSE-Chem-inspired refinement: grows a NEW hypothesis from a postponed
-# parent by closing ONE named gap with a freshly-found source — never by
-# reformulating/weakening the criteria around the SAME evidence the parent
-# already had (that is not evolution, it is grading yourself easier).
 
 @_register("evolution")
 def evolution(ctx: PromptContext) -> str:
-    # EvolutionAgent does not search or compute directly — it delegates to
-    # whichever specialist actually fits the named gap (literature vs
-    # clinical vs computational), the same specialists the orchestrator
-    # itself uses. This avoids maintaining a second, narrower copy of their
-    # tool lists here (which repeatedly went stale and got hallucinated
-    # against — "tavily_research", "explore_scientific_database",
-    # "find_papers_in_db" all trace back to this agent guessing at tools it
-    # didn't actually have). Delegating means it inherits their REAL,
-    # up-to-date toolkits instead.
     delegation = ""
     if ctx.subordinates:
         routing = ctx.render_routing()
@@ -420,9 +406,6 @@ def research(ctx: PromptContext) -> str:
         )
         n += 1
 
-    # 4) Final fallback to tavily — only advertise it when it actually built
-    # (TAVILY_API_KEY configured, see research_tools.py); otherwise calling it
-    # hard-errors with "Tool not found" since no live tool by that name exists.
     if websearch and lit:
         steps.append(
             f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. "

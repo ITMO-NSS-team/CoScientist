@@ -484,7 +484,7 @@ def test_evidence_text_falls_back_to_structured_attrs():
     text = V._evidence_text(bibliographic)
     assert text and text != ""
     assert "A2A knockout study" in text and "Huang et al." in text and "2005" in text
-    assert "subtype" not in text  # not duplicated — it's already shown separately
+    assert "subtype" not in text
 
     computational = {"attrs": {"subtype": "computational", "mean_macro_f1": 0.9664}}
     assert "0.9664" in V._evidence_text(computational)
@@ -686,7 +686,6 @@ def test_evolvable_hypotheses_trigger(store):
     assert [i["hypothesis"] for i in items] == ["H1"]
     assert items[0]["gap"] == "IC50 value for X against Y"
 
-    # EvolutionAgent grows H2 from H1 — the branch is no longer evolvable.
     r = store.commit(
         source="EvolutionAgent",
         nodes=[{"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "narrower claim"}},
@@ -706,7 +705,7 @@ def test_evolution_agent_permissions(store):
     assert errs == []
     errs = schema.validate_transition("EvolutionAgent", "Hypothesis",
                                       "under_verification", "confirmed")
-    assert errs  # judging a verdict stays ValidatorAgent-only
+    assert errs
 
 
 def test_is_restatement_matches_on_shared_source_ref_even_without_id_mention():
@@ -788,7 +787,7 @@ def test_confirmed_verdict_downgraded_when_evolved_hypothesis_has_only_birth_evi
 
     assert res and res["ok"], res
     nodes = {n["id"]: n for n in store.full()["nodes"]}
-    assert nodes[h2_id]["status"] == "postponed"  # NOT confirmed — downgraded
+    assert nodes[h2_id]["status"] == "postponed"
     concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
     assert concl["attrs"]["independence_check"] == "failed"
     assert concl["attrs"]["evolve_recommended"] is True
@@ -818,7 +817,6 @@ def test_confirmed_verdict_stays_when_evolved_hypothesis_gains_independent_evide
     h2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "h2")
     cc2_id = next(n["id"] for n in r.committed["nodes"] if n.get("ref") == "cc2")
 
-    # A separate, later commit: a genuinely independent literature source.
     r2 = store.commit(
         source="ResearchAgent",
         nodes=[{"type": "Evidence", "ref": "ei", "attrs": {"subtype": "literature",
@@ -896,7 +894,7 @@ def test_pre_existing_evidence_cited_at_birth_does_not_count_as_seed(store):
 
     assert res and res["ok"], res
     nodes = {n["id"]: n for n in store.full()["nodes"]}
-    assert nodes[h2_id]["status"] == "confirmed"  # not downgraded: eold pre-existed h2
+    assert nodes[h2_id]["status"] == "confirmed"
     concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
     assert "independence_check" not in concl["attrs"]
 
@@ -941,7 +939,7 @@ def test_duplicate_evidence_flagged_but_does_not_block_ordinary_hypothesis(store
 
     assert res and res["ok"], res
     nodes = {n["id"]: n for n in store.full()["nodes"]}
-    assert nodes["H1"]["status"] == "confirmed"  # ordinary hypothesis: not blocked
+    assert nodes["H1"]["status"] == "confirmed"
     concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
     assert concl["attrs"]["duplicate_evidence"] == [e2_id]
 
@@ -986,7 +984,7 @@ def test_shares_evidence_with_flags_confirmed_sibling_overlap(store):
     import asyncio
     import CoScientist.graph.research.validator as V
 
-    _build_verifiable(store)  # H1: "X binds Y"
+    _build_verifiable(store)
     store.commit(
         source="HypothesesAgent",
         nodes=[{"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "Y regulates Z"}},
@@ -1083,7 +1081,7 @@ def test_comparator_check_flags_superlative_confirmed_without_head_to_head(store
 
     assert res and res["ok"], res
     nodes = {n["id"]: n for n in store.full()["nodes"]}
-    assert nodes["H1"]["status"] == "confirmed"  # flagged, NOT blocked
+    assert nodes["H1"]["status"] == "confirmed"
     concl = next(n for n in nodes.values() if n["type"] == "Conclusion")
     assert concl["attrs"]["comparator_check"] == "missing"
 
@@ -1124,7 +1122,7 @@ def test_comparator_check_does_not_fire_on_non_superlative_hypothesis(store):
     import asyncio
     import CoScientist.graph.research.validator as V
 
-    _build_verifiable(store)  # H1: "X binds Y" — no superlative wording
+    _build_verifiable(store)
     store.commit(source="ResearchAgent",
                  nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "literature",
                          "content": "strong support, no baseline language at all"}}],
@@ -1271,7 +1269,7 @@ def test_wait_for_validator_settle_gives_up_after_timeout(monkeypatch):
             return {"research_id": "research-1"}
 
         def overview(self):
-            return {"counts": {"Hypothesis": {"under_verification": 1}}}  # never clears
+            return {"counts": {"Hypothesis": {"under_verification": 1}}}
 
     graph = FakeGraph()
 
@@ -1282,8 +1280,6 @@ def test_wait_for_validator_settle_gives_up_after_timeout(monkeypatch):
     monkeypatch.setattr(V, "_SETTLE_TIMEOUT", 0.03)
     monkeypatch.setattr(V, "background_validator_plugin", V.BackgroundValidatorPlugin())
 
-    # Must return on its own once the bound elapses — the outer timeout here
-    # is only a safety net against a real hang, not the mechanism under test.
     asyncio.run(asyncio.wait_for(V.wait_for_validator_settle(object()), timeout=1.0))
 
 

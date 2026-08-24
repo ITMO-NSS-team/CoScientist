@@ -224,10 +224,6 @@ EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "applies_to": tuple((m, t) for m in ("CostModel", "EfficiencyMetric")
                         for t in ("ResearchQuestion", "Hypothesis",
                                   "VerificationMethod", "Conclusion")),
-    # MOOSE-inspired refinement: a new Hypothesis grown from a postponed parent
-    # by closing ONE specific gap the ValidatorAgent named (see EvolutionAgent
-    # in AGENT_PERMISSIONS below and graph/research/evolution.py). Points from
-    # the child (the mutated/closer variant) to the parent it was grown from.
     "evolved_from": (("Hypothesis", "Hypothesis"),),
 }
 
@@ -431,14 +427,6 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("motivates", "tested_by", "requires", "formulated_for",
                      "uses", "consumes"),
     ),
-    # MOOSE-Chem-inspired refinement loop (graph/research/evolution.py): grows
-    # a NEW hypothesis from a postponed parent by closing ONE specific gap the
-    # ValidatorAgent named (Conclusion.attrs.evolve_reason), grounded in a
-    # freshly-found source — never a reformulation of the SAME evidence the
-    # parent already had (that would just be relaxing the wording to fit what
-    # is already known, not real evolution). Create-set mirrors HypothesesAgent
-    # (new Hypothesis + its own criteria) plus ResearchAgent (new Evidence for
-    # that hypothesis specifically); `evolved_from` records the lineage.
     "EvolutionAgent": AgentPerm(
         create=frozenset({"Hypothesis", "ConfirmationCriteria", "Evidence"}),
         update_attrs=frozenset(),
