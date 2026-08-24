@@ -720,7 +720,10 @@ async def _wrap(name, session_service, metrics):
     if server_err:
         logger.warning(f"[wrapper] server venv setup problem (continuing): {server_err}")
 
-    res = write_server(name, names)
+    # The plan's recorded invocation for each tool: the last resort for typing
+    # a param the repo function itself leaves un-annotated and un-defaulted.
+    sample_args = {t.name: t.sample_args for t in plan.tools if t.sample_args}
+    res = write_server(name, names, sample_args=sample_args)
     gate = check_server()
     used_fallback = False
     if not gate["passed"]:
