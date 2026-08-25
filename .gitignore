@@ -29,3 +29,36 @@ research_graph_*.png
 
 # Run bundles dropped in for analysis (artefacts, checkpoints, traces)
 CoScientist/track3/
+
+# Paper and demo workspace — the article, its figures, LaTeX build products and
+# the recorded bundles the replay plays. Kept out of the repository: they are
+# artefacts of one submission, not part of the system.
+paper/
+demo/
+RUNBOOK_*.md
+
+# Per-run traces and exports dropped at the repository root
+act3*.jsonl
+act3*.log
+act3*.json
+act3*.html
+act3*.svg
+act3*.png
+track3*
+run_evolution.log
+last_run.log
+session.log
+dataset_gen.log
+agent_events.log
+runs/
+logs/
+workspace/
+tz_documents/
+conversations*/
+task_tracker_data.json
+*_report.md
+
+# Reference PDFs and vendored templates pulled in for the write-up
+CoScientist/docs/*.pdf
+CoScientist/golem_h1/
+IEEE-conference-template-*/
