@@ -40,7 +40,10 @@ logger = logging.getLogger(__name__)
 _LOG_TAIL_LINES = 15
 _MAX_JOBS = 200  # cap registry size; evict oldest finished jobs past this
 # Base for the absolute, clickable build-page link handed back to the agent.
-_WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "http://localhost:8000").rstrip("/")
+# Empty when nothing set it, and then no absolute link is offered at all: the
+# page only exists while the web UI is running, and a link that does not open
+# sends the agent looking for the build somewhere else on the host.
+_WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "").rstrip("/")
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
@@ -139,12 +142,12 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
         "status": rec["status"],
         "elapsed_seconds": round((rec.get("finished_at") or time.time()) - rec["started_at"]),
         # Live build page in the CoScientist web UI (tails this build's log and
-        # renders the streamed pipeline events). ``progress_page`` is relative;
-        # ``progress_url`` is the absolute, clickable link (base from
-        # COSCIENTIST_WEB_BASE_URL, default http://localhost:8000).
+        # renders the streamed pipeline events). ``progress_page`` is relative
+        # and always present, since the web layer resolves it itself.
         "progress_page": f"/builds/{rec['job_id']}",
-        "progress_url": f"{_WEB_BASE_URL}/builds/{rec['job_id']}",
     }
+    if _WEB_BASE_URL:
+        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{rec['job_id']}"
     text = _read_log(rec) if (with_log_tail or rec["status"] != "running") else ""
     stages = _STAGE_RE.findall(text)
     if stages:
@@ -154,8 +157,11 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
             out["log_tail"] = "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
         out["note"] = ("The build is still running (a full build takes tens of "
                        "minutes). Do other work and call "
-                       f"check_mcp_build('{rec['job_id']}') again later — do not "
-                       "poll in a tight loop.")
+                       f"check_mcp_build('{rec['job_id']}') again later; do not "
+                       "poll in a tight loop. That call is the only source of "
+                       "this build's result. An MCP server found any other way "
+                       "on this host belongs to some earlier build and says "
+                       "nothing about this one.")
     elif rec["status"] == "done":
         out["mcp_url"] = rec.get("mcp_url")
         out["image"] = rec.get("image")
@@ -230,7 +236,10 @@ async def build_mcp_server(
         "repo_url": repo_url,
         "note": ("Build started (base image → pipeline → docker commit → serve). "
                  "A full build takes tens of minutes: report the job_id back, do "
-                 f"other work, and call check_mcp_build('{job_id}') later."),
+                 f"other work, and call check_mcp_build('{job_id}') later. That "
+                 "call is the only source of this build's result; an MCP server "
+                 "found any other way on this host belongs to some earlier "
+                 "build."),
     }
 
 
@@ -394,8 +403,9 @@ def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
     text = log.read_text(encoding="utf-8", errors="replace")
     status = _status_from_log(text)
     out: Dict[str, Any] = {"job_id": job_id, "status": status,
-                           "progress_page": f"/builds/{job_id}",
-                           "progress_url": f"{_WEB_BASE_URL}/builds/{job_id}"}
+                           "progress_page": f"/builds/{job_id}"}
+    if _WEB_BASE_URL:
+        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{job_id}"
     if status == "done":
         url = _URL_RE.search(text)
         image = _IMAGE_RE.search(text)
