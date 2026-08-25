@@ -17,6 +17,19 @@ Credentials come from the environment and are never hardcoded; a missing
 credential returns ``None`` so the caller can fall back to the bundle path
 rather than fail. The docker argv sequences and the packing are injectable, so
 all of it is testable without Docker, a registry, or real credentials.
+
+.. note::
+
+   There is no command-line entry point for this yet. The functions here are
+   the mechanism and are covered by tests, but nothing in the tree calls them,
+   so shipping a tool to another machine currently means driving them from
+   Python by hand. A CLI is the missing piece.
+
+   For the same reason this path has never been run for real: the tests cover
+   it with an injected runner, and no push to a registry, no rebuild on a
+   target, no serve on the far side has been done end to end. Both are open:
+   write the entry point, then verify it against a live registry and a second
+   machine.
 """
 
 from __future__ import annotations

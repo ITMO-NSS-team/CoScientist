@@ -13,6 +13,19 @@ is small enough to store, and it is enough to stand the tool up anywhere.
 Both docker steps take an injectable ``runner``, so the logic is testable
 without Docker. A failed rebuild is classified from its build log, because
 "the build failed" is not actionable and the same handful of causes recur.
+
+.. note::
+
+   There is no command-line entry point for this yet. The functions here are
+   the mechanism and are covered by tests, but nothing in the tree calls them,
+   so shipping a tool to another machine currently means driving them from
+   Python by hand. A CLI is the missing piece.
+
+   For the same reason this path has never been run for real: the tests cover
+   it with an injected runner, and no push to a registry, no rebuild on a
+   target, no serve on the far side has been done end to end. Both are open:
+   write the entry point, then verify it against a live registry and a second
+   machine.
 """
 
 from __future__ import annotations
