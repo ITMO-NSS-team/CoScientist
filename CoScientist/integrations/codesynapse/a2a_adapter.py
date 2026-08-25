@@ -16,14 +16,17 @@ from a2a.types import (
     AgentSkill,
     Artifact,
     DataPart,
+    Message,
+    Role,
     Task,
     TaskState,
     TaskStatus,
+    TaskStatusUpdateEvent,
     TextPart,
 )
 
 from CoScientist.integrations.codesynapse.facade import CodesynapseFacade, StartRequest
-from CoScientist.integrations.codesynapse.models import A2ATaskRecord, ArtifactPart, RunState
+from CoScientist.integrations.codesynapse.models import A2ATaskRecord, ArtifactPart, RunState, TraceEvent
 
 
 def _a2a_state(state: RunState) -> TaskState:
@@ -80,6 +83,59 @@ def task_from_record(record: A2ATaskRecord, *, context_id: str) -> Task:
     )
 
 
+def progress_from_trace(event: TraceEvent, *, a2a_task_id: str, context_id: str) -> TaskStatusUpdateEvent:
+    """Expose a redacted trace fact as a non-terminal standard A2A update."""
+
+    tool_name = event.data.get("tool_name")
+    subject = " · ".join(part for part in (event.agent, tool_name) if isinstance(part, str) and part)
+    if event.type.endswith(".started"):
+        action = "started"
+    elif event.type.endswith(".completed"):
+        action = "completed"
+    elif event.type.endswith(".failed"):
+        action = "failed"
+    elif event.type.endswith(".cancelled"):
+        action = "cancelled"
+    else:
+        action = event.type
+    summary = event.summary or (f"{subject} {action}" if subject else f"CoScientist {action}")
+    metadata: dict[str, Any] = {
+        "event_id": event.event_id,
+        "run_id": event.run_id,
+        "sequence": event.sequence,
+        "type": event.type,
+    }
+    if event.agent:
+        metadata["agent"] = event.agent
+    if isinstance(tool_name, str) and tool_name:
+        metadata["tool_name"] = tool_name
+    progress_data = {
+        "schema_version": "coscientist-a2a-progress-v1",
+        "event_id": event.event_id,
+        "run_id": event.run_id,
+        "sequence": event.sequence,
+        "type": event.type,
+        "agent": event.agent,
+        "tool_name": tool_name if isinstance(tool_name, str) else None,
+    }
+    return TaskStatusUpdateEvent(
+        task_id=a2a_task_id,
+        context_id=context_id,
+        final=False,
+        status=TaskStatus(
+            state=TaskState.working,
+            message=Message(
+                message_id=event.event_id,
+                role=Role.agent,
+                task_id=a2a_task_id,
+                context_id=context_id,
+                parts=[TextPart(text=summary), DataPart(data=progress_data)],
+            ),
+        ),
+        metadata=metadata,
+    )
+
+
 class FacadeTaskStore(TaskStore):
     """A2A task store view backed by the façade's durable task repository."""
 
@@ -98,7 +154,7 @@ class FacadeTaskStore(TaskStore):
 
 
 class FacadeAgentExecutor(AgentExecutor):
-    """Starts a façade task and immediately publishes its A2A ``working`` view."""
+    """Streams façade trace progress and terminal state through one A2A request."""
 
     def __init__(self, facade: CodesynapseFacade) -> None:
         self._facade = facade
@@ -112,6 +168,15 @@ class FacadeAgentExecutor(AgentExecutor):
         a2a_task_id = str(context.task_id or uuid4())
         external_run_id = str(metadata.get("external_run_id") or a2a_task_id)
         project_id = str(metadata.get("project_id") or context.context_id or a2a_task_id)
+        async def publish_progress(event: TraceEvent) -> None:
+            await event_queue.enqueue_event(
+                progress_from_trace(
+                    event,
+                    a2a_task_id=a2a_task_id,
+                    context_id=context.context_id or event.run_id,
+                )
+            )
+
         record = await self._facade.start(
             StartRequest(
                 external_run_id=external_run_id,
@@ -153,9 +218,19 @@ class FacadeAgentExecutor(AgentExecutor):
                     else None
                 ),
                 a2a_task_id=a2a_task_id,
+                progress_subscriber=publish_progress,
             )
         )
-        await event_queue.enqueue_event(task_from_record(record, context_id=context.context_id or record.coscientist_run_id))
+        try:
+            await event_queue.enqueue_event(
+                task_from_record(record, context_id=context.context_id or record.coscientist_run_id)
+            )
+            terminal = await self._facade.wait_for_terminal_task(record.a2a_task_id)
+            await event_queue.enqueue_event(
+                task_from_record(terminal, context_id=context.context_id or terminal.coscientist_run_id)
+            )
+        finally:
+            self._facade.unsubscribe_progress(record.a2a_task_id, publish_progress)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         if context.task_id is None:
@@ -171,10 +246,10 @@ def make_agent_card(url: str) -> AgentCard:
 
     return AgentCard(
         name="coscientist",
-        description="Long-running scientific research pipeline with standard A2A task polling.",
+        description="Long-running scientific research pipeline with standard A2A progress streaming and task polling.",
         url=url,
         version="1.0.0",
-        capabilities=AgentCapabilities(streaming=False),
+        capabilities=AgentCapabilities(streaming=True),
         default_input_modes=["text/plain"],
         default_output_modes=["text/markdown", "application/json"],
         skills=[

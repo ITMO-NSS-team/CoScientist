@@ -161,7 +161,10 @@ class InMemoryIntegrationStore:
         """Store a new event, returning False for an idempotent duplicate."""
 
         async with self._lock:
-            if event.event_id in self._events:
+            if event.event_id in self._events or any(
+                stored.run_id == event.run_id and stored.sequence == event.sequence
+                for stored in self._events.values()
+            ):
                 return False
             stored = event.model_copy(deep=True)
             self._events[stored.event_id] = stored

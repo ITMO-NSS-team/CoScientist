@@ -56,7 +56,7 @@ def batch_events(
 
 
 class TraceRecorder:
-    """Assigns monotonic sequences and writes redacted events to the repository."""
+    """Assigns persisted monotonic sequences and writes redacted trace events."""
 
     def __init__(
         self,
@@ -73,21 +73,32 @@ class TraceRecorder:
         self._tenant_id = tenant_id
         self._project_id = project_id
         self._sequence = initial_sequence
+        self._initialized = False
         self._on_event = on_event
 
     async def emit(self, event_type: str, *, data: dict[str, Any] | None = None, **fields: Any) -> TraceEvent:
-        self._sequence += 1
-        event = TraceEvent(
-            event_id=str(uuid4()),
-            run_id=self._run_id,
-            sequence=self._sequence,
-            tenant_id=self._tenant_id,
-            project_id=self._project_id,
-            type=event_type,
-            data=redact(data or {}),
-            **fields,
-        )
-        stored = await self._store.append_event(event)
-        if stored and self._on_event is not None:
-            await self._on_event(event)
-        return event
+        event_id = str(uuid4())
+        if not self._initialized:
+            self._sequence = max(self._sequence, await self._last_persisted_sequence())
+            self._initialized = True
+        while True:
+            self._sequence += 1
+            event = TraceEvent(
+                event_id=event_id,
+                run_id=self._run_id,
+                sequence=self._sequence,
+                tenant_id=self._tenant_id,
+                project_id=self._project_id,
+                type=event_type,
+                data=redact(data or {}),
+                **fields,
+            )
+            if await self._store.append_event(event):
+                if self._on_event is not None:
+                    await self._on_event(event)
+                return event
+            self._sequence = await self._last_persisted_sequence()
+
+    async def _last_persisted_sequence(self) -> int:
+        events = await self._store.replay_events(self._run_id)
+        return max((event.sequence for event in events), default=0)

@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 from types import SimpleNamespace
 
-from CoScientist.integrations.codesynapse.a2a_adapter import FacadeAgentExecutor, task_from_record
+from CoScientist.integrations.codesynapse.a2a_adapter import FacadeAgentExecutor, make_agent_card, task_from_record
 from CoScientist.integrations.codesynapse.facade import CodesynapseFacade
 from CoScientist.integrations.codesynapse.models import A2ATaskRecord, ArtifactPart, RunState, TerminalArtifacts
 from CoScientist.integrations.codesynapse.store import InMemoryIntegrationStore
@@ -70,6 +70,72 @@ def test_a2a_adapter_starts_a_task_without_codesynapse_metadata():
         assert (await store.get_run("task-1")).tenant_id == "root"
 
     asyncio.run(scenario())
+
+
+def test_a2a_adapter_streams_redacted_trace_progress_before_terminal_task():
+    async def scenario():
+        class Executor:
+            async def execute(self, request, hitl_handler):
+                await request.trace_recorder.emit(
+                    "tool.started",
+                    agent="ResearchAgent",
+                    data={"tool_name": "tavily_search", "api_key": "secret"},
+                )
+                return "report"
+
+        events = []
+
+        class Queue:
+            async def enqueue_event(self, event):
+                events.append(event)
+
+        adapter = FacadeAgentExecutor(
+            CodesynapseFacade(store=InMemoryIntegrationStore(), executor=Executor())
+        )
+        request_context = SimpleNamespace(
+            metadata={},
+            task_id="task-1",
+            context_id="context-1",
+            get_user_input=lambda: "Find a hypothesis",
+        )
+
+        await adapter.execute(request_context, Queue())
+
+        assert events[0].status.state == "working"
+        progress = next(
+            event
+            for event in events
+            if getattr(event, "kind", None) == "status-update"
+            and event.metadata["type"] == "tool.started"
+        )
+        assert progress.kind == "status-update"
+        assert progress.final is False
+        assert progress.status.state == "working"
+        assert progress.status.message.parts[0].root.text == "ResearchAgent · tavily_search started"
+        assert progress.status.message.parts[1].root.data == {
+            "schema_version": "coscientist-a2a-progress-v1",
+            "event_id": progress.metadata["event_id"],
+            "run_id": progress.metadata["run_id"],
+            "sequence": 2,
+            "type": "tool.started",
+            "agent": "ResearchAgent",
+            "tool_name": "tavily_search",
+        }
+        assert progress.metadata == {
+            "event_id": progress.metadata["event_id"],
+            "run_id": progress.metadata["run_id"],
+            "sequence": 2,
+            "type": "tool.started",
+            "agent": "ResearchAgent",
+            "tool_name": "tavily_search",
+        }
+        assert events[-1].status.state == "completed"
+
+    asyncio.run(scenario())
+
+
+def test_codesynapse_agent_card_advertises_streaming():
+    assert make_agent_card("http://localhost:8010").capabilities.streaming is True
 
 
 def test_a2a_adapter_hashes_raw_control_capability_without_jwt():

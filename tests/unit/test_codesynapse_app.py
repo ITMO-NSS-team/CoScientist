@@ -53,6 +53,42 @@ def test_a2a_start_returns_working_task_before_pipeline_completes():
     assert response.json()["result"]["status"]["state"] == "working"
 
 
+def test_a2a_message_stream_emits_progress_before_terminal_task():
+    class TraceExecutor:
+        async def execute(self, request, hitl_handler):
+            await request.trace_recorder.emit(
+                "tool.started",
+                agent="ResearchAgent",
+                data={"tool_name": "tavily_search"},
+            )
+            return "report"
+
+    store = InMemoryIntegrationStore()
+    app = create_app(
+        CodesynapseIntegrationSettings(a2a_public_url="http://testserver"),
+        facade=CodesynapseFacade(store=store, executor=TraceExecutor()),
+        store=store,
+    )
+    response = TestClient(app).post("/", json={
+        "jsonrpc": "2.0",
+        "id": "request-1",
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "messageId": "message-1",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Find a hypothesis"}],
+            },
+        },
+    }, headers={"Accept": "text/event-stream"})
+
+    assert response.status_code == 200
+    assert '"kind":"status-update"' in response.text
+    assert '"type":"tool.started"' in response.text
+    assert '"state":"working"' in response.text
+    assert '"state":"completed"' in response.text
+
+
 def test_a2a_task_get_completes_without_codesynapse_metadata_or_jwt():
     store = InMemoryIntegrationStore()
     app = create_app(

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -20,10 +21,16 @@ from CoScientist.integrations.codesynapse.models import (
     RunState,
     TERMINAL_RUN_STATES,
     TerminalArtifacts,
+    TraceEvent,
 )
 from CoScientist.integrations.codesynapse.state import transition
 from CoScientist.integrations.codesynapse.store import DuplicateIdentityError, IntegrationStore
 from CoScientist.integrations.codesynapse.trace import TraceRecorder
+
+
+logger = logging.getLogger(__name__)
+
+ProgressSubscriber = Callable[[TraceEvent], Awaitable[None]]
 
 
 class StartRequest(BaseModel):
@@ -42,6 +49,7 @@ class StartRequest(BaseModel):
     artifact_capability_token: str | None = Field(default=None, exclude=True)
     trace_recorder: object | None = Field(default=None, exclude=True)
     a2a_task_id: str | None = None
+    progress_subscriber: ProgressSubscriber | None = Field(default=None, exclude=True)
 
 
 class CodesynapseFacade:
@@ -61,6 +69,7 @@ class CodesynapseFacade:
         self._jobs: dict[str, asyncio.Task[None]] = {}
         self._handlers: dict[str, CodesynapseHITLHandler] = {}
         self._task_ids_by_run: dict[str, str] = {}
+        self._progress_subscribers: dict[str, set[ProgressSubscriber]] = {}
         self._cancelling_tasks: set[str] = set()
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._start_lock = asyncio.Lock()
@@ -83,6 +92,7 @@ class CodesynapseFacade:
                 task = await self._store.get_task(existing.a2a_task_id)
                 if task is None:
                     raise RuntimeError("existing integration run has no persisted task")
+                self._subscribe_progress(task.a2a_task_id, request.progress_subscriber)
                 return task
 
             coscientist_run_id = request.coscientist_run_id or str(uuid4())
@@ -128,10 +138,12 @@ class CodesynapseFacade:
                 task = await self._store.get_task(existing.a2a_task_id)
                 if task is None:
                     raise RuntimeError("existing integration run has no persisted task")
+                self._subscribe_progress(task.a2a_task_id, request.progress_subscriber)
                 return task
             a2a_task_id = task.a2a_task_id
             coscientist_run_id = task.coscientist_run_id
             self._task_ids_by_run[coscientist_run_id] = a2a_task_id
+            self._subscribe_progress(a2a_task_id, request.progress_subscriber)
 
         if run_in_background:
             self._jobs[a2a_task_id] = asyncio.create_task(self._execute(request, a2a_task_id, coscientist_run_id))
@@ -144,6 +156,46 @@ class CodesynapseFacade:
 
     async def get_task(self, a2a_task_id: str) -> A2ATaskRecord | None:
         return await self._store.get_task(a2a_task_id)
+
+    async def wait_for_terminal_task(self, a2a_task_id: str) -> A2ATaskRecord:
+        """Wait without cancelling the durable scientific job when a client disconnects."""
+
+        while True:
+            task = await self.get_task(a2a_task_id)
+            if task is None:
+                raise RuntimeError("A2A task disappeared while streaming")
+            if task.state in TERMINAL_RUN_STATES:
+                return task
+            job = self._jobs.get(a2a_task_id)
+            if job is not None:
+                await asyncio.shield(job)
+            else:
+                await asyncio.sleep(0.1)
+
+    def unsubscribe_progress(self, a2a_task_id: str, subscriber: ProgressSubscriber) -> None:
+        subscribers = self._progress_subscribers.get(a2a_task_id)
+        if subscribers is None:
+            return
+        subscribers.discard(subscriber)
+        if not subscribers:
+            self._progress_subscribers.pop(a2a_task_id, None)
+
+    def _subscribe_progress(self, a2a_task_id: str, subscriber: ProgressSubscriber | None) -> None:
+        if subscriber is not None:
+            self._progress_subscribers.setdefault(a2a_task_id, set()).add(subscriber)
+
+    async def _publish_progress(self, a2a_task_id: str, event: TraceEvent) -> None:
+        for subscriber in tuple(self._progress_subscribers.get(a2a_task_id, ())):
+            try:
+                await subscriber(event)
+            except Exception:
+                logger.warning(
+                    "[A2A_PROGRESS] task_id=%s event_id=%s — subscriber disconnected",
+                    a2a_task_id,
+                    event.event_id,
+                    exc_info=True,
+                )
+                self.unsubscribe_progress(a2a_task_id, subscriber)
 
     async def cancel(self, a2a_task_id: str) -> bool:
         """Idempotently cancel a live task and publish a terminal cancelled view."""
@@ -182,12 +234,13 @@ class CodesynapseFacade:
                 run.terminal_reason = "cancelled"
                 run.updated_at = datetime.now(timezone.utc)
                 await self._store.save_run_if_non_terminal(run)
-                await TraceRecorder(
+                event = await TraceRecorder(
                     self._store,
                     run_id=task.coscientist_run_id,
                     tenant_id=run.tenant_id,
                     project_id=run.project_id,
                 ).emit("run.cancelled", data={"error_code": "cancelled"})
+                await self._publish_progress(task.a2a_task_id, event)
 
             # A2A cancellation is an acknowledgement, not a join on the
             # scientific pipeline.  _execute performs eventual cleanup.
@@ -226,7 +279,8 @@ class CodesynapseFacade:
 
             dispatcher = self._delivery_factory(request) if self._delivery_factory is not None else None
 
-            async def flush_trace_event(event) -> None:
+            async def flush_trace_event(event: TraceEvent) -> None:
+                await self._publish_progress(a2a_task_id, event)
                 if dispatcher is not None:
                     await dispatcher.flush_run(coscientist_run_id)
 
@@ -235,7 +289,7 @@ class CodesynapseFacade:
                 run_id=coscientist_run_id,
                 tenant_id=request.tenant_id,
                 project_id=request.project_id,
-                on_event=flush_trace_event if dispatcher is not None else None,
+                on_event=flush_trace_event,
             )
 
             async def emit_hitl_event(event_type: str, **fields: Any) -> None:

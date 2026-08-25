@@ -103,6 +103,10 @@ def test_facade_cancel_returns_terminal_cancelled_task():
         assert task.artifacts.error.data["error_code"] == "cancelled"
         events = await facade._store.replay_events(task.coscientist_run_id)
         assert events[-1].type == "run.cancelled"
+        assert [(event.type, event.sequence) for event in events] == [
+            ("run.started", 1),
+            ("run.cancelled", 2),
+        ]
 
     asyncio.run(scenario())
 
