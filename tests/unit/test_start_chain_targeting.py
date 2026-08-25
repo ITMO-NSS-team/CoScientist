@@ -81,6 +81,36 @@ class _Ok:
     returncode = 0
 
 
+def test_a_soft_hint_reaches_the_build_container(monkeypatch, tmp_path):
+    """--hints is documented in the README; it has to actually arrive."""
+    ran = []
+    monkeypatch.setattr(sc, "_run", lambda cmd, **kw: ran.append(cmd) or _Ok())
+    ns = argparse.Namespace(
+        platform=None, gpus=None, mount_dir=None, context=None, stage_volume=None,
+        advertise_host=None, env_file=tmp_path / "absent.env", resume=None, until=None,
+        hints="a tool for drug and disease associations",
+    )
+
+    sc.build_image("https://github.com/org/repo", ns)
+
+    build = " ".join(ran[0])
+    assert "ALEMBIC_HINTS=a tool for drug and disease associations" in build
+
+
+def test_no_hint_adds_nothing(monkeypatch, tmp_path):
+    ran = []
+    monkeypatch.setattr(sc, "_run", lambda cmd, **kw: ran.append(cmd) or _Ok())
+    ns = argparse.Namespace(
+        platform=None, gpus=None, mount_dir=None, context=None, stage_volume=None,
+        advertise_host=None, env_file=tmp_path / "absent.env", resume=None, until=None,
+        hints=None,
+    )
+
+    sc.build_image("https://github.com/org/repo", ns)
+
+    assert "ALEMBIC_HINTS" not in " ".join(ran[0])
+
+
 def test_the_api_version_pin_reaches_the_docker_call(monkeypatch):
     """An old daemon rejects the client's default version. The pin has to be on
     the call, since exporting it would break every newer daemon."""

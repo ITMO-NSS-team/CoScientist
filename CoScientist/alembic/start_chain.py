@@ -179,6 +179,10 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
     cmd += _env_args(ns.env_file)
+    # A soft hint reaches the pipeline through the environment, like the rest of
+    # the ALEMBIC_* settings.
+    if getattr(ns, "hints", None):
+        cmd += ["-e", f"ALEMBIC_HINTS={ns.hints}"]
     cmd += [BASE_IMAGE, "build", repo_url]
     if ns.resume:
         cmd += ["--resume", ns.resume]
@@ -289,6 +293,10 @@ def parse_args() -> argparse.Namespace:
                          "(e.g. --until explorer runs only exploration). "
                          "Forwarded to alembic.main; implies no serve unless "
                          "it is 'wrapper'.")
+    ap.add_argument("--hints", default=None,
+                    help="Free-text steer for the explorer: the kind of tool you "
+                         "hope to see among the others. No forced signature and "
+                         "no gate. Same as setting ALEMBIC_HINTS.")
     ap.add_argument("--mount-dir", default=None,
                     help="Host directory bind-mounted read-only at /mount/data "
                          "inside the build container (TM-Bench input data).")
