@@ -28,10 +28,23 @@ def get_repo_name(repo_url: str) -> str:
     return re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1])
 
 
-def _image_exists(name: str) -> bool:
-    """True if a local docker image with this name/tag exists."""
+def _docker(context: str | None) -> list[str]:
+    """``docker [--context X]``, imported late.
+
+    ``alembic.targets`` resolves only where the package is on sys.path (inside
+    the build container, or through start_chain's path setup). This module is
+    also imported plainly as ``CoScientist.alembic.common``, so the import
+    happens where docker is actually being run rather than at module load.
+    """
+    from alembic.targets import docker_cli
+
+    return docker_cli(context)
+
+
+def _image_exists(name: str, context: str | None = None) -> bool:
+    """True if a docker image with this name/tag exists on that daemon."""
     return subprocess.run(
-        ["docker", "image", "inspect", name],
+        [*_docker(context), "image", "inspect", name],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     ).returncode == 0
 
@@ -74,10 +87,10 @@ def _source_hash(dockerfile: Path, project_root: Path) -> str:
     return digest.hexdigest()[:16]
 
 
-def _image_label(name: str, key: str) -> str | None:
+def _image_label(name: str, key: str, context: str | None = None) -> str | None:
     """Value of image label ``key``, or ``None`` if the image or label is absent."""
     result = subprocess.run(
-        ["docker", "image", "inspect", "--format",
+        [*_docker(context), "image", "inspect", "--format",
          f'{{{{ index .Config.Labels "{key}" }}}}', name],
         capture_output=True, text=True,
     )
@@ -89,15 +102,42 @@ def _image_label(name: str, key: str) -> str | None:
 
 
 def ensure_base_image(dockerfile: Path, project_root: Path,
-                platform: str | None = None, rebuild: bool = False) -> None:
-    """Build ``alembic-base:latest`` when it is missing, forced, or out of date.
+                platform: str | None = None, rebuild: bool = False,
+                context: str | None = None) -> None:
+    """Make sure the daemon the build will run on has a current base image.
 
     Out of date means the sources baked into the present image differ from the
     checkout — detected through the ``alembic.source_sha`` label. Rebuilding on
     that difference is what stops a cached image from quietly running old
     pipeline code.
+
+    ``context`` names the daemon the build is headed for, and the check has to
+    ask that one. Asking the local daemon about a build that will run elsewhere
+    answers the wrong question, and the answer is reassuring, so old pipeline
+    code runs on the remote machine with nothing said.
+
+    A remote daemon is checked but never built on: the base image installs
+    system packages, which the build hosts cannot reach the network for. A
+    remote image that is missing or stale is therefore an error with the command
+    to fix it, not something to paper over.
     """
     want = _source_hash(dockerfile, project_root)
+    if context:
+        have = _image_label(BASE_IMAGE, _LABEL_KEY, context)
+        if have == want and not rebuild:
+            print(f"[alembic] base image on {context} is up to date ({want}) — reusing.")
+            return
+        state = (f"built from {have}" if have else
+                 "unlabelled" if _image_exists(BASE_IMAGE, context) else "missing")
+        sys.exit(
+            f"[alembic] base image {BASE_IMAGE} on context {context!r} is {state}, "
+            f"the checkout is {want}.\n"
+            f"[alembic] It cannot be built there (the build installs system "
+            f"packages and those hosts have no network during a build). Build it "
+            f"here and ship it:\n"
+            f"[alembic]   python CoScientist/alembic/start_chain.py --help  # local build first\n"
+            f"[alembic]   docker save {BASE_IMAGE} | docker --context {context} load"
+        )
     if not rebuild and _image_exists(BASE_IMAGE):
         have = _image_label(BASE_IMAGE, _LABEL_KEY)
         if have == want:

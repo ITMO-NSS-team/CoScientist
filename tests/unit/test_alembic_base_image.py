@@ -27,8 +27,10 @@ def project(tmp_path):
 def _patch(monkeypatch, *, exists, label):
     """Record what would have been run; answer the two lookups."""
     builds = []
-    monkeypatch.setattr(common, "_image_exists", lambda name: exists)
-    monkeypatch.setattr(common, "_image_label", lambda name, key: label)
+    monkeypatch.setattr(common, "_image_exists", lambda name, context=None: exists)
+    monkeypatch.setattr(
+        common, "_image_label", lambda name, key, context=None: label
+    )
     monkeypatch.setattr(
         common.subprocess, "run", lambda cmd, **kw: builds.append(cmd) or _Ok()
     )
@@ -116,3 +118,58 @@ def test_the_digest_is_the_same_on_any_machine(project):
     first = common._source_hash(dockerfile, root)
 
     assert first == common._source_hash(Path(dockerfile), Path(root))
+
+
+# ── a build headed for another daemon ────────────────────────────────────────
+
+
+def test_the_check_asks_the_daemon_the_build_will_run_on(project, monkeypatch):
+    """Asking the local daemon about a remote build answers the wrong question,
+    and answers it reassuringly."""
+    root, dockerfile = project
+    asked = []
+    monkeypatch.setattr(
+        common, "_image_label",
+        lambda name, key, context=None: asked.append(context) or common._source_hash(
+            dockerfile, root
+        ),
+    )
+
+    common.ensure_base_image(dockerfile, root, context="nss-calc")
+
+    assert asked == ["nss-calc"]
+
+
+def test_a_current_image_on_the_remote_is_reused(project, monkeypatch):
+    root, dockerfile = project
+    current = common._source_hash(dockerfile, root)
+    builds = _patch(monkeypatch, exists=True, label=current)
+
+    common.ensure_base_image(dockerfile, root, context="nss-calc")
+
+    assert builds == []
+
+
+def test_a_stale_image_on_the_remote_stops_the_run(project, monkeypatch):
+    """It cannot be built there, so carrying on would run old pipeline code on
+    the remote machine with nothing said."""
+    root, dockerfile = project
+    builds = _patch(monkeypatch, exists=True, label="0123456789abcdef")
+
+    with pytest.raises(SystemExit) as exit_info:
+        common.ensure_base_image(dockerfile, root, context="nss-calc")
+
+    assert builds == []
+    message = str(exit_info.value)
+    assert "nss-calc" in message
+    assert "docker save" in message  # says how to fix it
+
+
+def test_a_missing_image_on_the_remote_stops_the_run(project, monkeypatch):
+    root, dockerfile = project
+    _patch(monkeypatch, exists=False, label=None)
+
+    with pytest.raises(SystemExit) as exit_info:
+        common.ensure_base_image(dockerfile, root, context="nss-calc")
+
+    assert "missing" in str(exit_info.value)

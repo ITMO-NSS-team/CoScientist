@@ -79,3 +79,26 @@ def test_a_named_volume_that_already_exists_is_reused(tmp_path, monkeypatch):
 
 class _Ok:
     returncode = 0
+
+
+def test_the_api_version_pin_reaches_the_docker_call(monkeypatch):
+    """An old daemon rejects the client's default version. The pin has to be on
+    the call, since exporting it would break every newer daemon."""
+    seen = {}
+    monkeypatch.setattr(sc.subprocess, "run", lambda cmd, **kw: seen.update(kw) or _Ok())
+    monkeypatch.setattr(sc, "_API_VERSION", "1.43")
+
+    sc._run(["docker", "info"])
+
+    assert seen["env"]["DOCKER_API_VERSION"] == "1.43"
+
+
+def test_without_a_pin_the_docker_call_keeps_the_ambient_environment(monkeypatch):
+    monkeypatch.delenv("DOCKER_API_VERSION", raising=False)
+    seen = {}
+    monkeypatch.setattr(sc.subprocess, "run", lambda cmd, **kw: seen.update(kw) or _Ok())
+    monkeypatch.setattr(sc, "_API_VERSION", None)
+
+    sc._run(["docker", "info"])
+
+    assert "DOCKER_API_VERSION" not in seen["env"]

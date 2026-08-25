@@ -47,7 +47,7 @@ from alembic.remote import (
     serve_mount_args,
     stage_volume_name,
 )
-from alembic.targets import detect_gpu, docker_cli
+from alembic.targets import detect_gpu, docker_cli, docker_env
 
 # /<root>/CoScientist/alembic/start_chain.py -> /<root>
 PROJECT_ROOT     = Path(__file__).resolve().parents[2]
@@ -97,8 +97,16 @@ def _redact_cmd(cmd: list[str]) -> str:
     return " ".join(parts)
 
 
+# The API version the selected daemon needs, set once from --api-version. It is
+# applied per call rather than exported, because a pin an old daemon requires is
+# rejected by a newer one, and a process-wide value would make one of the two
+# unreachable.
+_API_VERSION: str | None = None
+
+
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print(f"[start-chain] $ {_redact_cmd(cmd)}", flush=True)
+    kw.setdefault("env", docker_env(api_version=_API_VERSION))
     return subprocess.run(cmd, **kw)
 
 
@@ -289,6 +297,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--context", default=None,
                     help="Docker context to build and serve on (a remote daemon). "
                          "Default: the local daemon.")
+    ap.add_argument("--api-version", default=None,
+                    help="Docker API version this daemon needs (e.g. 1.43 for an "
+                         "older remote host). Applied to this run's docker calls "
+                         "only; a pin a newer daemon rejects would otherwise make "
+                         "it unreachable.")
     ap.add_argument("--advertise-host", default=None,
                     help="Host name to advertise the served MCP at. Default: "
                          "derived from the context's endpoint, then $A2A_HOST, "
@@ -304,6 +317,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     ns = parse_args()
+    global _API_VERSION
+    _API_VERSION = ns.api_version
     if ns.platform is None:
         ns.platform = _default_platform()
         if ns.platform:
@@ -312,11 +327,13 @@ def main() -> None:
                   f"Pass --platform native to override.")
     elif ns.platform == "native":
         ns.platform = None
-    if ns.gpus is None and detect_gpu():
+    if ns.gpus is None and detect_gpu(ns.context, env=docker_env(api_version=_API_VERSION)):
         ns.gpus = "all"
-        print("[start-chain] GPU detected — passing --gpus all.")
-    ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT, 
-                      platform=ns.platform, rebuild=ns.rebuild_base)
+        where = f" on {ns.context}" if ns.context else ""
+        print(f"[start-chain] GPU detected{where} — passing --gpus all.")
+    ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT,
+                      platform=ns.platform, rebuild=ns.rebuild_base,
+                      context=ns.context)
     image = build_image(ns.repo_url, ns)
     if ns.no_serve:
         return
