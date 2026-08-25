@@ -1,17 +1,15 @@
 """A built MCP server has to reach two places: the durable catalogue (so later
-runs find it) and this run's state (so the executor can call it now). No
-network, no database — the rag_tools manager is injected.
+runs find it) and this run's state (so the executor can call it now). They
+happen at different moments — the catalogue when the build finishes, the state
+when a session polls it — so they are tested apart. No network, no database:
+the rag_tools manager is injected.
 """
 
 import asyncio
 
 import pytest
 
-from CoScientist.tools.registry_bridge import (
-    register_and_resolve,
-    register_mcp_server,
-    resolve_into_state,
-)
+from CoScientist.tools.registry_bridge import register_mcp_server, resolve_into_state
 
 
 class _Server:
@@ -89,21 +87,10 @@ def test_resolving_keeps_servers_that_are_already_there():
     assert [d["name"] for d in state["deployed_mcps"]] == ["other", "medsam"]
 
 
-def test_one_call_does_both_halves():
-    manager, state = _Manager(), {}
-
-    server, entry = asyncio.run(
-        register_and_resolve(
-            "http://host:8000/mcp", "medsam", state, manager=manager
-        )
-    )
-
-    assert manager.added[0]["url"] == "http://host:8000/mcp"  # in the catalogue
-    assert state["deployed_mcps"] == [entry]  # and callable right now
-    assert server.name == "medsam"
-
-
-# ── the call site: a finished build must reach the catalogue ─────────────────
+# ── the call site ────────────────────────────────────────────────────────────
+# A finished build must reach the catalogue on its own. The agent's own prompt
+# tells it to start a build, report the job_id and go do something else, so
+# nothing may depend on it coming back to poll.
 
 
 class _Ctx:
@@ -111,74 +98,162 @@ class _Ctx:
         self.state = {}
 
 
-def _finished_job(monkeypatch, tmp_path, calls):
-    """A done build in alembic_tools' job registry, with the bridge stubbed."""
-    tmp_log = tmp_path / "build.log"
-    tmp_log.write_text("MCP server: http://host:8000/mcp\n", encoding="utf-8")
+_DONE_LOG = """\
+  image     : alembic-tool:gget
+  container : alembic-serve-gget-b29990
+  url       : http://localhost:20162/mcp
+"""
+
+
+class _FakeProc:
+    """A build subprocess that writes its log and exits with ``returncode``."""
+
+    def __init__(self, stdout, text, returncode):
+        self.pid = 4242
+        self._stdout, self._text, self._rc = stdout, text, returncode
+
+    def wait(self):
+        self._stdout.write(self._text)
+        self._stdout.flush()
+        return self._rc
+
+
+def _fake_build(monkeypatch, tmp_path, *, log=_DONE_LOG, returncode=0):
+    """A job record whose build subprocess is faked out."""
     from CoScientist.tools import alembic_tools
 
-    async def _register_and_resolve(mcp_url, name, state, description="", **kw):
-        calls.append({"url": mcp_url, "name": name})
-        state.setdefault("deployed_mcps", []).append({"url": mcp_url, "name": name})
-        return object(), state["deployed_mcps"][-1]
-
     monkeypatch.setattr(
-        "CoScientist.tools.registry_bridge.register_and_resolve", _register_and_resolve
+        alembic_tools.subprocess,
+        "Popen",
+        lambda *a, stdout=None, **kw: _FakeProc(stdout, log, returncode),
     )
     rec = {
-        "job_id": "medsam-abc123",
-        "repo_url": "https://github.com/org/medsam.git",
-        "status": "done",
+        "job_id": "gget-938c68",
+        "repo_url": "https://github.com/pachterlab/gget",
+        "status": "running",
         "started_at": 0.0,
-        "finished_at": 1.0,
-        "mcp_url": "http://host:8000/mcp",
-        "image": "alembic-tool:medsam",
-        "log_file": str(tmp_log),
+        "log_file": str(tmp_path / "build.log"),
     }
-    monkeypatch.setattr(alembic_tools, "_JOBS", {"medsam-abc123": rec})
+    monkeypatch.setattr(alembic_tools, "_JOBS", {"gget-938c68": rec})
     return alembic_tools, rec
 
 
-def test_a_finished_build_is_registered_and_made_callable(monkeypatch, tmp_path):
+def _stub_registry(monkeypatch, calls, *, boom=None, status=None):
+    async def _register(mcp_url, name, description="", **kw):
+        if boom is not None:
+            raise boom
+        calls.append({"url": mcp_url, "name": name})
+        return _Server(mcp_url, name) if status is None else _Errored(mcp_url, name)
+
+    monkeypatch.setattr(
+        "CoScientist.tools.registry_bridge.register_mcp_server", _register
+    )
+
+
+class _Errored(_Server):
+    """A server that was added but whose tool sync failed."""
+
+    def __init__(self, url, name):
+        super().__init__(url, name)
+        from rag_tools.storage.models import ToolStatus
+
+        self.status = ToolStatus.ERROR
+
+
+def test_a_finished_build_registers_itself_with_nobody_watching(monkeypatch, tmp_path):
     calls = []
-    alembic_tools, _ = _finished_job(monkeypatch, tmp_path, calls)
-    ctx = _Ctx()
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path)
+    _stub_registry(monkeypatch, calls)
 
-    out = asyncio.run(alembic_tools.check_mcp_build("medsam-abc123", ctx))
+    alembic_tools._runner(rec)  # the build thread's body, run inline
 
-    assert calls == [{"url": "http://host:8000/mcp", "name": "medsam"}]
-    assert ctx.state["deployed_mcps"] == [
-        {"url": "http://host:8000/mcp", "name": "medsam"}
-    ]
-    assert out["registered"] is True
+    assert rec["status"] == "done"
+    assert calls == [{"url": "http://localhost:20162/mcp", "name": "gget"}]
+    assert rec["registered"] is True
 
 
-def test_polling_the_same_build_registers_it_once(monkeypatch, tmp_path):
+def test_a_failed_build_registers_nothing(monkeypatch, tmp_path):
     calls = []
-    alembic_tools, _ = _finished_job(monkeypatch, tmp_path, calls)
-    ctx = _Ctx()
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path, log="boom\n", returncode=1)
+    _stub_registry(monkeypatch, calls)
 
-    asyncio.run(alembic_tools.check_mcp_build("medsam-abc123", ctx))
-    asyncio.run(alembic_tools.check_mcp_build("medsam-abc123", ctx))
+    alembic_tools._runner(rec)
 
-    assert len(calls) == 1
+    assert rec["status"] == "failed"
+    assert calls == []
 
 
 def test_a_registry_outage_does_not_fail_the_build(monkeypatch, tmp_path):
-    """The build succeeded. A catalogue that is down is reported, not raised."""
+    """The build succeeded. A catalogue that is down is recorded, not raised."""
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path)
+    _stub_registry(monkeypatch, [], boom=ConnectionError("registry unreachable"))
+
+    alembic_tools._runner(rec)
+
+    assert rec["status"] == "done"
+    assert rec["registered"] is False
+    assert "registry unreachable" in rec["registration_error"]
+
+
+def test_polling_a_registered_build_reports_it_and_makes_it_callable(
+    monkeypatch, tmp_path
+):
     calls = []
-    alembic_tools, _ = _finished_job(monkeypatch, tmp_path, calls)
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path)
+    _stub_registry(monkeypatch, calls)
+    alembic_tools._runner(rec)
+    ctx = _Ctx()
 
-    async def _boom(*a, **kw):
-        raise ConnectionError("registry unreachable")
+    out = asyncio.run(alembic_tools.check_mcp_build("gget-938c68", ctx))
 
-    monkeypatch.setattr(
-        "CoScientist.tools.registry_bridge.register_and_resolve", _boom
-    )
+    assert len(calls) == 1  # the poll does not register a second time
+    assert out["registered"] is True
+    assert ctx.state["deployed_mcps"] == [
+        {"url": "http://localhost:20162/mcp", "name": "gget"}
+    ]
 
-    out = asyncio.run(alembic_tools.check_mcp_build("medsam-abc123", _Ctx()))
 
-    assert out["status"] == "done"
-    assert out["mcp_url"] == "http://host:8000/mcp"
-    assert out["registered"] is False
-    assert "registry unreachable" in out["registration_error"]
+def test_a_failed_registration_is_still_reported_on_a_later_poll(monkeypatch, tmp_path):
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path)
+    _stub_registry(monkeypatch, [], boom=ConnectionError("registry unreachable"))
+    alembic_tools._runner(rec)
+
+    first = asyncio.run(alembic_tools.check_mcp_build("gget-938c68", _Ctx()))
+    second = asyncio.run(alembic_tools.check_mcp_build("gget-938c68", _Ctx()))
+
+    for out in (first, second):
+        assert out["status"] == "done"
+        assert out["registered"] is False
+        assert "registry unreachable" in out["registration_error"]
+
+
+def test_a_build_that_never_ran_the_thread_is_registered_on_its_first_poll(
+    monkeypatch, tmp_path
+):
+    """A record can reach a poll without having gone through the build thread
+    (restored from disk, thread killed). The poll is the fallback."""
+    calls = []
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path)
+    _stub_registry(monkeypatch, calls)
+    (tmp_path / "build.log").write_text(_DONE_LOG, encoding="utf-8")
+    rec.update(status="done", finished_at=1.0, mcp_url="http://localhost:20162/mcp")
+
+    out = asyncio.run(alembic_tools.check_mcp_build("gget-938c68", _Ctx()))
+
+    assert calls == [{"url": "http://localhost:20162/mcp", "name": "gget"}]
+    assert out["registered"] is True
+
+
+def test_a_server_whose_tools_could_not_be_indexed_is_not_called_registered(
+    monkeypatch, tmp_path
+):
+    """Retrieval scores tools. A server row with none behind it will never
+    surface, so reporting it as registered tells the agent something false."""
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path)
+    _stub_registry(monkeypatch, [], status="error")
+
+    alembic_tools._runner(rec)
+
+    assert rec["status"] == "done"
+    assert rec["registered"] is False
+    assert "tools could not be indexed" in rec["registration_error"]

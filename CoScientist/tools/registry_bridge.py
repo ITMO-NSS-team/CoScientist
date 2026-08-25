@@ -16,6 +16,11 @@ This module closes both halves of that gap:
       executor can call the tool immediately, without waiting for a retrieval
       round.
 
+The two are called at different moments, which is why they are separate. (a)
+happens when the build finishes, whether or not anybody is asking, because a
+tool missing from the catalogue is a tool the next run builds again. (b) needs
+a live session, so it happens when a build is polled from one.
+
 ``register_mcp_server`` connects to the live server to enumerate its tools, so
 the server must be serving at ``mcp_url`` when it is called.
 """
@@ -23,7 +28,7 @@ the server must be serving at ``mcp_url`` when it is called.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -128,24 +133,3 @@ def resolve_into_state(
     if not any(d.get("url") == url for d in deployed):
         deployed.append(entry)
     return entry
-
-
-async def register_and_resolve(
-    mcp_url: str,
-    name: str,
-    state: Dict[str, Any],
-    description: str = "",
-    *,
-    headers: Optional[Dict[str, str]] = None,
-    manager=None,
-) -> Tuple[Any, Dict[str, str]]:
-    """Register a served ``mcp_url`` AND wire it into ``state``.
-
-    The one call to make after a build: the tool joins the durable catalogue and
-    becomes callable by the executor in the current run. Returns
-    ``(server, deployed_entry)``.
-    """
-    server = await register_mcp_server(
-        mcp_url, name, description, headers=headers, manager=manager
-    )
-    return server, resolve_into_state(state, server, name)

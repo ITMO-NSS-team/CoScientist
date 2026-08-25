@@ -13,6 +13,7 @@ find and continue an earlier build via ``list_mcp_builds``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -112,6 +113,22 @@ def _runner(rec: Dict[str, Any]) -> None:
         return
     with _LOCK:
         _finalize(rec, returncode)
+    # The catalogue entry is made here, when the build finishes, and not when
+    # someone asks about it. An agent that starts a build and reports the job_id
+    # back (which is what its prompt tells it to do) may never poll, and a tool
+    # that exists but is in no catalogue is a tool the next run rebuilds from
+    # scratch. Own thread, no event loop of its own, so asyncio.run is safe here.
+    #
+    # This thread is a daemon, so a host process that exits before the build
+    # ends takes it down and nothing here runs — the build container finishes
+    # regardless, but its result is lost. That is the same boundary the whole
+    # job registry has (``_JOBS`` lives in memory), and it does not bite the
+    # long-lived processes the system actually runs in: the web server, the A2A
+    # services and the REPL all outlive their builds.
+    try:
+        asyncio.run(_register_in_catalogue(rec))
+    except Exception as exc:  # noqa: BLE001 — the build itself succeeded
+        logger.warning("catalogue registration thread failed: %s", exc)
 
 
 def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]:
@@ -242,41 +259,75 @@ async def check_mcp_build(
     return out
 
 
-async def _publish_to_catalogue(
-    rec: Dict[str, Any], out: Dict[str, Any], tool_context: Optional[ToolContext]
-) -> None:
-    """Put a finished build's MCP server where the rest of the system can find it.
+async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
+    """Ingest a finished build's MCP server into the rag_tools registry, once.
 
-    Two destinations, both needed: the rag_tools registry, so Retrieve_tools
-    surfaces the tool in later runs and on other machines; and this session's
-    ``deployed_mcps``, so the executor can call it without waiting for a
-    retrieval round. Without this a build is forgotten the moment it finishes.
+    This is the durable half: it needs nothing from the session, so it runs the
+    moment the build finishes and does not wait for an agent to ask. Called
+    again from a poll it is a no-op, because the attempt is recorded on the job.
 
-    Runs once per job and never raises — a registry that is down must not turn a
-    successful build into a failed tool call. The outcome is reported back to
-    the agent in ``registered``.
+    Never raises — a registry that is down must not turn a successful build into
+    a failed tool call. The outcome is kept on the record and reported back to
+    the agent as ``registered``.
     """
-    if out.get("status") != "done" or not out.get("mcp_url") or rec.get("registered"):
+    if rec.get("status") != "done" or not rec.get("mcp_url") or "registered" in rec:
         return
     rec["registered"] = True  # one attempt per build, however often it is polled
 
-    from CoScientist.tools.registry_bridge import register_and_resolve
+    from CoScientist.tools.registry_bridge import register_mcp_server
 
     name = _repo_name(rec["repo_url"])
-    state = {"deployed_mcps": list((getattr(tool_context, "state", None) or {}).get(
-        "deployed_mcps") or [])}
     try:
-        await register_and_resolve(
-            out["mcp_url"], name, state, description=f"Alembic build of {rec['repo_url']}"
+        server = await register_mcp_server(
+            rec["mcp_url"], name, description=f"Alembic build of {rec['repo_url']}"
         )
     except Exception as exc:  # noqa: BLE001 — the build itself succeeded
         logger.warning("catalogue registration failed for %s: %s", name, exc)
-        out["registered"] = False
-        out["registration_error"] = f"{type(exc).__name__}: {exc}"
+        rec["registered"] = False
+        rec["registration_error"] = f"{type(exc).__name__}: {exc}"
         return
+
+    # A server row with no tools behind it is not a registration: retrieval
+    # scores tools, so nothing will ever surface it. Say so instead of
+    # reporting success the agent cannot act on.
+    from rag_tools.storage.models import ToolStatus
+
+    if getattr(server, "status", None) == ToolStatus.ERROR:
+        rec["registered"] = False
+        rec["registration_error"] = (
+            f"{name} was added to the catalogue but its tools could not be "
+            "indexed, so retrieval will not find it"
+        )
+
+
+async def _publish_to_catalogue(
+    rec: Dict[str, Any], out: Dict[str, Any], tool_context: Optional[ToolContext]
+) -> None:
+    """Report the catalogue outcome and make the tool callable in this run.
+
+    By the time a poll gets here the build thread has normally registered the
+    server already; the call below only covers a record that never went through
+    that thread. What is left is the run-scoped half: putting the url into
+    ``deployed_mcps`` so the executor can call the tool without waiting for a
+    retrieval round.
+    """
+    if out.get("status") != "done" or not out.get("mcp_url"):
+        return
+    await _register_in_catalogue(rec)
+    out["registered"] = rec.get("registered", False)
+    if rec.get("registration_error"):
+        out["registration_error"] = rec["registration_error"]
+
     if tool_context is not None:
+        from CoScientist.tools.registry_bridge import resolve_into_state
+
+        # ADK records a state change on assignment, so the list is rebuilt and
+        # put back whole instead of being appended to in place.
+        state = {"deployed_mcps": list(
+            (getattr(tool_context, "state", None) or {}).get("deployed_mcps") or []
+        )}
+        resolve_into_state(state, out["mcp_url"], _repo_name(rec["repo_url"]))
         tool_context.state["deployed_mcps"] = state["deployed_mcps"]
-    out["registered"] = True
 
 
 async def list_mcp_builds(tool_context: Optional[ToolContext] = None) -> Dict[str, Any]:
