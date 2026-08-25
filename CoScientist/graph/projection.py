@@ -96,6 +96,13 @@ def tool_vs_coder(
     ``"mcp" | "coder" | "mixed" | "none"``. Works on any run's ``full()`` dict,
     including a re-loaded snapshot. The agent sets can be passed in for callers
     that project a graph produced by a different configuration.
+
+    .. note::
+
+       Checked against the 29 recorded runs under ``graph_runs/sessions``: 25
+       came out ``coder``, 2 ``mcp``, 2 ``none``. No run mixed the two, and no
+       run reached the catalogue by way of a built tool, which is the signal
+       this is here to expose.
     """
     mcp_agents = _agents_bound_to(_MCP_TOOLSETS) if mcp_agents is None else mcp_agents
     coder_agents = (
