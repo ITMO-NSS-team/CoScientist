@@ -129,7 +129,6 @@ def make_a2a_app(
         app_name=app_name,
         session_service=session_service or InMemorySessionService(),
         artifact_service=InMemoryArtifactService(),
-<<<<<<< HEAD
         # ArtifactGatePlugin first: refuse training on a fabricated dataset here
         # too, so an agent served over A2A is held to the same standard as the
         # in-process runner. Truncation MUST stay last (ADK early-exits on the
@@ -137,12 +136,7 @@ def make_a2a_app(
         plugins=[
             ArtifactGatePlugin(),
             EventLoggerPlugin(),
-=======
-        # truncation MUST be last (ADK early-exits on first non-None after_tool).
-        plugins=[
-            EventLoggerPlugin(),
             UsageMetricsPlugin(),
->>>>>>> origin/feature/openhands
             GraphEmitterPlugin(),
             ToolResultTruncationPlugin(),
         ],
