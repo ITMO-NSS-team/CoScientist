@@ -1,10 +1,13 @@
 """Deterministic bridge: approved ExperimentPlan / TaskResults → research graph.
 
 After a plan is approved each task becomes a ``VerificationMethod`` node linked
-to the hypothesis it tests (``Hypothesis —tested_by→ VM``); after
-``record_result`` the outcome becomes ``Evidence`` (+``GeneratedData`` for file
-artifacts) linked back via ``VM —produces→ Evidence``. Writes go through the
-same privileged code-path as ``init_research`` (``enforce_permissions=False``):
+to the hypothesis it tests (``Hypothesis —tested_by→ VM``). Hypotheses with no
+covering task are postponed (``no_method_this_stage``), not dropped and not
+turned into extra EXP tasks. After ``record_result`` the outcome becomes
+``Evidence`` (+``GeneratedData`` for file artifacts) linked via
+``VM —produces→ Evidence`` and ``Evidence —relates_to→ Hypothesis`` so the
+background validator can judge the active claim. Writes go through the same
+privileged code-path as ``init_research`` (``enforce_permissions=False``):
 structural validation stays, per-agent ACLs are not extended, and no LLM agent
 gets a new tool.
 
@@ -71,6 +74,70 @@ def _task_hypothesis_ids(design: dict[str, Any]) -> list[str]:
     return ids
 
 
+def _plan_tasks(state: MutableMapping[str, Any]) -> list[dict[str, Any]]:
+    runtime = state.get(_RUNTIME_KEY) or {}
+    plan = runtime.get("plan") or {}
+    return [t for t in (plan.get("tasks") or []) if isinstance(t, dict)]
+
+
+def _task_by_id(state: MutableMapping[str, Any], task_id: str) -> dict[str, Any] | None:
+    for task in _plan_tasks(state):
+        if str(task.get("id") or "") == str(task_id):
+            return task
+    return None
+
+
+def _covered_hypothesis_ids(tasks: list[dict[str, Any]]) -> set[str]:
+    covered: set[str] = set()
+    for task in tasks:
+        covered.update(_task_hypothesis_ids(task.get("design") or {}))
+    return covered
+
+
+def _sync_uncovered_hypotheses(
+    store: Any, graph_nodes: dict[str, dict[str, Any]], covered: set[str],
+) -> tuple[int, int]:
+    """Postpone formulated Hs with no task; revive postponed Hs a task now covers.
+
+    Does not touch confirmed/refuted/under_verification. Alternatives that
+    HypothesesAgent parked as postponed stay postponed until a task lists them.
+    """
+    updates: list[dict[str, str]] = []
+    for nid, meta in graph_nodes.items():
+        if meta.get("type") != "Hypothesis":
+            continue
+        status = str(meta.get("status") or "")
+        if nid in covered:
+            if status == "postponed":
+                updates.append({
+                    "id": nid,
+                    "status": "formulated",
+                    "reason": "plan task covers this hypothesis",
+                })
+        elif status == "formulated":
+            updates.append({
+                "id": nid,
+                "status": "postponed",
+                "reason": "no_method_this_stage: no plan task tests this hypothesis",
+            })
+    if not updates:
+        return 0, 0
+    store.commit(source=_SOURCE, status_updates=updates, enforce_permissions=False)
+    postponed = sum(1 for row in updates if row["status"] == "postponed")
+    revived = sum(1 for row in updates if row["status"] == "formulated")
+    return postponed, revived
+
+
+def _schedule_hypothesis_judgments(store: Any) -> int:
+    """Fire-and-forget judge for Hs that now have evidence. Never raises."""
+    try:
+        from CoScientist.graph.research.validator import background_validator_plugin
+
+        return int(background_validator_plugin.schedule_for_graph(store) or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
     design = task.get("design") or {}
     dataset = design.get("dataset") or {}
@@ -102,9 +169,11 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
 
     Each plan task → one ``VerificationMethod`` node plus ``tested_by`` edges
     from every hypothesis the task's design covers (only for hypothesis ids that
-    actually exist as graph nodes). Re-approval / replan updates the existing VM
-    (attrs merge) instead of creating a duplicate; VMs whose tasks disappeared
-    from the plan are marked ``failed`` (reason=replanned) when still non-terminal.
+    actually exist as graph nodes). Formulated hypotheses with no covering task
+    are postponed; a postponed hypothesis a task now lists is revived to
+    formulated. Re-approval / replan updates the existing VM (attrs merge)
+    instead of creating a duplicate; VMs whose tasks disappeared from the plan
+    are marked ``failed`` (reason=replanned) when still non-terminal.
     """
     try:
         if not _enabled() or store is None:
@@ -170,10 +239,12 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
         ]
         if stale:
             store.commit(source=_SOURCE, status_updates=stale, enforce_permissions=False)
+        postponed, revived = _sync_uncovered_hypotheses(store, _graph_nodes(store), _covered_hypothesis_ids(tasks))
         audit(
             logger,
             f"EXPERIMENT_GRAPH_PLAN_PUBLISHED plan_id={plan_id} "
-            f"vms={len(vm_ids)} edges={len(edges)} stale={len(stale)}",
+            f"vms={len(vm_ids)} edges={len(edges)} stale={len(stale)} "
+            f"postponed={postponed} revived={revived}",
         )
     except Exception as exc:  # noqa: BLE001 — best-effort by contract
         audit(logger, f"EXPERIMENT_GRAPH_PLAN_PUBLISH_FAILED error={exc}",
@@ -197,10 +268,12 @@ def publish_result_to_graph(
 ) -> None:
     """Write one recorded TaskResult into the research graph (best-effort).
 
-    success/partial → ``Evidence`` (subtype=computational) + ``VM —produces→ E``,
-    file artifacts → ``GeneratedData —derived_from→ E``; the task's VM status is
-    advanced ``planned→running→done`` (or ``failed``). Skips silently when no VM
-    was published for this task.
+    success/partial → ``Evidence`` (subtype=computational) + ``VM —produces→ E``
+    and ``Evidence —relates_to→`` every hypothesis the task covers (so the
+    store moves those Hs to ``under_verification`` and the background
+    validator can judge). File artifacts → ``GeneratedData —derived_from→ E``;
+    the task's VM status is advanced ``planned→running→done`` (or ``failed``).
+    Skips silently when no VM was published for this task.
     """
     try:
         if not _enabled() or store is None or not isinstance(task_result, dict):
@@ -242,6 +315,10 @@ def publish_result_to_graph(
                 },
             })
             edges.append({"type": "produces", "from": vm_id, "to": "#e0"})
+            task = _task_by_id(state, task_id)
+            for hid in _task_hypothesis_ids((task or {}).get("design") or {}):
+                if graph_nodes.get(hid, {}).get("type") == "Hypothesis":
+                    edges.append({"type": "relates_to", "from": "#e0", "to": hid})
             for i, artifact in enumerate(artifacts[:_MAX_GENERATED_DATA]):
                 location = _artifact_location(artifact)
                 if not location:
@@ -276,11 +353,14 @@ def publish_result_to_graph(
             audit(logger, f"EXPERIMENT_GRAPH_RESULT_PUBLISH_FAILED task_id={task_id} errors={errors}",
                   level=logging.WARNING)
             return
+        linked = sum(1 for e in edges if e.get("type") == "relates_to")
+        judged = _schedule_hypothesis_judgments(store) if status in ("success", "partial") else 0
         audit(
             logger,
             f"EXPERIMENT_GRAPH_RESULT_PUBLISHED task_id={task_id} vm={vm_id} "
             f"vm_status={final} evidence={sum(1 for n in nodes if n.get('type') == 'Evidence')} "
-            f"generated_data={sum(1 for n in nodes if n.get('type') == 'GeneratedData')}",
+            f"generated_data={sum(1 for n in nodes if n.get('type') == 'GeneratedData')} "
+            f"relates_to={linked} scheduled_judgments={judged}",
         )
     except Exception as exc:  # noqa: BLE001 — best-effort by contract
         audit(logger, f"EXPERIMENT_GRAPH_RESULT_PUBLISH_FAILED task_id={task_id} error={exc}",

@@ -490,13 +490,15 @@ def test_design_field_coercions_are_llm_tolerant():
 def test_task_design_is_required_on_experiment_plan_1_0():
     task = _task("EXP-1")
     del task["design"]
-    with pytest.raises(ValidationError):
-        ExperimentPlan.model_validate(
-            {
-                **_plan(_task("EXP-1")).model_dump(mode="json"),
-                "tasks": [task],
-            }
-        )
+    plan = ExperimentPlan.model_validate(
+        {
+            **_plan(_task("EXP-1")).model_dump(mode="json"),
+            "tasks": [task],
+        }
+    )
+    assert plan.tasks[0].design.hypothesis_ref == "H1"
+    assert plan.tasks[0].design.baselines == []
+    assert plan.tasks[0].design.metrics == []
 
 
 def test_experiment_task_does_not_default_missing_route_to_coder():
@@ -690,13 +692,9 @@ def test_plan_methods_filled_when_empty():
     assert plan.methods
     assert plan.total_est_duration_min == 20
 
-def test_lenient_planner_preserves_unspecified_for_critique():
-    """Strict mode keeps unspecified* so completeness majors can fire."""
-    from CoScientist.experiments.schemas.models import (
-        ExperimentTask,
-        reset_lenient_planner,
-        set_lenient_planner,
-    )
+def test_design_placeholders_are_dropped_not_invented():
+    from CoScientist.experiments.review import render_experiment_plan
+    from CoScientist.experiments.schemas.models import ExperimentTask
 
     payload = {
         "id": "EXP-1",
@@ -704,12 +702,12 @@ def test_lenient_planner_preserves_unspecified_for_critique():
         "route": "coder",
         "design": {
             "hypothesis_ref": "H1",
-            "experiment_question": "Is toxicity acceptable?",
-            "dataset": {"name": "panel"},
+            "experiment_question": "What measurable outcome does this task produce?",
+            "dataset": {"name": "task dataset"},
             "baselines": [{"name": "unspecified", "kind": "method"}],
-            "metrics": [{"name": "unspecified_metric", "direction": "compare"}],
+            "metrics": [{"name": "primary_outcome", "direction": "compare"}],
             "analysis_artifacts": [
-                {"name": "tox.py", "role": "code", "prepare_via": "coder"}
+                {"name": "analysis.py", "role": "code", "prepare_via": "coder"}
             ],
         },
         "success_criteria": [
@@ -725,35 +723,25 @@ def test_lenient_planner_preserves_unspecified_for_critique():
         ],
         "est_duration_min": 10,
     }
+    task = ExperimentTask.model_validate(payload)
+    assert task.design.baselines == []
+    assert task.design.metrics == []
+    assert task.design.analysis_artifacts == []
+    assert task.design.dataset.name == ""
+    assert task.design.experiment_question == ""
 
-    token = set_lenient_planner(True)
-    try:
-        invent = ExperimentTask.model_validate(payload)
-        assert invent.design.baselines[0].name == "comparative reference method"
-        assert invent.design.metrics[0].name == "primary_outcome"
-    finally:
-        reset_lenient_planner(token)
-
-    token = set_lenient_planner(False)
-    try:
-        strict = ExperimentTask.model_validate(payload)
-        assert strict.design.baselines[0].name.startswith("unspecified")
-        assert strict.design.metrics[0].name.startswith("unspecified")
-        plan = _plan(
-            {
-                **_task("EXP-1", route="coder"),
-                "design": strict.design.model_dump(mode="json"),
-            }
-        )
-    finally:
-        reset_lenient_planner(token)
-
+    plan = _plan({**_task("EXP-1", route="coder"), "design": task.design.model_dump(mode="json")})
     critique = critique_plan(
         plan,
         settings=ExperimentsSettings(lenient_planner=False),
-        available_tools=_inventory(),
+        available_tools=[],
         hypothesis_refs=[{"hypothesis_id": "H1", "statement": "Fixture"}],
     )
-    assert critique.verdict == "revise"
-    assert any("unspecified" in i.message for i in critique.issues)
+    assert critique.verdict == "approve"
+    assert all(i.severity == "minor" for i in critique.issues if "design." in i.message)
+    text = render_experiment_plan(plan)
+    assert "comparative reference method" not in text
+    assert "primary_outcome" not in text
+    assert "analysis.py" not in text
+    assert "| EXP-1 |" in text and "—" in text
 

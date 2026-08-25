@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import functools
 import logging
+import os
 from datetime import timedelta
 from typing import Any, Callable, Mapping, MutableMapping
 from uuid import uuid4
@@ -444,6 +445,32 @@ def force_managed_s3_launch_params(launch_params: dict[str, Any] | None, *, requ
     if require:
         params["upload_results_to_s3"] = True
         params.setdefault("output_s3_prefix", "generated")
+    return clamp_generate_launch_num(params)
+
+
+def generate_num_cap() -> int:
+    """Max generator ``num`` from ``EXPERIMENTS__MAX_GENERATE_NUM`` (0 = off)."""
+    raw = os.getenv("EXPERIMENTS__MAX_GENERATE_NUM", "").strip()
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def clamp_generate_launch_num(launch_params: dict[str, Any] | None) -> dict[str, Any]:
+    """Cap or fill ``num`` so Fedot cannot request 100 CVAE molecules."""
+    params = copy.deepcopy(launch_params or {})
+    cap = generate_num_cap()
+    if cap <= 0:
+        return params
+    current = params.get("num")
+    try:
+        n = int(current) if current is not None else cap
+    except (TypeError, ValueError):
+        n = cap
+    params["num"] = min(n, cap)
     return params
 
 
@@ -553,8 +580,13 @@ def start_task(
         raise ExperimentRuntimeError("route_disabled", "Direct MCP-to-Coder mode is disabled.")
 
     task_model = fill_server_urls(task_model, state)
+    launch_params = task_model.launch_params
     if task_requires_managed_s3(task_model):
-        task_model = task_model.model_copy(update={"launch_params": force_managed_s3_launch_params(task_model.launch_params, require=True)})
+        launch_params = force_managed_s3_launch_params(launch_params, require=True)
+    else:
+        launch_params = clamp_generate_launch_num(launch_params)
+    if launch_params != (task_model.launch_params or {}):
+        task_model = task_model.model_copy(update={"launch_params": launch_params})
         task_runtime["task"] = task_model.model_dump(mode="json")
 
     attempt_no = len(task_runtime["attempt_order"]) + 1
@@ -566,6 +598,33 @@ def start_task(
         filtered_tools, deployed_mcps = [], []
     try:
         resolved_inputs = _resolve_inputs(runtime, task_model, route=route, settings=cfg, presign=presign)
+        if route == ExecutionRoute.CODER.value and not resolved_inputs and task_model.depends_on:
+            from CoScientist.experiments.schemas import DataRef
+            synthetic: list[Any] = []
+            for dep in task_model.depends_on:
+                for result in reversed(runtime.get("results") or []):
+                    if result.get("task_id") != dep:
+                        continue
+                    for art in result.get("artifacts") or []:
+                        if not isinstance(art, dict):
+                            continue
+                        name = str(art.get("name") or "").strip()
+                        if not name:
+                            continue
+                        synthetic.append(DataRef(
+                            data_id=name,
+                            kind="task_artifact",
+                            description=f"Upstream artifact from {dep}",
+                            source_task_id=dep,
+                            source_artifact_id=name,
+                            required=True,
+                        ))
+                    break
+            if synthetic:
+                task_model = task_model.model_copy(update={"input_data": synthetic})
+                resolved_inputs = _resolve_inputs(
+                    runtime, task_model, route=route, settings=cfg, presign=presign,
+                )
     except ExperimentRuntimeError as exc:
         if exc.code in {"artifact_not_found", "input_resolution_failed"}:
             _block_unstartable(state, task_id, exc)
@@ -575,6 +634,14 @@ def start_task(
     upstream_bindings = seed_upstream_from_resolved_inputs(
         state, resolved_inputs, filtered_tools
     )
+    if route == ExecutionRoute.CODER.value:
+        from CoScientist.experiments.runtime.coder_artifacts import seed_coder_upstream_inputs
+        try:
+            seed_coder_upstream_inputs(state, resolved_inputs)
+        except ExperimentRuntimeError as exc:
+            if exc.code == "coder_input_missing":
+                _block_unstartable(state, task_id, exc)
+            raise
     started_at = utc_now().isoformat()
     attempt = {
         "attempt_id": attempt_id,
@@ -1118,7 +1185,9 @@ __all__ = [
     "amend_task",
     "approve_plan",
     "fallback_task",
+    "clamp_generate_launch_num",
     "force_managed_s3_launch_params",
+    "generate_num_cap",
     "generate_presigned_s3_url",
     "get_experiment_plan",
     "initialize_runtime",

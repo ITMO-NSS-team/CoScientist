@@ -122,13 +122,16 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert mcp_builder.callbacks.after_tool == ["await_alembic_job_if_experiment"]
     fedot = config.agent("FedotAgent")
     fedot_before = fedot.callbacks.before_agent
-    assert "refuse_when_fedot_deliverable" in fedot_before
+    assert "refuse_when_fedot_deliverable" not in fedot_before
     assert "inject_upstream_artifacts" not in fedot_before
-    assert "refuse_when_fedot_deliverable" in config.agent("CoderAgent").callbacks.before_agent
+    assert "refuse_when_fedot_deliverable" not in config.agent("CoderAgent").callbacks.before_agent
     assert fedot.callbacks.before_tool == ["pin_fedot_alembic_task"]
     assert fedot.prompt == "experiment_fedot_route"
     assert "task_tracker" not in (fedot.tools or [])
     assert "task_tracker" not in (config.agent("ExperimentAgent").tools or [])
+    assert config.agent("ExperimentAgent").callbacks.before_tool == [
+        "force_schema_s3_upload"
+    ]
     assert config.agent("ExperimentExecutorAgent").callbacks.before_tool == [
         "guard_experiment_route"
     ]
@@ -190,6 +193,7 @@ def test_planner_and_coder_prompts_cover_multi_h_and_anti_fabrication():
     assert "role=data" in planner
     assert "different-family" in planner
     assert "Cover every distinct operation" in retriever
+    assert "1–8 tasks" in planner
     assert "one non-optional" in planner and "distinct target" in planner
     assert "also_tests" in planner
     assert "Uncovered hypothesis_refs" in planner
@@ -287,27 +291,18 @@ def test_web_hitl_timeout_is_fail_closed_only_for_experiment_review():
     asyncio.run(scenario())
 
 
-def test_hard_stop_scoped_to_delivering_attempt():
-    """A report/synthesis task (new attempt) must not inherit a prior task's stop."""
-    from CoScientist.tools.fedot_artifact_handoff import (
-        record_fedot_deliverable_attempt,
-        should_hard_stop_fedot,
-    )
+def test_hard_stop_never_fires_under_experiment_runtime():
+    """EM owns anti-dup via the state machine; session hard-stop must not fire."""
+    from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
 
-    # Compute task EXP-4 delivered under ATT-4; the stale matched verdict + the
-    # deliverable-ready flag persist into EXP-5 (coder report, no tools) on ATT-5.
     state = {
+        "experiment_runtime": {"run_id": "EXRUN-1", "active_attempt_id": "ATT-4"},
         "experiment_active_envelope": {"attempt_id": "ATT-4"},
         "fedot_deliverable_ready": True,
+        "executor_tool_match": {"matched": True},
     }
-    record_fedot_deliverable_attempt(state)
-    assert state["fedot_deliverable_attempt"] == "ATT-4"
+    assert should_hard_stop_fedot(state) is False
 
-    # Same attempt still looping → stop as before.
-    state["executor_tool_match"] = {"matched": True}
-    assert should_hard_stop_fedot(state) is True
-
-    # New attempt (report task) → must NOT be blocked by the prior delivery.
     state["experiment_active_envelope"] = {"attempt_id": "ATT-5"}
     assert should_hard_stop_fedot(state) is False
 
@@ -318,3 +313,19 @@ def test_hard_stop_unchanged_without_experiment_runtime():
 
     state = {"fedot_deliverable_ready": True, "executor_tool_match": {"matched": True}}
     assert should_hard_stop_fedot(state) is True
+
+
+def test_glued_imperative_ask_splits_into_internal_ops():
+    from CoScientist.context_init.operations import parse_glued_imperative_operations
+
+    l2 = (
+        "Generate GSK-3beta inhibitors with high activity. "
+        "Suggest some small molecules that inhibit KRAS G12C - a target "
+        "responsible for non-small cell lung cancer. "
+        "Generate high activity tyrosine-protein kinase BTK inhibitors. "
+        "Generate 2 molecules that would help with a blood lipid spectrum disorder."
+    )
+    ops = parse_glued_imperative_operations(l2)
+    assert [op.operation_id for op in ops] == ["OP-1", "OP-2", "OP-3", "OP-4"]
+    assert ops[0].statement.startswith("Generate GSK-3beta")
+    assert "1." not in l2

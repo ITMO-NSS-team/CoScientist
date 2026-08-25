@@ -48,8 +48,8 @@ def _stringify_agent_tool_request(args: dict[str, Any]) -> None:
         else str(val) if val is not None else val
     )
 
-# Process-local pin so nested McpBuilder tool callbacks see the EM repo even
-# if the sub-agent session copy is stale. Cleared when the executor delegates.
+# Process-local fallback when a nested McpBuilder session copy is stale.
+# Canonical pin lives on experiment_runtime["alembic_pin"] / the attempt.
 _EM_ALEMBIC_PIN: dict[str, Any] = {}
 
 
@@ -59,14 +59,72 @@ def _set_em_alembic_pin(
     run_id: str | None = None,
     task_id: str | None = None,
     attempt_id: str | None = None,
-) -> None:
-    _EM_ALEMBIC_PIN.clear()
-    _EM_ALEMBIC_PIN.update({
+    runtime: dict[str, Any] | None = None,
+    attempt: dict[str, Any] | None = None,
+    snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pin: dict[str, Any] = {
         "repo_url": repo_url,
         "run_id": run_id,
         "task_id": task_id,
         "attempt_id": attempt_id,
-    })
+    }
+    if snapshot is not None:
+        pin["snapshot"] = copy.deepcopy(snapshot)
+    if isinstance(runtime, dict):
+        stored = dict(runtime.get("alembic_pin") or {})
+        stored.update({k: v for k, v in pin.items() if v is not None})
+        if snapshot is not None:
+            stored["snapshot"] = copy.deepcopy(snapshot)
+        runtime["alembic_pin"] = stored
+        pin = stored
+    if isinstance(attempt, dict):
+        attempt["alembic_pin"] = dict(pin)
+        if snapshot is not None:
+            attempt["alembic_snapshot"] = copy.deepcopy(snapshot)
+    _EM_ALEMBIC_PIN.clear()
+    _EM_ALEMBIC_PIN.update(pin)
+    return pin
+
+
+def _read_em_alembic_pin(
+    state: dict[str, Any] | None,
+    *,
+    runtime: dict[str, Any] | None = None,
+    attempt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    runtime = runtime if isinstance(runtime, dict) else None
+    if runtime is None and isinstance(state, dict):
+        raw = state.get("experiment_runtime")
+        runtime = raw if isinstance(raw, dict) else None
+    for candidate in (
+        attempt.get("alembic_pin") if isinstance(attempt, dict) else None,
+        runtime.get("alembic_pin") if runtime is not None else None,
+        _EM_ALEMBIC_PIN,
+    ):
+        if isinstance(candidate, dict) and candidate.get("repo_url"):
+            return dict(candidate)
+    return dict(_EM_ALEMBIC_PIN)
+
+
+def _alembic_snapshot(
+    *,
+    runtime: dict[str, Any] | None = None,
+    attempt: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if isinstance(attempt, dict):
+        snap = attempt.get("alembic_snapshot")
+        if isinstance(snap, dict):
+            return snap
+        pin = attempt.get("alembic_pin")
+        if isinstance(pin, dict) and isinstance(pin.get("snapshot"), dict):
+            return pin["snapshot"]
+    if isinstance(runtime, dict):
+        pin = runtime.get("alembic_pin")
+        if isinstance(pin, dict) and isinstance(pin.get("snapshot"), dict):
+            return pin["snapshot"]
+    snap = _EM_ALEMBIC_PIN.get("snapshot")
+    return snap if isinstance(snap, dict) else None
 
 
 def _em_alembic_attempt(
@@ -111,6 +169,8 @@ def _inject_alembic_repo_url(
         run_id=str((runtime or {}).get("run_id") or "") or None,
         task_id=str((runtime or {}).get("active_task_id") or "") or None,
         attempt_id=str((attempt or {}).get("attempt_id") or "") or None,
+        runtime=runtime if isinstance(runtime, dict) else None,
+        attempt=attempt if isinstance(attempt, dict) else None,
     )
 
 
@@ -122,7 +182,7 @@ def pin_alembic_build_args(
         return None
     state = tool_context.state
     ctx = _em_alembic_attempt(state)
-    pin = dict(_EM_ALEMBIC_PIN)
+    runtime = task_runtime = attempt = None
     repo_url = ""
     run_id = task_id = attempt_id = None
     if ctx is not None:
@@ -131,6 +191,7 @@ def pin_alembic_build_args(
         run_id = runtime.get("run_id")
         task_id = runtime.get("active_task_id")
         attempt_id = attempt.get("attempt_id")
+    pin = _read_em_alembic_pin(state, runtime=runtime, attempt=attempt)
     if not repo_url:
         repo_url = str(pin.get("repo_url") or "")
         run_id = run_id or pin.get("run_id")
@@ -147,6 +208,16 @@ def pin_alembic_build_args(
         args["idempotency_key"] = f"{run_id or ''}:{task_id}:{repo_url.rstrip('/').lower()}"
     if attempt_id:
         args["attempt_id"] = str(attempt_id)
+    if runtime is None and isinstance(state.get("experiment_runtime"), dict):
+        runtime = state["experiment_runtime"]
+    _set_em_alembic_pin(
+        repo_url=str(repo_url),
+        run_id=str(run_id) if run_id else None,
+        task_id=str(task_id) if task_id else None,
+        attempt_id=str(attempt_id) if attempt_id else None,
+        runtime=runtime if isinstance(runtime, dict) else None,
+        attempt=attempt if isinstance(attempt, dict) else None,
+    )
     audit(logger, f"EXPERIMENT_ALEMBIC_PIN repo_url={repo_url} task_id={task_id}")
     return None
 
@@ -161,21 +232,29 @@ def await_alembic_job_if_experiment(
         return None
     state = tool_context.state
     ctx = _em_alembic_attempt(state)
-    if ctx is None and not _EM_ALEMBIC_PIN.get("repo_url"):
+    pin = _read_em_alembic_pin(state)
+    if ctx is None and not pin.get("repo_url"):
         return None
     job_id = str(tool_response.get("job_id") or "").strip()
     if not job_id:
         return None
+    runtime = attempt = None
     if ctx is not None:
-        _, _, attempt = ctx
+        runtime, _, attempt = ctx
         attempt["alembic_job_id"] = job_id
     if tool_response.get("status") in {"done", "failed", "error"}:
         from CoScientist.tools.alembic_tools import enrich_snapshot_with_tools
 
         snap = enrich_snapshot_with_tools(dict(tool_response))
-        if ctx is not None:
-            ctx[2]["alembic_snapshot"] = copy.deepcopy(snap)
-        _EM_ALEMBIC_PIN["snapshot"] = copy.deepcopy(snap)
+        _set_em_alembic_pin(
+            repo_url=str(pin.get("repo_url") or (attempt or {}).get("alembic_pin", {}).get("repo_url") or ""),
+            run_id=pin.get("run_id"),
+            task_id=pin.get("task_id"),
+            attempt_id=pin.get("attempt_id"),
+            runtime=runtime,
+            attempt=attempt,
+            snapshot=snap,
+        )
         audit(
             logger,
             f"EXPERIMENT_ALEMBIC_WAIT_DONE job_id={job_id} status={snap.get('status')} "
@@ -208,10 +287,17 @@ def await_alembic_job_if_experiment(
     from CoScientist.tools.alembic_tools import enrich_snapshot_with_tools
 
     snap = enrich_snapshot_with_tools(snap if isinstance(snap, dict) else {})
+    _set_em_alembic_pin(
+        repo_url=str(pin.get("repo_url") or ""),
+        run_id=pin.get("run_id"),
+        task_id=pin.get("task_id"),
+        attempt_id=pin.get("attempt_id"),
+        runtime=runtime,
+        attempt=attempt,
+        snapshot=snap,
+    )
     if ctx is not None:
         ctx[2]["alembic_job_id"] = job_id
-        ctx[2]["alembic_snapshot"] = copy.deepcopy(snap)
-    _EM_ALEMBIC_PIN["snapshot"] = copy.deepcopy(snap)
     audit(
         logger,
         f"EXPERIMENT_ALEMBIC_WAIT_DONE job_id={job_id} status={snap.get('status')} "
@@ -334,14 +420,14 @@ def on_route_agent_returned(
     if tool_name not in ROUTE_AGENT_NAMES:
         return
     try:
-        _, _, attempt = active_attempt(tool_context.state)
+        runtime, _, attempt = active_attempt(tool_context.state)
         if tool_name != ROUTE_AGENT_BY_ROUTE.get(attempt["route"]) or attempt.get("route_returned"):
             return
         if tool_name == "CoderAgent":
             from CoScientist.experiments.runtime.coder_artifacts import promote_coder_workspace_artifacts
             promote_coder_workspace_artifacts(tool_context.state)
         stored = tool_response
-        snap = attempt.get("alembic_snapshot") or _EM_ALEMBIC_PIN.get("snapshot")
+        snap = _alembic_snapshot(runtime=runtime, attempt=attempt)
         if tool_name == "McpBuilderAgent" and isinstance(snap, dict):
             stored = copy.deepcopy(snap)
             if not attempt.get("alembic_snapshot"):
@@ -713,7 +799,11 @@ _NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
 
 def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
     """after_agent(ToolPreparer): set/clear an early NO_MATCHING_TOOL verdict."""
-    from CoScientist.experiments.capabilities.inventory import index_inventory_tools
+    from CoScientist.experiments.capabilities.inventory import (
+        index_inventory_tools,
+        inventory_covers_capabilities,
+        request_capabilities,
+    )
     from CoScientist.config import get_settings
 
     state = callback_context.state
@@ -722,19 +812,31 @@ def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
     if hasattr(state, "__setitem__"):
         state[GATE_ROUTED_STATE_KEY] = None
     by_tool = index_inventory_tools(session_inventory_rows(state))
+    ask = ""
+    if callable(getter):
+        ask = str(getter("experiment_source_request") or "").strip()
+    needed = request_capabilities(ask)
+    covered = inventory_covers_capabilities(by_tool, needed) if needed else False
     alembic_on = False
     try:
         alembic_on = bool(get_settings().experiments.route_alembic)
     except Exception:  # noqa: BLE001
         alembic_on = False
 
-    if (not gate_routed) or by_tool or alembic_on:
+    # Leftover MCP is not compute coverage. Lit-only asks (no needed family)
+    # must not be dragged into Hypotheses by tox/generate leftovers.
+    inventory_ok = covered
+    if (not gate_routed) or inventory_ok or alembic_on:
         if hasattr(state, "__setitem__"):
             state[NO_MATCHING_TOOL_STATE_KEY] = None
         audit(
             logger,
-            f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} inventory={len(by_tool)}",
-            stdout=f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} inventory={len(by_tool)}",
+            f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
+            f"inventory={len(by_tool)} needed={sorted(needed)} covered={covered}",
+            stdout=(
+                f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
+                f"inventory={len(by_tool)} needed={sorted(needed)} covered={covered}"
+            ),
         )
         return
 
@@ -813,6 +915,7 @@ __all__ = [
     "assess_experiment_inventory_feasibility",
     "await_alembic_job_if_experiment",
     "force_molecule_generator_s3_upload",
+    "force_schema_s3_upload",
     "guard_route_agent_tool",
     "on_route_agent_returned",
     "pin_alembic_build_args",

@@ -17,7 +17,6 @@ from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin, merge
 from CoScientist.tools.fedot_artifact_handoff import (
     bind_upstream_inputs_to_task,
     materialize_tables_from_artifacts,
-    record_fedot_deliverable_attempt,
     record_fedot_producer_tools,
     should_hard_stop_fedot,
     tables_from_state,
@@ -127,6 +126,14 @@ class FedotMASToolset(BaseToolset):
         if tables and tool_context is not None and not state.get("fedot_artifact_tables"):
             tool_context.state["fedot_artifact_tables"] = tables
         task_description = bind_upstream_inputs_to_task(task_description, tables, filtered_tools)
+        envelope = state.get("experiment_active_envelope") or {}
+        launch_num = ((envelope.get("task") or {}).get("launch_params") or {}).get("num")
+        if launch_num is not None:
+            task_description = (
+                f"{task_description}\n\n"
+                f"REQUIRED MCP args: num={launch_num}. "
+                f"Do not generate more than {launch_num} molecules."
+            )
 
         # F010.A3/A4: an after_tool_callback plugin captures S3 artifact links
         # (results_presigned_url) at the tool-call boundary, BEFORE FEDOT.MAS sub-agents
@@ -255,7 +262,6 @@ class FedotMASToolset(BaseToolset):
             # Even on timeout: if we already have S3 links, treat as delivered.
             tool_context.state[_FEDOT_DELIVERABLE_READY_KEY] = True
             record_fedot_producer_tools(tool_context.state, filtered_tools)
-            record_fedot_deliverable_attempt(tool_context.state)
 
         ret = {"status": status, "artifacts": cap.captured}
         if result is not None:

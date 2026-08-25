@@ -1,8 +1,9 @@
 """Authoritative experiment operations from the research frame / ask structure.
 
 Slots are first-class: the planner may only choose a route, not invent, merge,
-or drop them. Extraction uses the ask's own numbered/separated structure and
-the frame's ``operations`` field — not domain keyword tables.
+or drop them. Extraction uses the ask's own numbered/separated structure,
+imperative sentence glue (unnumbered multi-target asks), and the frame's
+``operations`` field — not domain keyword tables.
 """
 from __future__ import annotations
 
@@ -23,6 +24,12 @@ _BULLET_RE = re.compile(
     r"(?:^|\n)\s*[-*•]\s+(\S.+?)(?=(?:\n\s*[-*•]\s+)|\Z)",
     re.DOTALL,
 )
+_IMPERATIVE_HEAD_RE = re.compile(
+    r"(?i)^(generate|design|develop|suggest|discover|propose|dock|"
+    r"calculate|predict|compute|curate|cluster)\b"
+)
+
+
 _NARRATIVE_RE = re.compile(
     r"(?i)"
     r"(?:^|\b)(?:write|draft|prepare)\s+(?:a\s+)?(?:final\s+)?(?:comprehensive\s+)?"
@@ -130,6 +137,36 @@ def parse_bullet_operations(text: str) -> List[FrameOperation]:
     return rows if len(rows) >= 2 else []
 
 
+def parse_glued_imperative_operations(text: str) -> List[FrameOperation]:
+    """Split unnumbered glue on sentence boundaries when each clause is an imperative.
+
+    User-facing asks stay unnumbered; OP-1…N are internal slots only.
+    """
+    if not (text or "").strip():
+        return []
+    parts = [
+        _clean_statement(part)
+        for part in re.split(r"(?<=[.!?])\s+", text)
+        if _clean_statement(part)
+    ]
+    if len(parts) < 2:
+        return []
+    if not all(_IMPERATIVE_HEAD_RE.match(part) for part in parts):
+        return []
+    # Keep repeats: 3L+1S glue reuses the same generate lines on purpose.
+    out: List[FrameOperation] = []
+    for part in parts:
+        if len(part) < 8 or is_narrative_report_operation(part):
+            continue
+        out.append(FrameOperation(
+            operation_id=f"OP-{len(out) + 1}",
+            statement=part[:500],
+        ))
+        if len(out) >= MAX_OPERATIONS:
+            break
+    return out if len(out) >= 2 else []
+
+
 def parse_decomposition_operations(value: str) -> List[FrameOperation]:
     """JSON list, newline list, or numbered text in the frame decomposition field."""
     text = str(value or "").strip()
@@ -194,13 +231,16 @@ def _decomposition_value(frame: ResearchFrame) -> str:
 
 
 def extract_frame_operations(frame: ResearchFrame) -> List[FrameOperation]:
-    """Ask structure first (numbered/bullets), then LLM/HITL ops, then decomposition."""
+    """Ask structure first (numbered/bullets/glue), then LLM/HITL ops, then decomposition."""
     numbered = parse_numbered_operations(frame.original_request)
     if len(numbered) >= 2:
         return numbered
     bullets = parse_bullet_operations(frame.original_request)
     if len(bullets) >= 2:
         return bullets
+    glued = parse_glued_imperative_operations(frame.original_request)
+    if len(glued) >= 2:
+        return glued
     existing = _rows_from_statements(op.statement for op in (frame.operations or []))
     if existing:
         return existing
@@ -208,10 +248,15 @@ def extract_frame_operations(frame: ResearchFrame) -> List[FrameOperation]:
 
 
 def fill_operations_if_missing(frame: ResearchFrame) -> ResearchFrame:
-    """Prefer a longer numbered/bulleted ask list over a collapsed LLM draft."""
+    """Prefer a longer numbered/bulleted/glued ask list over a collapsed LLM draft."""
     structured = parse_numbered_operations(frame.original_request)
     if len(structured) < 2:
         structured = parse_bullet_operations(frame.original_request)
+    if len(structured) < 2:
+        structured = parse_glued_imperative_operations(frame.original_request)
+        if len(structured) >= 2:
+            frame.operations = structured
+            return frame
     current = _rows_from_statements(op.statement for op in (frame.operations or []))
     if len(structured) >= 2 and len(current) < len(structured):
         frame.operations = structured
@@ -240,5 +285,6 @@ __all__ = [
     "normalize_operation_rows",
     "operations_as_dicts",
     "parse_decomposition_operations",
+    "parse_glued_imperative_operations",
     "parse_numbered_operations",
 ]

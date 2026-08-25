@@ -352,24 +352,27 @@ def _inventory_covers_ask(
     source_request: str,
     operations: Iterable[Any] = (),
 ) -> bool:
-    """True when this-run retrieve covers the ask enough to skip GitHub search.
+    """True when this-run retrieve covers the **primary** needed family.
 
-    Frame operations + nonempty inventory → covered (leftover isolation is
-    persist-clear on a new ask). Without operations, the ask itself must name
-    an inventory tool — leftover tox does not cover an MD/generate ask.
+    Leftover tox / smiles2prop / paper-demo do not cover generate/dock.
+    Frame operations are extra text for needed, not automatic cover.
     """
     from CoScientist.context_init.operations import normalize_operation_rows
     from CoScientist.experiments.capabilities.inventory import (
         index_inventory_tools,
+        inventory_covers_capabilities,
         match_named_inventory_tool,
+        request_capabilities,
     )
 
     by_tool = index_inventory_tools(planner_caps)
     if not by_tool:
         return False
     ops = normalize_operation_rows(list(operations or []))
-    if ops:
-        return True
+    op_blob = " ".join(str(op.get("statement") or "") for op in ops)
+    needed = request_capabilities(f"{source_request}\n{op_blob}")
+    if needed:
+        return inventory_covers_capabilities(by_tool, needed)
     return match_named_inventory_tool(source_request, by_tool) is not None
 
 
@@ -627,8 +630,17 @@ def _session_accumulated_raw(callback_context: CallbackContext | None = None) ->
     return []
 
 
+def _filter_caps_for_ask(caps: list[dict[str, Any]], ask: str) -> list[dict[str, Any]]:
+    from CoScientist.experiments.capabilities.inventory import (
+        filter_inventory_to_needed,
+        request_capabilities,
+    )
+
+    return filter_inventory_to_needed(caps, request_capabilities(ask))
+
+
 def stash_experiment_retrieved_capabilities(callback_context: CallbackContext) -> None:
-    """Snapshot accumulated retrieval into durable inventory (merge, never shrink)."""
+    """Snapshot accumulated retrieval into durable inventory, then drop leftover families."""
     ask = str(callback_context.state.get("experiment_source_request") or "").strip()
     caps = _merge_capabilities(
         _session_accumulated_raw(callback_context), callback_context.state.get("accumulated_tools"),
@@ -636,7 +648,8 @@ def stash_experiment_retrieved_capabilities(callback_context: CallbackContext) -
     if not caps and not ask:
         return
     prior = callback_context.state.get(RETRIEVED_CAPABILITIES_KEY)
-    callback_context.state[RETRIEVED_CAPABILITIES_KEY] = _merge_capabilities(prior, caps)
+    merged = _merge_capabilities(prior, caps)
+    callback_context.state[RETRIEVED_CAPABILITIES_KEY] = _filter_caps_for_ask(merged, ask)
 
 def snapshot_experiment_discovered_capabilities(callback_context: CallbackContext) -> None:
     """Persist registry tools so attempt clears do not erase critique inventory."""
@@ -646,7 +659,8 @@ def snapshot_experiment_discovered_capabilities(callback_context: CallbackContex
         callback_context.state.get(DISCOVERED_CAPABILITIES_KEY),
     )
     if caps:
-        callback_context.state[DISCOVERED_CAPABILITIES_KEY] = caps
+        ask = str(callback_context.state.get("experiment_source_request") or "").strip()
+        callback_context.state[DISCOVERED_CAPABILITIES_KEY] = _filter_caps_for_ask(caps, ask)
 
 def skip_executor_without_runtime(callback_context: CallbackContext) -> types.Content | None:
     """Fail closed when plan review never approved a runtime."""

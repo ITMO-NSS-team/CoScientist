@@ -56,9 +56,9 @@ def test_repair_plan_mcp_bindings_fills_or_demotes():
     repaired = repair_plan_mcp_bindings(payload, inventory)
     assert repaired["tasks"][0]["mcp_servers"][0]["tools"][0]["name"] == "chemical_space_clustering"
     assert repaired["tasks"][0]["design"]["analysis_artifacts"][0]["path_or_tool"] == "chemical_space_clustering"
-    # Nonempty inventory never demotes to coder; bind leftover task by score.
-    assert repaired["tasks"][1]["route"] == "fedot_mas"
-    assert repaired["tasks"][1]["mcp_servers"][0]["tools"][0]["name"] == "chemical_space_clustering"
+    # Unrelated leftover task is not bound by retrieval score.
+    assert repaired["tasks"][1]["route"] == "coder"
+    assert not repaired["tasks"][1].get("mcp_servers")
 
 
 def test_repair_binds_generate_case_mols_not_docking_or_demote():
@@ -183,6 +183,38 @@ def test_repair_demotes_only_when_inventory_empty():
     repaired = repair_plan_mcp_bindings(payload, [])
     assert repaired["tasks"][0]["route"] == "coder"
     assert any("empty_inventory" in w for w in repaired["tasks"][0]["warnings"])
+
+
+def test_repair_rewrites_coder_generate_inhibitors_via_family():
+    """Unnamed generate-inhibitors slot + generate MCP → Fedot (glue asks)."""
+    from CoScientist.experiments.critique.mcp_repair import repair_plan_mcp_bindings
+
+    payload = {
+        "source_request": (
+            "Generate GSK-3beta inhibitors with high activity. "
+            "Suggest some small molecules that inhibit KRAS G12C."
+        ),
+        "tasks": [{
+            "id": "EXP-1",
+            "name": "GSK-3beta inhibitors",
+            "description": "Generate GSK-3beta inhibitors with high activity",
+            "operation_ref": "OP-1",
+            "route": "coder",
+            "design": {},
+            "mcp_servers": [],
+        }],
+    }
+    covering = [{
+        "server_id": "srv-gen",
+        "tool": "generate_case_mols",
+        "description": "Generate molecules for a hardcoded disease case.",
+    }]
+    repaired = repair_plan_mcp_bindings(
+        payload, covering,
+        operations=[{"operation_id": "OP-1", "statement": "Generate GSK-3beta inhibitors with high activity"}],
+    )
+    assert repaired["tasks"][0]["route"] == "fedot_mas"
+    assert repaired["tasks"][0]["mcp_servers"][0]["tools"][0]["name"] == "generate_case_mols"
 
 
 def test_repair_rewrites_coder_when_inventory_covers_task():

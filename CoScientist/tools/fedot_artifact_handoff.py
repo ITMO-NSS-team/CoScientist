@@ -35,36 +35,20 @@ FEDOT_PRODUCER_TOOLS_KEY = "fedot_producer_tools"
 # as plain strings to avoid a circular import (tool_callbacks -> this module).
 _FEDOT_DELIVERABLE_READY_KEY = "fedot_deliverable_ready"
 _TOOL_MATCH_STATE_KEY = "executor_tool_match"
-# Experiment-Module attempt id under which the deliverable was captured. Lets the
-# hard-stop stay scoped to that ONE attempt instead of leaking across tasks.
-_FEDOT_DELIVERABLE_ATTEMPT_KEY = "fedot_deliverable_attempt"
 
 
-def _active_experiment_attempt(state: Mapping[str, Any]) -> Optional[str]:
-    """The Experiment Module attempt id currently executing, if any."""
-    envelope = state.get("experiment_active_envelope")
-    if isinstance(envelope, Mapping):
-        attempt = envelope.get("attempt_id")
-        if isinstance(attempt, str) and attempt.strip():
-            return attempt.strip()
-    runtime = state.get("experiment_runtime")
-    if isinstance(runtime, Mapping):
-        attempt = runtime.get("active_attempt_id")
-        if isinstance(attempt, str) and attempt.strip():
-            return attempt.strip()
-    return None
+def _experiment_module_active(state: Mapping[str, Any]) -> bool:
+    """True while the Experiment Module owns the session.
 
-
-def record_fedot_deliverable_attempt(state: MutableMapping[str, Any]) -> None:
-    """Tag the just-captured deliverable with the current EM attempt id.
-
-    Called right after ``fedot_deliverable_ready`` is set so the hard-stop can
-    tell "this attempt already delivered, stop looping" from "a PREVIOUS task
-    delivered, let the new task run" (e.g. a report/synthesis step).
+    Hard-stop is a legacy-profile gate (no experiment_runtime). Inside EM the
+    state machine already decides start / retry / next-task; a session stop
+    would refuse transitions the machine considers valid.
     """
-    attempt = _active_experiment_attempt(state)
-    if attempt:
-        state[_FEDOT_DELIVERABLE_ATTEMPT_KEY] = attempt
+    runtime = state.get("experiment_runtime")
+    if isinstance(runtime, Mapping) and runtime:
+        return True
+    envelope = state.get("experiment_active_envelope")
+    return isinstance(envelope, Mapping) and bool(envelope)
 
 
 def _tool_names(tools: Sequence[Any] | None) -> set[str]:
@@ -112,19 +96,10 @@ def should_hard_stop_fedot(state: Mapping[str, Any]) -> bool:
     """
     if os.getenv("COSCIENTIST_FEDOT_HARD_STOP", "1") == "0":
         return False
+    if _experiment_module_active(state):
+        return False
     if not state.get(_FEDOT_DELIVERABLE_READY_KEY):
         return False
-
-    # Attempt-scoped: under the Experiment Module the deliverable belongs to ONE
-    # attempt. A later task (a coder report/synthesis step, a gen->dock handoff)
-    # runs under a DIFFERENT attempt and must not inherit a prior task's stop —
-    # otherwise a report step is refused forever because compute already ran.
-    active_attempt = _active_experiment_attempt(state)
-    if active_attempt is not None:
-        delivered_attempt = state.get(_FEDOT_DELIVERABLE_ATTEMPT_KEY)
-        if isinstance(delivered_attempt, str) and delivered_attempt.strip():
-            if delivered_attempt.strip() != active_attempt:
-                return False
 
     verdict = state.get(_TOOL_MATCH_STATE_KEY) or {}
     if verdict and not verdict.get("matched"):

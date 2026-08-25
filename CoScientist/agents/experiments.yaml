@@ -20,9 +20,10 @@
 #      system agent/prompt; graph+research_graph; seed ask + refs bridge
 #      (no task_tracker: EXP tasks do not exist yet at hyp step)
 #   4. ToolRetriever/ToolReranker: EM inventory stash/snapshot callbacks
-#   5. ExperimentAgent: force_molecule_generator_s3_upload (no inject_upstream —
+#   5. ExperimentAgent: force_schema_s3_upload (no inject_upstream —
 #      EM seeds lineage at start_task via seed_upstream_from_resolved_inputs)
-#   6. FedotAgent/Coder: refuse_when_fedot_deliverable (deliverable hard-stop)
+#   6. Fedot/Coder anti-dup is the EM state machine + guard_route_agent_tool
+#      (no session hard-stop: that would refuse valid start_task / retry transitions)
 #   7. ToolReranker: sanitize_json_output applies scores; collect_reranked_tools
 #      is after_agent fallback (no separate *_from_model callback)
 #   8. TaskExecutorAgent removed (cannot share ToolPreparerAgent with EM)
@@ -337,7 +338,7 @@ agents:
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
-      before_agent: [refuse_when_fedot_deliverable, inject_research_context]
+      before_agent: [inject_research_context]
       before_model: [seed_coder_workspace]
       after_model: [guard_unknown_tools]
     a2a:
@@ -516,7 +517,7 @@ agents:
     output_key: fedot_results
     callbacks:
       before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
-      before_tool: [force_molecule_generator_s3_upload]
+      before_tool: [force_schema_s3_upload]
       after_tool: [capture_mcp_artifacts]
 
   FedotAgent:
@@ -530,5 +531,5 @@ agents:
     tools: [fedot, graph]
     output_key: fedot_results
     callbacks:
-      before_agent: [redirect_when_no_tools, refuse_when_fedot_deliverable, before_get_task, inject_research_context]
+      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
       before_tool: [pin_fedot_alembic_task]

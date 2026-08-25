@@ -31,6 +31,33 @@ from CoScientist.experiments.schemas import (
 _MCP = {ExecutionRoute.FEDOT_MAS, ExecutionRoute.REACT_TOOLS}
 _EVIDENCE_AGENTS = {ExecutionRoute.RESEARCH, ExecutionRoute.MEDICAL}
 _ALT = re.compile(r"\b(otherwise|else|либо|иначе|alternativ)\b|/", re.I)
+_NARRATIVE_REPORT = re.compile(
+    r"(?x)"
+    r"(synthesize|write|draft|compil\w*|подготов\w*|напиш\w*)\s+"
+    r".{0,40}(report|отчёт|вывод|findings)|"
+    r"(comprehensive|toxicological|final)\s+\w*\s*(report|synthesis)|"
+    r"отчёт\s+синтез|report\s+synthesis",
+    re.I,
+)
+_EXECUTION_ROUTES = {
+    ExecutionRoute.FEDOT_MAS,
+    ExecutionRoute.REACT_TOOLS,
+    ExecutionRoute.CODER,
+    ExecutionRoute.ALEMBIC_BUILD,
+}
+
+
+def _is_narrative_report_task(task: Any) -> bool:
+    blob = " ".join(
+        str(getattr(task, field, "") or "")
+        for field in ("name", "description")
+    )
+    design = getattr(task, "design", None)
+    if design is not None:
+        blob = f"{blob} {getattr(design, 'experiment_question', '') or ''}"
+    if not _NARRATIVE_REPORT.search(blob):
+        return False
+    return getattr(task, "route", None) in _EXECUTION_ROUTES
 
 
 class PlanValidationError(ValueError):
@@ -360,6 +387,15 @@ def critique_plan(
 
     for task in plan.tasks:
         tid = task.id
+        if _is_narrative_report_task(task):
+            fe(
+                tid, "major",
+                f"{tid} is a narrative report/synthesis task — that is ResultAggregator, "
+                "not start_task(coder|fedot|alembic).",
+                "Drop this task. Compute tasks already produce artifacts; "
+                "the post-stage aggregator writes the report.",
+            )
+            continue
         if task.route == ExecutionRoute.ALEMBIC_BUILD:
             if not settings.route_alembic:
                 fe(tid, "blocker", "Route 'alembic_build' is disabled by profile settings.",

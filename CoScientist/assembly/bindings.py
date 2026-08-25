@@ -1072,6 +1072,7 @@ _EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
     ("pin_alembic_build_args", "before_tool", f"{_EM}.runtime:pin_alembic_build_args"),
     ("pin_fedot_alembic_task", "before_tool", f"{_EM}.runtime:pin_fedot_alembic_task"),
     ("await_alembic_job_if_experiment", "after_tool", f"{_EM}.runtime:await_alembic_job_if_experiment"),
+    ("force_schema_s3_upload", "before_tool", f"{_EM}.runtime:force_schema_s3_upload"),
     ("force_molecule_generator_s3_upload", "before_tool", f"{_EM}.runtime:force_molecule_generator_s3_upload"),
     ("mark_experiment_route_returned", "after_tool", f"{_EM}.runtime:on_route_agent_returned"),
     ("enforce_pending_record_result", "after_model", f"{_EM}.runtime:enforce_pending_record_result"),

@@ -9,7 +9,6 @@ from CoScientist.experiments.capabilities.inventory import (
     match_inventory_tool,
     match_named_family_capability,
     match_named_inventory_tool,
-    match_slot_inventory_tool,
 )
 from CoScientist.experiments.critique.coverage import (
     operation_statement as _operation_statement,
@@ -155,7 +154,7 @@ def _promote_coder_when_inventory_covers(
     route_fedot: bool,
     ops_index: dict[str, dict[str, str]] | None = None,
 ) -> bool:
-    """Coder is last resort. Named research/medical tool → that route; else named MCP."""
+    """Coder is last resort. Named research/medical tool → that route; else this-op MCP."""
     blob = _coverage_blob(task, ops_index or {})
     if not blob.strip():
         blob = _task_ask_blob(task)
@@ -170,6 +169,8 @@ def _promote_coder_when_inventory_covers(
     if not by_tool:
         return False
     matched = match_named_inventory_tool(blob, by_tool)
+    if matched is None:
+        matched = match_inventory_tool(blob, by_tool)
     if matched is None:
         return False
     task["route"] = "fedot_mas" if route_fedot else "react_tools"
@@ -367,19 +368,7 @@ def repair_plan_mcp_bindings(
             return True
         if not by_tool:
             return False
-        if ops:
-            matched = match_slot_inventory_tool(blob, by_tool) if blob else None
-            if matched is None:
-                unused = [
-                    item for item in by_tool.values()
-                    if item["tool"] not in used_tools
-                ]
-                unused.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
-                matched = unused[0] if unused else None
-        else:
-            matched = match_inventory_tool(
-                blob, by_tool, source_request=source_request,
-            )
+        matched = match_inventory_tool(blob, by_tool)
         if matched is None:
             return False
         task["route"] = "fedot_mas" if route_fedot else "react_tools"
