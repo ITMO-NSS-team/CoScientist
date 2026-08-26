@@ -322,10 +322,17 @@ def build_system(
         elif cfg.cls in ("sequential", "parallel"):
             cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
             sub_agents = [built[c] for c in cfg.children] if cfg.is_enabled() else []
+            # Composites carry callbacks too: `before_agent_callback` is a
+            # BaseAgent field, not an LlmAgent one. A composite that is the
+            # system root (start_mode=planner makes PlanningPipelineAgent the
+            # root) is the only agent positioned to run a root-only callback,
+            # so skipping callbacks here silently disabled them.
+            ctx = PromptContext(config=cfg, system=config)
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,
                 sub_agents=sub_agents,
+                **_callback_kwargs(cfg, ctx),
                 **cfg.resolved_options(),
             )
         else:  # custom:<key>

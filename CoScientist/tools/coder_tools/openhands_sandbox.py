@@ -66,6 +66,9 @@ DEFAULT_POLL_INTERVAL = 10.0
 DEFAULT_SUBMIT_TIMEOUT = 3600
 DEFAULT_STATUS_TIMEOUT = 15.0
 DEFAULT_METRICS_TIMEOUT = 15.0
+#: Trajectories are recorded event-by-event and can run to gigabytes of raw
+#: tool output, so they get a much longer budget than status/metrics polls.
+DEFAULT_TRAJECTORY_TIMEOUT = 120.0
 
 #: Statuses at which a task stops progressing.
 TERMINAL_STATUSES = frozenset({"completed", "cooldown", "error", "cancelled"})
@@ -477,6 +480,97 @@ async def _afetch_metrics(api_url: str, sandbox_id: str) -> Optional[Dict[str, A
         return _parse_metrics(await client.get(
             f"{api_url}/metrics", params={"task_id": sandbox_id},
         ))
+
+
+# ---------------------------------------------------------------------------
+# Trajectory: the full recorded trace of one sandbox run
+# ---------------------------------------------------------------------------
+
+def _parse_trajectory(response: httpx.Response) -> Optional[Dict[str, Any]]:
+    """Return the trajectory payload from a ``/trajectory`` reply, or ``None``.
+
+    404 (no trace was ever recorded, or it was already deleted with its
+    container) and 409 (the task — or a follow-up — hasn't finished, so the
+    trace file is still being written) are ordinary answers here, not
+    failures: there is simply nothing to attach yet.
+    """
+    if response.status_code in (404, 409):
+        return None
+    response.raise_for_status()
+    return response.json()
+
+
+def _fetch_trajectory(
+    api_url: str,
+    sandbox_id: str,
+    *,
+    include_raw_output: bool = True,
+    timeout: float = DEFAULT_TRAJECTORY_TIMEOUT,
+) -> Optional[Dict[str, Any]]:
+    return _parse_trajectory(httpx.get(
+        f"{api_url}/trajectory",
+        params={"task_id": sandbox_id, "include_raw_output": include_raw_output},
+        timeout=timeout,
+    ))
+
+
+async def _afetch_trajectory(
+    api_url: str,
+    sandbox_id: str,
+    *,
+    include_raw_output: bool = True,
+    timeout: float = DEFAULT_TRAJECTORY_TIMEOUT,
+) -> Optional[Dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        return _parse_trajectory(await client.get(
+            f"{api_url}/trajectory",
+            params={"task_id": sandbox_id, "include_raw_output": include_raw_output},
+        ))
+
+
+def get_sandbox_trajectory(
+    *,
+    session_id: Optional[str] = None,
+    sandbox_id: Optional[str] = None,
+    tool_context: Any = None,
+    sandbox_url: Optional[str] = None,
+    include_raw_output: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """Fetch the full agent trajectory (trace) recorded for a sandbox run.
+
+    Unlike metrics there is no local journal to fall back on — the trace lives
+    only on the sandbox server, for as long as its container is up. Returns
+    ``None`` when there is nothing to fetch: no sandbox bound to this session,
+    no trace recorded for it, or the run hasn't finished yet. Transport and
+    server errors (a timeout on a huge trace, a 500 reading a corrupt file)
+    are raised — a caller folding this into a larger export should treat a
+    failure here as "skip this section", not "abort the whole export".
+    """
+    target = sandbox_id or read_binding(resolve_session_key(session_id, tool_context), tool_context)
+    if not target:
+        return None
+    return _fetch_trajectory(
+        _api(resolve_sandbox_url(sandbox_url)), str(target),
+        include_raw_output=include_raw_output,
+    )
+
+
+async def aget_sandbox_trajectory(
+    *,
+    session_id: Optional[str] = None,
+    sandbox_id: Optional[str] = None,
+    tool_context: Any = None,
+    sandbox_url: Optional[str] = None,
+    include_raw_output: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """Async twin of :func:`get_sandbox_trajectory`."""
+    target = sandbox_id or read_binding(resolve_session_key(session_id, tool_context), tool_context)
+    if not target:
+        return None
+    return await _afetch_trajectory(
+        _api(resolve_sandbox_url(sandbox_url)), str(target),
+        include_raw_output=include_raw_output,
+    )
 
 
 def _publish_metrics(

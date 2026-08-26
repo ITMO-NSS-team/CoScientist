@@ -470,8 +470,7 @@ def inject_original_query(
 
     # Replace the last user-role content in llm_request.contents
     for i, content in enumerate(llm_request.contents):
-        content = llm_request.contents[i]
-        if content.role == "user" and content.parts:
+        if getattr(content, "role", "user") == "user" and getattr(content, "parts", None):
             llm_request.contents[i] = types.Content(
                 role="user",
                 parts=[types.Part(text=original_text)],

@@ -27,19 +27,45 @@ def get_multi_agent_tracer():
     if cache_key in _tracers:
         return _tracers[cache_key]
 
+    url_override = settings.opik.url_override
+
     if api_key:
         os.environ["OPIK_API_KEY"] = api_key
     else:
         os.environ.pop("OPIK_API_KEY", None)
+    if url_override:
+        os.environ["OPIK_URL_OVERRIDE"] = url_override
+    else:
+        os.environ.pop("OPIK_URL_OVERRIDE", None)
+    os.environ["OPIK_PROJECT_NAME"] = project_name
 
     import opik
 
     # Don't let an opik misconfiguration (no key, no network) take down the app
     # on import — tracing is best-effort.
     try:
-        opik.configure(use_local=False)
+        # These must be passed explicitly: without them, opik.configure() never
+        # sees our settings at all — it resolves api_key/url from whatever is
+        # cached in ~/.opik.config on the machine, and then OVERWRITES the env
+        # vars we just set above with that cached value. Passing them here is
+        # what makes settings.opik authoritative over a stale local cache.
+        opik.configure(
+            api_key=api_key or None,
+            url_override=url_override or None,
+            project_name=project_name,
+            use_local=False,
+        )
     except Exception as e:  # pragma: no cover - best-effort tracing setup
         print(f"[opik] configure failed, tracing may be disabled: {e!r}")
+
+    # opik.configure() may still rewrite these from its cached config on a path
+    # that doesn't validate our values (e.g. offline, or an unreachable key) —
+    # re-assert them so a stale ~/.opik.config can never silently win.
+    if api_key:
+        os.environ["OPIK_API_KEY"] = api_key
+    if url_override:
+        os.environ["OPIK_URL_OVERRIDE"] = url_override
+    os.environ["OPIK_PROJECT_NAME"] = project_name
 
     from opik.integrations.adk import OpikTracer
 

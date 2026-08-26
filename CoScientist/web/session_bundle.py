@@ -19,6 +19,12 @@ Bundle contents
     graphs/execution.json           — execution graph snapshot
     graphs/research_active.json     — research graph snapshot
     knowledge_memory_snapshot.json  — global memory snapshot (read-only, informational)
+    sandbox_trajectory.json         — full OpenHands sandbox trace, if any (read-only, best-effort)
+
+Sandbox trajectories can run to gigabytes of raw tool output and live on a
+separate server, so fetching one is a best-effort step: any failure (timeout,
+the container already gone, a bad response) is logged and skipped rather than
+failing the whole export — every other section is still saved.
 """
 
 from __future__ import annotations
@@ -48,6 +54,7 @@ _SETTINGS = "settings_snapshot.json"
 _GRAPH_EXECUTION = "graphs/execution.json"
 _GRAPH_RESEARCH = "graphs/research_active.json"
 _KNOWLEDGE_MEMORY = "knowledge_memory_snapshot.json"
+_SANDBOX_TRAJECTORY = "sandbox_trajectory.json"
 
 
 def _json_bytes(obj: Any) -> bytes:
@@ -142,6 +149,22 @@ async def export_session(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not read knowledge memory: %s", exc)
 
+    # 10. Sandbox trajectory (best-effort — can be huge, or the container
+    # behind it may already be gone; must never sink the rest of the export)
+    sandbox_trajectory: Optional[Dict[str, Any]] = None
+    try:
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+        sandbox_id = None
+        if adk_session_data and isinstance(adk_session_data.get("state"), dict):
+            sandbox_id = adk_session_data["state"].get(sandbox.SESSION_STATE_KEY)
+        if sandbox_id:
+            sandbox_trajectory = await sandbox.aget_sandbox_trajectory(
+                sandbox_id=str(sandbox_id),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not fetch sandbox trajectory: %s", exc)
+        sandbox_trajectory = None
+
     # --- Build manifest ---
     manifest = {
         "bundle_version": BUNDLE_VERSION,
@@ -170,6 +193,11 @@ async def export_session(
             zf.writestr(_GRAPH_RESEARCH, _json_bytes(research_graph))
         if knowledge_memory is not None:
             zf.writestr(_KNOWLEDGE_MEMORY, _json_bytes(knowledge_memory))
+        if sandbox_trajectory is not None:
+            try:
+                zf.writestr(_SANDBOX_TRAJECTORY, _json_bytes(sandbox_trajectory))
+            except Exception as exc:  # noqa: BLE001 - a huge/odd trace must not sink the export
+                logger.warning("Could not include sandbox trajectory in export: %s", exc)
 
     return buf.getvalue()
 
