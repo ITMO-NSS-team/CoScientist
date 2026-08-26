@@ -75,12 +75,14 @@ agents:
       - MedicalAgent
       - McpBuilderAgent
     callbacks:
-      before_model: [save_uploaded_artifacts, seed_coder_workspace]
-      before_agent: [before_get_task, inject_graph_root, inject_research_context]
+      before_model: [save_uploaded_artifacts, seed_coder_workspace, redact_link_urls]
+      before_agent: [before_get_task, inject_graph_root, inject_research_context, user_links]
       # Catch hallucinated tool calls (e.g. the orchestrator inventing a
       # sub-agent's `execute_bash`) and correct them, instead of ADK raising
       # ValueError('Tool not found') and crashing the whole run.
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
       # `after_tool: [post_action_critique]` to enable it — the orchestrator
@@ -131,8 +133,11 @@ agents:
     output_key: planner_roadmap
     report_output: true
     callbacks:
-      before_agent: [inject_graph_root]
-      after_model: [guard_unknown_tools, finish_after_plan_registered]
+      before_agent: [inject_graph_root, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs, guard_unknown_tools, finish_after_plan_registered]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     hitl: true
     critic: ${web.planner_critic_enabled}
     options:
@@ -166,8 +171,15 @@ agents:
     output_schema: research_frame
     hitl: true
     callbacks:
-      # Strip prose/fences around the JSON before strict output_schema validation.
-      after_model: [sanitize_json_output]
+      before_agent: [user_links]
+      before_model: [redact_link_urls]
+      # expand_link_refs MUST come first: ADK's after_model chain stops at the
+      # first callback that returns a response, and sanitize_json_output
+      # returns one on every JSON answer. expand_link_refs mutates the text in
+      # place and returns None, so it never stops the chain — sanitize_json_output
+      # still runs next and reads the already-expanded text. Reversed, a
+      # `[[link1]]` inside a frame field would never be expanded.
+      after_model: [expand_link_refs, sanitize_json_output]
 
   ResultAggregatorAgent:
     class: llm
@@ -186,7 +198,11 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      before_agent: [inject_research_context, inject_report_language]
+      before_agent: [inject_research_context, inject_report_language, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     output_key: final_report
 
   HypothesesAgent:
@@ -207,8 +223,11 @@ agents:
     report_output: true
     tools: [task_tracker, graph, research_graph]
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
-      after_model: [guard_unknown_tools]
+      before_agent: [before_get_task, inject_research_context, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     a2a:
       key: hypotheses
       port: 8002
@@ -245,11 +264,11 @@ agents:
     output_key: search_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
-      before_model: [inject_uploaded_papers]
-      before_tool: [WebSearchLimiter]
-      after_tool: [log_research_tool_calls]
-      after_model: [guard_unknown_tools]
+      before_agent: [before_get_task, inject_research_context, user_links]
+      before_model: [inject_uploaded_papers, redact_link_urls]
+      before_tool: [WebSearchLimiter, resolve_link_refs]
+      after_tool: [log_research_tool_calls, register_tool_result_links]
+      after_model: [expand_link_refs, guard_unknown_tools]
     hitl: true
     a2a:
       key: research
@@ -284,7 +303,11 @@ agents:
     output_key: executor_results
     report_output: true
     callbacks:
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_agent: [user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     a2a:
       key: task_execution
       port: 8004
@@ -341,11 +364,14 @@ agents:
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
-      before_agent: [inject_research_context, inject_dataset_context]
+      before_agent: [inject_research_context, inject_dataset_context, user_links]
+      before_model: [redact_link_urls]
       #before_model: [hitl_before_model]
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
       # corrective message instead of letting ADK crash the whole run.
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     hitl: true
     a2a:
       key: coder
@@ -383,8 +409,11 @@ agents:
     tools: [coder, sandbox, websearch, research_graph]
     output_key: dataset_results
     callbacks:
-      before_agent: [inject_research_context, inject_dataset_context]
-      after_model: [guard_unknown_tools]
+      before_agent: [inject_research_context, inject_dataset_context, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
 
   MedicalAgent:
     class: llm
@@ -404,9 +433,11 @@ agents:
     output_key: medical_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
-      before_model: [inject_medical_artifacts]
-      after_model: [guard_unknown_tools]
+      before_agent: [before_get_task, inject_research_context, user_links]
+      before_model: [inject_medical_artifacts, redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
+      after_model: [expand_link_refs, guard_unknown_tools]
     a2a:
       key: medical
       port: 8005
@@ -440,7 +471,11 @@ agents:
     tools: [alembic]
     output_key: mcp_build_results
     callbacks:
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_agent: [user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     a2a:
       key: mcp_builder
       port: 8007
@@ -523,10 +558,15 @@ agents:
     callbacks:
       # Abstain → recommend CoderAgent when the tool-prep pipeline found no tool
       # that actually matches the task (instead of running a nearest-but-wrong one).
-      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
-      # Capture figure/table artifact URLs the MCP tools return (e.g. presigned
-      # MinIO PNGs) into state['mcp_artifacts'] so the report collector downloads them.
-      after_tool: [capture_mcp_artifacts]
+      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context, user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_model: [expand_link_refs]
+      # register_tool_result_links catches a URL an MCP tool returns for the
+      # link registry; capture_mcp_artifacts separately stashes figure/table
+      # artifact URLs (e.g. presigned MinIO PNGs) into state['mcp_artifacts']
+      # so the report collector downloads them. Two different jobs, same hook.
+      after_tool: [register_tool_result_links, capture_mcp_artifacts]
 
   # Disabled for now — FEDOT.MAS isn't reliable yet. Kept (built, not attached)
   # so the agent, its prompt and the `fedot` tool stay available; re-enable by
@@ -539,4 +579,8 @@ agents:
     tools: [fedot, task_tracker, graph]
     output_key: fedot_results
     callbacks:
-      before_agent: [redirect_when_no_tools, before_get_task]
+      before_agent: [redirect_when_no_tools, before_get_task, user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
+      after_model: [expand_link_refs]

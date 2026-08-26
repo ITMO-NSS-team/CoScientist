@@ -812,6 +812,31 @@ def _inject_report_language():
     return inject_report_language
 
 
+def _user_links():
+    from CoScientist.agents.callbacks import user_links
+    return user_links
+
+
+def _resolve_link_refs():
+    from CoScientist.agents.callbacks import resolve_link_refs
+    return resolve_link_refs
+
+
+def _register_tool_result_links():
+    from CoScientist.agents.callbacks import register_tool_result_links
+    return register_tool_result_links
+
+
+def _expand_link_refs():
+    from CoScientist.agents.callbacks import expand_link_refs
+    return expand_link_refs
+
+
+def _redact_link_urls():
+    from CoScientist.agents.callbacks import redact_link_urls
+    return redact_link_urls
+
+
 def _inject_research_context(ctx):
     """before_agent callback seeding state['research_context']. The orchestrator
     (root) gets the overview + trigger digest; a worker gets its focus slice.
@@ -930,6 +955,28 @@ _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_datase
 # Report language the user picked for this session: inject the whole block
 # (headings, substitution rule, glossary), not a bare language name.
 _cb("inject_report_language", "before_agent", factory=lambda ctx: _inject_report_language())
+
+
+# The link registry.
+#   * `user_links` (before_agent) — a snapshot before the agent's own turn:
+#     extracts URLs from the incoming message + already-rendered context, and
+#     renders the `{links_context?}` table.
+#   * `register_tool_result_links` (after_tool) — the snapshot's counterpart: a
+#     URL a TOOL returns mid-turn (a sandbox artifact, a generated figure)
+#     wasn't in that snapshot, so it gets registered here instead, and the
+#     table re-rendered — the agent's very next model call already has a
+#     reference for it.
+#   * `resolve_link_refs` (before_tool) / `expand_link_refs` (after_model) —
+#     substitute the real URL for every `[[linkN]]` the model writes, on the
+#     two ways text leaves an agent: its tool calls and its own answer.
+# Wire all four together: an agent that writes references without an egress
+# callback emits the raw `[[linkXXXX]]` verbatim; one that calls tools without the
+# after_tool hook never learns about a link a tool handed it.
+_cb("user_links", "before_agent", factory=lambda ctx: _user_links())
+_cb("redact_link_urls", "before_model", factory=lambda ctx: _redact_link_urls())
+_cb("resolve_link_refs", "before_tool", factory=lambda ctx: _resolve_link_refs())
+_cb("register_tool_result_links", "after_tool", factory=lambda ctx: _register_tool_result_links())
+_cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
 # Human-In-The-Loop approval callback before model/agent execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())

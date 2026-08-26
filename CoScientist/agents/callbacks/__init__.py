@@ -13,6 +13,13 @@ from CoScientist.agents.callbacks.med_callbacks import (
     med_agent_before_model,
 )
 from CoScientist.agents.callbacks.json_output import sanitize_json_output
+from CoScientist.agents.callbacks.link_registry import (
+    expand_link_refs,
+    redact_link_urls,
+    register_tool_result_links,
+    resolve_link_refs,
+    user_links,
+)
 from CoScientist.agents.callbacks.report_language import inject_report_language
 from CoScientist.agents.callbacks.research_callbacks import (
     cleanup_uploaded_papers,
@@ -57,4 +64,9 @@ __all__ = [
     "inject_dataset_context",
     "inject_report_language",
     "sanitize_json_output",
+    "user_links",
+    "redact_link_urls",
+    "resolve_link_refs",
+    "register_tool_result_links",
+    "expand_link_refs",
 ]

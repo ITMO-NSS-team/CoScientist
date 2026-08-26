@@ -324,6 +324,7 @@ Then, briefly:
 Never present the alternatives as a set of parallel tasks and never ask for all
 of them to be tested — <<BACKLOG_RULE>>.
 
+{links_context?}
 ### TASK_MANAGEMENT
 Context of tasks:
 {active_tasks}
@@ -409,6 +410,7 @@ Your job is to understand the query, gather reliable information, and produce cl
 
 <<TOOLS>>
 
+{links_context?}
 --------------------------------------------------
 WORKFLOW
 --------------------------------------------------
@@ -655,6 +657,7 @@ def fedot(ctx: PromptContext) -> str:
 Your role is to solve tasks by using **FEDOT_MAS**, which automatically generates and runs multi-agent pipelines from a text description.
 
 <<TOOLS>>
+{links_context?}
 
 ## How it works:
 - The ToolRetrieverAgent already found the relevant MCP servers
@@ -716,6 +719,7 @@ tool-prep pipeline and are attached to you directly (no server ids to manage —
 just call the tools by name). Call them yourself; do NOT delegate to any
 sub-pipeline.
 
+{links_context?}
 ## FIRST: do the available tools actually cover this task?
 Judge whether the tools genuinely implement the REQUESTED operation — not merely
 the same domain (being molecule-related is not enough). If the task needs a
@@ -816,15 +820,22 @@ Each path's own routing guidance:
 
 <<TOOLS>>
 
+{links_context?}
 ## Choosing the path — apply these in order
 
 <<RULES>>
 
 ## Delegating
 - Restate the task in the request you send: every concrete detail you were given
-  (names, ids, paths, URLs, numeric thresholds, required output format). The
+  (names, ids, paths, numeric thresholds, required output format). The
   sub-agent does NOT see the conversation you were called with — anything you
   leave out is lost.
+- If any links are available, write the reference for it — copied exactly
+  from the "Links available in this task" section — where you would have
+  written the URL. The real link is substituted for you before the request
+  leaves, so it arrives intact even at a sub-agent, the sandbox, or a remote
+  service; a URL you copy out by hand arrives clipped or swapped for a
+  similar one.
 - Call ONE path at a time and read its result before deciding the next step.
 - You have NO tools of your own — no shell, no MCP tools, no web. If you catch
   yourself explaining HOW to do the work, delegate it instead.
@@ -962,6 +973,7 @@ DOING engineering work rather than calling a ready-made service.
 <<TOOLS>>
 <<SHELL_NOTE>>
 {dataset_context?}
+{links_context?}
 <<DELEGATION>>## What you handle
 - Writing new code / scripts and running them.
 - Shell automation and environment setup.
@@ -1027,6 +1039,7 @@ You do not plan, design, split or reason about the work. You are a pipe:
 
 <<TOOLS>>
 {dataset_context?}
+{links_context?}
 ## Forwarding the task
 - Forward the task VERBATIM — same wording, same requirements, same numbers, same file/repo names. Copying it over is the whole job.
 - Do NOT write instructions for the sandbox agent: no plans, no steps, no methods, no libraries, no code, no "first do X then Y". It works that out itself and knows its workspace better than you do.
@@ -1080,6 +1093,7 @@ data or invent rows, columns, ids, or statistics.
 <<TOOLS>>
 <<SHELL_NOTE>>
 {dataset_context?}
+{links_context?}
 ## Sources (try them in this order of fit for the request)
 - **HuggingFace Datasets** — ready-made ML datasets. Find the right dataset id
   (use web search if unsure), then `pip install datasets` and load it:
@@ -1133,6 +1147,7 @@ You are a Medical Research Agent. Your role is to answer clinical and biomedical
 
 <<TOOLS>>
 
+{links_context?}
 ## Workflow
 
 ### For clinical / literature questions
@@ -1190,6 +1205,7 @@ its code -> build and serve a FastMCP server in Docker).
 
 <<TOOLS>>
 
+{links_context?}
 ## The build is a long, asynchronous job — protocol
 A full build takes TENS OF MINUTES. You never wait for it inline:
 1. Before starting a new build, ALWAYS call list_mcp_builds() first to check
@@ -1350,6 +1366,7 @@ Your objective is NOT to produce the most detailed roadmap. Your objective is
 to produce the SHORTEST executable roadmap that covers every user deliverable.
 Plan tasks are delegation units, not a narration of your reasoning.
 
+{links_context?}
 <<DISCOVERY>>
 
 ### AVAILABLE AGENTS
@@ -1568,7 +1585,10 @@ def orchestrator(ctx: PromptContext) -> str:
             "   dataset\". It routes to the right path itself, so do NOT pre-judge\n"
             "   whether a ready tool exists, and do not split a step by execution\n"
             "   mechanism. Delegate the OUTCOME you need, with every concrete\n"
-            "   detail (names, ids, URLs, thresholds, output format). If it reports\n"
+            "   detail (names, ids, thresholds, output format), writing any link\n"
+            "   as its reference, copied exactly from the links section,\n"
+            "   instead of typing the URL out.\n"
+            "   If it reports\n"
             "   that no tool matched AND no code path worked, that is a real\n"
             "   blocker — re-delegating the same step unchanged will not fix it."
         )
@@ -1735,18 +1755,20 @@ def orchestrator(ctx: PromptContext) -> str:
             "\nWhat YOU write vs what others write (do not cross this line):\n"
             "- YOU: the root question + context star ONLY through `research_init`; "
             "then mid-run — start/postpone verification (hypothesis → "
-            "under_verification / postponed), approve conclusions, spend Resources, "
-            "wire Constraints (regulates/constrains), artifacts, economic nodes, "
+            "under_verification / postponed), update Tool status (e.g. set a built "
+            "tool to 'available'), approve conclusions, spend Resources, "
+            "wire Constraints (regulates/constrains), record Evidence when a worker "
+            "returned findings only in text, record artifacts, economic nodes, "
             "spawned sub-questions.\n"
             "- BACKGROUND VALIDATOR (automatic, not an agent you call): the VERDICT "
             "(confirmed/refuted), criteria met/not, and the Conclusion draft. Never "
             "write these yourself and never wait for them.\n"
             "- WORKERS: Hypotheses/Methods/Criteria (HypothesesAgent), Evidence "
             "(Research/Medical/Coder/Experiment), Tools & code/data (Coder). You "
-            "CANNOT create Evidence, Hypotheses, Conclusions, Methods, Tools, "
-            "Resources or EmpiricalBases mid-run — the graph will reject it. If a "
-            "worker reported findings only as text, re-delegate to that worker to "
-            "commit them; never try to record them yourself.\n"
+            "do NOT create Hypotheses, Conclusions, Methods, Resources or EmpiricalBases mid-run. "
+            "If a worker reported findings only as text without committing them to the graph, "
+            "record them directly as Evidence attached to the hypothesis via `research_commit` — "
+            "do NOT re-delegate just for graph commitment.\n"
             "- Never re-verify a refuted or postponed hypothesis — those branches "
             "stay in the graph as negative results, so you don't repeat them."
             + approval_line + "\n"
@@ -1760,6 +1782,7 @@ Available tools from agents:
 <<AGENTS>>
 
 <<KNOWLEDGE_GRAPH>><<RESEARCH_GRAPH>>
+{links_context?}
 ### Instructions:
 
 <<INSTRUCTIONS>>
@@ -2118,6 +2141,8 @@ itself records that the run was about reproducing or benchmarking against it.
 A starting digest of the graph:
 {research_context?}
 
+{links_context?}
+
 ### Procedure
 1. **Read the graph.** Call `research_overview()` first to see every node (ids,
    types, statuses, labels). Then, for each Conclusion and the Evidence/Hypotheses
@@ -2259,6 +2284,7 @@ def context_init(ctx: PromptContext) -> str:
 ДО того, как оркестратор выберет стратегию (литературный обзор, дорогой или
 дешёвый эксперимент). Поэтому рамка важна.
 
+{links_context?}
 ОБЯЗАТЕЛЬНЫЕ БЛОКИ (ровно с такими названиями и полями, в этом порядке):
 <<BLOCKS_DESC>>
 
