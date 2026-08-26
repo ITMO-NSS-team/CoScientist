@@ -105,10 +105,7 @@ def _fill_task(
 
     dataset_name = "" if is_design_placeholder(design.dataset.name) else design.dataset.name.strip()
     if not dataset_name:
-        tools = _bound_tool_names(task)
-        dataset_name = _dataset_from_inputs(task) or (
-            f"output of {tools[0]}" if tools else ""
-        )
+        dataset_name = _dataset_from_inputs(task)
     dataset = design.dataset.model_copy(update={"name": dataset_name})
 
     baselines = list(design.baselines)

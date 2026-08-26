@@ -185,6 +185,11 @@ def primary_needed_capability(needed: Iterable[str]) -> str | None:
     return next(iter(sorted(want)), None)
 
 
+def tool_primary_family(tool_name: str, description: str = "") -> str | None:
+    """Primary CAPABILITY_SPECS family for a compute tool, or None."""
+    return primary_needed_capability(tool_capabilities(tool_name, description))
+
+
 def inventory_covers_capabilities(
     by_tool: Mapping[str, Mapping[str, Any]],
     needed: Iterable[str],
@@ -396,4 +401,5 @@ __all__ = [
     "primary_needed_capability",
     "request_capabilities",
     "tool_capabilities",
+    "tool_primary_family",
 ]

@@ -173,15 +173,9 @@ def _write_molecule_csv(
     if not raw:
         return None
 
-    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime.inline_artifacts import experiment_artifacts_folder
 
-    folder = (
-        Path(get_settings().code_exec.workspace_root)
-        / "experiment_artifacts"
-        / str(task_id)
-        / str(attempt_id)
-    )
-    folder.mkdir(parents=True, exist_ok=True)
+    folder = experiment_artifacts_folder(str(task_id), str(attempt_id))
     destination = folder / "candidates.csv"
     destination.write_bytes(raw)
     return {

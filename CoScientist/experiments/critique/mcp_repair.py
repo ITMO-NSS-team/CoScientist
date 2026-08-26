@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any, Iterable
 
 from CoScientist.experiments.capabilities.inventory import (
+    PRIMARY_CAP_PRIORITY,
     index_inventory_tools,
     match_inventory_tool,
     match_named_family_capability,
     match_named_inventory_tool,
+    tool_primary_family,
 )
 from CoScientist.experiments.critique.coverage import (
     operation_statement as _operation_statement,
@@ -53,6 +56,153 @@ def _bound_tool_names(task: dict[str, Any]) -> list[str]:
             if name:
                 names.append(name)
     return names
+
+
+def _launch_params_map(task: dict[str, Any]) -> dict[str, Any]:
+    raw = task.get("launch_params") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _task_tool_names(task: dict[str, Any], by_tool: dict[str, dict[str, Any]]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in (*_bound_tool_names(task), *(_launch_params_map(task))):
+        key = str(name or "").strip()
+        if key and key in by_tool and key not in seen:
+            seen.add(key)
+            names.append(key)
+    return names
+
+
+def _tool_family(name: str, by_tool: dict[str, dict[str, Any]]) -> str | None:
+    item = by_tool.get(name) or {}
+    return tool_primary_family(name, str(item.get("description") or ""))
+
+
+def _server_for_tool(task: dict[str, Any], tool_name: str, by_tool: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    for server in task.get("mcp_servers") or []:
+        if not isinstance(server, dict):
+            continue
+        for tool in server.get("tools") or []:
+            name = str(tool.get("name") if isinstance(tool, dict) else tool or "").strip()
+            if name == tool_name:
+                return {
+                    **server,
+                    "tools": [tool if isinstance(tool, dict) else {"name": tool_name}],
+                }
+    item = by_tool[tool_name]
+    return _bind_server(item)
+
+
+def _artifacts_for_tool(task: dict[str, Any], tool_name: str, family: str) -> list[dict[str, Any]]:
+    design = task.get("design") if isinstance(task.get("design"), dict) else {}
+    kept: list[dict[str, Any]] = []
+    for art in design.get("analysis_artifacts") or []:
+        if not isinstance(art, dict):
+            continue
+        blob = f"{art.get('path_or_tool') or ''} {art.get('name') or ''}".lower()
+        if tool_name.lower() in blob or family.split("_")[0] in blob:
+            kept.append(copy.deepcopy(art))
+    if kept:
+        return kept
+    return [{
+        "name": f"{family}_result",
+        "role": "metrics_table",
+        "prepare_via": "mcp",
+        "path_or_tool": tool_name,
+    }]
+
+
+def _alloc_exp_id(used: set[str]) -> str:
+    n = 1
+    while f"EXP-{n}" in used:
+        n += 1
+    return f"EXP-{n}"
+
+
+def _split_multifamily_mcp_task(
+    task: dict[str, Any],
+    by_tool: dict[str, dict[str, Any]],
+    *,
+    used_ids: set[str],
+) -> list[dict[str, Any]]:
+    names = _task_tool_names(task, by_tool)
+    by_family: dict[str, str] = {}
+    for name in names:
+        fam = _tool_family(name, by_tool)
+        if fam and fam not in by_family:
+            by_family[fam] = name
+    families = [fam for fam in PRIMARY_CAP_PRIORITY if fam in by_family]
+    if len(families) < 2:
+        return [task]
+    params = _launch_params_map(task)
+    producer_id = str(task.get("id") or "EXP-1")
+    upstream_name = next(
+        (str(art["name"]) for art in (task.get("expected_artifacts") or [])
+         if isinstance(art, dict) and art.get("name")),
+        "",
+    )
+    pieces: list[dict[str, Any]] = []
+    for index, family in enumerate(families):
+        tool_name = by_family[family]
+        piece = copy.deepcopy(task)
+        if index:
+            piece["id"] = _alloc_exp_id(used_ids)
+            used_ids.add(piece["id"])
+            piece["depends_on"] = [producer_id]
+            if upstream_name:
+                piece["input_data"] = [{
+                    "data_id": upstream_name,
+                    "kind": "task_artifact",
+                    "description": "Upstream family output",
+                    "source_task_id": producer_id,
+                    "source_artifact_id": upstream_name,
+                    "required": True,
+                }]
+        piece["mcp_servers"] = [_server_for_tool(task, tool_name, by_tool)]
+        if tool_name in params and isinstance(params[tool_name], dict):
+            piece["launch_params"] = copy.deepcopy(params[tool_name])
+        elif index == 0:
+            piece["launch_params"] = {
+                key: value for key, value in params.items() if key not in by_family.values()
+            }
+        else:
+            piece["launch_params"] = {}
+        _design_dict(piece)["analysis_artifacts"] = _artifacts_for_tool(task, tool_name, family)
+        _rewrite_artifacts_to_tool(piece, tool_name)
+        piece["warnings"] = list(piece.get("warnings") or []) + [
+            f"auto_split_multifamily_mcp:{family}:{tool_name}"
+        ]
+        pieces.append(piece)
+    return pieces
+
+
+def _split_multifamily_tasks(
+    tasks: list[Any],
+    by_tool: dict[str, dict[str, Any]],
+    *,
+    max_plan_tasks: int,
+) -> list[Any]:
+    used = {
+        str(task.get("id") or "").strip().upper()
+        for task in tasks if isinstance(task, dict)
+    }
+    out: list[Any] = []
+    for task in tasks:
+        if not isinstance(task, dict) or str(task.get("route") or "") not in _MCP_ROUTES:
+            out.append(task)
+            continue
+        pieces = _split_multifamily_mcp_task(task, by_tool, used_ids=used)
+        if len(out) + len(pieces) > max_plan_tasks:
+            out.append(task)
+            continue
+        out.extend(pieces)
+    return out
 
 
 def _bound_tools_in_inventory(
@@ -468,6 +618,18 @@ def repair_plan_mcp_bindings(
                 "auto_rewrote_unbound_evidence_to_ready_mcp"
             ]
 
+    out["tasks"] = _split_multifamily_tasks(
+        list(out.get("tasks") or []), by_tool, max_plan_tasks=max_plan_tasks,
+    )
+    duration = 0
+    for task in out["tasks"]:
+        if isinstance(task, dict):
+            try:
+                duration += int(task.get("est_duration_min") or 0)
+            except (TypeError, ValueError):
+                pass
+    if duration:
+        out["total_est_duration_min"] = duration
     out.pop("warnings", None)
     return out
 

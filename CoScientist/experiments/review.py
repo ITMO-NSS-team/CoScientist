@@ -180,13 +180,17 @@ def render_experiment_plan(plan: ExperimentPlan) -> str:
         arts = "; ".join(f"{a.name} ({a.role})" for a in t.expected_artifacts)
         also = f" (+{', '.join(d.also_tests)})" if d.also_tests else ""
         notes = f" — {d.dataset.notes}" if d.dataset.notes else ""
+        dataset_shown = _design_cell(d.dataset.name)
         L += ["", f"## {t.id} · {t.name}", f"Route: `{t.route.value}`"]
         if t.route.value == "alembic_build":
             L += [f"Repo URL: {t.repo_url}", f"Post-build route: `{t.post_build_route}`"]
         L += [
             f"Hypothesis: `{d.hypothesis_ref}`{also}",
             f"Question: {_design_cell(d.experiment_question)}",
-            f"Dataset: {_design_cell(d.dataset.name)}{notes if d.dataset.name else ''}",
+        ]
+        if dataset_shown != "—":
+            L.append(f"Dataset: {dataset_shown}{notes}")
+        L += [
             f"Baselines: {_design_cell('; '.join(f'{b.name} ({b.kind})' for b in d.baselines))}",
             f"Metrics: {_design_cell('; '.join(f'{m.name} ({m.direction})' for m in d.metrics))}",
             f"Analysis artifacts: {_design_cell('; '.join(f'{a.name} [{a.role}]' for a in d.analysis_artifacts))}",

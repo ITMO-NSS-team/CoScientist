@@ -1093,7 +1093,7 @@ class ExperimentPlan(StrictModel):
     methods: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(min_length=1)
     context_digest: str = Field(min_length=1)
     context_refs: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(default_factory=list)
-    tasks: list[ExperimentTask] = Field(min_length=1, max_length=8)
+    tasks: list[ExperimentTask] = Field(min_length=1, max_length=10)
     risks: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(default_factory=list)
     assumptions: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(default_factory=list)
     total_est_duration_min: int = Field(gt=0)

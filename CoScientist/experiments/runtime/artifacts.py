@@ -132,8 +132,9 @@ def _materialize_signed_artifact(url: str, *, task_id: str, attempt_id: str, nam
     """Copy URL-only signed output into the report workspace."""
     try:
         import requests
-        folder = Path(get_settings().code_exec.workspace_root) / "experiment_artifacts" / task_id / attempt_id
-        folder.mkdir(parents=True, exist_ok=True)
+        from CoScientist.experiments.runtime.inline_artifacts import experiment_artifacts_folder
+
+        folder = experiment_artifacts_folder(task_id, attempt_id)
         destination = folder / (Path(name).name or f"artifact-{uuid4().hex}")
         response = requests.get(html.unescape(url), timeout=30)
         response.raise_for_status()

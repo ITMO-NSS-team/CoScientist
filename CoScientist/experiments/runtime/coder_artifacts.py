@@ -166,8 +166,9 @@ def promote_coder_workspace_artifacts(
     if sandbox is None or not sandbox.is_dir():
         return []
 
-    dest_dir = root / "experiment_artifacts" / str(task_id) / str(attempt_id)
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    from CoScientist.experiments.runtime.inline_artifacts import experiment_artifacts_folder
+
+    dest_dir = experiment_artifacts_folder(str(task_id), str(attempt_id))
 
     bucket = state.setdefault("coder_artifacts", [])
     if not isinstance(bucket, list):
