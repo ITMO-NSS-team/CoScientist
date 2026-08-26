@@ -62,3 +62,13 @@ task_tracker_data.json
 CoScientist/docs/*.pdf
 CoScientist/golem_h1/
 IEEE-conference-template-*/
+research_graph*.svg
+research_graph*.html
+research_graph*.json
+run_evolution*.jsonl
+run_evolution*.html
+agent_events.jsonl
+e2e_case.jsonl
+benchmarks/**/repository_inventory.jsonl
+CoScientist/developer/aaai_coscientist/
+CoScientist/developer/slides/
