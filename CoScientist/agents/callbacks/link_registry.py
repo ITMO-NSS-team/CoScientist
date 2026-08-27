@@ -780,11 +780,21 @@ def _flatten_tool_result(value: Any) -> str:
     """One text blob to scan for URLs — whatever shape a tool's result is."""
     if isinstance(value, str):
         return value
+    if isinstance(value, dict):
+        parts = []
+        for k, v in value.items():
+            if isinstance(k, str):
+                parts.append(k)
+            parts.append(_flatten_tool_result(v))
+        return "\n".join(parts)
+    if isinstance(value, (list, tuple, set)):
+        return "\n".join(_flatten_tool_result(v) for v in value)
     try:
-        import json
-        return json.dumps(value, ensure_ascii=False, default=str)
-    except Exception:  # noqa: BLE001 — some payload types resist json.dumps
-        return str(value)
+        if hasattr(value, "model_dump"):
+            return _flatten_tool_result(value.model_dump())
+    except Exception:  # noqa: BLE001
+        pass
+    return str(value)
 
 
 def _to_refs(text: str, ref_of: Dict[str, str]) -> str:
