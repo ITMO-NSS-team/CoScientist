@@ -513,11 +513,17 @@ agents:
     description: Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.
     prompt: tool_reranker
     output_key: reranked_tools
-    output_schema: tool_ranking
+    # No `output_schema:` on purpose. It makes ADK send a *strict* json_schema
+    # response_format, which OpenRouter hands to the provider as a constrained
+    # decode — the call has been observed to hang there with no timeout. The
+    # prompt asks for the same JSON, `sanitize_json_output` strips any fences,
+    # and `collect_reranked_tools` parses + shape-checks it.
+    llm_timeout: 45
     callbacks:
+      before_agent: [shortlist_reranker_tools]
       before_model: [skip_retriever_context]
-      # Not every provider honours response_format: strip prose/```json fences
-      # around the JSON before ADK's strict output_schema validation.
+      # Nothing else validates the shape now that output_schema is gone: strip
+      # prose/```json fences here, parse and shape-check in collect_reranked_tools.
       after_model: [sanitize_json_output]
       after_agent: [collect_reranked_tools]
 

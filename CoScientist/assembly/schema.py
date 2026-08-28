@@ -134,6 +134,12 @@ class AgentConfig(BaseModel):
     enabled: Union[bool, str] = True
     root: bool = False
     model: Optional[str] = None
+    # Seconds to wait for the model's FIRST response before giving up (the retry
+    # ladder in RetryingLiteLlm then applies). Opt-in per agent: unset means no
+    # deadline, i.e. the pre-existing behaviour. Set it on agents whose turn is
+    # a single short structured answer; a long multi-step tool-use turn does not
+    # want one.
+    llm_timeout: Optional[float] = None
     description: str = ""
     # How a PARENT's prompt routes work to this agent (one routing bullet).
     routing: str = ""
@@ -178,7 +184,7 @@ class AgentConfig(BaseModel):
         if composite:
             if not self.children:
                 raise ValueError(f"{self.cls} agent needs non-empty children")
-            for forbidden in ("tools", "subordinates", "prompt", "model"):
+            for forbidden in ("tools", "subordinates", "prompt", "model", "llm_timeout"):
                 if getattr(self, forbidden):
                     raise ValueError(
                         f"{self.cls} agent cannot have {forbidden} (got {getattr(self, forbidden)!r})"

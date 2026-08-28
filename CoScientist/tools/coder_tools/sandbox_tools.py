@@ -249,6 +249,7 @@ async def run_sandbox_task(
         dataset_url=dataset_url,
         new_sandbox=new_sandbox,
         session_id=_session(tool_context),
+        tool_context=tool_context,
         timeout=RUN_WAIT,
         poll_interval=POLL_INTERVAL,
         # Announced from inside the client: this call returns only when the job
@@ -329,6 +330,7 @@ async def check_sandbox_task(tool_context: ToolContext = None) -> Dict[str, Any]
     """
     result = await sandbox.await_sandbox_task(
         session_id=_session(tool_context),
+        tool_context=tool_context,
         timeout=CHECK_WAIT,
         poll_interval=POLL_INTERVAL,
         metrics_sink=_metrics_sink(tool_context),

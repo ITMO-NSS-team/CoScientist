@@ -104,11 +104,14 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
     from CoScientist.agents.common import make_coder_llm, make_llm
 
     ref = cfg.model or system.defaults.model
+    # Per-agent first-response deadline; None for every agent that doesn't ask
+    # for one, so nothing else changes behaviour.
+    deadline_s = cfg.llm_timeout
     if ref == "main":
-        return make_llm()
+        return make_llm(deadline_s=deadline_s)
     if ref == "coder":
-        return make_coder_llm()
-    return make_llm(ref)
+        return make_coder_llm(deadline_s=deadline_s)
+    return make_llm(ref, deadline_s=deadline_s)
 
 
 def _resolve_tools(cfg: AgentConfig) -> List[ToolEntry]:

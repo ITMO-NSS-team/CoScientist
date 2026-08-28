@@ -6,7 +6,7 @@ LLM/tooling setup is consistent across agents.
 import asyncio
 import logging
 import os
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 import litellm
 from google.adk.models.lite_llm import LiteLlm
@@ -43,6 +43,10 @@ _RETRYABLE_SUBSTRINGS = (
 _RETRYABLE_TYPES = (
     "RateLimitError",
     "Timeout",
+    # asyncio's deadline (see RetryingLiteLlm.deadline_s) raises the builtin
+    # TimeoutError, whose str() is EMPTY — so the substring ladder below can
+    # never see it. It has to be matched by type name or the retry is skipped.
+    "TimeoutError",
     "APIConnectionError",
     "ServiceUnavailableError",
     "InternalServerError",
@@ -89,7 +93,22 @@ class RetryingLiteLlm(LiteLlm):
 
     Only retries when nothing has been yielded yet (so a partial stream is never
     duplicated) and only for transient errors; everything else propagates.
+
+    ``deadline_s`` (opt-in, per agent via ``llm_timeout:`` in system.yaml) caps
+    the wait for the FIRST response. litellm's own timeout is httpx's, i.e. a
+    per-read limit: a provider that dribbles bytes — or stalls after accepting
+    the request — never trips it, and the call hangs for good. Agents that leave
+    it unset keep exactly the previous behaviour.
     """
+
+    # Pydantic private attribute (same pattern as LiteLlm._additional_args).
+    # Consumed in __init__ before super(), so it never leaks into the kwargs
+    # LiteLlm forwards to litellm's completion API.
+    _deadline_s: Optional[float] = None
+
+    def __init__(self, model: str, *, deadline_s: Optional[float] = None, **kwargs):
+        super().__init__(model=model, **kwargs)
+        self._deadline_s = deadline_s
 
     @staticmethod
     async def _verify_proxy_reachable() -> None:
@@ -129,9 +148,23 @@ class RetryingLiteLlm(LiteLlm):
         while True:
             yielded = False
             try:
-                async for resp in super().generate_content_async(llm_request, stream=stream):
-                    yielded = True
-                    yield resp
+                if self._deadline_s is None:
+                    async for resp in super().generate_content_async(llm_request, stream=stream):
+                        yielded = True
+                        yield resp
+                else:
+                    async with asyncio.timeout(self._deadline_s) as deadline:
+                        async for resp in super().generate_content_async(
+                            llm_request, stream=stream
+                        ):
+                            # The provider answered, so stop the clock. The budget
+                            # covers time-to-first-response only: leaving it armed
+                            # would also time a long stream — and, because we
+                            # suspend right here, whatever the CONSUMER does with
+                            # the response downstream.
+                            deadline.reschedule(None)
+                            yielded = True
+                            yield resp
                 return
             except Exception as err:  # noqa: BLE001 — classify then re-raise
                 attempt += 1
@@ -181,11 +214,11 @@ hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 CODER_MODEL = settings.llm.coder_model or settings.llm.main_model
 
 
-def make_llm(model: str = MODEL) -> LiteLlm:
+def make_llm(model: str = MODEL, *, deadline_s: Optional[float] = None) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the main model (or an override)."""
-    return RetryingLiteLlm(model=model)
+    return RetryingLiteLlm(model=model, deadline_s=deadline_s)
 
 
-def make_coder_llm() -> LiteLlm:
+def make_coder_llm(*, deadline_s: Optional[float] = None) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the dedicated coder model."""
-    return RetryingLiteLlm(model=CODER_MODEL)
+    return RetryingLiteLlm(model=CODER_MODEL, deadline_s=deadline_s)

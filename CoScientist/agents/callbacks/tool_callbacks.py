@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -24,6 +25,132 @@ logger = logging.getLogger(__name__)
 
 # State key carrying the executor's tool-match verdict for the redirect guard.
 TOOL_MATCH_STATE_KEY = "executor_tool_match"
+
+
+def _output_key_json(value: Any) -> Dict[str, Any]:
+    """Coerce a reranker's ``output_key`` payload to a dict.
+
+    With ``output_schema`` set, ADK validates the model's text and stores a dict.
+    We deliberately drop the schema on ToolReranker so ADK never sends OpenRouter
+    a *strict* json_schema ``response_format`` (some providers stall on the
+    grammar-constrained decode it implies), which leaves ``output_key`` holding
+    raw text — already reduced to bare JSON by ``sanitize_json_output``.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            logger.warning("reranker output is not valid JSON: %.300s", value)
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+        logger.warning("reranker output is %s, expected an object", type(parsed).__name__)
+    return {}
+
+
+def _score_map(entries: Any, *, cast: Callable[[Any], Any]) -> Dict[int, Any]:
+    """Build ``{index: score}``, skipping anything malformed.
+
+    Without ``output_schema`` nothing validates the model's shape any more, so a
+    missing/!int ``index`` or a non-numeric ``score`` must degrade to "this tool
+    went unscored" rather than raise inside an after_agent callback.
+    """
+    out: Dict[int, Any] = {}
+    if not isinstance(entries, list):
+        return out
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        index = entry.get("index")
+        if not isinstance(index, int) or isinstance(index, bool):
+            continue
+        try:
+            out[index] = cast(entry.get("score"))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+# ── ToolReranker shortlist (local cross-encoder pre-pass) ────────────────────
+# Every entry in `accumulated_tools` carries the score of the retrieval query
+# that FOUND it, and those queries differ per tool — so the scores share no
+# scale. (Observed: a tool whose query happened to contain its own name scored
+# 0.74 while the one the task actually needed scored 0.38 and sat 12th.)
+# Truncating on them drops the right tool, so we re-score every candidate
+# against ONE query — the task — with the local reranker service, and shortlist
+# on that. Putting candidates on a common scale is exactly the job the LLM
+# reranker does next; this just narrows what it has to read.
+_RERANK_SHORTLIST_KEY = "reranker_candidates"
+_RERANK_SHORTLIST_SIZE = int(os.getenv("RERANK_SHORTLIST_SIZE", "8"))
+
+
+def _first_text(content) -> str:
+    """First text part of a Content, or '' if there is none."""
+    if content is None or not getattr(content, "parts", None):
+        return ""
+    for part in content.parts:
+        if getattr(part, "text", None):
+            return part.text
+    return ""
+
+
+async def shortlist_reranker_tools(callback_context: CallbackContext) -> None:
+    """Narrow `accumulated_tools` to the top-K by local cross-encoder score.
+
+    Best-effort by construction: every early return leaves the full tool list in
+    place, so an unreachable reranker service costs context, never correctness.
+    """
+    state = callback_context.state
+    acc: List[Dict[str, Any]] = state.get('accumulated_tools') or []
+    # Set first: the prompt reads this key, so it must be populated on every path.
+    state[_RERANK_SHORTLIST_KEY] = acc
+
+    if len(acc) <= _RERANK_SHORTLIST_SIZE:
+        return None
+
+    task = _first_text(getattr(callback_context, "user_content", None)).strip()
+    if not task:
+        logger.info(
+            "shortlist: no task text on this invocation — passing all %d tools", len(acc)
+        )
+        return None
+
+    documents = [
+        f"{tool.get('tool', '')}: {tool.get('description', '')}" for tool in acc
+    ]
+    try:
+        from rag_tools.retrieval import APIReranker
+
+        ranked = await APIReranker().rerank_with_scores(
+            task, documents, top_k=_RERANK_SHORTLIST_SIZE
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail the run over a shortlist
+        logger.warning(
+            "shortlist: reranker unavailable (%r) — passing all %d tools", exc, len(acc)
+        )
+        return None
+
+    # APIReranker swallows its own HTTP errors and answers with all-zero scores.
+    # That ordering is just the input order, so shortlisting on it would silently
+    # cut arbitrary tools — treat it as "service down" instead.
+    if not ranked or max(score for _, score in ranked) <= 0.0:
+        logger.warning(
+            "shortlist: no usable scores from the reranker — passing all %d tools", len(acc)
+        )
+        return None
+
+    shortlist = [acc[i] for i, _ in ranked if 0 <= i < len(acc)]
+    if not shortlist:
+        return None
+
+    logger.info(
+        "shortlist: %d -> %d tools for the reranker (best=%s)",
+        len(acc), len(shortlist), round(ranked[0][1], 3),
+    )
+    state[_RERANK_SHORTLIST_KEY] = shortlist
+    return None
+
 
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
@@ -55,9 +182,9 @@ def after_tool_reranker_agent(
 
 
     current_state = callback_context.state
-    reranked_tools: Dict[str, float] = (current_state.get('reranked_tools') or {}).get('tools', [])
+    reranked_tools = _output_key_json(current_state.get('reranked_tools')).get('tools', [])
 
-    rerank_map: Dict[int, float] = {t['index']: t['score'] for t in reranked_tools}
+    rerank_map: Dict[int, float] = _score_map(reranked_tools, cast=float)
     acc_tools: List[Dict[str, Any]] = current_state.get('accumulated_tools', [])
 
     filtered_tools: List[Dict[str, Any]] = [
@@ -90,6 +217,7 @@ def after_tool_reranker_agent(
     }
     callback_context.state['filtered_tools'] = filtered_tools
     callback_context.state['accumulated_tools'] = []
+    callback_context.state[_RERANK_SHORTLIST_KEY] = []
     callback_context.state['retrieval_queries'] = []
     return
 

@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 import os
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -75,6 +75,11 @@ SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 # log and are never dropped, so only the tool stream is capped.
 MAX_TOOL_ACTIVITY_EVENTS = 600
 TOOL_ACTIVITY_TRIM_SLACK = 200
+# Untruncated tool args/results kept for on-demand fetch (ToolsViewer's "Show
+# full result"), keyed by call_id. Independent of MAX_TOOL_ACTIVITY_EVENTS
+# since most calls never need an entry here at all — only ones whose preview
+# was actually truncated get one.
+MAX_TOOL_FULL_VALUES = 300
 DATASET_URL_MAX_LENGTH = 2048
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
@@ -272,6 +277,11 @@ class WebRuntime:
         self.stopping_runs: set[SessionKey] = set()
         self._closing = False
         self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
+        # Full (untruncated) tool args/results, keyed by call_id — see
+        # MAX_TOOL_FULL_VALUES. Never broadcast; only served on demand.
+        self.tool_full_values: dict[SessionKey, "OrderedDict[str, dict[str, Any]]"] = (
+            defaultdict(OrderedDict)
+        )
         # Latest usage/cost snapshot per session — cumulative, so one entry is
         # the whole history and a reconnecting tab needs nothing older.
         self.metrics: dict[SessionKey, dict[str, Any]] = {}
@@ -746,11 +756,32 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
             event for index, event in enumerate(events) if index not in dropped
         ]
 
+    def stash_full_values(key: SessionKey, event: dict[str, Any]) -> None:
+        """Pull the untruncated `*_full` fields out of the broadcast event and
+        keep them server-side under the call's id, so a client can fetch the
+        whole thing later without it ever going out over every tab's socket.
+        """
+        call_id = event.get("call_id")
+        full_fields = {
+            field: event.pop(key_name)
+            for field, key_name in (("args", "args_full"), ("result", "result_full"), ("error", "error_full"))
+            if key_name in event
+        }
+        if not call_id or not full_fields:
+            return
+        store = runtime.tool_full_values[key]
+        entry = store.setdefault(call_id, {})
+        entry.update(full_fields)
+        store.move_to_end(call_id)
+        while len(store) > MAX_TOOL_FULL_VALUES:
+            store.popitem(last=False)
+
     async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
         event = {"type": "tool_activity", **_json_safe(payload)}
+        stash_full_values(key, event)
         events = runtime.agent_events[key]
         events.append(event)
         trim(events)
@@ -1523,6 +1554,22 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"events": runtime.agent_events[(user_id, session_id)][-100:]})
+
+    # --- Full (untruncated) tool args/results, for the ToolsViewer's "Show
+    # full result" — the live socket stream only ever carries a preview.
+    @app.get("/api/users/{user_id}/sessions/{session_id}/tool-activity/{call_id}")
+    async def get_tool_activity_full(user_id: str, session_id: str, call_id: str):
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        entry = runtime.tool_full_values.get((user_id, session_id), {}).get(call_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No stored full result for this call (it may have expired or was never truncated)",
+            )
+        return JSONResponse({"call_id": call_id, **entry})
 
     # --- Usage and cost ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")

@@ -774,6 +774,11 @@ def _skip_retriever_context():
     return before_tool_reranker_model
 
 
+def _shortlist_reranker_tools():
+    from CoScientist.agents.callbacks import shortlist_reranker_tools
+    return shortlist_reranker_tools
+
+
 def _collect_reranked_tools():
     from CoScientist.agents.callbacks import after_tool_reranker_agent
     return after_tool_reranker_agent
@@ -938,6 +943,8 @@ _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_upload
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
 _cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
+# Cross-encoder pre-pass: hand the LLM reranker a short list, not everything.
+_cb("shortlist_reranker_tools", "before_agent", factory=lambda ctx: _shortlist_reranker_tools())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.

@@ -31,10 +31,16 @@ logger = logging.getLogger("CoScientist.logging.tool_activity")
 
 ToolActivitySink = Callable[[SessionKey, dict], Awaitable[None]]
 
-# Tool args and results are only rendered as a compact preview by observers, and
-# a raw result can be megabytes (search dumps, file contents). Cap them here so
-# the sink never carries more than a glance's worth of payload.
+# The live broadcast only ever carries a compact preview of each value — a raw
+# result can be megabytes (search dumps, file contents), and every connected
+# tab would otherwise pay for that on every call. The full value is rendered
+# too (see `_FULL_LIMIT`) but only handed to the web app for on-demand
+# storage/retrieval (the ToolsViewer's "Show full result"), never broadcast.
 _PREVIEW_LIMIT = 1500
+# Ceiling on the *full* value kept for on-demand fetch — generous enough to
+# cover virtually any real tool output, but still bounded so one pathological
+# call (a multi-MB dump) can't be pulled whole into a session's memory.
+_FULL_LIMIT = 2_000_000
 
 _sink: Optional[ToolActivitySink] = None
 
@@ -45,29 +51,46 @@ def set_tool_activity_sink(sink: Optional[ToolActivitySink]) -> None:
     _sink = sink
 
 
-def _preview(value: Any) -> Any:
-    """Return a small JSON-safe rendering of ``value``.
+def _render(value: Any, limit: int) -> tuple[Any, bool]:
+    """Return ``(rendered, truncated)`` — a JSON-safe rendering of ``value``
+    capped at ``limit`` characters.
 
     Structure is preserved while it stays under the cap — observers render a
     dict of arguments far more readably than its escaped JSON text. Anything
     larger degrades to a truncated string.
     """
     if value is None or isinstance(value, (bool, int, float)):
-        return value
+        return value, False
     try:
         text = value if isinstance(value, str) else json.dumps(
             value, ensure_ascii=False, default=str,
         )
     except (TypeError, ValueError):
         text = str(value)
-    if len(text) > _PREVIEW_LIMIT:
-        return text[:_PREVIEW_LIMIT] + " …"
-    if isinstance(value, str):
-        return value
+    truncated = len(text) > limit
+    if truncated:
+        text = text[:limit] + " …"
+    if isinstance(value, str) or truncated:
+        return text, truncated
     try:
-        return json.loads(text)
+        return json.loads(text), False
     except (TypeError, ValueError):
-        return text
+        return text, False
+
+
+def _preview_and_full(value: Any) -> tuple[Any, Any, bool]:
+    """Return ``(preview, full, truncated)`` for one args/result/error value.
+
+    ``truncated`` reflects only the small preview cap — ``full`` is what the
+    ToolsViewer fetches on demand when the user asks to see everything, so a
+    caller should skip storing/sending it at all when ``truncated`` is False
+    (the preview already *is* the complete value).
+    """
+    preview, truncated = _render(value, _PREVIEW_LIMIT)
+    if not truncated:
+        return preview, preview, False
+    full, _ = _render(value, _FULL_LIMIT)
+    return preview, full, True
 
 
 def _agent_name(tool_context: Any) -> str:
@@ -105,34 +128,49 @@ class ToolActivityPlugin(BasePlugin):
             logger.warning("Tool activity sink failed: %s", exc)
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> None:
-        await self._dispatch(tool_context, {
+        preview, full, truncated = _preview_and_full(tool_args)
+        payload = {
             "phase": "call",
             "author": _agent_name(tool_context),
             "tool": getattr(tool, "name", "?"),
             "call_id": _call_id(tool_context),
-            "args": _preview(tool_args),
-        })
+            "args": preview,
+            "args_truncated": truncated,
+        }
+        if truncated:
+            payload["args_full"] = full
+        await self._dispatch(tool_context, payload)
         return None  # never override the tool's own execution
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> None:
-        await self._dispatch(tool_context, {
+        preview, full, truncated = _preview_and_full(result)
+        payload = {
             "phase": "result",
             "author": _agent_name(tool_context),
             "tool": getattr(tool, "name", "?"),
             "call_id": _call_id(tool_context),
-            "result": _preview(result),
-        })
+            "result": preview,
+            "result_truncated": truncated,
+        }
+        if truncated:
+            payload["result_full"] = full
+        await self._dispatch(tool_context, payload)
         return None
 
     async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error) -> None:
         # ADK re-raises a tool error when no plugin supplies a replacement
         # response, so ``after_tool_callback`` never fires for it: this is the
         # only closing record such a call will ever get.
-        await self._dispatch(tool_context, {
+        preview, full, truncated = _preview_and_full(str(error))
+        payload = {
             "phase": "error",
             "author": _agent_name(tool_context),
             "tool": getattr(tool, "name", "?"),
             "call_id": _call_id(tool_context),
-            "error": _preview(str(error)),
-        })
+            "error": preview,
+            "error_truncated": truncated,
+        }
+        if truncated:
+            payload["error_full"] = full
+        await self._dispatch(tool_context, payload)
         return None

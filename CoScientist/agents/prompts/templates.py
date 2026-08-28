@@ -490,9 +490,12 @@ Your output: A brief summary of accumulated tools with their descriptions and re
 
 
 # ── ToolReranker ─────────────────────────────────────────────────────────────
-# `{accumulated_tools?}` is an ADK state injection (the trailing `?` makes it
+# `{reranker_candidates?}` is an ADK state injection (the trailing `?` makes it
 # optional — it renders empty when the upstream ToolRetrieverAgent didn't
 # accumulate anything, instead of crashing the run with a KeyError).
+# The key is written by the `shortlist_reranker_tools` before_agent callback:
+# `accumulated_tools` narrowed to the top-K by local cross-encoder score, or the
+# full list verbatim when the reranker service has nothing usable to say.
 
 _static("tool_reranker", '''
 You are a TOOL RERANKING SPECIALIST.
@@ -506,7 +509,7 @@ You DO NOT invent indices.
 ## INPUTS
 
 You are given list of AVAILABLE TOOLS:
-{accumulated_tools?}
+{reranker_candidates?}
 
 ## YOUR TASK
 
@@ -765,7 +768,8 @@ def task_router(ctx: PromptContext) -> str:
             "The task needs ENGINEERING — writing/running code, a named repository,\n"
             "   URL or example code to clone and read, a specific architecture,\n"
             "   library or training procedure, shell/git work, or collecting and\n"
-            f"   processing data ⇒ {coder_path}, straight away."
+            f"   processing data ⇒ {coder_path}, straight away. Note: {coder_path} has NO\n"
+            "   ability to call MCP tools/servers and must NEVER be given tasks meant for MCP."
             + (
                 f"\n   Do NOT run {tools_path} first \"just to check\": a discovery pass on\n"
                 "   work that plainly needs code costs a full pipeline and returns nothing."
