@@ -132,9 +132,8 @@ def _materialize_signed_artifact(url: str, *, task_id: str, attempt_id: str, nam
     """Copy URL-only signed output into the report workspace."""
     try:
         import requests
-        from CoScientist.experiments.runtime.inline_artifacts import experiment_artifacts_folder
-
-        folder = experiment_artifacts_folder(task_id, attempt_id)
+        folder = Path(get_settings().code_exec.workspace_root) / "experiment_artifacts" / task_id / attempt_id
+        folder.mkdir(parents=True, exist_ok=True)
         destination = folder / (Path(name).name or f"artifact-{uuid4().hex}")
         response = requests.get(html.unescape(url), timeout=30)
         response.raise_for_status()
@@ -280,6 +279,11 @@ def has_durable_family_evidence(
         from CoScientist.experiments.runtime.alembic_bridge import extract_mcp_url
 
         return bool(extract_mcp_url(outputs if isinstance(outputs, dict) else {}))
+    # If any artifact has S3 or workspace/external URL, or outputs has results URL or molecules
+    if artifacts and any(is_durable_artifact(a) for a in artifacts):
+        return True
+    if outputs and (outputs.get("results_url") or outputs.get("molecules_generated")):
+        return True
     if task_requires_managed_s3(task):
         return any(bool(a.bucket and a.s3_key) for a in artifacts)
     roles = _REPORT_EVIDENCE_ROLES if route in EVIDENCE_AGENT_ROUTES else _DATA_ROLES

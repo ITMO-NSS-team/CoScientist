@@ -487,6 +487,34 @@ def enforce_hypothesis_research_commit(
         # interrupt tool-using turns.
         return None
     if _already_have_hypothesis_refs(callback_context):
+        # If the model emits no visible non-thought text on its final exit turn,
+        # furnish a clean summary from the committed refs so the caller (Orchestrator)
+        # receives a substantive result instead of empty text.
+        content = getattr(llm_response, "content", None)
+        parts = list(getattr(content, "parts", None) or [])
+        visible = "".join(
+            getattr(p, "text", "") or ""
+            for p in parts
+            if not getattr(p, "thought", False)
+        ).strip()
+        if not visible:
+            refs = (
+                state.get(_PENDING_FC_KEY)
+                or _refs_from_research_graph(callback_context)
+            )
+            if refs:
+                lines = ["Formulated Hypotheses:"]
+                for i, r in enumerate(refs, 1):
+                    hid = r.get("hypothesis_id", f"H{i}")
+                    stmt = r.get("statement", "")
+                    lines.append(f"- {hid}: {stmt}")
+                parts.append(types.Part.from_text(text="\n".join(lines)))
+                return LlmResponse(
+                    content=types.Content(
+                        role=getattr(content, "role", None) or "model",
+                        parts=parts,
+                    )
+                )
         return None
     draft = _response_text(llm_response)
     refs = _refs_from_model_draft(draft)
@@ -565,14 +593,42 @@ def _coerce_commit_arg_lists(args: dict[str, Any]) -> tuple[dict[str, Any], bool
     """Force nodes/edges/status_updates to list type before the FC is dispatched.
 
     GLM occasionally emits ``research_commit`` with a JSON-encoded STRING for
-    ``nodes`` (or edges/status_updates) instead of an array. The tool signature
-    types those as ``List[Dict]``, so a string argument makes the provider
-    reject the whole turn (``Input should be a valid list``) and kills the run.
-    Parsing the string back into a list at the model boundary keeps the typed
-    contract without guessing content.
+    ``nodes`` (or edges/status_updates) instead of an array, or even serializes
+    the JSON list directly as an argument key/value in args.
     """
     out = dict(args)
     changed = False
+
+    # Check if a key in out is itself a JSON list/dict
+    if "nodes" not in out:
+        for k, v in list(out.items()):
+            if isinstance(k, str) and (k.strip().startswith("[") or k.strip().startswith("{")):
+                parsed = _parse_payload(k)
+                if isinstance(parsed, list):
+                    if parsed and isinstance(parsed[0], dict) and ("from" in parsed[0] or "to" in parsed[0]):
+                        out["edges"] = out.get("edges") or parsed
+                    else:
+                        out["nodes"] = parsed
+                    out.pop(k, None)
+                    changed = True
+                    break
+                elif isinstance(parsed, dict):
+                    out["nodes"] = out.get("nodes") or parsed.get("nodes")
+                    out["edges"] = out.get("edges") or parsed.get("edges")
+                    out["status_updates"] = out.get("status_updates") or parsed.get("status_updates")
+                    out.pop(k, None)
+                    changed = True
+                    break
+            if isinstance(v, str) and (v.strip().startswith("[") or v.strip().startswith("{")):
+                parsed = _parse_payload(v)
+                if isinstance(parsed, list):
+                    if parsed and isinstance(parsed[0], dict) and ("from" in parsed[0] or "to" in parsed[0]):
+                        out["edges"] = out.get("edges") or parsed
+                    elif (k in ("nodes", "node_list", "hypotheses") or "nodes" not in out):
+                        out["nodes"] = parsed
+                    changed = True
+                    break
+
     for key in ("nodes", "edges", "status_updates"):
         val = out.get(key)
         if not isinstance(val, str):

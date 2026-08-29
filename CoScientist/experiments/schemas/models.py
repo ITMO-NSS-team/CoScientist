@@ -187,6 +187,21 @@ class MCPServerRef(StrictModel):
     source: Literal["registry", "explicit", "alembic"]
     health: Literal["unknown", "healthy", "unhealthy"] = "unknown"
 
+    @field_validator("server_id")
+    @classmethod
+    def validate_server_id(cls, value: Any) -> str | None:
+        if value is not None:
+            sid = str(value).strip()
+            if "/" in sid and "://" not in sid:
+                raise ValueError(f"server_id must not contain composite '/tool': {sid!r}")
+            return sid or None
+        return None
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: Any) -> str | None:
+        return _http_url_str(value)
+
     @model_validator(mode="before")
     @classmethod
     def coerce_server_shape(cls, data: Any) -> Any:
@@ -195,14 +210,6 @@ class MCPServerRef(StrictModel):
         raw = dict(data)
         # Server description is not a schema field — drop LLM extras.
         raw.pop("description", None)
-        # Mini often copies inventory keys "server_id/tool" into server_id.
-        sid = str(raw.get("server_id") or "").strip()
-        composite_tool = ""
-        if sid and "/" in sid and "://" not in sid:
-            left, right = sid.rsplit("/", 1)
-            if left.strip() and right.strip():
-                raw["server_id"] = left.strip()
-                composite_tool = right.strip()
         if not raw.get("name"):
             raw["name"] = str(raw.get("server_id") or raw.get("url") or "mcp-server")
         # Planner often emits a singular "tool" instead of tools=[...].
@@ -215,17 +222,11 @@ class MCPServerRef(StrictModel):
         if isinstance(tools, str) and tools.strip():
             raw["tools"] = [tools.strip()]
             tools = raw["tools"]
-        if composite_tool and not tools:
-            raw["tools"] = [composite_tool]
-            tools = raw["tools"]
         if isinstance(tools, list):
             fixed = []
             for tool in tools:
                 if isinstance(tool, str):
                     name = tool.strip()
-                    # Also tolerate "server/tool" inside tools[] entries.
-                    if "/" in name and "://" not in name:
-                        name = name.rsplit("/", 1)[-1].strip() or name
                     fixed.append(
                         {
                             "name": name,
@@ -236,33 +237,15 @@ class MCPServerRef(StrictModel):
                     )
                 else:
                     fixed.append(tool)
-            if composite_tool and not any(
-                (isinstance(t, dict) and t.get("name") == composite_tool)
-                or t == composite_tool
-                for t in fixed
-            ):
-                fixed.append(
-                    {
-                        "name": composite_tool,
-                        "description": f"Registry tool {composite_tool}",
-                        "input_schema": None,
-                        "required_for_task": True,
-                    }
-                )
             raw["tools"] = fixed
         return raw
 
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, value: Any) -> str | None:
-        return _http_url_str(value)
-
     @model_validator(mode="after")
     def validate_location(self) -> "MCPServerRef":
-        if not self.server_id and not self.url:
-            raise ValueError("MCP server requires server_id or url")
-        if self.source in {"explicit", "alembic"} and not self.url:
-            raise ValueError(f"source={self.source!r} requires url")
+        if not self.url:
+            raise ValueError(f"MCP server requires url (source={self.source!r})")
+        if self.source == "registry" and not self.server_id:
+            raise ValueError("source='registry' requires server_id and url")
         return self
 
 
@@ -1093,7 +1076,7 @@ class ExperimentPlan(StrictModel):
     methods: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(min_length=1)
     context_digest: str = Field(min_length=1)
     context_refs: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(default_factory=list)
-    tasks: list[ExperimentTask] = Field(min_length=1, max_length=10)
+    tasks: list[ExperimentTask] = Field(min_length=1, max_length=20)
     risks: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(default_factory=list)
     assumptions: Annotated[list[str], BeforeValidator(_coerce_string_list)] = Field(default_factory=list)
     total_est_duration_min: int = Field(gt=0)

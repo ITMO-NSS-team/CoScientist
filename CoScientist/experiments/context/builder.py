@@ -13,6 +13,7 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmResponse
 from google.genai import types
 
+from CoScientist.experiments.capabilities.inventory import get_grouped_mcp_inventory
 from CoScientist.experiments.runtime.shared import audit
 
 logger = logging.getLogger(__name__)
@@ -557,6 +558,7 @@ def _normalize_capabilities(items: Any) -> list[dict[str, Any]]:
 def _cap_for_prompt(cap: dict[str, Any]) -> dict[str, Any]:
     row = {
         "tool": cap["tool"], "server_id": cap["server_id"],
+        "url": cap.get("url"),
         "description": str(cap.get("description") or "")[:_PROMPT_DESC_LIMIT],
     }
     if family := str(cap.get("family") or "").strip():
@@ -566,14 +568,33 @@ def _cap_for_prompt(cap: dict[str, Any]) -> dict[str, Any]:
 
 def _prompt_context(context: dict[str, Any]) -> str:
     """Compact JSON for the planner instruction."""
+    from CoScientist.experiments.capabilities.inventory import get_grouped_mcp_inventory
+
     available = context.get("available_mcp_capabilities") or []
+    grouped_servers = context.get("available_mcp_servers") or get_grouped_mcp_inventory(available)
+    prompt_servers = [
+        {
+            "name": s["name"],
+            "server_id": s["server_id"],
+            "url": s["url"],
+            "tools": [
+                t["name"] if isinstance(t, dict) else str(t)
+                for t in s.get("tools") or []
+            ],
+        }
+        for s in grouped_servers
+    ]
+    # Include both available_mcp_servers (grouped) and available_mcp_capabilities (flat) in prompt projection
     slim: dict[str, Any] = {
         "experiment_run_id": context.get("experiment_run_id"),
         "source_request": context.get("source_request"),
         "context_digest": context.get("context_digest") or "",
         "route_alembic": bool(context.get("route_alembic")),
         "route_fedot": bool(context.get("route_fedot")),
-        "available_mcp_capabilities": [_cap_for_prompt(c) for c in available],
+        "available_mcp_servers": prompt_servers,
+        "available_mcp_capabilities": [
+            _cap_for_prompt(c) for c in (context.get("available_mcp_capabilities") or [])
+        ],
         "available_research_capabilities": [
             _cap_for_prompt(c) for c in (context.get("available_research_capabilities") or [])
         ],
@@ -586,10 +607,6 @@ def _prompt_context(context: dict[str, Any]) -> str:
             continue
         if (val := context.get(key)) not in (None, "", [], {}):
             slim[key] = val
-    preferred = context.get("preferred_mcp_capabilities") or []
-    pref_ids = [f"{c['server_id']}/{c['tool']}" for c in preferred]
-    if pref_ids and set(pref_ids) != {f"{c['server_id']}/{c['tool']}" for c in available}:
-        slim["preferred_mcp_tools"] = pref_ids
     return json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
 
 def _merge_capabilities(*sources: Any) -> list[dict[str, Any]]:
@@ -812,15 +829,16 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
     context = {
         "experiment_run_id": run_id, "source_request": source_request,
         "research_focus_id": state.get("research_focus_id"), "research_context": research_context,
-        "hypotheses": _bounded(state.get("hypotheses") or [], 8),
+        "hypotheses": _bounded(state.get("hypotheses") or [], 20),
         "hypothesis_refs": hypothesis_refs,
-        "operations": _bounded(operations, 8),
-        "prior_results": _bounded(state.get("experiment_task_results") or [], 8),
-        "prior_evidence": _bounded(snapshot.get("prior_evidence") or [], 8),
-        "confirmation_criteria": _bounded(snapshot.get("confirmation_criteria") or [], 8),
+        "operations": _bounded(operations, 20),
+        "prior_results": _bounded(state.get("experiment_task_results") or [], 20),
+        "prior_evidence": _bounded(snapshot.get("prior_evidence") or [], 20),
+        "confirmation_criteria": _bounded(snapshot.get("confirmation_criteria") or [], 20),
         "data_refs": _bounded(data_refs, 20),
         "constraints": _bounded(constraints, 20),
         "available_mcp_capabilities": planner_caps,
+        "available_mcp_servers": get_grouped_mcp_inventory(planner_caps),
         "available_research_capabilities": declared_family_capabilities(FAMILY_RESEARCH),
         "available_medical_capabilities": declared_family_capabilities(FAMILY_MEDICAL),
         "preferred_mcp_capabilities": preferred if preferred else planner_caps,

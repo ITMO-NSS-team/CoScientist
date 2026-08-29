@@ -68,6 +68,13 @@ def test_publish_plan_creates_vm_and_tested_by(tmp_path):
     edges = store.full()["edges"]
     assert any(e["type"] == "tested_by" and e["from"] == "H1" and e["to"] == vm_id
                for e in edges)
+    # VerificationMethod node attrs must contain mcp_servers
+    vm_node = next(n for n in store.full()["nodes"] if n["id"] == vm_id)
+    assert "mcp_servers" in vm_node.get("attrs", {})
+    mcp_servers = vm_node["attrs"]["mcp_servers"]
+    assert len(mcp_servers) >= 1
+    assert mcp_servers[0]["url"] == "http://127.0.0.1:8000/mcp"
+    assert "estimate_property" in mcp_servers[0]["tools"]
 
 
 def test_publish_plan_is_idempotent(tmp_path):

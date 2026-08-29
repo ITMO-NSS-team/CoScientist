@@ -185,11 +185,6 @@ def primary_needed_capability(needed: Iterable[str]) -> str | None:
     return next(iter(sorted(want)), None)
 
 
-def tool_primary_family(tool_name: str, description: str = "") -> str | None:
-    """Primary CAPABILITY_SPECS family for a compute tool, or None."""
-    return primary_needed_capability(tool_capabilities(tool_name, description))
-
-
 def inventory_covers_capabilities(
     by_tool: Mapping[str, Mapping[str, Any]],
     needed: Iterable[str],
@@ -340,12 +335,17 @@ def match_inventory_tool(
     if not by_tool:
         return None
     task_text = (blob or "").strip()
-    request = (source_request or "").strip()
-    combined = f"{task_text}\n{request}".strip()
-    for text in (task_text, combined):
-        if hit := _named_match(text, by_tool):
+    if not task_text and not source_request:
+        return None
+    if task_text:
+        if hit := _named_match(task_text, by_tool):
             return hit
-    needed = request_capabilities(combined)
+    request = (source_request or "").strip()
+    if request:
+        if hit := _named_match(request, by_tool):
+            return hit
+    combined = f"{task_text}\n{request}".strip()
+    needed = request_capabilities(task_text or combined)
     primary = primary_needed_capability(needed)
     if not primary:
         return None
@@ -362,10 +362,14 @@ def match_named_inventory_tool(
     if not by_tool:
         return None
     task_text = (blob or "").strip()
+    if not task_text and not source_request:
+        return None
+    if task_text:
+        if hit := _named_match(task_text, by_tool):
+            return hit
     request = (source_request or "").strip()
-    combined = f"{task_text}\n{request}".strip()
-    for text in (task_text, combined):
-        if hit := _named_match(text, by_tool):
+    if request:
+        if hit := _named_match(request, by_tool):
             return hit
     return None
 
@@ -383,6 +387,49 @@ def match_named_family_capability(blob: str) -> dict[str, Any] | None:
     return match_named_inventory_tool(blob, by_tool)
 
 
+def get_grouped_mcp_inventory(
+    rows: Iterable[Mapping[str, Any] | dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Group flat retrieved tool rows by (server_id, url).
+
+    Returns:
+      [{name, server_id, url, tools: [{name, description, input_schema}]}]
+    """
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in rows:
+        if not isinstance(item, (dict, Mapping)):
+            continue
+        server_id = str(item.get("server_id") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if server_id in _SYNTHETIC_SERVER_IDS or row_family(item) != FAMILY_MCP:
+            continue
+        tool_name = str(item.get("tool") or item.get("name") or "").strip()
+        if not tool_name:
+            continue
+
+        key = (server_id, url)
+        if key not in groups:
+            sname = str(item.get("server_name") or item.get("name") or "").strip()
+            if not sname or sname == tool_name:
+                sname = server_id
+            groups[key] = {
+                "name": sname,
+                "server_id": server_id,
+                "url": url,
+                "tools": [],
+            }
+
+        tools_list = groups[key]["tools"]
+        if not any(t.get("name") == tool_name for t in tools_list):
+            tools_list.append({
+                "name": tool_name,
+                "description": str(item.get("description") or "").strip(),
+                "input_schema": item.get("input_schema"),
+            })
+
+    return list(groups.values())
+
+
 __all__ = [
     "CAPABILITY_SPECS",
     "FAMILY_MEDICAL",
@@ -390,6 +437,7 @@ __all__ = [
     "PRIMARY_CAP_PRIORITY",
     "declared_family_capabilities",
     "filter_inventory_to_needed",
+    "get_grouped_mcp_inventory",
     "index_inventory_tools",
     "inventory_covers_capabilities",
     "inventory_nonempty",
@@ -401,5 +449,4 @@ __all__ = [
     "primary_needed_capability",
     "request_capabilities",
     "tool_capabilities",
-    "tool_primary_family",
 ]

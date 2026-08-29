@@ -1,11 +1,14 @@
-"""Orchestrator gates: coalesce, module-first, feasibility, retrieval budget."""
+"""Orchestrator gates: coalesce, module suppression, feasibility, retrieval budget."""
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+import yaml
 
 from .helpers import (
     _research_call_response,
 )
+
 
 def test_experiment_retrieval_budget_stops_repeated_llm_tool_calls():
     from google.adk.models import LlmResponse
@@ -71,7 +74,8 @@ def test_coalesce_merges_parallel_experiment_module_calls():
             ],
         )
     )
-    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
+    state = {}
+    ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
 
     assert coalesce_experiment_module_calls(ctx, response) is None
     parts = response.content.parts
@@ -79,101 +83,39 @@ def test_coalesce_merges_parallel_experiment_module_calls():
     merged = parts[0].function_call.args["request"]
     assert "Generate KRAS G12C inhibitors." in merged
     assert "Dock the generated molecules." in merged
+    assert state.get("experiment_module_dispatched") is True
 
 
-def test_module_first_gate_reroutes_research_before_module_ran():
+def test_enforce_experiment_module_first_does_not_rewrite_research():
     from CoScientist.experiments.runtime.coalesce import (
         enforce_experiment_module_first,
     )
-    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
 
     state: dict = {}
     response = _research_call_response("Dock aspirin against COX-2 and report affinity.")
     ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
 
+    # Clean architecture: no-op, never rewrites ResearchAgent to ExperimentModuleAgent
     assert enforce_experiment_module_first(ctx, response) is None
     fc = response.content.parts[0].function_call
-    # State-keyed rewrite: the module gets the first shot with the same brief.
-    assert fc.name == "ExperimentModuleAgent"
-    assert fc.args["request"] == "Dock aspirin against COX-2 and report affinity."
-    # Flagged as a structural reroute so the early feasibility gate may apply.
-    assert state[GATE_ROUTED_STATE_KEY] is True
+    assert fc.name == "ResearchAgent"
 
 
-def test_module_first_gate_prefers_root_goal_over_reworded_brief():
-    from CoScientist.experiments.runtime.coalesce import (
-        enforce_experiment_module_first,
-    )
-
-    # Orchestrator declared a compute goal via research_init, then delegated a
-    # reworded "find literature" brief. The gate must reroute to the module with
-    # the real goal, not the literature rewording (otherwise EM plans a lit search).
-    response = _research_call_response(
-        "Find literature on non-covalent BTK inhibitors and their BBB permeability."
-    )
-    ctx = SimpleNamespace(
-        state={
-            "orchestrator_root_goal": (
-                "Generate highly potent non-covalent BTK inhibitors with "
-                "increased blood-brain barrier permeability."
-            )
-        },
-        user_content=None,
-        agent_name="OrchestratorAgent",
-    )
-
-    assert enforce_experiment_module_first(ctx, response) is None
-    fc = response.content.parts[0].function_call
-    assert fc.name == "ExperimentModuleAgent"
-    assert fc.args["request"].startswith("Generate highly potent non-covalent BTK")
-    assert "Find literature" not in fc.args["request"]
-
-
-def test_module_first_gate_falls_back_to_brief_without_root_goal():
-    from CoScientist.experiments.runtime.coalesce import (
-        enforce_experiment_module_first,
-    )
-
-    response = _research_call_response("Dock aspirin against COX-2 and report affinity.")
-    ctx = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
-
-    assert enforce_experiment_module_first(ctx, response) is None
-    fc = response.content.parts[0].function_call
-    assert fc.name == "ExperimentModuleAgent"
-    assert fc.args["request"] == "Dock aspirin against COX-2 and report affinity."
-
-
-def test_module_first_gate_no_op_after_module_attempted():
-    from CoScientist.experiments.runtime.coalesce import (
-        enforce_experiment_module_first,
-    )
-
-    response = _research_call_response("Find review papers on COX-2 selectivity.")
-    # Module already started without NO_MATCHING_TOOL → no parallel orch Research.
-    ctx = SimpleNamespace(
-        state={"experiment_source_request": "prior compute ask"},
-        user_content=None,
-        agent_name="OrchestratorAgent",
-    )
-
-    assert enforce_experiment_module_first(ctx, response) is None
-    names = [
-        getattr(getattr(p, "function_call", None), "name", None)
-        for p in response.content.parts
-    ]
-    assert "ResearchAgent" not in names
-
-
-def test_module_first_gate_leaves_explicit_module_call_untouched():
+def test_suppress_experiment_module_after_completed_and_success():
     from google.adk.models import LlmResponse
     from google.genai import types
 
     from CoScientist.experiments.runtime.coalesce import (
-        enforce_experiment_module_first,
+        suppress_experiment_module_after_completed,
     )
-    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
 
-    # Same-turn Research + EM is Dual EM — keep the module, drop Research.
+    state = {
+        "experiment_runtime": {
+            "phase": "completed",
+            "tasks_ok": True,
+            "tasks": [{"id": "EXP-1", "status": "success", "result_ok": True}],
+        }
+    }
     response = LlmResponse(
         content=types.Content(
             role="model",
@@ -181,32 +123,84 @@ def test_module_first_gate_leaves_explicit_module_call_untouched():
                 types.Part(
                     function_call=types.FunctionCall(
                         name="ExperimentModuleAgent",
-                        args={"request": "Generate candidates."},
+                        args={"request": "Run more experiments."},
                     )
-                ),
-                types.Part(
-                    function_call=types.FunctionCall(
-                        name="ResearchAgent",
-                        args={"request": "Background on the target."},
-                    )
-                ),
+                )
             ],
         )
     )
-    state: dict = {}
     ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
+    suppress_experiment_module_after_completed(ctx, response)
+    # The call should be stripped/suppressed
+    fcs = [
+        p.function_call.name
+        for p in response.content.parts
+        if getattr(p, "function_call", None)
+    ]
+    assert "ExperimentModuleAgent" not in fcs
 
-    assert enforce_experiment_module_first(ctx, response) is None
-    names = [p.function_call.name for p in response.content.parts]
-    assert names == ["ExperimentModuleAgent"]
-    # Explicit module call stays trusted (not a structural Research rewrite).
-    assert GATE_ROUTED_STATE_KEY not in state
+
+def test_suppress_experiment_module_allows_retry_when_tasks_failed():
+    from google.adk.models import LlmResponse
+    from google.genai import types
+
+    from CoScientist.experiments.runtime.coalesce import (
+        suppress_experiment_module_after_completed,
+    )
+
+    state = {
+        "experiment_runtime": {
+            "phase": "completed",
+            "tasks_ok": False,
+            "tasks": [{"id": "EXP-1", "phase": "failed", "result_ok": False}],
+        }
+    }
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name="ExperimentModuleAgent",
+                        args={"request": "Retry failed computation with alternative tool."},
+                    )
+                )
+            ],
+        )
+    )
+    ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
+    suppress_experiment_module_after_completed(ctx, response)
+    # The call should NOT be suppressed because tasks failed and orchestrator may retry
+    fcs = [
+        p.function_call.name
+        for p in response.content.parts
+        if getattr(p, "function_call", None)
+    ]
+    assert "ExperimentModuleAgent" in fcs
+
+
+def test_orchestrator_subordinates_clean_lanes():
+    yaml_path = Path("CoScientist/agents/experiments.yaml")
+    assert yaml_path.is_file()
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    agents = data.get("agents", {})
+    orch = agents.get("OrchestratorAgent", {})
+    subordinates = orch.get("subordinates", [])
+
+    # Orchestrator has HypothesesAgent, ResearchAgent, ExperimentModuleAgent
+    assert "HypothesesAgent" in subordinates
+    assert "ResearchAgent" in subordinates
+    assert "ExperimentModuleAgent" in subordinates
+
+    # Orchestrator does NOT have McpBuilderAgent or PlannerAgent at root
+    assert "McpBuilderAgent" not in subordinates
+    assert "PlannerAgent" not in subordinates
 
 
 def test_early_feasibility_skips_check_for_explicit_module_call():
-    """An orchestrator-chosen EM call (not gate-routed) is never second-guessed,
-    even for a lit-only ask with junk inventory — only the structural reroute
-    path (enforce_experiment_module_first) is eligible for NO_MATCHING_TOOL."""
+    """An orchestrator-chosen EM call is never second-guessed."""
     from CoScientist.experiments.context.builder import RETRIEVED_CAPABILITIES_KEY
     from CoScientist.experiments.runtime.guards import (
         NO_MATCHING_TOOL_STATE_KEY,
@@ -229,82 +223,3 @@ def test_early_feasibility_skips_check_for_explicit_module_call():
         SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
     )
     assert state.get(NO_MATCHING_TOOL_STATE_KEY) in (None, "")
-
-
-def test_early_feasibility_empty_inventory_is_no_matching_when_gate_routed():
-    from CoScientist.experiments.runtime.guards import (
-        NO_MATCHING_TOOL_STATE_KEY,
-        assess_experiment_inventory_feasibility,
-        skip_when_experiment_not_feasible,
-    )
-    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
-
-    state = {
-        "experiment_source_request": "Dock aspirin against COX-2 and report affinity.",
-        "experiment_retrieved_capabilities": [],
-        GATE_ROUTED_STATE_KEY: True,
-    }
-    assess_experiment_inventory_feasibility(
-        SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
-    )
-    msg = state[NO_MATCHING_TOOL_STATE_KEY]
-    assert isinstance(msg, str) and msg.startswith("NO_MATCHING_TOOL:")
-    skipped = skip_when_experiment_not_feasible(
-        SimpleNamespace(state=state, agent_name="HypothesesAgent")
-    )
-    assert skipped is not None
-
-
-def test_module_first_gate_reroutes_first_shot_mcp_builder():
-    from google.adk.models import LlmResponse
-    from google.genai import types
-
-    from CoScientist.experiments.runtime.coalesce import enforce_experiment_module_first
-    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
-
-    compute = LlmResponse(
-        content=types.Content(
-            role="model",
-            parts=[
-                types.Part(
-                    function_call=types.FunctionCall(
-                        name="McpBuilderAgent",
-                        args={
-                            "request": (
-                                "Implement a small computational experiment: use the "
-                                "PubChemPy Python package to fetch compound records."
-                            )
-                        },
-                    )
-                )
-            ],
-        )
-    )
-    state: dict = {}
-    ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
-    assert enforce_experiment_module_first(ctx, compute) is None
-    assert compute.content.parts[0].function_call.name == "ExperimentModuleAgent"
-    assert state[GATE_ROUTED_STATE_KEY] is True
-
-    wrap = LlmResponse(
-        content=types.Content(
-            role="model",
-            parts=[
-                types.Part(
-                    function_call=types.FunctionCall(
-                        name="McpBuilderAgent",
-                        args={
-                            "request": (
-                                "Turn https://github.com/mcs07/PubChemPy into a "
-                                "reusable MCP server we can register."
-                            )
-                        },
-                    )
-                )
-            ],
-        )
-    )
-    ctx2 = SimpleNamespace(state={}, user_content=None, agent_name="OrchestratorAgent")
-    assert enforce_experiment_module_first(ctx2, wrap) is None
-    assert wrap.content.parts[0].function_call.name == "ExperimentModuleAgent"
-    assert ctx2.state[GATE_ROUTED_STATE_KEY] is True

@@ -98,20 +98,6 @@ def has_structured_family_outputs(outputs: Mapping[str, Any] | None) -> bool:
     return len(items) >= 2
 
 
-def experiment_artifacts_folder(task_id: str, attempt_id: str) -> Path:
-    """Session-stable folder for one attempt's files.
-
-    ``EXPERIMENTS__ARTIFACTS_DIR`` (if set) wins so a test/run can keep notes
-    next to the log. Otherwise ``<workspace>/experiment_artifacts``.
-    """
-    settings = get_settings()
-    custom = str(getattr(settings.experiments, "artifacts_dir", "") or "").strip()
-    root = Path(custom) if custom else Path(settings.code_exec.workspace_root) / "experiment_artifacts"
-    folder = root / str(task_id) / str(attempt_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder
-
-
 def _write_artifact(
     *,
     task_id: str,
@@ -125,7 +111,8 @@ def _write_artifact(
     if not payload or len(payload) > _MAX_INLINE_BYTES:
         return None
     ext = "" if Path(name).suffix else _EXTENSIONS.get(media_type, ".json")
-    folder = experiment_artifacts_folder(task_id, attempt_id)
+    folder = Path(get_settings().code_exec.workspace_root) / "experiment_artifacts" / str(task_id) / str(attempt_id)
+    folder.mkdir(parents=True, exist_ok=True)
     destination = folder / (Path(name).name + ext)
     destination.write_bytes(payload)
     artifact = {
@@ -235,7 +222,6 @@ def materialize_outputs_as_artifacts(
 
 
 __all__ = [
-    "experiment_artifacts_folder",
     "materialize_inline_result",
     "materialize_outputs_as_artifacts",
 ]

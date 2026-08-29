@@ -193,6 +193,22 @@ def hypotheses(ctx: PromptContext) -> str:
     # graph tools when the graph is off would make the model call a tool it does
     # not have.
     if ctx.has_tool("research_graph"):
+        research_example = '''\n\nExample research_commit call:
+research_commit(
+    nodes=[
+        {"type": "Hypothesis", "ref": "h1", "attrs": {"formulation": "...", "status": "formulated", "priority": "high", "selected": "true"}},
+        {"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "...", "status": "postponed", "priority": "medium"}},
+        {"type": "VerificationMethod", "ref": "vm1", "attrs": {"method_type": "computational", "description": "..."}},
+        {"type": "ConfirmationCriteria", "ref": "cc1", "attrs": {"threshold": "..."}}
+    ],
+    edges=[
+        {"type": "motivates", "from": "Q1", "to": "#h1"},
+        {"type": "motivates", "from": "Q1", "to": "#h2"},
+        {"type": "tested_by", "from": "#h1", "to": "#vm1"},
+        {"type": "evaluated_by", "from": "#vm1", "to": "#cc1"}
+    ]
+)
+ALWAYS pass `nodes` and `edges` as explicit named arguments (lists of dictionaries) in your `research_commit` tool call.'''
         if single:
             selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
 The research verifies ONE hypothesis at a time — verifying several at once burns
@@ -247,6 +263,7 @@ so in the commit warnings — better to make the choice yourself, deliberately.'
                               "one-line list, explicitly\n  marked as NOT to be "
                               "started now.")
     else:
+        research_example = ""
         if single:
             selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
 The research verifies ONE hypothesis at a time — verifying several at once burns
@@ -332,7 +349,7 @@ Context of tasks:
 
 Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
 Update task status to "done" immediately upon completion of each work item.
-''', SELECTION=selection, ANSWER_HEAD=answer_head,
+''' + research_example, SELECTION=selection, ANSWER_HEAD=answer_head,
         ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
         SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule)
 
@@ -1619,8 +1636,9 @@ def orchestrator(ctx: PromptContext) -> str:
         else:
             discovery_clause = ""
         steps.append(
-            "BEFORE delegating, call `retrieve_tools` to discover which ready-made MCP\n"
-            "   tools exist for the task. Run one or two focused `retrieve_tools` queries per capability\n"
+            "For computational/execution experiments, call `retrieve_tools` to discover which ready-made MCP\n"
+            "   tools exist for the task. (Do NOT call `retrieve_tools` for literature searches or hypotheses-only requests).\n"
+            "   Run one or two focused `retrieve_tools` queries per capability\n"
             f"   (e.g. \"molecule generation\", \"inhibitor design\"); if a relevant tool\n"
             f"   exists, {prefer}.{research_clause}"
             f"{discovery_clause}\n"
@@ -1644,9 +1662,9 @@ def orchestrator(ctx: PromptContext) -> str:
             alternatives.append("produced by writing/running code (CoderAgent)")
         steps.append(
             "Do NOT open with ResearchAgent (and never fan out several Research calls\n"
-            "   at once) for work that can instead be "
+            "   at once) for work that is purely computational without literature review and can instead be "
             + " or ".join(alternatives)
-            + ". Research is a fallback for genuine knowledge gaps, not the first move."
+            + ". (If the user explicitly requests literature/papers/scientific knowledge or full-cycle research, start with ResearchAgent)."
         )
 
     # With the coder under the executor there is no Executor-vs-Coder decision
@@ -1686,15 +1704,33 @@ def orchestrator(ctx: PromptContext) -> str:
     # Experiment Module owns detailed tasking: never fan-out one stage into N calls.
     if exec_name == "ExperimentModuleAgent":
         steps.append(
+            "Match the delegation strictly to the user's requested scope:\n"
+            "   - Full-cycle scientific research (requesting literature + hypotheses + computational experiment/data/generation, or multi-step research plans with generation/models/validation) →\n"
+            "     Execute all three stages in sequence without stopping or skipping:\n"
+            "     1. ResearchAgent — review literature, known ligands/chemistry, and background data.\n"
+            "     2. HypothesesAgent — formulate and commit scientific hypotheses into the research graph.\n"
+            "     3. ExperimentModuleAgent — immediately call ExperimentModuleAgent after HypothesesAgent finishes to plan and execute the computational experiment stage. Pass the full goal and context to ExperimentModuleAgent. Do NOT finish your turn or provide a final answer before ExperimentModuleAgent runs!\n"
+            "   - Literature search / paper reviews / scientific knowledge questions (no experiment requested) →\n"
+            "     Call ResearchAgent. When ResearchAgent completes, synthesize the literature findings\n"
+            "     in your final answer and STOP. Do NOT call HypothesesAgent or ExperimentModuleAgent.\n"
+            "   - Hypotheses formulation / ideas only (no experiment requested) →\n"
+            "     Call HypothesesAgent. When HypothesesAgent completes, summarize the formulated hypotheses\n"
+            "     in your final answer and STOP. Do NOT call ExperimentModuleAgent.\n"
+            "   - Pure computational tasks, molecule generation/docking, simulations, code (where literature/hypotheses are not asked or already given) →\n"
+            "     Call ExperimentModuleAgent directly once.\n"
+            "   - Subordinates (ResearchAgent, HypothesesAgent) manage their own research graph commits. Do NOT call research_commit yourself with Evidence or Hypothesis nodes."
+        )
+        steps.append(
             "ExperimentModuleAgent is ONE computational-experiment stage, not a\n"
-            "   per-bullet worker. For a multi-step compute/analysis ask, call it\n"
+            "   per-bullet worker. For a compute/analysis ask, call it\n"
             "   EXACTLY ONCE with the FULL self-contained brief (goal, hypotheses/\n"
             "   literature context, constraints, data refs, required outcomes).\n"
             "   Do NOT split the stage into several ExperimentModuleAgent calls in\n"
             "   the same turn or as a parallel fan-out — the module builds the\n"
             "   detailed ExperimentPlan and runs tasks in order internally.\n"
-            "   A second call is allowed only for a later, separate scientific stage\n"
-            "   after the previous experiment result was accepted."
+            "   A second ExperimentModuleAgent call is allowed ONLY if the previous stage\n"
+            "   failed (tasks_ok=false) and needs recovery, or the user explicitly asks for\n"
+            "   a new stage. Once phase=completed with tasks_ok=true, STOP."
         )
         steps.append(
             "If the research graph already holds a seeded frame (question,\n"
@@ -1730,16 +1766,11 @@ def orchestrator(ctx: PromptContext) -> str:
                 "   yourself — pass those asks as one ExperimentModuleAgent brief."
                 + infra_clause
             )
-        # Data-driven research fallback: the module — not a keyword rule — decides
-        # whether a computational path exists. Honour its verdict.
         if has_research:
             steps.append(
-                "Send every computable/engineering ask to ExperimentModuleAgent FIRST;\n"
-                "   do not pre-judge it as literature. Only if ExperimentModuleAgent\n"
-                "   returns NO_MATCHING_TOOL or explicitly recommends literature/research\n"
-                "   (its inventory covers nothing) do you then call ResearchAgent with the\n"
-                "   ORIGINAL ask. Do not loop back into ExperimentModuleAgent for the same\n"
-                "   stage after such a verdict."
+                "Use ResearchAgent for open-ended literature and scientific knowledge searches.\n"
+                "   If ExperimentModuleAgent returns NO_MATCHING_TOOL (its inventory covers nothing),\n"
+                "   you may fall back to ResearchAgent with the original ask."
             )
     if has_coder or exec_routes_to_coder:
         steps.append(
@@ -1864,16 +1895,15 @@ def orchestrator(ctx: PromptContext) -> str:
                 "(postponed→formulated) and verify those.\n"
             )
         research_graph_section += (
-            "- Consult `research_triggers` before each step and act on them:\n"
-            "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
+            "- Consult `research_triggers` before each step and act on them (when verification is requested):\n"
+            f"  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
             "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "
-            "evidence-gathering (ResearchAgent for literature, TaskExecutorAgent "
+            f"evidence-gathering (ResearchAgent for literature, {exec_name or 'ExperimentModuleAgent'} "
             "for computation/engineering), NAMING the hypothesis in your request. "
-            "Setting focus "
-            "is the KEY step — every piece of evidence the worker records is then "
+            "Setting focus is the KEY step — every piece of evidence the worker records is then "
             "auto-attached to that hypothesis, which moves it to under_verification "
             "and lets the background validator judge it. Do NOT skip set_focus, and "
-            "do NOT set the verdict yourself.\n"
+            "do NOT set the verdict yourself. (Skip verification if the user asked only for hypotheses or literature search without experiments).\n"
             "  • REFUTE SIGNAL ⇒ review/close that branch; do not keep verifying it.\n"
             "  • NEEDS VERDICT (a hypothesis has evidence) ⇒ you do NOTHING here: a "
             "background validator judges it automatically (confirmed/refuted) and "
@@ -1893,9 +1923,7 @@ def orchestrator(ctx: PromptContext) -> str:
             "- WORKERS: Hypotheses/Methods/Criteria (HypothesesAgent), Evidence "
             "(Research/Medical/Coder/Experiment), Tools & code/data (Coder). You "
             "CANNOT create Evidence, Hypotheses, Conclusions, Methods, Tools, "
-            "Resources or EmpiricalBases mid-run — the graph will reject it. If a "
-            "worker reported findings only as text, re-delegate to that worker to "
-            "commit them; never try to record them yourself.\n"
+            "Resources or EmpiricalBases mid-run — the graph will reject it. Never try to call research_commit with Evidence or Hypothesis nodes.\n"
             "- Never re-verify a refuted or postponed hypothesis — those branches "
             "stay in the graph as negative results, so you don't repeat them."
             + approval_line + "\n"

@@ -37,22 +37,23 @@ def test_experiment_plan_json_schema_is_openai_structured_output_safe():
         {
             **_task("EXP-1"),
             "launch_params": '{"case":"cancer","num":5}',
-            "mcp_servers": [
-                {
-                    "name": "generative",
-                    "server_id": "srv-gen",
-                    "source": "registry",
-                    "health": "unknown",
-                    "tools": [
-                        {
-                            "name": "generate_case_mols",
-                            "description": "Generate molecules",
-                            "input_schema": '{"type":"object"}',
-                            "required_for_task": True,
-                        }
-                    ],
-                }
-            ],
+        "mcp_servers": [
+            {
+                "name": "generative",
+                "server_id": "srv-gen",
+                "url": "http://127.0.0.1:8000/mcp",
+                "source": "registry",
+                "health": "unknown",
+                "tools": [
+                    {
+                        "name": "generate_case_mols",
+                        "description": "Generate molecules",
+                        "input_schema": '{"type":"object"}',
+                        "required_for_task": True,
+                    }
+                ],
+            }
+        ],
         }
     )
     assert task.launch_params == {"case": "cancer", "num": 5}
@@ -585,6 +586,7 @@ def test_mcp_server_ref_coerces_singular_tool_field():
         {
             "source": "registry",
             "server_id": "srv-x",
+            "url": "http://127.0.0.1:8000/mcp",
             "tool": "calculate_docking",
             "health": "unknown",
         }
@@ -592,19 +594,20 @@ def test_mcp_server_ref_coerces_singular_tool_field():
     assert server.tools[0].name == "calculate_docking"
 
 
-def test_mcp_server_ref_coerces_composite_server_id_tool_key():
+def test_mcp_server_ref_disallows_composite_server_id():
+    from pydantic import ValidationError
     from CoScientist.experiments.schemas.models import MCPServerRef
 
-    server = MCPServerRef.model_validate(
-        {
-            "source": "registry",
-            "name": "molgen",
-            "server_id": "d36e3d994404e957/generate_case_mols",
-            "tools": ["generate_case_mols"],
-        }
-    )
-    assert server.server_id == "d36e3d994404e957"
-    assert server.tools[0].name == "generate_case_mols"
+    with pytest.raises(ValidationError, match="composite"):
+        MCPServerRef.model_validate(
+            {
+                "source": "registry",
+                "name": "molgen",
+                "server_id": "d36e3d994404e957/generate_case_mols",
+                "url": "http://127.0.0.1:8000/mcp",
+                "tools": ["generate_case_mols"],
+            }
+        )
 
 
 def test_baseline_kind_aliases_and_task_shape_coercion():

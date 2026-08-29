@@ -13,7 +13,7 @@ from typing import Any, Iterable, List
 
 from CoScientist.context_init.models import FrameOperation, ResearchFrame
 
-MAX_OPERATIONS = 8
+MAX_OPERATIONS = 20
 OPS_FORM_BLOCK = "Операции эксперимента"
 
 _NUMBERED_STEP_RE = re.compile(

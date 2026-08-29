@@ -89,111 +89,8 @@ def enforce_experiment_module_first(
     callback_context: CallbackContext,
     llm_response: LlmResponse,
 ) -> Optional[LlmResponse]:
-    """after_model: rewrite a first-shot ResearchAgent call into the module.
-
-    Deterministic gate keyed on execution state, not on the request text:
-      * same-turn Research/McpBuilder + EM → drop the parallel hop (Dual EM);
-      * after the module started, orch Research only if NO_MATCHING_TOOL;
-      * first-shot Research/McpBuilder (no EM yet) → rewrite to the module.
-    The module ``request`` is the user's original ask (research_init goal,
-    ContextInit ``research_frame.original_request``, or this turn's
-    user_content) — never a reworded Research/McpBuilder brief, which would
-    steer the module into a literature-only plan. The module's inventory (not
-    a keyword rule) then decides whether the ask is computable; if it is not,
-    it returns NO_MATCHING_TOOL and the orchestrator falls back to ResearchAgent
-    on the next turn.
-    """
-    content = getattr(llm_response, "content", None)
-    parts = list(getattr(content, "parts", None) or [])
-    if not parts:
-        return None
-    state = callback_context.state
-
-    research_idxs: list[int] = []
-    mcp_idxs: list[int] = []
-    has_module_call = False
-    for i, part in enumerate(parts):
-        name = getattr(getattr(part, "function_call", None), "name", None)
-        if name == _EM_NAME:
-            has_module_call = True
-        elif name == _RESEARCH_NAME:
-            research_idxs.append(i)
-        elif name == _MCP_BUILDER_NAME:
-            mcp_idxs.append(i)
-
-    def _drop_parallel(idxs: list[int], *, reason: str) -> None:
-        if not idxs:
-            return
-        drop = set(idxs)
-        kept = [p for i, p in enumerate(parts) if i not in drop]
-        if not kept:
-            kept = [types.Part(text=(
-                "Experiment Module already owns this session; literature and "
-                "infra hops go through EM routes, not a parallel orchestrator call."
-            ))]
-        content.parts = kept
-        logger.warning(
-            "[%s] dropped parallel %s call(s) (%s)",
-            getattr(callback_context, "agent_name", None) or "orchestrator",
-            ",".join(sorted({
-                getattr(getattr(parts[i], "function_call", None), "name", "") or "?"
-                for i in idxs
-            })),
-            reason,
-        )
-
-    # Same-turn Research/McpBuilder + EM is Dual EM: science/compute stays in EM.
-    if has_module_call:
-        _drop_parallel(research_idxs + mcp_idxs, reason="same_turn_em")
-        return None
-
-    from CoScientist.experiments.runtime.guards import NO_MATCHING_TOOL_STATE_KEY
-
-    getter = getattr(state, "get", None)
-    no_match = bool(callable(getter) and getter(NO_MATCHING_TOOL_STATE_KEY))
-    # After the module started, orch Research/McpBuilder only on NO_MATCHING_TOOL.
-    # phase=completed is not a literature lane — science/compute stays in EM.
-    if _experiment_module_attempted(state) and not no_match:
-        _drop_parallel(research_idxs + mcp_idxs, reason="em_in_progress")
-        return None
-    if _experiment_module_attempted(state):
-        return None
-
-    def _brief_of(fc: object) -> str:
-        args = dict(getattr(fc, "args", None) or {})
-        brief = args.get("request") or args.get("query") or args.get("input") or args.get("message")
-        return brief.strip() if isinstance(brief, str) else ""
-
-    rewrite_idxs = list(research_idxs)
-    rewrite_idxs.extend(mcp_idxs)
-    if not rewrite_idxs:
-        return None
-
-    for i in rewrite_idxs:
-        fc = getattr(parts[i], "function_call", None)
-        if fc is None:
-            continue
-        fc.name = _EM_NAME
-        # The module reads ``request``. Prefer the canonical top-level goal so a
-        # reworded literature / infra delegation brief cannot bias the module;
-        # fall back to whatever brief the orchestrator wrote otherwise.
-        args = dict(getattr(fc, "args", None) or {})
-        brief = _brief_of(fc)
-        chosen = _canonical_ask(callback_context, brief)
-        if chosen:
-            args["request"] = chosen
-        fc.args = args
-    if hasattr(state, "__setitem__"):
-        # Mark this ask as structurally rerouted (not an explicit orchestrator
-        # pick) so assess_experiment_inventory_feasibility may early-exit it
-        # with NO_MATCHING_TOOL if the module's inventory has no compute signal.
-        state[GATE_ROUTED_STATE_KEY] = True
-    logger.warning(
-        "[%s] routed first-shot Research/McpBuilder call(s) → ExperimentModuleAgent "
-        "(module decides compute-vs-research from inventory)",
-        getattr(callback_context, "agent_name", None) or "orchestrator",
-    )
-    return None  # in-place mutation is enough
+    """No-op: orchestrator selects its own lane (Research, Hypotheses, EM)."""
+    return None
 
 
 def coalesce_experiment_module_calls(
@@ -205,6 +102,7 @@ def coalesce_experiment_module_calls(
     Merges every ``request`` into a single self-contained brief so the module
     builds one ExperimentPlan instead of N interleaved runtimes.
     """
+    state = getattr(callback_context, "state", None)
     content = getattr(llm_response, "content", None)
     parts = list(getattr(content, "parts", None) or [])
     if not parts:
@@ -222,14 +120,18 @@ def coalesce_experiment_module_calls(
         if isinstance(req, str) and req.strip():
             requests.append(req.strip())
 
+    if em_idxs and hasattr(state, "__setitem__"):
+        state["experiment_module_dispatched"] = True
+
     if len(em_idxs) <= 1:
         return None
 
-    merged = (
+    canonical = _canonical_ask(callback_context, "")
+    merged = canonical or (
         "Complete the following computational experiment as ONE stage. "
         "Build a single ExperimentPlan covering all items below in order "
         "(with depends_on / artifact handoff as needed):\n\n"
-        + "\n\n".join(f"{n}. {r}" for n, r in enumerate(requests, 1))
+        + "\n\n".join(r for r in requests)
     )
     keep_i = em_idxs[0]
     keep_fc = getattr(parts[keep_i], "function_call", None)
@@ -252,11 +154,14 @@ def suppress_experiment_module_after_completed(
     callback_context: CallbackContext,
     llm_response: LlmResponse,
 ) -> Optional[LlmResponse]:
-    """after_model: do not re-enter the module after result HITL accepted the stage."""
+    """after_model: do not re-enter the module after result HITL accepted the stage with tasks_ok=true."""
     state = getattr(callback_context, "state", None)
     getter = getattr(state, "get", None) if state is not None else None
     runtime = getter("experiment_runtime") if callable(getter) else None
     if not isinstance(runtime, dict) or runtime.get("phase") != "completed":
+        return None
+    from CoScientist.experiments.review import result_tasks_ok
+    if not result_tasks_ok(runtime):
         return None
     content = getattr(llm_response, "content", None)
     parts = list(getattr(content, "parts", None) or [])
@@ -279,7 +184,7 @@ def suppress_experiment_module_after_completed(
         kept = [types.Part(text=summary)]
     content.parts = kept
     logger.warning(
-        "[%s] suppressed ExperimentModuleAgent call(s) after phase=completed",
+        "[%s] suppressed ExperimentModuleAgent call(s) after phase=completed (tasks_ok=true)",
         getattr(callback_context, "agent_name", None) or "orchestrator",
     )
     return None

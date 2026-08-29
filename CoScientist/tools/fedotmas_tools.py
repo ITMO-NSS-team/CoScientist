@@ -82,33 +82,56 @@ class FedotMASToolset(BaseToolset):
                     "Use existing artifacts / URLs for the Final Response."
                 ),
             }
-        servers = []
-        postgres = PostgresClient(settings.postgres)
-        try:
-            await postgres.initialize()
-            try:
-                server_ids = set([t['server_id'] for t in filtered_tools])
-                servers = [await postgres.get_server(server_id) for server_id in server_ids]
-            finally:
-                # Always release the DB connection, even if a lookup raised.
-                await postgres.close()
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "fedot_tool: database lookup failed (%s); proceeding with empty servers list", exc
-            )
+        servers_payload: dict[str, HttpMCPServer] = {}
+        envelope = state.get("experiment_active_envelope") or {}
+        task_data = envelope.get("task") or {}
+        task_servers = task_data.get("mcp_servers") or []
 
-        servers = [server for server in servers if (server is not None and server.protocol == 'http')]
-        servers_payload = {server.name: HttpMCPServer(url=server.url, description=server.description)
-                           for server in servers}
+        for srv in task_servers:
+            if isinstance(srv, dict) and srv.get("url"):
+                sname = srv.get("name") or srv.get("server_id") or "mcp"
+                servers_payload[sname] = HttpMCPServer(
+                    url=srv["url"],
+                    description=srv.get("description", "")
+                )
+
+        for t in filtered_tools:
+            if isinstance(t, dict) and t.get("url"):
+                sname = t.get("server_name") or t.get("name") or t.get("server_id") or "mcp"
+                if sname not in servers_payload:
+                    servers_payload[sname] = HttpMCPServer(
+                        url=t["url"],
+                        description=t.get("description", "")
+                    )
 
         # Deployed web MCPs are stored in state as dicts (see WebToolsDeployerAgent).
         web_servers = state.get('deployed_mcps', [])
-        web_servers_payload = {
-            s['name']: HttpMCPServer(url=s['url'], description=s.get('description', ''))
-            for s in web_servers
-        }
-        servers_payload.update(web_servers_payload)
+        for s in web_servers:
+            if isinstance(s, dict) and s.get("url"):
+                servers_payload[s['name']] = HttpMCPServer(
+                    url=s['url'], description=s.get('description', '')
+                )
+
+        # Fallback only when no URL was in plan/state: database lookup
+        if not servers_payload:
+            servers = []
+            postgres = PostgresClient(settings.postgres)
+            try:
+                await postgres.initialize()
+                try:
+                    server_ids = set([t['server_id'] for t in filtered_tools if isinstance(t, dict) and t.get('server_id')])
+                    servers = [await postgres.get_server(server_id) for server_id in server_ids]
+                finally:
+                    await postgres.close()
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "fedot_tool: database lookup failed (%s); proceeding with empty servers list", exc
+                )
+
+            servers = [server for server in servers if (server is not None and server.protocol == 'http')]
+            servers_payload = {server.name: HttpMCPServer(url=server.url, description=server.description)
+                               for server in servers}
         if not servers_payload:
             return {
                 "status": "error",

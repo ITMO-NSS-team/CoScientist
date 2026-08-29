@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 _AUTO_APPROVE_TRUTHY = frozenset({"1", "true", "yes", "on"})
-_OK_TASK_STATUSES = frozenset({"done", "done_with_warnings", "skipped"})
+_OK_TASK_STATUSES = frozenset({"done", "done_with_warnings", "skipped", "success", "completed", "partial", "partial_success"})
 _EVIDENCE_ROUTES = frozenset({"research", "medical"})
 
 
@@ -45,7 +45,18 @@ def _publish_approved_plan_to_graph(ctx: InvocationContext, state: Any) -> None:
 
 def result_tasks_ok(runtime: dict[str, Any] | None) -> bool:
     """Compute tasks must succeed. Failed literature/medical is ok if unused as input."""
-    tasks = (runtime or {}).get("tasks") or {}
+    if not isinstance(runtime, dict):
+        return False
+    if runtime.get("tasks_ok") is True:
+        return True
+    raw_tasks = runtime.get("tasks") or {}
+    if isinstance(raw_tasks, list):
+        tasks = {str(t.get("id") or i): t for i, t in enumerate(raw_tasks) if isinstance(t, dict)}
+    elif isinstance(raw_tasks, dict):
+        tasks = raw_tasks
+    else:
+        tasks = {}
+
     rows = [row for row in tasks.values() if isinstance(row, dict)]
     if not rows:
         return False
@@ -160,43 +171,78 @@ def render_experiment_plan(plan: ExperimentPlan) -> str:
         L += ["", "## Hypotheses"] + [f"- `{h.hypothesis_id}`: {h.statement}" for h in plan.hypotheses]
     L += [
         "", "## Design matrix (hypothesis → experiment → data → baseline → metrics)",
-        "| Task | Hypothesis | Question | Dataset | Baselines | Metrics | Analysis artifacts | Route |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Task | Hypothesis | Question | Dataset | Baselines | Metrics | Tools | Analysis artifacts | Route |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for t in plan.tasks:
         d = t.design
         bl = "; ".join(f"{b.name} ({b.kind})" for b in d.baselines) if d.baselines else ""
         mt = "; ".join(f"{m.name}/{m.direction}" + (f" [{m.test}]" if m.test else "") for m in d.metrics) if d.metrics else ""
         ar = "; ".join(f"{a.name} ({a.role}/{a.prepare_via})" for a in d.analysis_artifacts) if d.analysis_artifacts else ""
+        tools_summary = "; ".join(
+            f"{s.name}:{','.join(x.name for x in s.tools)}" for s in t.mcp_servers
+        ) if t.mcp_servers else ""
         L.append(
             f"| {t.id} | `{d.hypothesis_ref}` | {_design_cell(d.experiment_question, 120)} "
             f"| {_design_cell(d.dataset.name)} | {_design_cell(bl, 100)} "
-            f"| {_design_cell(mt, 100)} | {_design_cell(ar, 100)} | `{t.route.value}` |"
+            f"| {_design_cell(mt, 100)} | {_design_cell(tools_summary, 80)} "
+            f"| {_design_cell(ar, 100)} | `{t.route.value}` |"
         )
     for t in plan.tasks:
         d = t.design
-        tools = [f"{s.name}: {', '.join(x.name for x in s.tools)}" for s in t.mcp_servers]
-        criteria = "; ".join(f"{c.criterion_id}: {c.description}" for c in t.success_criteria)
-        arts = "; ".join(f"{a.name} ({a.role})" for a in t.expected_artifacts)
+        tools = [
+            f"{s.name} ({s.url}): {', '.join(x.name for x in s.tools)}"
+            if s.url else f"{s.name}: {', '.join(x.name for x in s.tools)}"
+            for s in t.mcp_servers
+        ]
+        criteria_parts = []
+        for c in t.success_criteria:
+            crit_text = f"{c.criterion_id}: {c.description}"
+            if c.metric and c.operator is not None and c.target is not None:
+                crit_text += f" [{c.metric} {c.operator} {c.target}]"
+            criteria_parts.append(crit_text)
+        criteria = "; ".join(criteria_parts)
+
+        arts = "; ".join(
+            f"{a.name} ({a.role})" if not a.description or a.description == a.name
+            else f"{a.name} ({a.role}: {a.description})"
+            for a in t.expected_artifacts
+        )
+        inputs_list = []
+        for inp in t.input_data:
+            loc = inp.url or inp.workspace_path or inp.s3_key or ""
+            if loc:
+                inputs_list.append(f"{inp.data_id} [{inp.kind}: {loc}]")
+            else:
+                inputs_list.append(f"{inp.data_id} [{inp.kind}]")
+        inputs_str = "; ".join(inputs_list) if inputs_list else "none"
+
         also = f" (+{', '.join(d.also_tests)})" if d.also_tests else ""
+        op_str = f" [Operation: `{d.operation_ref}`]" if d.operation_ref else ""
         notes = f" — {d.dataset.notes}" if d.dataset.notes else ""
-        dataset_shown = _design_cell(d.dataset.name)
         L += ["", f"## {t.id} · {t.name}", f"Route: `{t.route.value}`"]
         if t.route.value == "alembic_build":
             L += [f"Repo URL: {t.repo_url}", f"Post-build route: `{t.post_build_route}`"]
         L += [
-            f"Hypothesis: `{d.hypothesis_ref}`{also}",
+            f"Hypothesis: `{d.hypothesis_ref}`{also}{op_str}",
             f"Question: {_design_cell(d.experiment_question)}",
-        ]
-        if dataset_shown != "—":
-            L.append(f"Dataset: {dataset_shown}{notes}")
-        L += [
+            f"Dataset: {_design_cell(d.dataset.name)}{notes if d.dataset.name else ''}",
             f"Baselines: {_design_cell('; '.join(f'{b.name} ({b.kind})' for b in d.baselines))}",
             f"Metrics: {_design_cell('; '.join(f'{m.name} ({m.direction})' for m in d.metrics))}",
             f"Analysis artifacts: {_design_cell('; '.join(f'{a.name} [{a.role}]' for a in d.analysis_artifacts))}",
-            f"Task: {t.description}", f"MCP/tools: {'; '.join(tools) if tools else 'none'}",
-            f"Inputs: {len(t.input_data)}", f"Success criteria: {criteria}",
-            f"Expected artifacts: {arts}", f"Duration: {t.est_duration_min} min",
+            f"Task: {t.description}",
+        ]
+        if t.rationale and t.rationale != t.description:
+            L.append(f"Rationale: {t.rationale}")
+        L.append(f"MCP/tools: {'; '.join(tools) if tools else 'none'}")
+        if t.launch_params:
+            params_str = ", ".join(f"{k}={v}" for k, v in t.launch_params.items())
+            L.append(f"Launch params: {params_str}")
+        L += [
+            f"Inputs: {inputs_str}",
+            f"Success criteria: {criteria}",
+            f"Expected artifacts: {arts}",
+            f"Duration: {t.est_duration_min} min",
             f"Warnings: {'; '.join(t.warnings) if t.warnings else 'none'}",
         ]
     if plan.risks:

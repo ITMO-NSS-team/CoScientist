@@ -1,51 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# CoScientist experiments — system.yaml + Experiment Module control-plane.
+# CoScientist experiments — Clean 3-lane architecture.
 #
 # Goal: minimal delta vs system.yaml while keeping EM plan/execute/review quality.
-# Route agents (Coder/Fedot/Experiment/McpBuilder/ToolPreparer) are the SYSTEM
-# definitions; only the EM control-plane is added, plus a few quality callbacks.
+#
+# Orch lanes:
+#   1. ResearchAgent — literature and external knowledge (open-ended).
+#   2. HypothesesAgent — generates/commits hypotheses into the research graph.
+#   3. ExperimentModuleAgent — computational experiment execution (single gateway).
+#      Coder, Fedot, and Alembic are internal Executor routes of EM.
+#      McpBuilderAgent is an EM route, not a top-level orchestrator subordinate.
 #
 # Run:
 #   COSCIENTIST_CONFIG=CoScientist/agents/experiments.yaml python -m CoScientist
 # Validate:
 #   COSCIENTIST_CONFIG=CoScientist/agents/experiments.yaml python -m CoScientist.assembly
-#
-# Compact legacy profile (kept for reference): agents/experiments_old.yaml
-#
-# Diff vs system.yaml (intentional):
-#   1. Orchestrator subordinate TaskExecutorAgent → ExperimentModuleAgent
-#   2. New agents: ExperimentModuleAgent, ExperimentPlannerAgent,
-#      ExperimentExecutorAgent, ExperimentResultReviewAgent
-#   3. HypothesesAgent is EM sequential child (not orch subordinate) — same
-#      system agent/prompt; graph+research_graph; seed ask + refs bridge
-#      (no task_tracker: EXP tasks do not exist yet at hyp step)
-#   4. ToolRetriever/ToolReranker: EM inventory stash/snapshot callbacks
-#   5. ExperimentAgent: force_schema_s3_upload (no inject_upstream —
-#      EM seeds lineage at start_task via seed_upstream_from_resolved_inputs)
-#   6. Fedot/Coder anti-dup is the EM state machine + guard_route_agent_tool
-#      (no session hard-stop: that would refuse valid start_task / retry transitions)
-#   7. ToolReranker: sanitize_json_output applies scores; collect_reranked_tools
-#      is after_agent fallback (no separate *_from_model callback)
-#   8. TaskExecutorAgent removed (cannot share ToolPreparerAgent with EM)
-#   9. Target orch (three lanes, no keyword rewrites):
-#      - Science/compute → ExperimentModuleAgent ONLY (Coder is EM-internal
-#        route; no orchestrator→Coder bypass = no shadow science).
-#      - Infrastructure (repo→reusable MCP server) → McpBuilderAgent top-level
-#        (not an experiment; does not need hypotheses/plan-HITL/TaskResult).
-#      - Literature/knowledge → ResearchAgent only after NO_MATCHING_TOOL;
-#        never in the same turn as ExperimentModuleAgent (Dual EM). Clinical →
-#        MedicalAgent. Mixed lit+compute stays inside EM (Executor research route).
-#      Orch has NO retrieval (single inventory lives in ToolPreparer) and does
-#      NOT keyword-rewrite briefs: research-vs-compute is decided by the module
-#      from its own inventory (NO_MATCHING_TOOL → orch falls back to Research).
-#  10. After ToolPreparer, assess_experiment_inventory_feasibility early-exits
-#      with NO_MATCHING_TOOL when gate-routed AND compute MCP inventory is empty
-#      (declared research/medical families are not compute coverage), so leftover
-#      retrieve cannot drag Hypotheses→Plan→Coder; remaining EM children skip
-#      via skip_when_experiment_not_feasible. Mixed lit+compute stays in EM.
-#      Only applies to asks that enforce_experiment_module_first structurally
-#      rerouted from ResearchAgent (flagged via GATE_ROUTED_STATE_KEY) — an
-#      orchestrator call to the module made on purpose is always trusted.
 # ─────────────────────────────────────────────────────────────────────────────
 
 defaults:
@@ -69,27 +37,18 @@ agents:
     prompt: orchestrator
     # No retrieval: EM ToolPreparer owns the only inventory for compute.
     # No CoderAgent lane: Coder is an EM-internal Executor route (no shadow science).
-    # McpBuilderAgent stays top-level: repo→MCP is infrastructure, not an experiment.
     tools: [graph, research_graph_orchestrator]
     subordinates:
-      - PlannerAgent
       - ResearchAgent
+      - HypothesesAgent
       - ExperimentModuleAgent
-      - McpBuilderAgent
       - MedicalAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
       before_agent: [before_get_task, inject_graph_root, inject_research_context]
-      # Structural safety nets only — both keyed on shape/state, never on request
-      # keywords. coalesce merges accidental EM fan-out into one brief;
-      # enforce_experiment_module_first gives the module the FIRST shot before
-      # literature research (state-keyed), so research-vs-compute stays a
-      # data-driven contract decided by the module's inventory (NO_MATCHING_TOOL
-      # → orch falls back to Research on the next turn).
       after_model:
         - coalesce_experiment_module_calls
         - suppress_experiment_module_after_completed
-        - enforce_experiment_module_first
         - guard_unknown_tools
     hitl: true
     a2a:
@@ -117,33 +76,6 @@ agents:
     callbacks:
       after_model: [sanitize_json_output]
 
-  # ── Direct subordinates ────────────────────────────────────────────────────
-  PlannerAgent:
-    class: custom:session
-    root: false
-    enabled: false
-    description: >-
-      produces a step-by-step roadmap for a complex, multi-step task;
-      call it first, then execute the roadmap by delegating each step.
-    routing: >-
-      for a complex multi-step task, call this FIRST to produce a roadmap,
-      then follow it step by step.
-    prompt: planner
-    tools: [retrieval, create_plan_tool, graph]
-    output_key: planner_roadmap
-    callbacks:
-      before_agent: [inject_graph_root]
-      after_model: [guard_unknown_tools]
-    hitl: true
-    a2a:
-      key: planner
-      port: 8001
-      skill:
-        id: plan
-        name: Plan
-        description: Produce a research roadmap for a scientific task
-        tags: [planning, roadmap, science]
-
   ResultAggregatorAgent:
     class: llm
     description: >-
@@ -151,9 +83,6 @@ agents:
       hypotheses with their status), Experiment Module TaskResults when present,
       and the run's figures/tables, and synthesizes a single, complete,
       visually-rich Markdown report grounded in those sources.
-    # Prefer EM terminal report when experiment_summary/TaskResults exist;
-    # otherwise the system graph-primary aggregator prompt still applies via
-    # shared formatter + research_graph_readonly.
     prompt: experiment_result_aggregator
     tools: [result_formatter, research_graph_readonly]
     include_contents: none
@@ -161,9 +90,7 @@ agents:
       before_agent: [inject_research_context]
     output_key: final_report
 
-  # Same system HypothesesAgent — owned by ExperimentModuleAgent (ADK: one parent).
-  # EM wiring: seed ask + refs bridge. Graph tools restored; no task_tracker
-  # (EXP tasks do not exist yet at this step — empty tracker only distracts).
+  # ── Direct subordinates ────────────────────────────────────────────────────
   HypothesesAgent:
     class: llm
     model: openai/glm-4.7
@@ -174,9 +101,9 @@ agents:
       Use this to generate and test hypotheses.
     prompt: hypotheses
     output_key: hypotheses
-    tools: [graph, research_graph]
+    tools: [research_graph]
     callbacks:
-      before_agent: [skip_when_experiment_stage_complete, skip_when_experiment_not_feasible, bootstrap_research_question_if_empty, inject_research_context]
+      before_agent: [bootstrap_research_question_if_empty, inject_research_context]
       before_model: [seed_hypotheses_from_em_request]
       after_model: [enforce_hypothesis_research_commit, normalize_em_hypothesis_commit, guard_unknown_tools]
       after_tool: [capture_hypotheses_after_research_commit]
@@ -224,7 +151,7 @@ agents:
     description: >-
       Plans, reviews, executes and reports one computational experiment with
       task/attempt state, finite fallback and artifact lineage. Owns tool
-      discovery (ToolPreparer), hypotheses, plan HITL, MCP/FEDOT/Coder/Alembic/
+      discovery (ToolPreparer), plan HITL, MCP/FEDOT/Coder/Alembic/
       Research/Medical routing, and result HITL. Primary choice for ANY
       computational ask (mixed evidence+compute stays in one plan).
     routing: >-
@@ -242,7 +169,6 @@ agents:
         - tool discovery + execution + coder/FEDOT fallback
     children:
       - ToolPreparerAgent
-      - HypothesesAgent
       - ExperimentPlannerAgent
       - ExperimentExecutorAgent
       - ExperimentResultReviewAgent
@@ -512,8 +438,8 @@ agents:
       dynamically-provisioned MCP tools (ReAct: think → call tool → observe).
       Also ExperimentExecutorAgent route when start_task returns
       route_agent=ExperimentAgent.
-    prompt: experiment_react
-    tools: [dynamic_tools, graph, research_graph]
+    prompt: experiment_react_route
+    tools: [dynamic_tools]
     output_key: fedot_results
     callbacks:
       before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
@@ -528,7 +454,7 @@ agents:
       Also ExperimentExecutorAgent route when start_task returns
       route_agent=FedotAgent.
     prompt: experiment_fedot_route
-    tools: [fedot, graph]
+    tools: [fedot]
     output_key: fedot_results
     callbacks:
       before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]

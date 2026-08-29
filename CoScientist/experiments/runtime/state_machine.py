@@ -37,7 +37,6 @@ from CoScientist.experiments.runtime.artifacts import (
 from CoScientist.experiments.runtime.errors import ExperimentRuntimeError
 from CoScientist.experiments.runtime.readiness import TERMINAL_TASK_STATES, refresh_readiness
 from CoScientist.experiments.runtime.routing import (
-    fill_server_urls,
     match_session_inventory_tool,
     mcp_routes_tried,
     session_inventory_nonempty,
@@ -476,8 +475,15 @@ def clamp_generate_launch_num(launch_params: dict[str, Any] | None) -> dict[str,
 
 def _scope_tools(task: ExperimentTask) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     filtered = [
-        {"tool": tool.name, "server_id": server.server_id, "description": tool.description, "input_schema": tool.input_schema}
-        for server in task.mcp_servers if server.server_id for tool in server.tools
+        {
+            "tool": tool.name,
+            "server_id": server.server_id,
+            "server_name": server.name,
+            "description": tool.description,
+            "input_schema": tool.input_schema,
+            "url": str(server.url) if server.url else None,
+        }
+        for server in task.mcp_servers for tool in server.tools
     ]
     deployed = [
         {
@@ -579,7 +585,6 @@ def start_task(
     if route == ExecutionRoute.CODER.value and task_runtime["planned_route"] == ExecutionRoute.CODER.value and task_model.mcp_servers and not cfg.route_coder_mcp:
         raise ExperimentRuntimeError("route_disabled", "Direct MCP-to-Coder mode is disabled.")
 
-    task_model = fill_server_urls(task_model, state)
     launch_params = task_model.launch_params
     if task_requires_managed_s3(task_model):
         launch_params = force_managed_s3_launch_params(launch_params, require=True)

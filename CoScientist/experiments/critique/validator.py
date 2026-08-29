@@ -18,7 +18,6 @@ from CoScientist.experiments.capabilities.inventory import (
     inventory_pairs,
     match_named_family_capability,
     match_named_inventory_tool,
-    tool_primary_family,
 )
 from CoScientist.experiments.critique.coverage import task_coverage_blob as _task_coverage_blob
 from CoScientist.experiments.schemas import (
@@ -81,23 +80,6 @@ def _tool_output_blob(task: Any) -> str:
         for tool in getattr(s, "tools", None) or []
         for a in ("name", "description", "input_schema")
     ).lower()
-
-
-def _task_mcp_families(task: Any) -> set[str]:
-    names: list[str] = []
-    for server in getattr(task, "mcp_servers", None) or []:
-        for tool in getattr(server, "tools", None) or []:
-            name = str(getattr(tool, "name", "") or "").strip()
-            if name:
-                names.append(name)
-    params = getattr(task, "launch_params", None) or {}
-    if isinstance(params, dict):
-        names.extend(str(key) for key in params if str(key).strip())
-    return {
-        fam
-        for name in names
-        if (fam := tool_primary_family(name))
-    }
 
 
 def _is_image_artifact(a: Any) -> bool:
@@ -331,6 +313,9 @@ def critique_plan(
             ):
                 if not getattr(d, field):
                     co("minor", f"{tid} design.{field} is empty.", sug, tid)
+            if not d.dataset.name.strip():
+                co("minor", f"{tid} design.dataset.name is missing.",
+                   "Name the dataset/benchmark if one is already known.", tid)
             for field, sug in (
                 ("baselines", "Replace placeholder with a concrete baseline."),
                 ("metrics", "Replace placeholder with a concrete metric and direction."),
@@ -350,8 +335,8 @@ def critique_plan(
             if miss := [h for h in ctx if h not in req]:
                 co("major", f"Context hypothesis_refs uncovered by non-optional task design: {', '.join(miss)}.",
                    "Link each leftover id on an existing required task via "
-                   "design.hypothesis_ref or also_tests. A second required task "
-                   "for the same operation_ref is only for a different inventory family.")
+                   "design.hypothesis_ref or also_tests. Do not add another "
+                   "required task for the same operation_ref.")
             if plan_h and (mp := [h for h in ctx if h not in plan_h]):
                 add(category="consistency", severity="major",
                     message=f"plan.hypotheses omits context hypothesis ids: {', '.join(mp)}.",
@@ -394,24 +379,11 @@ def critique_plan(
                 co("major",
                    f"Tasks reference operation ids absent from the frame: {', '.join(sorted(extra_ops))}.",
                    "Copy operation_id from experiment_context.operations; do not invent OP-n.")
-            family_hits: list[tuple[str, str]] = []
-            for task in plan.tasks:
-                if task.optional:
-                    continue
-                ref = str(task.design.operation_ref or "").strip().upper()
-                if not ref:
-                    continue
-                for fam in _task_mcp_families(task):
-                    family_hits.append((ref, fam))
-            family_dupes = sorted({
-                f"{ref}/{fam}" for ref, fam in family_hits if family_hits.count((ref, fam)) > 1
-            })
-            if family_dupes:
+            dupes = sorted({ref for ref in covered if covered.count(ref) > 1})
+            if dupes:
                 co("major",
-                   f"Multiple non-optional tasks repeat the same inventory family "
-                   f"on one operation_ref: {', '.join(family_dupes)}.",
-                   "Same operation_ref may chain different families "
-                   "(generate → dock). Do not duplicate one family on one slot.")
+                   f"Multiple non-optional tasks share the same operation_ref: {', '.join(dupes)}.",
+                   "One non-optional task per frame operation.")
 
     for task in plan.tasks:
         tid = task.id
@@ -600,30 +572,19 @@ def validate_and_critique_plan(
     **_kwargs: Any,
 ) -> tuple[ExperimentPlan, PlanCritique]:
     """Strict schema validation, then deterministic policy checks."""
-    from CoScientist.experiments.critique.mcp_repair import repair_plan_mcp_bindings
     from CoScientist.experiments.schemas.models import reset_lenient_planner, set_lenient_planner
 
     inventory = list(available_tools)
     repo_list = list(repo_candidates)
-    repaired = repair_plan_mcp_bindings(
-        payload, inventory,
-        repo_candidates=repo_list,
-        route_alembic=bool(settings.route_alembic),
-        route_fedot=bool(settings.route_fedot),
-        operations=operations,
-        max_plan_tasks=int(settings.max_plan_tasks),
-    )
     token = set_lenient_planner(settings.lenient_planner)
     try:
-        plan = ExperimentPlan.model_validate(repaired)
+        plan = ExperimentPlan.model_validate(payload)
     except ValidationError as exc:
         raise PlanValidationError(
             "ExperimentPlan schema validation failed", errors=exc.errors(include_url=False)
         ) from exc
     finally:
         reset_lenient_planner(token)
-    from CoScientist.experiments.critique.design_fill import fill_experiment_design
-    plan = fill_experiment_design(plan, operations=operations)
     return plan, critique_plan(
         plan, settings=settings, available_tools=inventory,
         preferred_tools=None if preferred_tools is None else list(preferred_tools),

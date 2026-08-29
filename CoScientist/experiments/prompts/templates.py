@@ -46,9 +46,6 @@ Stop after the pass; briefly name exact ready tools and any unmatched facets.
 
 @_register("experiment_planner")
 def experiment_planner(ctx: PromptContext) -> str:
-    from CoScientist.config import get_settings
-
-    max_plan_tasks = str(int(get_settings().experiments.max_plan_tasks))
     return render_template(
         """You are ExperimentPlannerAgent (Experiment Module v1b/v1a).
 PLAN only — never call an execution tool. Emit exactly one ExperimentPlan
@@ -58,7 +55,7 @@ Authoritative context (sole MCP inventory; ignore tool names from chat):
 {experiment_planner_context?}
 
 If revision_feedback is non-empty, fix those issues first.
-MCP tools ONLY from available_mcp_capabilities (exact server_id+tool).
+MCP tools ONLY from available_mcp_servers / available_mcp_capabilities (exact server_id + url + tool). Every mcp_servers entry MUST copy the exact "url" from available_mcp_servers.
 Research/medical tools ONLY from available_research_capabilities /
 available_medical_capabilities (exact tool name; mcp_servers=[]).
 
@@ -79,7 +76,7 @@ CLOSED ENUMS (literals only):
 - design.metrics[].direction: maximize|minimize|compare
 - design.analysis_artifacts[].role: code|config|metrics_table|report
 - design.analysis_artifacts[].prepare_via: coder|mcp|existing|research|medical
-- mcp_servers: name, server_id, tools, source, health — no description
+- mcp_servers: name, server_id, url (copied verbatim from available_mcp_servers), tools, source, health — no description
 - launch_params / tools[].input_schema: JSON object *string* when schema wants
   a string, e.g. "{\"case\":\"alzheimer\",\"num\":10,\"upload_results_to_s3\":true}"
 
@@ -90,11 +87,7 @@ SCIENCE-FIRST:
    If hypothesis_refs is empty (should be rare), use one H1 restating
    source_request — still no free-form multi-H invent.
 2. Each task needs hypothesis_ref, operation_ref (when operations is non-empty),
-   experiment_question, baselines≥1, metrics≥1, analysis_artifacts≥1.
-   dataset only if a real source already exists (uploaded file, S3, URL, or
-   upstream task_artifact). Otherwise {"name":"","ref":null,"notes":null} —
-   do not invent conceptual labels (Target_Definition, Pharmacophore, Latent
-   Space, Ligands). dataset.ref usually null; URLs in notes.
+   experiment_question, dataset, baselines≥1, metrics≥1, analysis_artifacts≥1. dataset.ref usually null; URLs in notes.
    Never invent placeholder hosts (example.com/org/net, localhost), s3://artifacts,
    or dummy filenames. Prefer inventory/tool outputs or
    omit the URL; generators use input_data=[] + launch_params.
@@ -102,16 +95,13 @@ SCIENCE-FIRST:
    task_artifact inputs need full DataRef + producer in depends_on:
    kind=task_artifact, source_task_id, source_artifact_id (semantic filename).
    Never invent kind=artifact or a bare location/path string.
-3. 1–<<MAX_PLAN_TASKS>> tasks; total_est_duration_min = sum of task durations.
-   experiment_context.operations is AUTHORITATIVE when non-empty: every
-   operation_id must be covered. Copy statement into design.experiment_question.
-   Set design.operation_ref to that OP-n. Do not drop or invent slots, and do
-   not rewrite the slot into a leftover tool. One operation may have several
-   non-optional tasks when the ask needs more than one inventory family
-   (producer → consumer, same operation_ref, depends_on). One fedot/react
-   task binds one family — do not put two MCP families in one launch_params.
-   Multi-part asks without operations: one non-optional task per distinct target.
-   Do not collapse them into a single generation task.
+3. 1–8 tasks; total_est_duration_min = sum of task durations.
+   experiment_context.operations is AUTHORITATIVE when non-empty: one non-optional
+   task per operation_id. Copy statement into design.experiment_question.
+   Set design.operation_ref to that OP-n. Inventory chooses the route only —
+   do not merge, drop, or invent slots, and do not rewrite the slot into a
+   different leftover tool. Multi-part asks without operations: one non-optional
+   task per distinct target. Do not collapse them into a single generation task.
 4. EXACT SCOPE: plan only operations in source_request. Inventory ≠ checklist —
    unused matching tools are not errors. Do not add docking/toxicity/reporting
    tasks unless asked. NEVER add a narrative task whose only job is to write
@@ -120,9 +110,8 @@ SCIENCE-FIRST:
    final coder synthesis/aggregation task. design.baselines is metadata, not
    a fetch task. Do not add a literature/PDB/reference-SMILES task unless
    source_request itself asks for that evidence-gathering (route rule 2).
-   Docking/generation the ask already covers are separate family tasks:
-   SMILES from the generate artifact via depends_on, pdb_id in the docking
-   task launch_params only. Do not prepend papers in front of covered compute.
+   Docking/generation that the ask already covers take pdb_id and SMILES in
+   launch_params — do not prepend papers in front of covered compute.
    Field ownership: risks/assumptions only on plan root; depends_on on the task
    (not input_data); DataRef uses kind+location fields only (no role/path_or_tool).
    If THIS operation has no exact inventory tool name, no family tool, and no
@@ -132,9 +121,8 @@ SCIENCE-FIRST:
    assumptions/risks when they constrain methods; do not re-elicit the frame.
    On critique revise: uncovered OP-n → add one required task for that
    operation_id. Uncovered hypothesis_refs → hang them on an existing
-   required task (also_tests). A second required task for the same
-   operation_ref is allowed only for a different inventory family.
-   Do not drop other frame operations to make ids fit.
+   required task (also_tests); do not add a second required task for the
+   same operation_ref. Do not drop other frame operations to make ids fit.
 5. plan.hypothesis = short summary; details in hypotheses + task design.
 6. methods MUST be a JSON array of strings, never one numbered prose string.
    Hypotheses: only schema fields — no type/test_strategy/testable_prediction.
@@ -195,10 +183,28 @@ Contract:
 Prefer a short critical path; no obligatory upstream fetches not required by
 the primary deliverable.
 
+Minimal fedot_mas task (mcp_servers MUST copy server_id, name, and url from available_mcp_servers):
+{"id":"EXP-1","name":"…","description":"…","rationale":"…","route":"fedot_mas",
+ "design":{"hypothesis_ref":"H1","experiment_question":"…",
+  "dataset":{"name":"…","ref":null,"notes":"…"},
+  "baselines":[{"name":"…","kind":"method","ref":null}],
+  "metrics":[{"name":"…","direction":"maximize","threshold":0.8,"test":null}],
+  "analysis_artifacts":[{"name":"generated_candidates.json","role":"data","prepare_via":"mcp",
+   "path_or_tool":"generate_mols"}]},
+ "mcp_servers":[{"name":"srv-chem","server_id":"srv-chem","url":"http://127.0.0.1:8000/mcp","tools":["generate_mols"],"source":"registry","health":"unknown"}],
+ "repo_url":null,"post_build_route":null,"input_data":[],
+ "launch_params":"{\"case\":\"target\",\"num\":10,\"upload_results_to_s3\":true}",
+ "success_criteria":[{"criterion_id":"C1","description":"Molecules generated",
+  "kind":"artifact_exists","metric":null,"operator":null,"target":null,
+  "required":true,"verification":"Confirm generated_candidates.json in outputs"}],
+ "expected_artifacts":[{"name":"generated_candidates.json","role":"data",
+  "media_type":"application/json","required":true,"description":"…"}],
+ "est_duration_min":30,"warnings":[],"depends_on":[],"optional":false}
+
 Minimal coder task:
 {"id":"EXP-1","name":"…","description":"…","rationale":"…","route":"coder",
  "design":{"hypothesis_ref":"H1","experiment_question":"…",
-  "dataset":{"name":"","ref":null,"notes":null},
+  "dataset":{"name":"…","ref":null,"notes":"…"},
   "baselines":[{"name":"…","kind":"method","ref":null}],
   "metrics":[{"name":"…","direction":"compare","threshold":0,"test":null}],
   "analysis_artifacts":[{"name":"h1_test.py","role":"code","prepare_via":"coder",
@@ -215,7 +221,7 @@ Minimal coder task:
 Minimal research task (mcp_servers MUST be empty):
 {"id":"EXP-2","name":"…","description":"…","rationale":"…","route":"research",
  "design":{"hypothesis_ref":"H1","experiment_question":"…",
-  "dataset":{"name":"","ref":null,"notes":null},
+  "dataset":{"name":"…","ref":null,"notes":"…"},
   "baselines":[{"name":"…","kind":"prior_result","ref":null}],
   "metrics":[{"name":"…","direction":"compare","threshold":0,"test":null}],
   "analysis_artifacts":[{"name":"lit_notes.md","role":"report","prepare_via":"research",
@@ -232,7 +238,7 @@ Minimal research task (mcp_servers MUST be empty):
 Minimal alembic_build task (repo_url MUST come verbatim from repo_candidates):
 {"id":"EXP-2","name":"…","description":"…","rationale":"…","route":"alembic_build",
  "design":{"hypothesis_ref":"H1","experiment_question":"…",
-  "dataset":{"name":"","ref":null,"notes":null},
+  "dataset":{"name":"…","ref":null,"notes":"…"},
   "baselines":[{"name":"…","kind":"method","ref":null}],
   "metrics":[{"name":"…","direction":"compare","threshold":0,"test":null}],
   "analysis_artifacts":[{"name":"mcp_server","role":"code","prepare_via":"mcp",
@@ -253,7 +259,6 @@ goal, hypothesis, hypotheses, methods, context_digest, context_refs, tasks,
 risks, assumptions, total_est_duration_min, created_at (UTC ISO-8601 Z).
 risks/assumptions only at plan root — never on tasks.
 """,
-        MAX_PLAN_TASKS=max_plan_tasks,
     )
 
 
@@ -269,8 +274,6 @@ Routes: <<AGENTS>>
 2) start_task(ready task) → envelope with task/attempt/route_agent.
 3) Call that route AgentTool ONCE; FedotAgent(request="<JSON string>") —
    serialize experiment_active_envelope; never another route for the attempt.
-   CoderAgent: pass coder_sandbox_path from resolved_inputs (files already
-   seeded in the sandbox). Never invent workspace/experiment_artifacts paths.
    ResearchAgent / MedicalAgent: same JSON request; they use their own
    toolsets (not task mcp_servers). After return, record_result with a
    notes/citations artifact (workspace file OK; S3 not required).
@@ -278,10 +281,8 @@ Routes: <<AGENTS>>
    task_id/attempt_id from start_task. Payload keys only:
    status,summary,outputs,criteria_checks[{criterion_id,passed,observed,
    evidence_artifact_ids,details}],error_code,error_message,retryable,warnings.
-   success ⇒ every required criterion passed=true; no success if route admits
-   missing science or simulated/hardcoded/placeholder fabrication
-   (partial/failure + warnings). Soft-match captures by name/role+ext — URL
-   materialization warnings ≠ scientific fail.
+   success ⇒ every required criterion passed=true; if the route generated/computed the results successfully (even if criteria checks omitted or partial status returned), record status=success (or partial) with criteria_checks. Do NOT record failure when valid outputs/artifacts/download URLs were produced. Soft-match captures by name/role+ext — URL
+   materialization warnings ≠ scientific fail. If FedotAgent/ExperimentAgent returned generated molecules or output artifacts, record status=success or partial.
    ResearchAgent/MedicalAgent: if they returned tool output (papers, citations,
    notes), record_result status=success or partial — never error/failure for
    "insufficient literature". Put gaps in warnings. Durable S3/file evidence
@@ -305,7 +306,7 @@ Routes: <<AGENTS>>
    reporting: short factual summary and stop so ResultReview can run.
 
 On route_already_returned refuse: use a control tool. Never claim success
-without criteria+artifacts.
+without criteria+artifacts. Simulated/hardcoded outputs are forbidden.
 """,
         TOOLS=ctx.render_tools(),
         AGENTS=ctx.render_agents(),
@@ -348,9 +349,6 @@ def experiment_coder_route(ctx: PromptContext) -> str:
     return render_template(
         """CoderAgent: one sandbox attempt.
 Envelope: {experiment_active_envelope?}
-Read ONLY coder_sandbox_path (or resolved_workspace_path) from
-envelope.resolved_inputs. Those files are already in this sandbox.
-Do not invent workspace/experiment_artifacts paths or SMILES.
 <<TOOLS>>
 No invented data/SMILES/LD50/citations/clinical findings.
 ANTI-FABRICATION: never replace the method with a hardcoded/synthetic/

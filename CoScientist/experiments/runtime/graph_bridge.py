@@ -152,6 +152,21 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
         for m in (design.get("metrics") or [])
         if isinstance(m, dict) and m.get("name")
     )
+    mcp_servers = []
+    for srv in task.get("mcp_servers") or []:
+        if isinstance(srv, dict):
+            tools_list = []
+            for t in srv.get("tools") or []:
+                if isinstance(t, dict):
+                    tools_list.append(t.get("name") or "")
+                elif isinstance(t, str):
+                    tools_list.append(t)
+            mcp_servers.append({
+                "name": srv.get("name") or srv.get("server_id") or "",
+                "url": str(srv.get("url") or ""),
+                "tools": [t for t in tools_list if t],
+            })
+
     return {
         "method_type": "computational",
         "inputs": inputs,
@@ -161,6 +176,7 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
         "task_id": str(task.get("id") or ""),
         "plan_id": plan_id,
         "route": str(task.get("route") or ""),
+        "mcp_servers": mcp_servers,
     }
 
 

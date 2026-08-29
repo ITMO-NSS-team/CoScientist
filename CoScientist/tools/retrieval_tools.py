@@ -208,13 +208,13 @@ class RetrievalToolSet(BaseToolset):
             # The tool index / DB being unreachable (e.g. no VPN, timeout) must
             # NOT crash the whole run — return a graceful error so the agent can
             # proceed or abstain (e.g. NO_MATCHING_TOOL → CoderAgent).
-            _logger.warning("retrieve_tools unavailable: %r", e)
+            _logger.exception("retrieve_tools unavailable: %s", e)
             acc = tool_context.state.get('accumulated_tools', []) if tool_context is not None else []
             return {
                 "status": "error",
                 "result": [],
                 "accumulated_count": len(acc),
-                "message": f"Tool retrieval is unavailable right now (tool index/DB unreachable): {e}",
+                "message": f"Tool retrieval is unavailable right now (tool index/DB unreachable): {type(e).__name__}: {e}",
             }
         finally:
             # Always release the manager's DB/HTTP connections, even on error.

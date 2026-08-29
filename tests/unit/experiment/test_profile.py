@@ -43,13 +43,6 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     # the module's inventory, never by matching words in the request.
     assert "coalesce_experiment_module_calls" in orch.callbacks.after_model
     assert "suppress_experiment_module_after_completed" in orch.callbacks.after_model
-    assert "enforce_experiment_module_first" in orch.callbacks.after_model
-    assert orch.callbacks.after_model.index("coalesce_experiment_module_calls") < (
-        orch.callbacks.after_model.index("suppress_experiment_module_after_completed")
-    )
-    assert orch.callbacks.after_model.index("suppress_experiment_module_after_completed") < (
-        orch.callbacks.after_model.index("enforce_experiment_module_first")
-    )
     assert "redirect_research_to_experiment_module" not in orch.callbacks.after_model
     assert "normalize_experiment_module_brief" not in orch.callbacks.after_model
     assert "inject_upstream_artifacts" not in orch.callbacks.before_agent
@@ -59,7 +52,6 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert module.a2a.port == 8004
     assert module.children == [
         "ToolPreparerAgent",
-        "HypothesesAgent",
         "ExperimentPlannerAgent",
         "ExperimentExecutorAgent",
         "ExperimentResultReviewAgent",
@@ -67,7 +59,7 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     hyp = config.agent("HypothesesAgent")
     assert hyp.prompt == "hypotheses"
     assert hyp.model == "openai/glm-4.7"
-    assert hyp.tools == ["graph", "research_graph"]
+    assert hyp.tools == ["research_graph"]
     assert "commit_experiment_hypotheses" in hyp.callbacks.after_agent
     assert "seed_hypotheses_from_em_request" in hyp.callbacks.before_model
     assert "enforce_hypothesis_research_commit" in hyp.callbacks.after_model
@@ -78,8 +70,6 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert "capture_hypotheses_after_research_commit" in hyp.callbacks.after_tool
     # Root must be bootstrapped before inject_research_context renders the
     # {research_context?} placeholder, so a fresh graph never reads EMPTY.
-    assert hyp.callbacks.before_agent[0] == "skip_when_experiment_stage_complete"
-    assert hyp.callbacks.before_agent[1] == "skip_when_experiment_not_feasible"
     assert hyp.callbacks.before_agent.index("bootstrap_research_question_if_empty") < (
         hyp.callbacks.before_agent.index("inject_research_context")
     )
@@ -97,9 +87,9 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     ]
     assert "skip_when_experiment_stage_complete" in config.agent("ToolPreparerAgent").callbacks.before_agent
     # Three-lane target: science/compute → EM only (no orch→Coder shadow science);
-    # infra (repo→MCP) → McpBuilder top-level; single inventory (orch has no retrieval).
+    # single inventory (orch has no retrieval).
     assert "CoderAgent" not in orch.subordinates
-    assert "McpBuilderAgent" in orch.subordinates
+    assert "McpBuilderAgent" not in orch.subordinates
     assert "retrieval" not in (orch.tools or [])
     assert "McpBuilderAgent" in config.agents
     # Coder + McpBuilder remain EM-internal Executor routes as well.

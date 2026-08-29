@@ -76,15 +76,11 @@ def match_session_inventory_tool(
     """Named, family-covered, or already-bound tool from session inventory."""
     from CoScientist.experiments.capabilities.inventory import (
         index_inventory_tools,
-        match_inventory_tool,
         match_named_inventory_tool,
     )
 
     by_tool = index_inventory_tools(session_inventory_rows(state, scoped=True))
     matched = match_named_inventory_tool(blob, by_tool)
-    if matched is not None:
-        return matched
-    matched = match_inventory_tool(blob, by_tool)
     if matched is not None:
         return matched
     for server in task.mcp_servers:
@@ -94,67 +90,3 @@ def match_session_inventory_tool(
                 return by_tool[name]
     return None
 
-
-def _lookup_http_urls(server_ids: set[str]) -> dict[str, str]:
-    """Best-effort registry lookup for HTTP MCP URLs. Never raises."""
-    if not server_ids:
-        return {}
-    try:
-        import asyncio
-
-        from rag_tools.config.settings import get_settings as _rag_settings
-        from rag_tools.storage import PostgresClient
-    except Exception:  # noqa: BLE001
-        return {}
-
-    async def _go() -> dict[str, str]:
-        out: dict[str, str] = {}
-        pg = PostgresClient(_rag_settings().postgres)
-        await pg.initialize()
-        try:
-            for sid in server_ids:
-                srv = await pg.get_server(sid)
-                if srv is None:
-                    continue
-                url = getattr(srv, "url", None)
-                protocol = getattr(srv, "protocol", None)
-                if protocol == "http" and isinstance(url, str) and url.startswith("http"):
-                    out[sid] = url
-        finally:
-            await pg.close()
-        return out
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        try:
-            return asyncio.run(_go())
-        except Exception:  # noqa: BLE001
-            return {}
-    return {}
-
-
-def fill_server_urls(task: ExperimentTask, state: Mapping[str, Any]) -> ExperimentTask:
-    """Copy HTTP MCP URLs from this-run inventory (then registry) onto servers that only have server_id."""
-    by_sid: dict[str, str] = {}
-    inventory_sids: set[str] = set()
-    for item in session_inventory_rows(state, scoped=True):
-        sid = str(item.get("server_id") or "").strip()
-        if not sid:
-            continue
-        inventory_sids.add(sid)
-        url = str(item.get("url") or "").strip()
-        if url.startswith("http"):
-            by_sid[sid] = url
-    missing = {sid for sid in inventory_sids if sid not in by_sid}
-    if missing:
-        by_sid.update(_lookup_http_urls(missing))
-    servers = []
-    changed = False
-    for server in task.mcp_servers:
-        url = str(server.url or "").strip()
-        if not url and server.server_id and str(server.server_id) in by_sid:
-            server = server.model_copy(update={"url": by_sid[str(server.server_id)]})
-            changed = True
-        servers.append(server)
-    return task.model_copy(update={"mcp_servers": servers}) if changed else task

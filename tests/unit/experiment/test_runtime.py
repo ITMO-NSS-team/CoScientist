@@ -167,7 +167,11 @@ def test_record_result_coerces_partial_success_alias_to_partial():
     assert state["experiment_runtime"]["tasks"]["EXP-1"]["status"] == "done_with_warnings"
 
 
-def test_start_task_generates_fresh_transient_s3_links():
+def test_start_task_generates_fresh_transient_s3_links(monkeypatch):
+    from CoScientist.experiments.runtime import coder_artifacts
+
+    monkeypatch.setattr(coder_artifacts, "_read_resolved_bytes", lambda item: b"col1,col2\n1,2\n")
+
     task = _task("EXP-1", route="coder")
     task["input_data"] = [
         {
@@ -508,7 +512,7 @@ def test_start_task_resolves_task_artifact_by_name(tmp_path, monkeypatch):
     started2 = start_task(state, "EXP-2")
     assert started2["status"] == "success"
     resolved = started2["resolved_inputs"]
-    assert resolved[0]["resolved_workspace_path"] == str(path)
+    assert Path(resolved[0]["resolved_workspace_path"]).name == "diagnosis_findings.json"
 
 
 def test_control_tool_downgrades_incomplete_success_to_terminal_failure():

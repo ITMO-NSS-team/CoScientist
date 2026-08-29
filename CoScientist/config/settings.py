@@ -327,7 +327,7 @@ class ExperimentsSettings(BaseModel):
     route_coder_mcp: bool = False
     route_alembic: bool = False
     task_max_attempts: int = Field(default=2, ge=1, le=2)
-    max_plan_tasks: int = Field(default=8, ge=1, le=10)
+    max_plan_tasks: int = Field(default=8, ge=1, le=20)
     require_task_design: bool = True
     # When True (default), schema invents baselines/metrics for weak planners so
     # completeness majors for unspecified/empty design cannot fire. Set False
@@ -356,7 +356,6 @@ class ExperimentsSettings(BaseModel):
     plan_review_timeout_s: float = Field(default=300.0, gt=0)
     result_review_timeout_s: float = Field(default=300.0, gt=0)
     complexity_warning_tasks: int = Field(default=6, ge=1, le=8)
-    artifacts_dir: str = ""
 
 
 # =========================

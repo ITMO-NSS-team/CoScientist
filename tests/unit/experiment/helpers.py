@@ -54,10 +54,11 @@ def _design(hypothesis_ref: str = "H1", *, question: str | None = None) -> dict:
     }
 
 
-def _server(tool: str = "estimate_property") -> dict:
+def _server(tool: str = "estimate_property", url: str = "http://127.0.0.1:8000/mcp") -> dict:
     return {
         "name": "chem-ready",
         "server_id": "srv-chem",
+        "url": url,
         "tools": [
             {
                 "name": tool,
