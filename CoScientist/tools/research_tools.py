@@ -49,8 +49,10 @@ if settings.services.proxy_url:
         enabled_fn=get_settings().web.use_proxy,
     )
 
-websearch_toolset_instance = McpToolset(
-    connection_params=StreamableHTTPConnectionParams(**_tavily_conn_kwargs),
+websearch_toolset_instance = (
+    McpToolset(connection_params=StreamableHTTPConnectionParams(**_tavily_conn_kwargs))
+    if settings.services.tavily_api_key
+    else None
 )
 
 # Optional paper-analysis / paper-search MCP servers — only built when configured

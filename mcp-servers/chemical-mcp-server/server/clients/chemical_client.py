@@ -16,11 +16,13 @@ class ChemServiceClient:
         host: str,
         port: str,
         timeout: int = 60,
+        docking_timeout: int | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.base_url = f"http://{self.host}:{self.port}"
         self.timeout = timeout
+        self.docking_timeout = docking_timeout if docking_timeout is not None else timeout
 
     def _post(
         self,
@@ -28,6 +30,7 @@ class ChemServiceClient:
         *,
         files: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        timeout: int | None = None,
     ) -> Any:
         url = f"{self.base_url}{endpoint}"
         logger.info("Calling ChemService API: %s", url)
@@ -37,7 +40,7 @@ class ChemServiceClient:
                 url,
                 files=files,
                 params=params,
-                timeout=self.timeout,
+                timeout=timeout if timeout is not None else self.timeout,
             )
             response.raise_for_status()
         except requests.RequestException as e:
@@ -94,4 +97,5 @@ class ChemServiceClient:
         return self._post(
             "/docking/",
             params={"smiles": smiles, "pdb_id": pdb_id},
+            timeout=self.docking_timeout,
         )

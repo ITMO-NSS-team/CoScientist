@@ -179,6 +179,7 @@ def _research_graph_readonly():
 REGISTRY.register_tool(ToolEntry(
     key="websearch",
     factory=_websearch,
+    optional=True,
     runtime_resolved=True,  # Tavily MCP — tool surface comes from the remote server
     docs=(
         ToolDoc(
@@ -863,6 +864,11 @@ def _inject_research_context(ctx):
     return make_inject_research_context(is_root=is_root)
 
 
+def _wait_for_validator_settle():
+    from CoScientist.graph.research.validator import wait_for_validator_settle
+    return wait_for_validator_settle
+
+
 def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     from CoScientist.config import get_settings
@@ -966,6 +972,9 @@ _cb("inject_original_query", "before_model", factory=lambda ctx: _inject_origina
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
 # Seed state['research_context'] from the research blackboard (role-dependent).
 _cb("inject_research_context", "before_agent", factory=_inject_research_context)
+# Give any still-under_verification hypothesis one more chance to settle
+# before the final report freezes its status in prose.
+_cb("wait_for_validator_settle", "before_agent", factory=lambda ctx: _wait_for_validator_settle())
 # Tell the agent about the dataset archive the user attached in the web UI; it
 # decides itself which calls need the link.
 _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_dataset_context())

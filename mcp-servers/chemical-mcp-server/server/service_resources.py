@@ -16,6 +16,7 @@ chem_service = ChemServiceClient(
     host=settings.chem_services_host,
     port=str(settings.chem_services_port),
     timeout=settings.chem_services_timeout,
+    docking_timeout=settings.chem_services_docking_timeout,
 )
 
 retrosynthesis_service = RetrosynthesisServiceClient(
