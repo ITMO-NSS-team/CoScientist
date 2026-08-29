@@ -1326,16 +1326,20 @@ A full build takes TENS OF MINUTES.
   (status "error") — no job is started; do not retry the same bad URL.
 
 ## Reporting
-- Every build result carries progress_url (absolute, e.g.
-  http://localhost:8000/builds/<job_id>) and progress_page (relative) — a live
-  web page that streams the pipeline stages, tool validation and log straight
-  from the isolated build container. ALWAYS surface this as a CLICKABLE markdown
-  link, using progress_url.
-- While running: job_id, the clickable build-page link, current stage (if
-  known), and an estimate that this takes tens of minutes — invite the caller to
-  open the page or check back rather than wait.
-- On done: mcp_url, image, container, and the clickable build-page link.
-- On failed: the error, what was being built when it failed, and the link.
+- check_mcp_build(job_id) is the ONLY source of a build's result. An MCP server
+  reachable somewhere else on this machine belongs to some earlier build; never
+  report it as the outcome of this one, and never go looking for one.
+- A build result carries progress_url (absolute) when the web UI is configured —
+  a live page that streams the pipeline stages, tool validation and log straight
+  from the isolated build container. When the field is there, surface it as a
+  CLICKABLE markdown link. When it is absent there is no page to open: say so
+  instead of constructing a URL.
+- While running: job_id, current stage (if known), the build-page link if there
+  is one, and an estimate that this takes tens of minutes — invite the caller to
+  check back rather than wait.
+- On done: mcp_url, image, container, and the build-page link if there is one.
+- On failed: the error, what was being built when it failed, and the link if
+  there is one.
 
 <<HITL>>
 ''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())

@@ -20,6 +20,11 @@ The YAML declares every agent of the system in one place. Per agent:
   output_key / output_schema / planner / options: passthrough constructor config
                 (an ``options`` value may be "${settings.path}" too)
   a2a:          how the agent is exposed as an A2A service (key, port, skill, env)
+
+A config may also start with ``extends: <name-or-path>``, inheriting another
+config and overriding only the agents and fields it names — so a variant of the
+system (a limited profile, a deployment with one agent off) is a short overlay
+rather than a copy that drifts from the original. See :func:`_merge_raw`.
 """
 from __future__ import annotations
 
@@ -348,11 +353,55 @@ class SystemConfig(BaseModel):
         raise KeyError(f"No agent with a2a key {key!r}. Known: {known}")
 
 
+def _merge_raw(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Lay an overlay config's raw dict over a base's.
+
+    ``defaults`` merges shallowly. ``agents`` merges per agent — a named
+    agent's fields update the base agent's, so a profile can flip only
+    ``enabled`` without re-declaring the agent, and an agent the base does not
+    have is added whole. Every other top-level section (``pipeline``, and
+    anything added later) is taken from the overlay when it declares one, so a
+    new section can never be silently dropped on the way through an overlay.
+    """
+    merged: Dict[str, Any] = {
+        **base,
+        **{k: v for k, v in overlay.items() if k not in ("defaults", "agents")},
+    }
+    if "defaults" in overlay:
+        merged["defaults"] = {**(base.get("defaults") or {}), **overlay["defaults"]}
+    agents = dict(base.get("agents") or {})
+    for name, cfg in (overlay.get("agents") or {}).items():
+        if isinstance(cfg, dict) and isinstance(agents.get(name), dict):
+            agents[name] = {**agents[name], **cfg}
+        else:
+            agents[name] = cfg
+    merged["agents"] = agents
+    return merged
+
+
+def _load_raw(path: Path, _seen: frozenset = frozenset()) -> Dict[str, Any]:
+    """Load a config's raw dict, resolving an optional ``extends`` overlay.
+
+    A profile sets ``extends: <name-or-path>`` to inherit another config and
+    override only what it names (see :func:`_merge_raw`) instead of copying the
+    whole system — a copy starts drifting from the original the day it is made.
+    ``extends`` chains are followed; a cycle is an error.
+    """
+    path = Path(path).resolve()
+    if path in _seen:
+        raise ValueError(f"Config 'extends' cycle involving {path}")
+    with open(path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    base_ref = raw.pop("extends", None)
+    if base_ref is None:
+        return raw
+    base = _load_raw(resolve_config_path(str(base_ref)), _seen | {path})
+    return _merge_raw(base, raw)
+
+
 def load_config(path: Optional[Path] = None) -> SystemConfig:
     path = Path(path) if path else resolve_config_path()
-    with open(path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    return SystemConfig.model_validate(raw)
+    return SystemConfig.model_validate(_load_raw(path))
 
 
 @lru_cache(maxsize=1)
