@@ -1,0 +1,32 @@
+{
+  "session_id": "session_986d56e1053543e4a5567aeff3eb0b68",
+  "generated_at": "2026-08-29T03:12:17.199202+00:00",
+  "report": "report.md",
+  "figures": [],
+  "tables": [
+    "tables/generate_case_mols_0438de0dfb204e789d9952b17d572fe4.csv",
+    "tables/generate_case_mols_0f261e31a5374d3a8914b3a13905487b.csv",
+    "tables/generate_case_mols_5daff3ae71ba409a878397a25c35ca51.csv",
+    "tables/generate_case_mols_68335033c28f4b699526a1d2813fba10.csv",
+    "tables/generate_case_mols_76665aad343a434e8bdd956412b7f5ee.csv",
+    "tables/generate_case_mols_833fa10b653a4ee0a52e5692e68a04d1.csv",
+    "tables/generate_case_mols_8ac0689006df40bfa7ea6844667e41bf.csv",
+    "tables/generate_case_mols_a386df64c1f94e4e8028d56f440ce8f3.csv",
+    "tables/generate_case_mols_e3af6ebb64fc436d94ba98fe06320e2f.csv",
+    "tables/generate_case_mols_eac26577a22546edaa9d494dd32ce5cb.csv",
+    "tables/generate_case_mols_ff4932aed55d4781aa189a73b6ebe3f3.csv",
+    "tables/generate_mols_0d11309e94434ab2a0a8f4d7ea633567.csv",
+    "tables/generate_mols_64265a359e8f4b1e970ed919778d958e.csv",
+    "tables/generate_mols_7368751a7f4c47e2b94ade54d9892b48.csv",
+    "tables/generate_mols_7616ac63b1e44545a4656d0d7c0dfa84.csv",
+    "tables/generate_mols_7ba29487a887434882a9e3824626d51e.csv",
+    "tables/generate_mols_bfb205c315b14098b4671ac9199ab240.csv"
+  ],
+  "sections": [
+    "sections/tables.md"
+  ],
+  "latex": {
+    "mode": "skip",
+    "files": []
+  }
+}
