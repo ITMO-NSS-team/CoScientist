@@ -1259,23 +1259,16 @@
     }
 
     // Deleting a graph rewrites files on the server, so the confirmation names
-    // exactly what goes — in particular that the knowledge memory is shared by
-    // every session, not just the one currently open.
+    // exactly what goes.
     const GRAPH_DELETE_LABELS = {
       execution: "this session's execution graph",
       research: "this session's research graph",
-      memory: 'the GLOBAL knowledge memory (shared by every session)',
-      all: "this session's execution and research graphs AND the GLOBAL knowledge memory",
+      all: "this session's execution and research graphs",
     };
 
     function describeGraphDeletion(deleted) {
-      return Object.entries(deleted || {}).map(([name, info]) => {
-        if (info && info.error) return `${name} failed (${info.error})`;
-        if (name === 'memory') {
-          return `${name} (${info.entities || 0} entities, ${info.relations || 0} relations)`;
-        }
-        return name;
-      }).join(', ');
+      return Object.entries(deleted || {}).map(([name, info]) =>
+        info && info.error ? `${name} failed (${info.error})` : name).join(', ');
     }
 
     async function deleteGraphData() {
@@ -3279,7 +3272,7 @@
                 <label class="text-xs font-bold text-on-surface">Knowledge Graph</label>
                 <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Records the execution graph of every
                   run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span
-                    class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>).
+                    class="font-mono">get_agents_info</span>).
                   When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent
                   and from their prompts.</p>
               </div>
@@ -3308,9 +3301,8 @@
               <div class="flex flex-col">
                 <label class="text-xs font-bold text-on-surface">Delete Graph Data</label>
                 <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Wipe what the graphs have recorded.
-                  The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory
-                  is installation-wide and disappears for every session at once. The research graph and the knowledge
-                  memory are archived next to their files first; the execution graph keeps only the agent roster.</p>
+                  Both graphs belong to the <strong>current session</strong>. The research graph is archived next to
+                  its file first; the execution graph keeps only the agent roster.</p>
                 <div id="graph-delete-status" class="hidden text-[10px] font-mono mt-1.5"></div>
               </div>
               <div class="flex items-center gap-2 shrink-0">
@@ -3318,8 +3310,7 @@
                   class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 cursor-pointer">
                   <option value="execution">Execution (session)</option>
                   <option value="research">Research (session)</option>
-                  <option value="memory">Knowledge memory (global)</option>
-                  <option value="all">All of the above</option>
+                            <option value="all">All of the above</option>
                 </select>
                 <button id="graph-delete-btn" onclick="deleteGraphData()"
                   class="px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
@@ -3359,7 +3350,7 @@
                     — Knowledge Graph is off)</span>
                 </div>
                 <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner read the shared
-                  knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.</p>
+                  execution graph (history and agent roster) so it does not re-plan finished work.</p>
               </div>
               <input id="planner-graph-checkbox" type="checkbox" checked
                 class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />

@@ -74,7 +74,7 @@ TOOL_ACTIVITY_TRIM_SLACK = 200
 DATASET_URL_MAX_LENGTH = 2048
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
-GRAPH_DELETE_TARGETS = ("execution", "research", "memory")
+GRAPH_DELETE_TARGETS = ("execution", "research")
 
 
 def _validated_dataset_url(raw: Any) -> str:
@@ -1010,30 +1010,11 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.get("/api/knowledge")
-    async def api_global_knowledge():
-        """Return the installation-wide semantic Knowledge Memory."""
-        try:
-            from CoScientist.graph.memory_store import get_global_knowledge_memory
-            payload = get_global_knowledge_memory().full()
-            status_code = (
-                200 if payload.get("storage", {}).get("healthy") else 503
-            )
-            return JSONResponse(payload, status_code=status_code)
-        except Exception as exc:  # noqa: BLE001 - diagnostics must stay readable
-            return JSONResponse({
-                "scope": "global",
-                "nodes": [],
-                "edges": [],
-                "error": str(exc),
-            }, status_code=503)
-
     def graph_payload(user_id: str, session_id: str, view: str):
-        """Return scoped graphs; ``memory`` aliases the global knowledge graph."""
+        """Return the scoped research or execution graph for one session."""
         runtime.registry.require_session(user_id, session_id)
         try:
             from CoScientist.graph.memory import get_knowledge_graph
-            from CoScientist.graph.memory_store import get_knowledge_memory
             from CoScientist.graph.research.store import get_research_graph
 
             if view == "research":
@@ -1041,28 +1022,10 @@ def create_app() -> FastAPI:
                     user_id=user_id,
                     session_id=session_id,
                 ).to_view()
-            if view == "memory":
-                return get_knowledge_memory(
-                    user_id=user_id,
-                    session_id=session_id,
-                ).full()
-
-            execution = get_knowledge_graph(
+            return get_knowledge_graph(
                 user_id=user_id,
                 session_id=session_id,
             ).full()
-            if view == "knowledge":
-                from CoScientist.graph.knowledge import to_knowledge_graph
-                return to_knowledge_graph(
-                    execution,
-                    memory=get_knowledge_memory(
-                        user_id=user_id,
-                        session_id=session_id,
-                    ),
-                    user_id=user_id,
-                    session_id=session_id,
-                )
-            return execution
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 — never break the UI
@@ -1078,13 +1041,7 @@ def create_app() -> FastAPI:
             payload = graph_payload(user_id, session_id, view)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        status_code = (
-            503
-            if view == "memory"
-            and payload.get("storage", {}).get("healthy") is False
-            else 200
-        )
-        return JSONResponse(payload, status_code=status_code)
+        return JSONResponse(payload)
 
     @app.get("/api/users/{user_id}/sessions/{session_id}/graph.svg")
     async def api_session_graph_svg(user_id: str, session_id: str):
@@ -1160,17 +1117,6 @@ def create_app() -> FastAPI:
                         "cleared": True,
                         "archived": archived,
                     }
-                else:  # memory
-                    from CoScientist.graph.memory_store import (
-                        get_global_knowledge_memory,
-                    )
-                    result = get_global_knowledge_memory().clear()
-                    deleted[name] = {
-                        "scope": "global",
-                        "cleared": bool(result.get("persisted")),
-                        **result,
-                    }
-                    failed = failed or not result.get("persisted")
             except Exception as exc:  # noqa: BLE001 — report every target's fate
                 logging.getLogger("CoScientist.web").warning(
                     "Graph deletion failed for %s: %s", name, exc

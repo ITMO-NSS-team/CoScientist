@@ -285,21 +285,6 @@ _GRAPH_DOCS = (
         signature="get_agents_info()",
         purpose="Structured info about all agents in the system.",
     ),
-    ToolDoc(
-        name="search_knowledge_memory",
-        signature="search_knowledge_memory(query)",
-        purpose="Search globally accumulated facts relevant to a query.",
-    ),
-    ToolDoc(
-        name="get_entity_neighbors",
-        signature="get_entity_neighbors(entity)",
-        purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
-    ),
-    ToolDoc(
-        name="get_knowledge_memory",
-        signature="get_knowledge_memory()",
-        purpose="Global knowledge memory shared across users and sessions.",
-    ),
 )
 
 REGISTRY.register_tool(ToolEntry(
