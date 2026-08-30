@@ -25,7 +25,6 @@ run. Toggle with LOG_AGENT_EVENTS=0 (shared with the event logger).
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -35,26 +34,10 @@ from typing import Any, Optional
 from google.adk.plugins.base_plugin import BasePlugin
 
 from CoScientist.graph.memory import ROOT_ID, get_knowledge_graph
-from CoScientist.graph.memory_store import get_knowledge_memory
 from CoScientist.graph.session_scope import SessionKey, session_key
 
 _agent_names_cache: Optional[set] = None
 _composite_parents_cache: Optional[dict] = None
-
-# Fire-and-forget background tasks (semantic extraction, etc.). Held at module
-# level so they are not garbage-collected mid-flight; never awaited by the run
-# loop (full asynchrony), but drained when the Runner closes.
-_BG_TASKS: set = set()
-
-
-def _spawn_background(coro) -> None:
-    try:
-        task = asyncio.create_task(coro)
-        _BG_TASKS.add(task)
-        task.add_done_callback(_BG_TASKS.discard)
-    except Exception:  # noqa: BLE001 — no running loop / scheduling failure
-        pass
-
 
 def _agent_names() -> set:
     global _agent_names_cache
@@ -262,8 +245,13 @@ class GraphMemoryPlugin(BasePlugin):
         try:
             graph = get_knowledge_graph(invocation_context)
             nodes = {node["id"]: node for node in graph.full().get("nodes", [])}
-            goal = nodes.get(state.goal_id, {})
-            if goal.get("status") != "running":
+            # A sub-agent invocation never ran on_user_message_callback, so its
+            # goal_id is still the sentinel and no goal node exists. Returning on
+            # that basis left every delegated agent and its tools at "running"
+            # for good; only a goal that exists and is already closed means there
+            # is nothing left to finalise.
+            goal = nodes.get(state.goal_id)
+            if goal is not None and goal.get("status") != "running":
                 return
             now = time.time()
             active_ids = {
@@ -283,11 +271,8 @@ class GraphMemoryPlugin(BasePlugin):
             pass
 
     async def close(self) -> None:
-        """Drain best-effort semantic extraction before Runner shutdown."""
+        """Release per-run bookkeeping before Runner shutdown."""
         self._runs.clear()
-        pending = [task for task in list(_BG_TASKS) if not task.done()]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
         if not _enabled():
@@ -305,9 +290,13 @@ class GraphMemoryPlugin(BasePlugin):
                 # Delegation: connect the caller to the called agent's ONE stable
                 # node (agent:{name}); its own tool calls attach there too.
                 nid = self._agent_node_for(graph, state, tool.name)
+                # `input` is deliberately not written. It holds the agent's
+                # capability card from the roster, and overwriting it with one
+                # call's arguments broke get_agents_info and the detail panel;
+                # the arguments stay in the event log.
                 graph.add_node(
                     id=nid, kind="agent", label=tool.name, executor_agent=tool.name,
-                    status="running", input=_short(tool_args, 1000), t_start=time.time(),
+                    status="running", t_start=time.time(),
                 )
                 graph.add_edge(parent, nid, type="delegated_to")
             else:
@@ -328,9 +317,12 @@ class GraphMemoryPlugin(BasePlugin):
         try:
             graph = get_knowledge_graph(tool_context)
             state = self._state(tool_context)
-            nid = state.node_by_fcid.get(
-                getattr(tool_context, "function_call_id", None)
-            )
+            fcid = getattr(tool_context, "function_call_id", None)
+            nid = state.node_by_fcid.get(fcid)
+            if nid is None and tool.name in _agent_names():
+                # A delegation whose call id ADK did not supply: the node is the
+                # callee's stable one, so it closes without the map.
+                nid = f"agent:{tool.name}"
             if nid:
                 graph.set_status(
                     nid, status="failed" if _is_error(result) else "success",
@@ -388,73 +380,4 @@ class GraphMemoryPlugin(BasePlugin):
         except Exception:  # noqa: BLE001
             pass
 
-        # Semantic layer (Option B): extract domain entities/relations from the
-        # answer and accumulate them in global cross-run knowledge memory. It is
-        # enabled by default (KG_SEMANTIC_ENABLED=0 disables it); never fatal.
-        # FULLY ASYNC: the extraction LLM call is fired as a background task and
-        # NOT awaited here, so the run loop is never blocked waiting on it (on the
-        # web's persistent loop it lands moments after the answer). Mirrors the
-        # fire-and-forget pattern in graph/research/validator.py.
-        try:
-            from CoScientist.graph.semantic import semantic_enabled
-            if semantic_enabled():
-                inv = getattr(invocation_context, "invocation_id", "x")
-                user_id, session_id = session_key(invocation_context)
-                memory = get_knowledge_memory(invocation_context)
-                refs = {
-                    "run": inv,
-                    "goal_id": state.goal_id,
-                    "result_id": f"result:{inv}",
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "agent": self._root_name(state),
-                    "created_at": time.time(),
-                    # Extraction is immediately reusable, but it is not the
-                    # same thing as a validated Research Context Graph claim.
-                    "validation_status": "provisional",
-                }
-                try:
-                    from CoScientist.graph.research.store import get_research_graph
-                    research_id = get_research_graph(
-                        user_id=user_id,
-                        session_id=session_id,
-                    ).full().get("research_id")
-                    if research_id and research_id != "research":
-                        refs["research_id"] = research_id
-                except Exception:  # noqa: BLE001 - provenance is best-effort
-                    pass
-                _spawn_background(
-                    self._extract_semantic(
-                        text,
-                        state.goal_text,
-                        memory,
-                        refs,
-                    )
-                )
-        except Exception:  # noqa: BLE001
-            pass
         return None
-
-    async def _extract_semantic(
-        self,
-        text: str,
-        goal_text: str,
-        memory,
-        refs: dict[str, Any],
-    ) -> None:
-        """Background: extract domain entities/relations from the final answer and
-        accumulate them in the cross-run memory. Best-effort, never awaited by the
-        run loop."""
-        try:
-            from CoScientist.graph.semantic import extract
-            extraction = await extract(
-                text,
-                context=goal_text,
-                known_types=memory.known_types(),
-            )
-            memory.ingest(
-                extraction, source=_short(goal_text, 120),
-                refs=refs,
-            )
-        except Exception:  # noqa: BLE001
-            pass

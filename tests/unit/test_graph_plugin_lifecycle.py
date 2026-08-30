@@ -7,7 +7,6 @@ from google.genai import types
 
 from CoScientist.graph import plugin as plugin_module
 from CoScientist.graph.plugin import GraphMemoryPlugin
-from CoScientist.graph.semantic import Entity, Extraction, Relation
 from CoScientist.graph.session_scope import session_key
 
 
@@ -255,86 +254,3 @@ def test_run_without_final_response_is_marked_interrupted(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_semantic_ingest_records_public_session_and_research_provenance(monkeypatch):
-    class RecordingMemory:
-        def __init__(self):
-            self.ingests = []
-
-        def known_types(self):
-            return set(), set()
-
-        def ingest(self, extraction, *, source, refs):
-            self.ingests.append((extraction, source, refs))
-
-    async def scenario():
-        _install_graph_resolver(monkeypatch)
-        monkeypatch.setenv("KG_SEMANTIC_ENABLED", "1")
-        memory = RecordingMemory()
-        monkeypatch.setattr(
-            plugin_module,
-            "get_knowledge_memory",
-            lambda _context: memory,
-        )
-
-        pending = []
-        monkeypatch.setattr(plugin_module, "_spawn_background", pending.append)
-
-        from CoScientist.graph import semantic as semantic_module
-        from CoScientist.graph.research import store as research_store
-
-        async def fake_extract(_text, *, context, known_types):
-            assert context == "Investigate scoped provenance"
-            assert known_types == (set(), set())
-            return Extraction(
-                entities=[
-                    Entity(key="molecule:a", type="molecule", name="A"),
-                    Entity(key="target:b", type="target", name="B"),
-                ],
-                relations=[
-                    Relation(src="molecule:a", dst="target:b", type="inhibits"),
-                ],
-            )
-
-        monkeypatch.setattr(semantic_module, "extract", fake_extract)
-        monkeypatch.setattr(
-            research_store,
-            "get_research_graph",
-            lambda **_scope: SimpleNamespace(
-                full=lambda: {"research_id": "research-42"}
-            ),
-        )
-
-        plugin = GraphMemoryPlugin()
-        invocation, _tool_context = _contexts(
-            user_id="user-public",
-            session_id="session-public",
-            invocation_id="inv-public",
-        )
-        await plugin.on_user_message_callback(
-            invocation_context=invocation,
-            user_message=types.Content(
-                role="user",
-                parts=[types.Part(text="Investigate scoped provenance")],
-            ),
-        )
-        await plugin.on_event_callback(
-            invocation_context=invocation,
-            event=_final_event("A inhibits B."),
-        )
-        assert len(pending) == 1
-        await pending.pop()
-
-        assert len(memory.ingests) == 1
-        _extraction, source, refs = memory.ingests[0]
-        assert source == "Investigate scoped provenance"
-        assert refs["user_id"] == "user-public"
-        assert refs["session_id"] == "session-public"
-        assert refs["research_id"] == "research-42"
-        assert refs["run"] == "inv-public"
-        assert refs["goal_id"] == "goal:inv-public"
-        assert refs["result_id"] == "result:inv-public"
-        assert refs["agent"] == "OrchestratorAgent"
-        assert refs["validation_status"] == "provisional"
-        assert isinstance(refs["created_at"], float)
-
-    asyncio.run(scenario())

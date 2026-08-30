@@ -94,8 +94,6 @@
         <option value="research">research</option>
         <option value="slide">research · slide</option>
         <option value="execution">execution log</option>
-        <option value="knowledge">knowledge (this session)</option>
-        <option value="memory">knowledge memory</option>
       </select>
     </label>
     <label id="provWrap"><input type="checkbox" id="prov" /> provenance</label>
@@ -171,24 +169,19 @@
       ? m.split('').map(x=>parseInt(x+x,16)) : [0,2,4].map(i=>parseInt(m.slice(i,i+2),16));
       return `rgba(${v[0]},${v[1]},${v[2]},${a})`; }
 
-    // ── execution / memory views (unchanged classic styling) ──────────────────
+    // ── execution view styling ────────────────────────────────────────────────
     const STATUS_COLOR = { running:"#f1c40f", success:"#22c55e", failed:"#ef4444", interrupted:"#e67e22", pruned:"#64748b" };
-    const IDENTITY_COLOR = { system:"#f4c542", agent:"#7eb6ff", question:"#f59e0b", fact:"#f6c453",
-      hypothesis:"#a78bfa", finding:"#22c55e", method:"#14b8a6" };
+    // Identity fills the node; status rings it. Colouring agents by identity
+    // alone made a stuck "running" agent look exactly like a finished one, so
+    // the only nodes that showed progress were goals and tool calls.
+    const IDENTITY_COLOR = { system:"#f4c542", agent:"#7eb6ff" };
     const SHAPE = { system:"hexagon", agent:"dot", goal:"diamond", agent_call:"ellipse",
-      tool_call:"box", result:"star", question:"diamond", fact:"box", finding:"star" };
-    const ENTITY_COLOR = { target:"#ec4899", molecule:"#06b6d4", metric:"#f59e0b", property:"#fb7185",
-      paper:"#60a5fa", hypothesis:"#a78bfa", method:"#14b8a6", dataset:"#a78bfa", finding:"#22c55e",
-      gene:"#fde68a", organism:"#34d399" };
-    const ENTITY_SHAPE = { target:"star", molecule:"dot", metric:"triangle", paper:"box",
-      hypothesis:"ellipse", method:"box", dataset:"database" };
-    const etype = n => (n.semantic && n.semantic.type) || "entity";
-    function hashColor(s){ let h=0; s=s||"x"; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
-      const c=v=>(120+(v&0x5F)).toString(16).padStart(2,"0"); return "#"+c(h)+c(h>>6)+c(h>>12); }
-    const colorOf = n => n.kind==="entity" ? (ENTITY_COLOR[etype(n)]||hashColor(etype(n)))
-      : (IDENTITY_COLOR[n.kind]||STATUS_COLOR[n.status]||"#cbd5e1");
-    const shapeOf = n => n.kind==="entity" ? (ENTITY_SHAPE[etype(n)]||"dot") : (SHAPE[n.kind]||"box");
-    const labelOf = n => String(((["tool_call","result","goal","entity","fact","question"].includes(n.kind))
+      tool_call:"box", result:"star" };
+    const statusColor = n => STATUS_COLOR[n.status] || "#cbd5e1";
+    const colorOf = n => IDENTITY_COLOR[n.kind] || statusColor(n);
+    const borderOf = n => IDENTITY_COLOR[n.kind] ? statusColor(n) : "#20232a";
+    const shapeOf = n => SHAPE[n.kind] || "box";
+    const labelOf = n => String(((["tool_call","result","goal"].includes(n.kind))
       ? n.label : (n.executor_agent||n.label)) || n.id || "").slice(0,40);
 
     const isResearch = () => document.getElementById("view").value === "research";
@@ -319,7 +312,7 @@
             const isRoot = n.kind === "system";
             const isAgent = n.kind === "agent" || n.kind === "agent_call";
             const node = { id:n.id, title:titleOf(n), label:labelOf(n), shape:shapeOf(n),
-              color:{ background: colorOf(n), border:"#20232a" },
+              color:{ background: colorOf(n), border: borderOf(n) }, borderWidth: 3,
               font:{ color:"#e8eaed", size: isRoot?18:(isAgent?15:12), strokeWidth:3, strokeColor:"#14161a" } };
             if (isRoot) { node.size = 34; node.borderWidth = 3; node.font.color = "#ffffff"; node.mass = 4;
               node.color.border = "#38bdf8"; }
