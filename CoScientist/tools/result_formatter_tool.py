@@ -14,6 +14,7 @@ from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
 from CoScientist.config.report import ReportConfig
+from CoScientist.graph.session_scope import session_key
 from CoScientist.reporting.collect import collect_artifacts
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
         state=state,
         reports_root=cfg.reports_root,
         graph_nodes=_graph_nodes(tool_context),
+        # The capture plugin writes the index under the same scope the graph
+        # uses, which is the public web session even inside an AgentTool child.
+        index_key=session_key(tool_context),
     )
     logger.info(
         "format_results: session=%s figures=%d tables=%d",

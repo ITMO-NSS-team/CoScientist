@@ -37,6 +37,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 from CoScientist.graph.memory import ROOT_ID, get_knowledge_graph
 from CoScientist.graph.memory_store import get_knowledge_memory
 from CoScientist.graph.session_scope import SessionKey, session_key
+from CoScientist.utils.s3_refs import find_s3_uris
 
 _agent_names_cache: Optional[set] = None
 _composite_parents_cache: Optional[dict] = None
@@ -96,7 +97,14 @@ def _enabled() -> bool:
     return value not in ("0", "false", "False")
 
 
-def _short(value: Any, limit: int = 300) -> str:
+def _short(value: Any, limit: int = 2000) -> str:
+    """Trim a value for display on a node.
+
+    The limit used to be 300. A tool result carries its file references near the
+    end, so the old cut removed the very thing a reader opens the node for. The
+    references now live in their own fields, and this string stays long enough
+    to read the call.
+    """
     s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return s if len(s) <= limit else s[:limit] + "…"
 
@@ -301,7 +309,8 @@ class GraphMemoryPlugin(BasePlugin):
                 nid = f"{state.goal_id}::tool:{fcid}"
                 graph.add_node(
                     id=nid, kind="tool_call", label=tool.name, executor_agent=agent,
-                    status="running", parent_ids=[parent], input=_short(tool_args), t_start=time.time(),
+                    status="running", parent_ids=[parent], input=_short(tool_args),
+                    input_files=find_s3_uris(tool_args), t_start=time.time(),
                 )
                 graph.add_edge(parent, nid, type="caused_by")
             state.node_by_fcid[fcid] = nid
@@ -321,7 +330,9 @@ class GraphMemoryPlugin(BasePlugin):
             if nid:
                 graph.set_status(
                     nid, status="failed" if _is_error(result) else "success",
-                    output=_short(result, 400), t_end=time.time(),
+                    output=_short(result, 4000),
+                    output_files=find_s3_uris(result),
+                    t_end=time.time(),
                 )
         except Exception:  # noqa: BLE001
             pass
