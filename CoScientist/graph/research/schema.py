@@ -57,6 +57,9 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             "formulation": "the testable statement",
             "rationale": "why it is plausible",
             "priority": "verification priority (e.g. 1..5 or high/medium/low)",
+            "not_tested_reason": "why this hypothesis was left untested — set it "
+                                 "instead of verifying, when a verdict already "
+                                 "obtained makes the test unnecessary",
         },
     ),
     NodeTypeSpec(

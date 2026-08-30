@@ -43,14 +43,21 @@ def _agent(tool_context: Optional[ToolContext]) -> str:
     return getattr(tool_context, "agent_name", None) or "unknown"
 
 
-def _recent_tool_calls(agent: str, limit: int = 6) -> List[Dict[str, Any]]:
+def _recent_tool_calls(tool_context: Any, agent: str,
+                       limit: int = 6) -> List[Dict[str, Any]]:
     """The calling agent's most recent EXECUTION tool calls (from the execution
     graph) — the concrete `tavily_search` / `execute_bash` / MCP calls that
     produced the finding. Attached to Evidence as provenance so every piece of
-    evidence is traceable back to the exact call + result that yielded it."""
+    evidence is traceable back to the exact call + result that yielded it.
+
+    The graph must be the session-scoped one. Reading the module-level default
+    instead took the ids from a different, usually empty graph, so every
+    recorded `exec_id` pointed at a node the execution view does not contain and
+    the provenance link in the UI could never resolve.
+    """
     try:
-        from CoScientist.graph.memory import knowledge_graph
-        hist = knowledge_graph.history(limit=60)
+        from CoScientist.graph.memory import get_knowledge_graph
+        hist = get_knowledge_graph(tool_context).history(limit=60)
     except Exception:  # noqa: BLE001
         return []
     calls = [h for h in hist
@@ -89,7 +96,8 @@ def _as_op_list(value: Any, field: str) -> Optional[List[Dict[str, Any]]]:
     return value
 
 
-def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str) -> Optional[List[Dict[str, Any]]]:
+def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str,
+                       tool_context: Any = None) -> Optional[List[Dict[str, Any]]]:
     """Stamp each newly-created Evidence node with the producing tool calls."""
     if not nodes:
         return nodes
@@ -102,7 +110,7 @@ def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str) -> Opt
             attrs = dict(n.get("attrs") or {})
             if "_provenance" not in attrs:
                 if prov is None:
-                    prov = _recent_tool_calls(agent)
+                    prov = _recent_tool_calls(tool_context, agent)
                 if prov:
                     attrs["_provenance"] = prov
             n["attrs"] = attrs
@@ -263,7 +271,8 @@ class ResearchGraphToolset(BaseToolset):
             research_graph = get_research_graph(tool_context)
             agent = _agent(tool_context)
             result = research_graph.commit(
-                source=agent, nodes=_attach_provenance(nodes, agent), edges=edges,
+                source=agent, nodes=_attach_provenance(nodes, agent, tool_context),
+                edges=edges,
                 status_updates=status_updates, autolink_focus=focus,
             )
         except Exception as exc:  # noqa: BLE001 — a bad payload must not end the run

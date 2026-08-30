@@ -307,6 +307,57 @@ def unresolved_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[st
     return {"items": items, "rendered": "\n".join(lines)}
 
 
+def study_open(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """Whether the study may be called finished — as a graph condition.
+
+    A run used to end whenever the orchestrator judged it had answered enough.
+    The backlog was rendered as advice only, so a first confirmed hypothesis
+    ended the study with its alternatives never tested and never explicitly
+    dropped: the reviewers' objection was that nothing recorded *why* they were
+    not tested.
+
+    The condition is now computable. The study is open while any hypothesis
+    carries neither a verdict nor a recorded reason for being set aside, and it
+    offers exactly two ways to settle each one: verify it, or record
+    `attrs.not_tested_reason` stating why the verdict already obtained makes
+    testing it unnecessary. Either is a write to the graph, so the decision is
+    auditable instead of being a silence.
+
+    `postponed_reason` deliberately does not count. The store writes that itself
+    when it files the alternatives of one commit as a backlog, so accepting it
+    here would mark every hypothesis settled the moment it was created.
+    """
+    g = _graph(store).full_graph()
+    settled, unsettled = [], []
+    for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order):
+        status = _status(g, h)
+        attrs = g.nodes[h].get("attrs") or {}
+        reason = str(attrs.get("not_tested_reason") or "").strip()
+        if status in ("confirmed", "refuted"):
+            settled.append({"hypothesis": h, "status": status})
+        elif reason:
+            settled.append({"hypothesis": h, "status": "not tested", "reason": reason})
+        else:
+            unsettled.append({"hypothesis": h, "label": _label(g, h), "status": status})
+
+    verdicts = [i for i in settled if i["status"] in ("confirmed", "refuted")]
+    rendered = ""
+    if unsettled and verdicts:
+        rendered = (
+            "STUDY NOT FINISHED: "
+            + ", ".join(f"{i['hypothesis']} \"{i['label']}\" ({i['status']})"
+                        for i in unsettled)
+            + " still carry no verdict while "
+            + ", ".join(i["hypothesis"] for i in verdicts)
+            + " already has one. Do NOT report the study as complete. For each, "
+              "either revive it (postponed→formulated) and verify it next, or "
+              "commit attrs.not_tested_reason saying why the verdict already "
+              "obtained makes testing it unnecessary."
+        )
+    return {"items": unsettled, "settled": settled,
+            "open": bool(unsettled), "rendered": rendered}
+
+
 def progress(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
     g = _graph(store).full_graph()
     counts: Dict[str, Dict[str, int]] = {}
@@ -447,6 +498,7 @@ TRIGGERS = {
     "refuting_evidence": refuting_evidence,
     "unresolved_hypotheses": unresolved_hypotheses,
     "closable_hypotheses": closable_hypotheses,
+    "study_open": study_open,
     "pending_conclusions": pending_conclusions,
     "missing_tools": missing_tools,
     "resources_low": resources_low,
