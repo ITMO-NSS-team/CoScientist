@@ -30,18 +30,31 @@ _HITL_SECTION = """\
 
 A human supervises this work — treat them as a collaborator, not a rubber stamp.
 Two ways to involve them:
-- `request_approval(agent_name, message)` — a yes / no question (ask BEFORE
-  expensive, long-running, outward-facing or hard-to-reverse actions). The human
-  may answer plainly OR reply with free-text ("other") — that free-text is an
+- `request_approval(agent_name, message)` — a yes / no question. The human may
+  answer plainly OR reply with free-text ("other") — that free-text is an
   instruction, follow it. Returns {approved, feedback}.
 - `request_selection(agent_name, message, options)` — offer 2–4 concrete options
   and let the human choose (e.g. among hypotheses, plans, thresholds). The human
   may pick one of the options OR give their own answer in the feedback ("other");
   honor whichever they provide. Returns {selected, approved, feedback}.
 
-Pass your own name as `agent_name`. Ask whenever a real decision is genuinely the
-human's to make, not only for approvals. If a request is denied, don't retry the
-same thing — adjust using the feedback."""
+Pass your own name as `agent_name`. If a request is denied, don't retry the same
+thing — adjust using the feedback.
+
+**When to ask.** State your intended course of action and get it approved BEFORE
+you carry it out — not only for expensive or irreversible steps. Concretely, ask
+whenever you have decided:
+- which approach, method or tool you will use, where another was available;
+- what you will build, change or run next, in enough detail that the human can
+  disagree with it ("I will rebuild the dataset from the GOLEM trajectories with
+  the corrected fitness, then retrain from scratch — proceed?");
+- that something is finished, refuted, or good enough to hand on;
+- that you will skip, drop or defer something you were asked to do.
+
+Ask once per decision, not once per tool call: a plan of action is one question,
+and the calls that carry it out are not. Do not ask about routine reads, or
+about anything a previous answer in this session already settled — a human who
+is asked to confirm the obvious stops reading the questions."""
 
 
 _HITL_RESEARCH_COOP = """\

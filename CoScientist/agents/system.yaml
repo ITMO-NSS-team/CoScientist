@@ -254,6 +254,8 @@ agents:
       after_tool: [log_research_tool_calls]
       after_model: [guard_unknown_tools]
     hitl: true
+    # Every agent asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     a2a:
       key: research
       port: 8003
@@ -264,6 +266,8 @@ agents:
         tags: [research, literature, web-search, knowledge]
 
   TaskExecutorAgent:
+    # Asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     class: llm
     description: >-
       executes tasks: routes each one to the path that can actually deliver it —
@@ -350,6 +354,8 @@ agents:
       # corrective message instead of letting ADK crash the whole run.
       after_model: [guard_unknown_tools]
     hitl: true
+    # Every agent asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     a2a:
       key: coder
       port: 8006
@@ -372,6 +378,8 @@ agents:
   # data it downloads lands where the coder builds on it. Not exposed over A2A:
   # it is reached only through CoderAgent.
   DatasetCollectorAgent:
+    # Asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     class: llm
     model: coder
     description: >-
@@ -413,6 +421,8 @@ agents:
       before_agent: [before_get_task, inject_research_context]
       before_model: [inject_medical_artifacts]
       after_model: [guard_unknown_tools]
+    # Every agent asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     a2a:
       key: medical
       port: 8005
@@ -423,6 +433,8 @@ agents:
         tags: [medical, pubmed, dicom, clinical]
 
   McpBuilderAgent:
+    # Asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     class: llm
     description: >-
       builds a validated MCP tool server from a scientific GitHub repository
@@ -516,6 +528,8 @@ agents:
     description: Agent to deploy found web mcp servers
 
   ExperimentAgent:
+    # Asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     class: llm
     description: >-
       Runs computational/experimental sub-tasks by directly using the
@@ -538,6 +552,8 @@ agents:
   # so the agent, its prompt and the `fedot` tool stay available; re-enable by
   # setting enabled: true and making it (instead of ExperimentAgent) the child.
   FedotAgent:
+    # Asks before acting on a decision; inert until HITL__ENABLED.
+    hitl: true
     class: llm
     enabled: false
     description: Agent to invoke FEDOT.MAS for solving given task. Uses MCP tools
