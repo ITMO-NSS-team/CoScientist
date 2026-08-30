@@ -1,0 +1,4 @@
+Molecules,QED,Synthetic Accessibility,PAINS,SureChEMBL,Glaxo,Brenk,BBB,IC50
+Cc1ccc(S(=O)(=O)Nc2cccc(C(=O)N3CCCCCC3)c2)cc1,0.89,1.79,0,0,0,0,1,0
+Nc1ccc2ccccc2c1C1CCCCCC1,0.56,1.95,0,1,0,1,1,1
+O=C(c1cccc(F)c1)N1CCc2ccc(F)cc2C1,0.78,1.86,0,0,0,0,1,1

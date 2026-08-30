@@ -1,0 +1,3 @@
+Smiles,Brenk,QED,Synthetic Accessibility,LogP,Polar Surface Area,H-bond Donors,H-bond Acceptors,Rotatable Bonds,Aromatic Rings,Glaxo,SureChEMBL,PAINS,Validity,Duplicates
+CC1=Cc2ccc(C)cc2C1C(=O)NCCSc1ccc(F)cc1,1,0.6387404129499623,2.9951046531899195,4.543120000000004,29.1,1,2,5,2,0,0,0,1.0,0.0
+Cc1ccc(NC(=O)Nc2ccc(-c3c(C)noc3C)cc2)cc1,0,0.7199040602433403,1.8738321252569854,4.910860000000003,67.16,2,3,3,3,0,0,0,1.0,0.0
