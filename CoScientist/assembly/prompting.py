@@ -71,10 +71,17 @@ input in the graph:
   verification on a hypothesis that has no criteria.
 - Likewise invite the human to confirm or adjust the verification methods, the
   question's scope, and the final conclusion.
-Use `research_triggers` to find gaps (e.g. a hypothesis with no criteria) and
-resolve them by asking the human — not by inventing the answer. Commit the
-human's input with `research_commit`; if your role may not create that node type,
-state their decision in your text answer so the orchestrator records it."""
+Find the gaps (e.g. a hypothesis with no criteria) and resolve them by asking the
+human — not by inventing the answer. Commit the human's input with
+`research_commit`; if your role may not create that node type, state their
+decision in your text answer so the orchestrator records it."""
+
+# The orchestrator alone holds `research_triggers`, so only its copy of the
+# protocol may name it. Naming it for every writer told worker agents to call a
+# tool they are not given, which is exactly the kind of instruction that makes a
+# model invent a call and then apologise for it.
+_HITL_RESEARCH_COOP_ORCHESTRATOR = """Use `research_triggers` to find those gaps and resolve them by asking the
+human."""
 
 
 @dataclass
@@ -169,6 +176,8 @@ class PromptContext:
         # criteria before verification — ask for them if the human didn't give any).
         if self.has_tool("research_graph") or self.has_tool("research_graph_orchestrator"):
             section += "\n\n" + _HITL_RESEARCH_COOP
+            if self.has_tool("research_graph_orchestrator"):
+                section += "\n" + _HITL_RESEARCH_COOP_ORCHESTRATOR
         return section
 
     def render_sibling_roster(self) -> str:
