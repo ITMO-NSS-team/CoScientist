@@ -35,8 +35,7 @@ async def run_example():
         # 2. Upload with a plain HTTP PUT. No custom headers.
         print("[*] Uploading...")
         async with httpx.AsyncClient() as http:
-            resp = await http.put(up["upload_url"], content=content,
-                                  headers={"Content-Type": "application/octet-stream"})
+            resp = await http.put(up["upload_url"], content=content)
             if resp.status_code != 200:
                 print(f"[!] Upload failed: {resp.status_code}\n{resp.text}")
                 return

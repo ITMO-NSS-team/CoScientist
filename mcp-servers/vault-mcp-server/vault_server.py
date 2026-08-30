@@ -144,7 +144,9 @@ def get_upload_link(user_id: str, session_id: str, filename: str, feature: Optio
         expires_in = min(EPHEMERAL_TTL_SECONDS, SIGV4_MAX_EXPIRES)
         upload_url = signing_client.generate_presigned_url(
             ClientMethod='put_object',
-            Params={'Bucket': BUCKET_NAME, 'Key': key, 'ContentType': 'application/octet-stream'},
+            # Do not sign a content type. It would join X-Amz-SignedHeaders, and
+            # then a PUT without that exact header fails with SignatureDoesNotMatch.
+            Params={'Bucket': BUCKET_NAME, 'Key': key},
             ExpiresIn=expires_in,
         )
         return _contract(key, upload_url, expires_in, url_field='upload_url')

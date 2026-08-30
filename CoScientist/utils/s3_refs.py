@@ -22,7 +22,9 @@ from typing import Any, Dict, List, Optional
 
 # Matches an s3://bucket/key string already embedded in a payload. The dataset
 # collection server returns this form directly.
-_S3_URI_RE = re.compile(r"s3://[a-zA-Z0-9][a-zA-Z0-9.\-_]{1,254}/[^\s\"'<>,\]}]+")
+# The key stops at whitespace, a quote, or a bracket. A trailing period is
+# sentence punctuation far more often than the last character of a key.
+_S3_URI_RE = re.compile(r"s3://[a-zA-Z0-9][a-zA-Z0-9.\-_]{1,254}/[^\s\"'<>,\]}]*[^\s\"'<>,.\]}]")
 
 # A node records the files a call touched, not a file listing. A tool that
 # returns hundreds of keys is a listing, and the graph is the wrong place for it.

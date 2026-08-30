@@ -97,13 +97,16 @@ def _enabled() -> bool:
     return value not in ("0", "false", "False")
 
 
-def _short(value: Any, limit: int = 2000) -> str:
+def _short(value: Any, limit: int = 800) -> str:
     """Trim a value for display on a node.
 
-    The limit used to be 300. A tool result carries its file references near the
-    end, so the old cut removed the very thing a reader opens the node for. The
-    references now live in their own fields, and this string stays long enough
-    to read the call.
+    The limit used to be 300, which cut a tool result before its file
+    references. Those references now travel in ``input_files`` and
+    ``output_files``, so this string only has to stay readable.
+
+    Keep it short. GraphStore rewrites the whole graph JSON on every node, edge,
+    and status change, so each character here is paid a few hundred times per
+    run, inside the lock.
     """
     s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return s if len(s) <= limit else s[:limit] + "…"
@@ -330,7 +333,7 @@ class GraphMemoryPlugin(BasePlugin):
             if nid:
                 graph.set_status(
                     nid, status="failed" if _is_error(result) else "success",
-                    output=_short(result, 4000),
+                    output=_short(result, 1500),
                     output_files=find_s3_uris(result),
                     t_end=time.time(),
                 )

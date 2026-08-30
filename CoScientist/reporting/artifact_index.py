@@ -45,7 +45,7 @@ def index_path(key: SessionKey) -> Path:
 def _entry_id(entry: Dict[str, Any]) -> str:
     """What makes two entries the same artifact. The durable reference when the
     entry has one, so re-capturing the same object under a fresh presigned URL
-    does not add a duplicate."""
+    updates that entry instead of adding a duplicate."""
     bucket, key = entry.get("bucket"), entry.get("s3_key")
     if bucket and key:
         return f"s3://{bucket}/{key}"
@@ -96,16 +96,26 @@ def record(entries: List[Dict[str, Any]], context: Any = None, *,
         path.parent.mkdir(parents=True, exist_ok=True)
 
         merged = load(key[1], key[0])
-        seen = {_entry_id(e) for e in merged}
-        added = 0
+        known = {_entry_id(e): e for e in merged if _entry_id(e)}
+        added = changed = 0
         for entry in entries:
             eid = _entry_id(entry)
-            if not eid or eid in seen:
+            if not eid:
                 continue
-            seen.add(eid)
-            merged.append(entry)
-            added += 1
-        if not added:
+            previous = known.get(eid)
+            if previous is None:
+                known[eid] = entry
+                merged.append(entry)
+                added += 1
+                continue
+            # The same object, captured again under a fresh presigned URL. Keep
+            # the newer URL. The stored one is older and expires first, and the
+            # report downloads with whatever sits here, maybe an hour later.
+            url = entry.get("url")
+            if url and url != previous.get("url"):
+                previous["url"] = url
+                changed += 1
+        if not added and not changed:
             return
 
         payload = json.dumps({"artifacts": merged}, ensure_ascii=False, indent=2)
@@ -119,7 +129,10 @@ def record(entries: List[Dict[str, Any]], context: Any = None, *,
         except Exception:
             Path(tmp).unlink(missing_ok=True)
             raise
-        logger.info("artifact index: +%d entry(ies) -> %s (%d total)", added, path, len(merged))
+        logger.info(
+            "artifact index: +%d new, %d refreshed -> %s (%d total)",
+            added, changed, path, len(merged),
+        )
     except Exception as exc:  # noqa: BLE001 — capture must never break a tool call
         logger.warning("artifact index: cannot record (%s)", exc)
 

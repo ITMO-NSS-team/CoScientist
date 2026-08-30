@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp")
 _TABLE_EXTS = (".csv", ".tsv")
+# Source material a tool pulled in, not a result the run produced. The papers
+# search server uploads every PDF it downloads and returns a link to each one.
+# The report shows figures and tables, so these only add noise to it.
+_SOURCE_EXTS = (".pdf", ".doc", ".docx", ".zip", ".tar", ".gz")
 _MAX_TABLE_ROWS = 15
 
 # Workspace scan guards: dependency/VCS/cache dirs that carry bundled example
@@ -231,15 +235,18 @@ def collect_artifacts(
     unresolved = 0
     for art in artifact_lists:
         url = art.get("url")
+        # A durable reference whose cached URL is gone or dead. It needs the
+        # vault get_download_link to become a file again, which is the next
+        # branch. Count it, so the gap shows up in the log.
         if not url:
-            # A durable reference whose cached URL has gone. It needs the vault
-            # get_download_link to become a file again, which is the next branch.
             if art.get("s3_key"):
                 unresolved += 1
             continue
         if url in seen_urls:
             continue
         seen_urls.add(url)
+        if _looks_like(url, _SOURCE_EXTS):
+            continue
         label = art.get("tool") or art.get("name") or "artifact"
         if _looks_like(url, _IMAGE_EXTS):
             name = f"{label}_{_url_filename(url, '.png')}"
@@ -247,6 +254,8 @@ def collect_artifacts(
             if _download(url, dest):
                 figures.append(str(dest))
                 figure_blocks.append(f"### {label}\n\n![{label}](figures/{name})")
+            elif art.get("s3_key"):
+                unresolved += 1
         else:  # default remote artifacts to tabular
             name = f"{label}_{_url_filename(url, '.csv')}"
             dest = tables_dir / name
@@ -255,6 +264,8 @@ def collect_artifacts(
                 md = _table_to_markdown(dest)
                 head = f"### {label} — [download]({_rel(dest, report_dir)})"
                 table_blocks.append(f"{head}\n\n{md}" if md else head)
+            elif art.get("s3_key"):
+                unresolved += 1
 
     # 2) Files the run itself LEFT in the sandbox workspace. Prune vendored trees
     #    aggressively: a coder step may `git clone` a whole library (e.g. the RDKit

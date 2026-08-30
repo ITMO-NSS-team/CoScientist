@@ -39,10 +39,10 @@ def _agent_names() -> set:
 _RUN_ID_STATE_KEY = "deg_run_id"
 
 
-def _short(value: Any, limit: int = 2000) -> str:
+def _short(value: Any, limit: int = 800) -> str:
     """Trim a value for display. See the note on the same helper in plugin.py:
     the old 300-character cut removed the file references at the end of a result.
-    The references now travel in their own fields."""
+    The references now travel in their own fields, so this stays modest."""
     s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return s if len(s) <= limit else s[:limit] + "…"
 
@@ -106,7 +106,7 @@ class GraphEmitterPlugin(BasePlugin):
         await client.set_status(
             run_id=run_id, node_id=f"{run_id}:{fcid}",
             status="failed" if _is_error(result) else "success",
-            output=_short(result, 4000), output_files=find_s3_uris(result),
+            output=_short(result, 1500), output_files=find_s3_uris(result),
             t_end=time.time(),
         )
         return None
