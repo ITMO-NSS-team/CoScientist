@@ -219,7 +219,7 @@ class GraphMemoryPlugin(BasePlugin):
         try:
             graph = get_knowledge_graph(invocation_context)
             graph.add_node(
-                id=state.goal_id, kind="goal", label=_short(_content_text(user_message), 200),
+                id=state.goal_id, kind="goal", turn_id=inv, label=_short(_content_text(user_message), 200),
                 status="running", parent_ids=[ROOT_ID], t_start=time.time(),
             )
             graph.add_edge(ROOT_ID, state.goal_id, type="caused_by")
@@ -302,8 +302,9 @@ class GraphMemoryPlugin(BasePlugin):
             else:
                 nid = f"tool:{fcid}"
                 graph.add_node(
-                    id=nid, kind="tool_call", label=tool.name, executor_agent=agent,
-                    status="running", parent_ids=[parent], input=_short(tool_args), t_start=time.time(),
+                    id=nid, kind="tool_call", turn_id=self._invocation_id(tool_context),
+                    label=tool.name, executor_agent=agent, status="running",
+                    parent_ids=[parent], input=_short(tool_args), t_start=time.time(),
                 )
                 graph.add_edge(parent, nid, type="caused_by")
             state.node_by_fcid[fcid] = nid
@@ -367,9 +368,10 @@ class GraphMemoryPlugin(BasePlugin):
                 state,
                 self._root_name(state),
             )
-            rid = f"result:{getattr(invocation_context, 'invocation_id', 'x')}"
+            inv = getattr(invocation_context, "invocation_id", "x")
+            rid = f"result:{inv}"
             graph.add_node(
-                id=rid, kind="result", label=_short(text, 200),
+                id=rid, kind="result", turn_id=inv, label=_short(text, 200),
                 executor_agent=self._root_name(state), status="success",
                 parent_ids=[parent], output=_short(text, 600),
                 t_start=time.time(), t_end=time.time(),

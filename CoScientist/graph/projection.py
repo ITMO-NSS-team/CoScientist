@@ -5,7 +5,7 @@ context — reproducibility is an evaluation metric. See docs/execution_graph.md
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 _MAX_ITEMS = 12
 _LABEL = 200
@@ -80,3 +80,71 @@ def local_view(full: dict, node_id: str) -> str:
         return ""
     path = "\n".join(f"{'  ' * i}↳ {_node_line(n)}" for i, n in enumerate(chain))
     return "REASONING PATH that led to this task (top → here):\n" + path
+
+
+def turns(full: Dict[str, Any]) -> Dict[str, Any]:
+    """The session's execution graph as a chronological list of turns.
+
+    The call graph answers "what is connected to what". It cannot answer "what
+    happened, in what order", because agent nodes are one per agent for the
+    whole session, so every turn's calls hang off the same few nodes and the
+    layout is force-directed with no time axis at all.
+
+    This regroups the same records by the prompt that caused them and sorts each
+    group by start time, which is the shape a trace viewer needs: one entry per
+    user request, and under it every call with its agent, its arguments, its
+    result and its duration.
+
+    Turn membership comes from ``turn_id``. Nodes recorded before that field
+    existed fall back to the goal id embedded in their own id, and anything with
+    neither lands in a single "untagged" turn rather than being dropped.
+    """
+    nodes = {n["id"]: n for n in full.get("nodes", [])}
+    order = {"goal": 0, "tool_call": 1, "result": 2}
+
+    def turn_of(node: Dict[str, Any]) -> Optional[str]:
+        if node.get("turn_id"):
+            return node["turn_id"]
+        nid = str(node.get("id", ""))
+        for prefix in ("goal:", "result:"):
+            if nid.startswith(prefix):
+                return nid[len(prefix):]
+        return None
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for node in nodes.values():
+        if node.get("kind") not in order:
+            continue
+        grouped.setdefault(turn_of(node) or "untagged", []).append(node)
+
+    out = []
+    for turn_id, members in grouped.items():
+        members.sort(key=lambda n: (n.get("t_start") or 0.0, order[n["kind"]]))
+        goal = next((m for m in members if m["kind"] == "goal"), None)
+        result = next((m for m in members if m["kind"] == "result"), None)
+        calls = [m for m in members if m["kind"] == "tool_call"]
+        started = min((m.get("t_start") or 0.0) for m in members)
+        ended = max((m.get("t_end") or m.get("t_start") or 0.0) for m in members)
+        out.append({
+            "turn_id": turn_id,
+            "prompt": (goal or {}).get("label", ""),
+            "answer": (result or {}).get("output", ""),
+            "status": (goal or {}).get("status", ""),
+            "t_start": started,
+            "t_end": ended,
+            "duration": round(ended - started, 3) if ended and started else None,
+            "calls": [{
+                "id": c["id"],
+                "agent": c.get("executor_agent"),
+                "tool": c.get("label"),
+                "status": c.get("status"),
+                "input": c.get("input"),
+                "output": c.get("output"),
+                "t_start": c.get("t_start"),
+                "t_end": c.get("t_end"),
+                "duration": (round(c["t_end"] - c["t_start"], 3)
+                             if c.get("t_end") and c.get("t_start") else None),
+            } for c in calls],
+        })
+    out.sort(key=lambda t: t["t_start"])
+    return {"turns": out, "count": len(out)}

@@ -1011,7 +1011,8 @@ def create_app() -> FastAPI:
         )
 
     def graph_payload(user_id: str, session_id: str, view: str):
-        """Return the scoped research or execution graph for one session."""
+        """Return one session's graph: research, execution, or execution
+        regrouped as a chronological trace (``view=trace``)."""
         runtime.registry.require_session(user_id, session_id)
         try:
             from CoScientist.graph.memory import get_knowledge_graph
@@ -1022,10 +1023,16 @@ def create_app() -> FastAPI:
                     user_id=user_id,
                     session_id=session_id,
                 ).to_view()
-            return get_knowledge_graph(
+            execution = get_knowledge_graph(
                 user_id=user_id,
                 session_id=session_id,
             ).full()
+            if view == "trace":
+                # The same records grouped by the prompt that caused them and
+                # ordered by time — what the call graph cannot show.
+                from CoScientist.graph.projection import turns
+                return turns(execution)
+            return execution
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 — never break the UI
