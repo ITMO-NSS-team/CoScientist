@@ -1010,6 +1010,14 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get("/trace", response_class=HTMLResponse)
+    async def trace_page():
+        """Sessions, newest first; pick one to see its requests in order."""
+        return HTMLResponse(
+            (WEB_DIR / "templates" / "trace.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
+
     def graph_payload(user_id: str, session_id: str, view: str):
         """Return one session's graph: research, execution, or execution
         regrouped as a chronological trace (``view=trace``)."""

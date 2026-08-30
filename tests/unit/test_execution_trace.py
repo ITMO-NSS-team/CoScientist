@@ -64,3 +64,45 @@ def test_a_call_with_no_turn_is_kept_not_dropped():
                          "status": "success", "t_start": 1.0}]}
     result = turns(orphan)
     assert result["count"] == 1 and result["turns"][0]["turn_id"] == "untagged"
+
+
+def test_trace_view_is_served_and_grouped(tmp_path, monkeypatch):
+    """The page and its data source exist and agree on the shape."""
+    import time
+    import uuid
+
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path / "graphs"))
+    monkeypatch.setenv("WEB_STATE_DIR", str(tmp_path / "web"))
+    from starlette.testclient import TestClient
+
+    from CoScientist.graph.memory import get_knowledge_graph
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        assert "Sessions" in client.get("/trace").text
+
+        user = client.post(
+            "/api/users", json={"nickname": f"t-{uuid.uuid4().hex[:8]}"}
+        ).json()["user"]
+        session = client.post(
+            f"/api/users/{user['id']}/sessions", json={"title": "run"}
+        ).json()["session"]
+
+        graph = get_knowledge_graph(user_id=user["id"], session_id=session["id"])
+        now = time.time()
+        graph.add_node(id="goal:i1", kind="goal", turn_id="i1", label="do the thing",
+                       status="success", t_start=now, t_end=now + 9)
+        graph.add_node(id="tool:1", kind="tool_call", turn_id="i1", label="search",
+                       executor_agent="ResearchAgent", status="success",
+                       input="{}", output="hits", t_start=now + 1, t_end=now + 3)
+
+        payload = client.get(
+            f"/api/users/{user['id']}/sessions/{session['id']}/graph",
+            params={"view": "trace"},
+        ).json()
+
+    assert payload["count"] == 1
+    turn = payload["turns"][0]
+    assert turn["prompt"] == "do the thing"
+    assert [c["tool"] for c in turn["calls"]] == ["search"]
+    assert turn["calls"][0]["agent"] == "ResearchAgent"

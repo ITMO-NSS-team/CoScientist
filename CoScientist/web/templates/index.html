@@ -450,7 +450,8 @@
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
-      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
+      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
+      { name: "SessionTrace", icon: "schedule", desc: "Session Trace", id: "trace-link", href: "/trace" },
       { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
@@ -502,6 +503,11 @@
         } else {
           window.open('/graph', '_blank');
         }
+      } else if (name === "SessionTrace") {
+        // Sessions newest-first, and the chronology of the one you open.
+        window.open(activeUser && activeSession
+          ? `/trace?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`
+          : '/trace', '_blank');
       } else if (name === "MCPBuilds") {
         window.open('/builds', '_blank');
       } else if (name === "CoderSandbox") {
