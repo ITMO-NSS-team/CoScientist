@@ -125,3 +125,28 @@ def test_graph_opens_empty_and_grows_only_with_what_ran(tmp_path, monkeypatch):
                    executor_agent="CoderAgent", status="success")
     acted = {n["id"] for n in graph.full()["nodes"] if n["kind"] == "agent"}
     assert acted == {"agent:CoderAgent"}
+
+
+def test_legacy_snapshots_group_by_goal_and_by_time():
+    """Older records carry no turn_id: namespaced ids and chronology recover it."""
+    from CoScientist.graph.projection import turns as trace_by_turn
+
+    full = {"nodes": [
+        # Namespaced ids, the form used before turn_id existed.
+        {"id": "goal:inv1", "kind": "goal", "label": "first", "t_start": 100.0,
+         "t_end": 130.0, "status": "success"},
+        {"id": "goal:inv1::tool:a", "kind": "tool_call", "label": "search",
+         "t_start": 101.0, "t_end": 104.0},
+        # No marker at all: it ran while the first request was open.
+        {"id": "tool:loose", "kind": "tool_call", "label": "read",
+         "t_start": 110.0, "t_end": 111.0},
+        {"id": "goal:inv2", "kind": "goal", "label": "second", "t_start": 200.0,
+         "t_end": 210.0, "status": "success"},
+        {"id": "tool:later", "kind": "tool_call", "label": "write",
+         "t_start": 205.0, "t_end": 206.0},
+    ]}
+
+    turns = trace_by_turn(full)["turns"]
+    assert [t["prompt"] for t in turns] == ["first", "second"]
+    assert [c["tool"] for c in turns[0]["calls"]] == ["search", "read"]
+    assert [c["tool"] for c in turns[1]["calls"]] == ["write"]

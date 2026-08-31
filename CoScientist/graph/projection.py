@@ -95,27 +95,49 @@ def turns(full: Dict[str, Any]) -> Dict[str, Any]:
     user request, and under it every call with its agent, its arguments, its
     result and its duration.
 
-    Turn membership comes from ``turn_id``. Nodes recorded before that field
-    existed fall back to the goal id embedded in their own id, and anything with
-    neither lands in a single "untagged" turn rather than being dropped.
+    Turn membership comes from ``turn_id``. Snapshots recorded before that field
+    existed are reconstructed two ways: ids of the old namespaced form
+    ``goal:{inv}::tool:{call}`` carry the turn in their prefix, and anything left
+    is assigned to the last request that started before it. Chronology is what a
+    turn is, so recovering it from time is exact wherever the ids are silent.
     """
     nodes = {n["id"]: n for n in full.get("nodes", [])}
     order = {"goal": 0, "tool_call": 1, "result": 2}
 
-    def turn_of(node: Dict[str, Any]) -> Optional[str]:
+    def tagged_turn(node: Dict[str, Any]) -> Optional[str]:
         if node.get("turn_id"):
             return node["turn_id"]
         nid = str(node.get("id", ""))
         for prefix in ("goal:", "result:"):
             if nid.startswith(prefix):
-                return nid[len(prefix):]
+                # `goal:{inv}` and the namespaced `goal:{inv}::tool:{call}`.
+                return nid[len(prefix):].split("::", 1)[0]
         return None
 
+    members = [n for n in nodes.values() if n.get("kind") in order]
+    members.sort(key=lambda n: (n.get("t_start") or 0.0, order[n["kind"]]))
+
+    # Goals in the order they started, so an untagged call can be placed under
+    # the one that was open when it ran.
+    goals = [(g.get("t_start") or 0.0, tagged_turn(g) or g["id"])
+             for g in members if g["kind"] == "goal"]
+
+    def turn_of(node: Dict[str, Any]) -> str:
+        tag = tagged_turn(node)
+        if tag:
+            return tag
+        started = node.get("t_start") or 0.0
+        current = None
+        for goal_start, goal_turn in goals:
+            if goal_start <= started:
+                current = goal_turn
+            else:
+                break
+        return current or "untagged"
+
     grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for node in nodes.values():
-        if node.get("kind") not in order:
-            continue
-        grouped.setdefault(turn_of(node) or "untagged", []).append(node)
+    for node in members:
+        grouped.setdefault(turn_of(node), []).append(node)
 
     out = []
     for turn_id, members in grouped.items():
