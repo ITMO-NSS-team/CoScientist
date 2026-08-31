@@ -104,9 +104,14 @@ def _turn_resolver(nodes: List[Dict[str, Any]]):
                     for n in nodes if n.get("kind") == "goal"),
                    key=lambda pair: pair[0])
 
+    known = {turn for _, turn in goals}
+
     def resolve(node: Dict[str, Any]) -> str:
         marked = tagged(node)
-        if marked:
+        # A mark naming no request is worse than no mark: a delegated agent used
+        # to run under its own invocation id, and trusting it split one prompt
+        # into several, one of them promptless. Fall through to the clock.
+        if marked and marked in known:
             return marked
         started = node.get("t_start") or 0.0
         current = None

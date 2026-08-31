@@ -176,6 +176,13 @@ class GraphMemoryPlugin(BasePlugin):
     def __init__(self, name: str = "graph_memory") -> None:
         super().__init__(name=name)
         self._runs: dict[tuple[SessionKey, str], _RunState] = {}
+        #: The request each session is currently serving. A delegated agent runs
+        #: under its own ADK invocation id, so stamping nodes with the id of the
+        #: invocation that made the call split one user request into several —
+        #: the sub-agent's calls formed a request of their own, with no prompt.
+        #: What a node belongs to is the prompt that is open, so that is kept
+        #: per session and set when the user speaks.
+        self._turn_of_session: dict[SessionKey, str] = {}
 
     @staticmethod
     def _ctx_agent(invocation_context) -> Optional[str]:
@@ -193,6 +200,11 @@ class GraphMemoryPlugin(BasePlugin):
 
     def _run_key(self, context) -> tuple[SessionKey, str]:
         return session_key(context), self._invocation_id(context)
+
+    def _turn(self, context) -> str:
+        """The request being served, not the invocation that happens to be running."""
+        return self._turn_of_session.get(session_key(context)) \
+            or self._invocation_id(context)
 
     def _state(self, context) -> _RunState:
         return self._runs.setdefault(self._run_key(context), _RunState())
@@ -254,6 +266,8 @@ class GraphMemoryPlugin(BasePlugin):
         inv = getattr(invocation_context, "invocation_id", "x")
         state.goal_id = f"goal:{inv}"
         state.goal_text = _content_text(user_message)
+        # Everything recorded until the next prompt belongs to this one.
+        self._turn_of_session[session_key(invocation_context)] = inv
         state.agent_node = {}
         state.node_by_fcid = {}
         try:
@@ -345,7 +359,7 @@ class GraphMemoryPlugin(BasePlugin):
             else:
                 nid = f"tool:{fcid}"
                 graph.add_node(
-                    id=nid, kind="tool_call", turn_id=self._invocation_id(tool_context),
+                    id=nid, kind="tool_call", turn_id=self._turn(tool_context),
                     label=tool.name, executor_agent=agent, status="running",
                     parent_ids=[parent], input=_short(tool_args), t_start=time.time(),
                 )
@@ -397,12 +411,29 @@ class GraphMemoryPlugin(BasePlugin):
         if not _enabled():
             return None
         state = self._state(invocation_context)
-        if self._ctx_agent(invocation_context) != state.root_agent_name:
-            return None
         if not (getattr(event, "is_final_response", None) and event.is_final_response()):
             return None
         text = _content_text(getattr(event, "content", None))
         if not text:
+            return None
+
+        speaker = self._ctx_agent(invocation_context)
+        if speaker != state.root_agent_name:
+            # A delegated agent answering. Its node is created when it first
+            # acts, which records nothing about the work, so without this every
+            # agent in the trace showed a blank output and the panel had only a
+            # status to offer. Agents reached by transfer rather than as a tool
+            # are the ones this covers; a tool-style delegation is already
+            # closed out by after_tool_callback.
+            try:
+                graph = get_knowledge_graph(invocation_context)
+                graph.set_status(
+                    self._agent_node_for(graph, state, speaker),
+                    status="success", output=_short(text, _OUTPUT_LIMIT),
+                    t_end=time.time(),
+                )
+            except Exception:  # noqa: BLE001
+                pass
             return None
         try:
             graph = get_knowledge_graph(invocation_context)

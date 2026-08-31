@@ -73,15 +73,13 @@
       letter-spacing: .4px; margin: 14px 0 4px; }
     #detail .attr { margin: 3px 0; color: var(--ink); word-break: break-word; }
     #detail .attr .ak { color: var(--ink2); }
-    .foldbtn { margin-left: 8px; background: var(--surface2); color: var(--ink2);
-      border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px;
-      font-size: 10.5px; cursor: pointer; text-transform: none; letter-spacing: 0; }
-    .foldbtn:hover { color: var(--ink); border-color: var(--accent); }
-    #detail pre.folded { max-height: 240px; }
-    #detail pre.open { max-height: 60vh; }
+    .chars { color: var(--ink3); font-size: 10px; letter-spacing: 0;
+      text-transform: none; margin-left: 6px; }
     #detail pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 10px;
       border-radius: 8px; color: var(--ink); font-size: 12px; line-height: 1.5; margin: 4px 0 0;
-      border: 1px solid var(--line); }
+      border: 1px solid var(--line);
+      /* The whole value is here; long ones scroll rather than being cut. */
+      max-height: 46vh; overflow-y: auto; }
     #detail .prov { background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
       border-radius: 8px; padding: 9px 11px; margin: 6px 0; cursor: pointer; transition: border-color .12s, background .12s; }
     #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
@@ -485,32 +483,18 @@
         + provHtml + `</div>`;
       document.getElementById("detail").style.display = "block";
     }
-    // Long text is shown to a fold with the rest one click away, rather than
-    // cut off: a truncated tool result is the half you cannot check.
-    const FOLD_AT = 900;
+    // The whole text, always, in a box that scrolls when it is long. The
+    // earlier fold-and-expand needed a button to work and the button did not;
+    // a scrollbar has no state to get wrong.
     function textBlock(title, value){
       if (value === null || value === undefined || value === "") return "";
       const text = (typeof value === "object")
         ? Object.entries(value).map(([k, v]) =>
             `${k}: ${typeof v === "object" ? JSON.stringify(v, null, 2) : v}`).join("\n")
         : String(value);
-      if (text.length <= FOLD_AT)
-        return `<div class="k">${title}</div><pre>${esc(text)}</pre>`;
-      const id = "fold" + Math.random().toString(36).slice(2, 9);
-      return `<div class="k">${title}`
-        + `<button class="foldbtn" onclick="toggleFold('${id}', this)">`
-        + `show all ${text.length.toLocaleString()} chars</button></div>`
-        + `<pre id="${id}" data-full="${esc(text)}" class="folded">`
-        + `${esc(text.slice(0, FOLD_AT))}…</pre>`;
-    }
-    function toggleFold(id, button){
-      const box = document.getElementById(id);
-      if (!box) return;
-      const open = box.classList.toggle("open");
-      const full = box.dataset.full || "";
-      box.textContent = open ? full : full.slice(0, FOLD_AT) + "…";
-      button.textContent = open ? "collapse"
-        : `show all ${full.length.toLocaleString()} chars`;
+      const size = text.length > 900
+        ? ` <span class="chars">${text.length.toLocaleString()} chars</span>` : "";
+      return `<div class="k">${title}${size}</div><pre>${esc(text)}</pre>`;
     }
 
     function showDetailClassic(n){
