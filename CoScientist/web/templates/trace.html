@@ -156,7 +156,8 @@ async function loadTrace() {
     document.getElementById("meta").textContent =
       turns.length ? `${turns.length} request${turns.length > 1 ? "s" : ""}` : "";
     document.getElementById("tograph").href =
-      `/graph?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`;
+      `/graph?user_id=${encodeURIComponent(userId)}`
+      + `&session_id=${encodeURIComponent(sessionId)}&view=execution`;
     // Newest request first, to match the session list.
     box.innerHTML = turns.length
       ? turns.map((t, i) => [t, turns.length - i]).reverse()

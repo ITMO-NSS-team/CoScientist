@@ -101,7 +101,7 @@
     <button id="refresh">↻</button>
     <span class="spacer"></span>
     <span id="status">connecting…</span>
-      <a href="/trace" style="margin-left:auto;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:12px;text-decoration:none">← session trace</a>
+      <a id="totrace" href="/trace" style="margin-left:auto;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:12px;text-decoration:none">← session trace</a>
   </div>
 
   <div id="head">
@@ -229,13 +229,19 @@
         edges: { arrows: { to: { scaleFactor: 0.55 } }, color: { color: "#3a4150", highlight: "#64748b" },
                  font: { color: "#8b93a1", size: r ? 12 : 10, strokeWidth: 0 }, smooth: r
                    ? { type: "cubicBezier", forceDirection: "vertical", roundness: 0.5 } : { type: "continuous" } },
-        layout: r ? { hierarchical: { enabled: true, direction: "UD", levelSeparation: 220,
-                       nodeSpacing: 300, treeSpacing: 320, blockShifting: true, edgeMinimization: true } }
-                  : { hierarchical: false },
-        physics: r ? { enabled: false }
-          : { enabled: true, solver: "barnesHut", stabilization: { iterations: 150 },
-              barnesHut: { gravitationalConstant: -12000, centralGravity: 0.25,
-                           springLength: 150, springConstant: 0.05, avoidOverlap: 0.4 } },
+        // Both views are trees drawn top-down. The execution log used to be a
+        // force-directed cloud: it drifted while you read it, and it carried no
+        // order at all, so the sequence of a run had to be guessed from the
+        // arrows. Now the request is the root and depth is what followed from
+        // what, with siblings sorted by start time. Physics stays off in both,
+        // which is also what stops the layout wobbling.
+        layout: { hierarchical: { enabled: true, direction: "UD",
+                    sortMethod: "directed", shakeTowards: "roots",
+                    levelSeparation: r ? 220 : 150,
+                    nodeSpacing: r ? 300 : 210,
+                    treeSpacing: r ? 320 : 220,
+                    blockShifting: true, edgeMinimization: true, parentCentralization: true } },
+        physics: { enabled: false },
         interaction: { hover: true, tooltipDelay: 120, navigationButtons: false },
       });
       network.on("click", params => {
@@ -291,7 +297,18 @@
         // because the agent acted. The roster is no longer seeded into it, so
         // there is nothing left here to filter out.
         const hidden = new Set();
-        (g.nodes || []).forEach(n => {
+        // Depth in the execution tree. Set explicitly rather than inferred from
+        // the arrows: an agent node is shared by every turn that called it, so
+        // inference would drag it to whatever depth the first caller had and
+        // bend the tree around it. Siblings are inserted in start order, which
+        // is how vis lays them out left to right, so reading across a level
+        // reads forward in time.
+        const E_LEVEL = { system: 0, goal: 1, agent: 2, agent_call: 2, tool_call: 3, result: 4 };
+        const ordered = research ? (g.nodes || [])
+          : (g.nodes || []).slice().sort((a, b) =>
+              (E_LEVEL[a.kind] ?? 3) - (E_LEVEL[b.kind] ?? 3)
+              || (a.t_start || 0) - (b.t_start || 0));
+        ordered.forEach(n => {
           if (hidden.has(n.id)) return;
           if (n.overlay && !(research && prov)) return;   // hide provenance overlay unless toggled
           nodeData[n.id] = n;
@@ -305,9 +322,10 @@
             const node = { id:n.id, title:titleOf(n), label:labelOf(n), shape:shapeOf(n),
               color:{ background: colorOf(n), border: borderOf(n) }, borderWidth: 3,
               font:{ color:"#e8eaed", size: isRoot?18:(isAgent?15:12), strokeWidth:3, strokeColor:"#14161a" } };
-            if (isRoot) { node.size = 34; node.borderWidth = 3; node.font.color = "#ffffff"; node.mass = 4;
+            node.level = E_LEVEL[n.kind] != null ? E_LEVEL[n.kind] : 3;
+            if (isRoot) { node.size = 34; node.borderWidth = 3; node.font.color = "#ffffff";
               node.color.border = "#38bdf8"; }
-            else if (isAgent) { node.size = 20; node.mass = 2; }
+            else if (isAgent) { node.size = 20; }
             nodes.update(node);
           }
         });
@@ -454,6 +472,18 @@
     document.getElementById("prov").onchange = () => { hardReset(); poll(); };
     let timer=null;
     function loop(){ if (document.getElementById("auto").checked) poll(); timer=setTimeout(loop,1500); }
+    // Honour ?view= so a link can open the view it means. Without this the page
+    // always opened on research, and the trace page's "graph view" link landed
+    // on a different graph than the one it offered.
+    (() => {
+      const q = new URLSearchParams(location.search);
+      const wanted = q.get("view");
+      const sel = document.getElementById("view");
+      if (wanted && [...sel.options].some(o => o.value === wanted)) sel.value = wanted;
+      const back = document.getElementById("totrace");
+      if (back && q.get("user_id")) back.href = "/trace?" + new URLSearchParams({
+        user_id: q.get("user_id"), session_id: q.get("session_id") || "" });
+    })();
     makeNetwork(); updateChrome(); poll(); loop();
   </script>
 </body>
