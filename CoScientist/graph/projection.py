@@ -237,5 +237,82 @@ def execution_tree(full: Dict[str, Any]) -> Dict[str, Any]:
         node["level"] = level[node_id]
 
     ordered = sorted(nodes.values(),
-                     key=lambda n: (n["level"], n.get("t_start") or 0.0))
+                     key=lambda n: (n.get("t_start") or 0.0, n["level"]))
+    _place_in_time(ordered, edges)
     return {"run_id": full.get("run_id"), "nodes": ordered, "edges": edges}
+
+
+#: Horizontal pixels between two calls that began at the same moment, and the
+#: most a single idle stretch is allowed to occupy. A run waits forty minutes
+#: for a sandbox; drawn to scale that gap is the whole picture and the calls on
+#: either side of it are a smudge, so long waits are compressed and the order
+#: is what survives.
+_MIN_STEP, _MAX_STEP, _PIXELS_PER_SECOND = 34, 260, 6.0
+_ROW_HEIGHT = 120
+
+
+def _place_in_time(ordered: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> None:
+    """Give every node an x from when it ran and a y from who ran it.
+
+    Depth answers "what followed from what", which is why it stays on the node,
+    but it is the wrong horizontal axis: laying calls out by depth puts thirty
+    of them in one column and says nothing about the order they happened in.
+    Here x advances with the clock, so the picture stretches as the run goes on
+    and reading left to right is reading forward in time.
+
+    Rows keep it legible. The request and its answer bookend row zero; every
+    agent gets a row of its own in the order it first appears, and a call sits
+    in the row of the agent that made it.
+    """
+    if not ordered:
+        return
+
+    owner = {e["dst"]: e["src"] for e in edges}
+
+    def name_of(node: Dict[str, Any]) -> str:
+        return str(node.get("executor_agent") or node.get("label")
+                   or node["id"].split("::")[-1])
+
+    def agent_of(node: Dict[str, Any]) -> Optional[str]:
+        """The agent whose row this node belongs in, by walking up its callers.
+
+        Keyed by name, not by node: the same agent called in three requests is
+        three nodes, and giving each its own row would spread one participant
+        across the page instead of showing it as one lane of activity.
+        """
+        if node.get("kind") in ("agent", "agent_call"):
+            return name_of(node)
+        seen, current = set(), owner.get(node["id"])
+        while current and current not in seen:
+            seen.add(current)
+            parent = by_id.get(current)
+            if parent is None:
+                return None
+            if parent.get("kind") in ("agent", "agent_call"):
+                return name_of(parent)
+            current = owner.get(current)
+        return None
+
+    by_id = {n["id"]: n for n in ordered}
+    rows: Dict[str, int] = {}
+    for node in ordered:                      # first appearance decides the row
+        if node.get("kind") in ("goal", "result"):
+            continue
+        agent = agent_of(node)
+        if agent is not None and agent not in rows:
+            rows[agent] = len(rows) + 1
+
+    previous_start, x = None, 0.0
+    for node in ordered:
+        started = node.get("t_start")
+        if previous_start is not None and started is not None:
+            gap = max(0.0, started - previous_start) * _PIXELS_PER_SECOND
+            x += min(_MAX_STEP, max(_MIN_STEP, gap))
+        elif previous_start is not None:
+            x += _MIN_STEP
+        if started is not None:
+            previous_start = started
+        node["x"] = round(x)
+        node["row"] = 0 if node.get("kind") in ("goal", "result") \
+            else rows.get(agent_of(node) or "", 1)
+        node["y"] = node["row"] * _ROW_HEIGHT

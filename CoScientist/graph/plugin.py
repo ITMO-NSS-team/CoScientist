@@ -290,13 +290,16 @@ class GraphMemoryPlugin(BasePlugin):
                 # Delegation: connect the caller to the called agent's ONE stable
                 # node (agent:{name}); its own tool calls attach there too.
                 nid = self._agent_node_for(graph, state, tool.name)
-                # `input` is deliberately not written. It holds the agent's
-                # capability card from the roster, and overwriting it with one
-                # call's arguments broke get_agents_info and the detail panel;
-                # the arguments stay in the event log.
+                # The arguments of the delegation ARE this node's input. They
+                # used to be withheld because the node also carried the agent's
+                # capability card from the seeded roster and writing over it
+                # broke get_agents_info. The roster is no longer seeded into the
+                # graph, so there is nothing left to protect and withholding
+                # them only left every agent in the trace with a blank input.
                 graph.add_node(
                     id=nid, kind="agent", label=tool.name, executor_agent=tool.name,
-                    status="running", t_start=time.time(),
+                    status="running", input=_short(tool_args, 1000),
+                    t_start=time.time(),
                 )
                 graph.add_edge(parent, nid, type="delegated_to")
             else:

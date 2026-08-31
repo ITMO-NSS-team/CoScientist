@@ -243,21 +243,17 @@
         nodes: { borderWidth: 2, shadow: { enabled: true, color: "rgba(0,0,0,0.35)", size: 10, x: 0, y: 3 } },
         edges: { arrows: { to: { scaleFactor: 0.55 } }, color: { color: "#3a4150", highlight: "#64748b" },
                  font: { color: "#8b93a1", size: r ? 12 : 10, strokeWidth: 0 }, smooth: r
-                   ? { type: "cubicBezier", forceDirection: "vertical", roundness: 0.5 } : { type: "continuous" } },
-        // Both views are trees drawn top-down. The execution log used to be a
-        // force-directed cloud: it drifted while you read it, and it carried no
-        // order at all, so the sequence of a run had to be guessed from the
-        // arrows. Now the request is the root and depth is what followed from
-        // what, with siblings sorted by start time. Physics stays off in both,
-        // which is also what stops the layout wobbling.
-        // The log reads left to right: the request on the left, then what it
-        // caused, then the answer. The research graph keeps its top-down spine.
-        layout: { hierarchical: { enabled: true, direction: r ? "UD" : "LR",
+                   ? { type: "cubicBezier", forceDirection: "vertical", roundness: 0.5 }
+                   : { type: "cubicBezier", forceDirection: "horizontal", roundness: 0.35 } },
+        // The research graph is a hierarchy, so vis lays it out. The log is a
+        // timeline: every node already carries the x its start time earns and
+        // the row of the agent that ran it, so vis must not move anything —
+        // hierarchical layout would collapse the clock back into columns.
+        layout: r ? { hierarchical: { enabled: true, direction: "UD",
                     sortMethod: "directed", shakeTowards: "roots",
-                    levelSeparation: r ? 220 : 260,
-                    nodeSpacing: r ? 300 : 90,
-                    treeSpacing: r ? 320 : 130,
-                    blockShifting: true, edgeMinimization: true, parentCentralization: true } },
+                    levelSeparation: 220, nodeSpacing: 300, treeSpacing: 320,
+                    blockShifting: true, edgeMinimization: true, parentCentralization: true } }
+                  : { hierarchical: false, randomSeed: 1 },
         physics: { enabled: false },
         interaction: { hover: true, tooltipDelay: 120, navigationButtons: false },
       });
@@ -345,10 +341,13 @@
               borderWidth: 2,
               font:{ color:"#e8eaed", multi:false, align:"left",
                      size: isGoal?15:(isAgent?14:12), strokeWidth:0 } };
-            // Depth is computed server-side per request (projection.execution_tree),
-            // because an agent node shared by several requests cannot be placed
-            // from the arrows alone.
-            if (n.level != null) node.level = n.level;
+            // Position comes from the server: x from when the call started, y
+            // from whose lane it belongs to. Pinned, so the picture stays put
+            // while it is being read and stretches as the run goes on.
+            if (n.x != null && n.y != null) {
+              node.x = n.x; node.y = n.y;
+              node.fixed = { x: true, y: true };
+            }
             if (isGoal) { node.borderWidth = 3; node.font.color = "#ffffff"; }
             else if (isRoot) { node.borderWidth = 3; node.color.border = "#38bdf8"; }
             nodes.update(node);

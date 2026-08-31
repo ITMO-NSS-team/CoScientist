@@ -185,3 +185,35 @@ def test_execution_tree_drops_the_roster_and_measures_depth():
     assert level["tool:a"] == level["tool:b"] == 2
     # The answer ends the request, to the right of everything it did.
     assert level["result:i1"] > level["tool:a"]
+
+
+def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
+    """x advances with the clock; a row belongs to an agent, not to a depth."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "goal:i1", "kind": "goal", "label": "ask", "t_start": 0.0},
+        {"id": "a:One", "kind": "agent_call", "executor_agent": "One", "t_start": 1.0},
+        {"id": "t:1", "kind": "tool_call", "label": "first", "t_start": 2.0},
+        {"id": "t:2", "kind": "tool_call", "label": "second", "t_start": 3.0},
+        {"id": "a:Two", "kind": "agent_call", "executor_agent": "Two", "t_start": 4.0},
+        {"id": "t:3", "kind": "tool_call", "label": "third", "t_start": 5.0},
+    ], "edges": [
+        {"src": "goal:i1", "dst": "a:One", "type": "caused_by"},
+        {"src": "a:One", "dst": "t:1", "type": "caused_by"},
+        {"src": "a:One", "dst": "t:2", "type": "caused_by"},
+        {"src": "a:One", "dst": "a:Two", "type": "delegated_to"},
+        {"src": "a:Two", "dst": "t:3", "type": "caused_by"},
+    ]}
+
+    placed = {n["id"]: n for n in execution_tree(full)["nodes"]}
+
+    # Reading left to right reads forward in time.
+    order = sorted(placed.values(), key=lambda n: n["x"])
+    assert [n["id"] for n in order] == ["goal:i1", "a:One", "t:1", "t:2", "a:Two", "t:3"]
+
+    # Calls sit in the row of the agent that made them, not at their depth.
+    assert placed["t:1"]["row"] == placed["t:2"]["row"] == placed["a:One"]["row"]
+    assert placed["t:3"]["row"] == placed["a:Two"]["row"]
+    assert placed["a:One"]["row"] != placed["a:Two"]["row"]
+    assert placed["goal:i1"]["row"] == 0
