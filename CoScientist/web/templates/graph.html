@@ -287,20 +287,10 @@
         const r = await fetch(url, { cache: "no-store" });
         const g = await r.json(); lastGraph = g;
         const research = isResearch(), prov = showProv();
-        // Execution view: show only what ACTUALLY ran this session — the tree
-        // grows system:root → goal → orchestrator → delegated agents → tools.
-        // The static roster (`has_member` edges wiring every agent to the centre)
-        // is hidden, and any agent never invoked this run is dropped, so an agent
-        // appears once, under the orchestrator that called it — not floating off
-        // the hub as well.
+        // The execution graph now carries only what ran: an agent node exists
+        // because the agent acted. The roster is no longer seeded into it, so
+        // there is nothing left here to filter out.
         const hidden = new Set();
-        if (!research) {
-          const invoked = new Set();
-          (g.edges || []).forEach(e => { if (e.type !== "has_member" && e.dst) invoked.add(e.dst); });
-          (g.nodes || []).forEach(n => {
-            if ((n.kind === "agent" || n.kind === "agent_call") && !invoked.has(n.id)) hidden.add(n.id);
-          });
-        }
         (g.nodes || []).forEach(n => {
           if (hidden.has(n.id)) return;
           if (n.overlay && !(research && prov)) return;   // hide provenance overlay unless toggled
@@ -324,7 +314,7 @@
         if (selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);
         (g.edges || []).forEach(e => {
           if (e.overlay && !(research && prov)) return;
-          if (!research && (e.type === "has_member" || hidden.has(e.src) || hidden.has(e.dst))) return;
+          if (!research && (hidden.has(e.src) || hidden.has(e.dst))) return;
           const id = e.src + "->" + e.dst + ":" + (e.type||"");
           if (seenEdges.has(id) || !e.src || !e.dst) return;
           seenEdges.add(id);
@@ -341,7 +331,7 @@
         if (research) renderHeader(g.nodes || []);
         document.getElementById("status").textContent =
           (g.nodes||[]).filter(n=>!n.overlay && !hidden.has(n.id)).length + " nodes · " +
-          (g.edges||[]).filter(e=>!e.overlay && !(!research && (e.type==="has_member"||hidden.has(e.src)||hidden.has(e.dst)))).length + " edges";
+          (g.edges||[]).filter(e=>!e.overlay && !(!research && (hidden.has(e.src)||hidden.has(e.dst)))).length + " edges";
       } catch (err) { document.getElementById("status").textContent = "error: " + err; }
     }
 

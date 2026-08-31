@@ -106,3 +106,22 @@ def test_trace_view_is_served_and_grouped(tmp_path, monkeypatch):
     assert turn["prompt"] == "do the thing"
     assert [c["tool"] for c in turn["calls"]] == ["search"]
     assert turn["calls"][0]["agent"] == "ResearchAgent"
+
+
+def test_graph_opens_empty_and_grows_only_with_what_ran(tmp_path, monkeypatch):
+    """No roster in the trace: an agent node exists because that agent acted."""
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
+    from CoScientist.graph.memory import KnowledgeGraph
+
+    graph = KnowledgeGraph(run_id="execution")
+
+    fresh = graph.full()
+    assert [n["id"] for n in fresh["nodes"]] == ["system:root"]
+    assert fresh["edges"] == []
+    # The roster still resolves for prompts and for get_agents_info.
+    assert len(graph.agents_info()) > 1
+
+    graph.add_node(id="agent:CoderAgent", kind="agent", label="CoderAgent",
+                   executor_agent="CoderAgent", status="success")
+    acted = {n["id"] for n in graph.full()["nodes"] if n["kind"] == "agent"}
+    assert acted == {"agent:CoderAgent"}

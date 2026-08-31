@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Run-step nodes are coloured by STATUS; the static structure (system root and
-# the agent roster) keeps its own identity colour so it doesn't read as "done".
+# it acted) keeps its own identity colour so it doesn't read as "done".
 _STATUS_COLOR = {
     "running": "#f1c40f",  # amber
     "success": "#2ecc71",  # green
