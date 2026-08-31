@@ -170,3 +170,72 @@ def turns(full: Dict[str, Any]) -> Dict[str, Any]:
         })
     out.sort(key=lambda t: t["t_start"])
     return {"turns": out, "count": len(out)}
+
+
+def execution_tree(full: Dict[str, Any]) -> Dict[str, Any]:
+    """The call graph as one tree per user request, ready to draw left to right.
+
+    The stored graph is not shaped for reading. Older snapshots still carry the
+    seeded roster — every configured agent wired to a hub by ``has_member``,
+    whether or not it was ever called — and the hub itself adds a level above
+    the request that carries no information. What a reader wants is the shape
+    the run actually had:
+
+        request -> agent -> its calls -> nested agent -> its calls -> answer
+
+    So the roster and the hub are dropped, an agent survives only if something
+    invoked it, and each node is given the depth it sits at in its own request.
+    Depth is measured here rather than inferred by the viewer, because an agent
+    node can be shared by several requests and inference would pin it to
+    whichever one reached it first.
+    """
+    nodes = {n["id"]: dict(n) for n in full.get("nodes", [])}
+    edges = [e for e in full.get("edges", []) if e.get("type") != "has_member"]
+
+    roots = [n for n in nodes.values() if n.get("kind") == "system"]
+    for root in roots:                       # the hub is a fixture, not an event
+        nodes.pop(root["id"], None)
+    edges = [e for e in edges
+             if e.get("src") in nodes and e.get("dst") in nodes]
+
+    # An agent that nothing called is roster, not history.
+    called = {e["dst"] for e in edges}
+    for node_id, node in list(nodes.items()):
+        if node.get("kind") in ("agent", "agent_call") and node_id not in called:
+            nodes.pop(node_id)
+    edges = [e for e in edges if e["src"] in nodes and e["dst"] in nodes]
+
+    children: Dict[str, List[str]] = {}
+    for edge in edges:
+        children.setdefault(edge["src"], []).append(edge["dst"])
+
+    # Breadth-first from each request; a node keeps the shallowest depth found.
+    level: Dict[str, int] = {}
+    goals = sorted((n for n in nodes.values() if n.get("kind") == "goal"),
+                   key=lambda n: n.get("t_start") or 0.0)
+    frontier = [(g["id"], 0) for g in goals]
+    while frontier:
+        node_id, depth = frontier.pop(0)
+        if node_id in level and level[node_id] <= depth:
+            continue
+        level[node_id] = depth
+        for child in children.get(node_id, []):
+            frontier.append((child, depth + 1))
+
+    # Anything unreachable from a request still has to be placed somewhere.
+    for node_id, node in nodes.items():
+        level.setdefault(node_id, 0 if node.get("kind") == "goal" else 1)
+
+    # The answer ends its request, so it belongs to the right of everything the
+    # request did rather than beside the calls that produced it.
+    deepest = max(level.values(), default=0)
+    for node_id, node in nodes.items():
+        if node.get("kind") == "result":
+            level[node_id] = deepest + 1
+
+    for node_id, node in nodes.items():
+        node["level"] = level[node_id]
+
+    ordered = sorted(nodes.values(),
+                     key=lambda n: (n["level"], n.get("t_start") or 0.0))
+    return {"run_id": full.get("run_id"), "nodes": ordered, "edges": edges}

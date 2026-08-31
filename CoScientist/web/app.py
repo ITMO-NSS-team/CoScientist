@@ -1040,6 +1040,10 @@ def create_app() -> FastAPI:
                 # ordered by time — what the call graph cannot show.
                 from CoScientist.graph.projection import turns
                 return turns(execution)
+            if view in ("", "execution"):
+                # One tree per request, roster and hub removed, depth measured.
+                from CoScientist.graph.projection import execution_tree
+                return execution_tree(execution)
             if view not in ("", "execution"):
                 # `knowledge` and `memory` were served here until the knowledge
                 # memory was removed. Falling through to the execution graph

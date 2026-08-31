@@ -175,15 +175,30 @@
     // Identity fills the node; status rings it. Colouring agents by identity
     // alone made a stuck "running" agent look exactly like a finished one, so
     // the only nodes that showed progress were goals and tool calls.
-    const IDENTITY_COLOR = { system:"#f4c542", agent:"#7eb6ff" };
-    const SHAPE = { system:"hexagon", agent:"dot", goal:"diamond", agent_call:"ellipse",
-      tool_call:"box", result:"star" };
+    const IDENTITY_COLOR = { system:"#f4c542", agent:"#7eb6ff", agent_call:"#7eb6ff" };
+    // Every node in the log is a labelled box. Dots, diamonds and stars made a
+    // trace read as a diagram of shapes; a run reads better as a row of cards
+    // whose text you can scan.
+    const SHAPE = { system:"hexagon" };
     const statusColor = n => STATUS_COLOR[n.status] || "#cbd5e1";
     const colorOf = n => IDENTITY_COLOR[n.kind] || statusColor(n);
     const borderOf = n => IDENTITY_COLOR[n.kind] ? statusColor(n) : "#20232a";
     const shapeOf = n => SHAPE[n.kind] || "box";
-    const labelOf = n => String(((["tool_call","result","goal"].includes(n.kind))
-      ? n.label : (n.executor_agent||n.label)) || n.id || "").slice(0,40);
+    const secsOf = n => (n.t_end && n.t_start)
+      ? ((n.t_end - n.t_start) < 1 ? (n.t_end - n.t_start).toFixed(2)
+                                   : (n.t_end - n.t_start).toFixed(1)) + "s" : "";
+    // Kind first, then what it was, then how long it took: the three things a
+    // reader of a trace is after.
+    function labelOf(n){
+      const dur = secsOf(n);
+      if (n.kind === "goal")
+        return "❯ " + String(n.label || "request").slice(0, 46) + (dur ? "\n" + dur : "");
+      if (n.kind === "result")
+        return "✔ answer" + (dur ? "  " + dur : "");
+      if (n.kind === "agent" || n.kind === "agent_call")
+        return String(n.executor_agent || n.label || "").slice(0, 34) + (dur ? "\n" + dur : "");
+      return String(n.label || n.id || "").slice(0, 30) + (dur ? "\n" + dur : "");
+    }
 
     const isResearch = () => document.getElementById("view").value === "research";
     const isSlide = () => document.getElementById("view").value === "slide";
@@ -235,11 +250,13 @@
         // arrows. Now the request is the root and depth is what followed from
         // what, with siblings sorted by start time. Physics stays off in both,
         // which is also what stops the layout wobbling.
-        layout: { hierarchical: { enabled: true, direction: "UD",
+        // The log reads left to right: the request on the left, then what it
+        // caused, then the answer. The research graph keeps its top-down spine.
+        layout: { hierarchical: { enabled: true, direction: r ? "UD" : "LR",
                     sortMethod: "directed", shakeTowards: "roots",
-                    levelSeparation: r ? 220 : 150,
-                    nodeSpacing: r ? 300 : 210,
-                    treeSpacing: r ? 320 : 220,
+                    levelSeparation: r ? 220 : 260,
+                    nodeSpacing: r ? 300 : 90,
+                    treeSpacing: r ? 320 : 130,
                     blockShifting: true, edgeMinimization: true, parentCentralization: true } },
         physics: { enabled: false },
         interaction: { hover: true, tooltipDelay: 120, navigationButtons: false },
@@ -303,29 +320,37 @@
         // bend the tree around it. Siblings are inserted in start order, which
         // is how vis lays them out left to right, so reading across a level
         // reads forward in time.
-        const E_LEVEL = { system: 0, goal: 1, agent: 2, agent_call: 2, tool_call: 3, result: 4 };
-        const ordered = research ? (g.nodes || [])
-          : (g.nodes || []).slice().sort((a, b) =>
-              (E_LEVEL[a.kind] ?? 3) - (E_LEVEL[b.kind] ?? 3)
-              || (a.t_start || 0) - (b.t_start || 0));
+        // Already ordered by (level, start time) upstream; siblings enter in the
+        // order they ran, which is the order vis lays them out.
+        const ordered = g.nodes || [];
         ordered.forEach(n => {
           if (hidden.has(n.id)) return;
           if (n.overlay && !(research && prov)) return;   // hide provenance overlay unless toggled
           nodeData[n.id] = n;
           if (research) { nodes.update(researchNode(n)); }
           else {
-            // execution/memory: the system root is the big central hub, agents
-            // are medium; tool calls / entities stay small — so the tree reads
-            // as "system → orchestrator → agents → tools" radiating out.
+            // Cards, sized by what they are: the request opens the row, agents
+            // carry it, calls are the detail. Status is the border, identity the
+            // fill, so a failed call is visible without reading its label.
             const isRoot = n.kind === "system";
             const isAgent = n.kind === "agent" || n.kind === "agent_call";
+            const isGoal = n.kind === "goal", isResult = n.kind === "result";
+            const c = colorOf(n);
             const node = { id:n.id, title:titleOf(n), label:labelOf(n), shape:shapeOf(n),
-              color:{ background: colorOf(n), border: borderOf(n) }, borderWidth: 3,
-              font:{ color:"#e8eaed", size: isRoot?18:(isAgent?15:12), strokeWidth:3, strokeColor:"#14161a" } };
-            node.level = E_LEVEL[n.kind] != null ? E_LEVEL[n.kind] : 3;
-            if (isRoot) { node.size = 34; node.borderWidth = 3; node.font.color = "#ffffff";
-              node.color.border = "#38bdf8"; }
-            else if (isAgent) { node.size = 20; }
+              margin: { top:8, bottom:8, left:12, right:12 },
+              widthConstraint: { maximum: isGoal ? 260 : 200 },
+              color:{ background: rgba(c, isGoal || isResult ? 0.22 : 0.16),
+                      border: borderOf(n) === "#20232a" ? c : borderOf(n),
+                      highlight: { background: rgba(c, 0.32), border: c } },
+              borderWidth: 2,
+              font:{ color:"#e8eaed", multi:false, align:"left",
+                     size: isGoal?15:(isAgent?14:12), strokeWidth:0 } };
+            // Depth is computed server-side per request (projection.execution_tree),
+            // because an agent node shared by several requests cannot be placed
+            // from the arrows alone.
+            if (n.level != null) node.level = n.level;
+            if (isGoal) { node.borderWidth = 3; node.font.color = "#ffffff"; }
+            else if (isRoot) { node.borderWidth = 3; node.color.border = "#38bdf8"; }
             nodes.update(node);
           }
         });

@@ -150,3 +150,38 @@ def test_legacy_snapshots_group_by_goal_and_by_time():
     assert [t["prompt"] for t in turns] == ["first", "second"]
     assert [c["tool"] for c in turns[0]["calls"]] == ["search", "read"]
     assert [c["tool"] for c in turns[1]["calls"]] == ["write"]
+
+
+def test_execution_tree_drops_the_roster_and_measures_depth():
+    """request -> agent -> its calls -> answer, with nothing that never ran."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "system:root", "kind": "system", "label": "the system"},
+        {"id": "agent:NeverCalled", "kind": "agent", "label": "NeverCalled"},
+        {"id": "goal:i1", "kind": "goal", "label": "do it", "t_start": 10.0},
+        {"id": "goal:i1::agent:Research", "kind": "agent_call",
+         "executor_agent": "Research", "t_start": 11.0},
+        {"id": "tool:a", "kind": "tool_call", "label": "search", "t_start": 12.0},
+        {"id": "tool:b", "kind": "tool_call", "label": "extract", "t_start": 13.0},
+        {"id": "result:i1", "kind": "result", "output": "done", "t_start": 20.0},
+    ], "edges": [
+        {"src": "system:root", "dst": "agent:NeverCalled", "type": "has_member"},
+        {"src": "system:root", "dst": "goal:i1", "type": "caused_by"},
+        {"src": "goal:i1", "dst": "goal:i1::agent:Research", "type": "caused_by"},
+        {"src": "goal:i1::agent:Research", "dst": "tool:a", "type": "caused_by"},
+        {"src": "goal:i1::agent:Research", "dst": "tool:b", "type": "caused_by"},
+        {"src": "goal:i1::agent:Research", "dst": "result:i1", "type": "produced"},
+    ]}
+
+    tree = execution_tree(full)
+    ids = {n["id"] for n in tree["nodes"]}
+    assert "agent:NeverCalled" not in ids, "an agent nothing called is roster"
+    assert "system:root" not in ids, "the hub carries no information"
+
+    level = {n["id"]: n["level"] for n in tree["nodes"]}
+    assert level["goal:i1"] == 0
+    assert level["goal:i1::agent:Research"] == 1
+    assert level["tool:a"] == level["tool:b"] == 2
+    # The answer ends the request, to the right of everything it did.
+    assert level["result:i1"] > level["tool:a"]
