@@ -226,14 +226,26 @@ def cleanup_session(user_id: str, session_id: str, confirm: bool = False) -> str
             }, indent=2)
 
         deleted = 0
+        errors = []
         for i in range(0, len(keys), 1000):
             batch = keys[i:i + 1000]
-            s3_client.delete_objects(
+            # delete_objects reports a per-object refusal in Errors and still
+            # answers 200. Counting the batch would call a denied delete a
+            # success, and the caller would believe the session is gone.
+            resp = s3_client.delete_objects(
                 Bucket=BUCKET_NAME,
                 Delete={'Objects': [{'Key': k} for k in batch]},
             )
-            deleted += len(batch)
-        return json.dumps({"dry_run": False, "deleted": deleted}, indent=2)
+            deleted += len(resp.get('Deleted', []))
+            errors.extend(resp.get('Errors', []))
+
+        result = {"dry_run": False, "deleted": deleted, "requested": len(keys)}
+        if errors:
+            result["failed"] = len(errors)
+            result["errors"] = [
+                {"key": e.get('Key'), "code": e.get('Code')} for e in errors[:50]
+            ]
+        return json.dumps(result, indent=2)
     except (ValueError, ClientError) as e:
         return _err(str(e))
 

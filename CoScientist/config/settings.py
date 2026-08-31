@@ -152,6 +152,11 @@ class MCPSettings(BaseModel):
     paper_analysis_url: Optional[str] = None
     papers_search_url: Optional[str] = None
     result_formatter_url: Optional[str] = None
+    # The file vault (mcp-servers/vault-mcp-server). Two consumers read it:
+    # worker agents get the upload/download pair as an ADK toolset, and
+    # framework code calls it per request through tools/vault_client.py.
+    # Unset means both drop out, and the run still completes.
+    vault_url: Optional[str] = None
 
 
 # =========================
