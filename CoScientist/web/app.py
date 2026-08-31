@@ -1018,7 +1018,8 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
-    def graph_payload(user_id: str, session_id: str, view: str):
+    def graph_payload(user_id: str, session_id: str, view: str,
+                      turn: str | None = None):
         """Return one session's graph: research, execution, or execution
         regrouped as a chronological trace (``view=trace``)."""
         runtime.registry.require_session(user_id, session_id)
@@ -1041,9 +1042,10 @@ def create_app() -> FastAPI:
                 from CoScientist.graph.projection import turns
                 return turns(execution)
             if view in ("", "execution"):
-                # One tree per request, roster and hub removed, depth measured.
+                # One request at a time: roster and hub removed, placed on a
+                # clock. The payload also lists the session's other requests.
                 from CoScientist.graph.projection import execution_tree
-                return execution_tree(execution)
+                return execution_tree(execution, turn=turn)
             if view not in ("", "execution"):
                 # `knowledge` and `memory` were served here until the knowledge
                 # memory was removed. Falling through to the execution graph
@@ -1065,9 +1067,10 @@ def create_app() -> FastAPI:
         user_id: str,
         session_id: str,
         view: str = "execution",
+        turn: str | None = None,
     ):
         try:
-            payload = graph_payload(user_id, session_id, view)
+            payload = graph_payload(user_id, session_id, view, turn)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)

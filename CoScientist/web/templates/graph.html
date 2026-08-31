@@ -73,6 +73,12 @@
       letter-spacing: .4px; margin: 14px 0 4px; }
     #detail .attr { margin: 3px 0; color: var(--ink); word-break: break-word; }
     #detail .attr .ak { color: var(--ink2); }
+    .foldbtn { margin-left: 8px; background: var(--surface2); color: var(--ink2);
+      border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px;
+      font-size: 10.5px; cursor: pointer; text-transform: none; letter-spacing: 0; }
+    .foldbtn:hover { color: var(--ink); border-color: var(--accent); }
+    #detail pre.folded { max-height: 240px; }
+    #detail pre.open { max-height: 60vh; }
     #detail pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 10px;
       border-radius: 8px; color: var(--ink); font-size: 12px; line-height: 1.5; margin: 4px 0 0;
       border: 1px solid var(--line); }
@@ -95,6 +101,9 @@
         <option value="slide">research · slide</option>
         <option value="execution">execution log</option>
       </select>
+    </label>
+    <label id="turnWrap" style="display:none">request
+      <select id="turn" style="max-width:340px"></select>
     </label>
     <label id="provWrap"><input type="checkbox" id="prov" /> provenance</label>
     <label><input type="checkbox" id="auto" checked /> live</label>
@@ -302,10 +311,28 @@
           return;
         }
         netBox.style.display = ""; slideBox.style.display = "none";
-        const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/graph?view=${encodeURIComponent(document.getElementById("view").value)}`;
+        const chosenTurn = document.getElementById("turn").value;
+        const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`
+          + `/graph?view=${encodeURIComponent(document.getElementById("view").value)}`
+          + (!isResearch() && chosenTurn ? `&turn=${encodeURIComponent(chosenTurn)}` : "");
         const r = await fetch(url, { cache: "no-store" });
         const g = await r.json(); lastGraph = g;
         const research = isResearch(), prov = showProv();
+        // The log is drawn one request at a time; the payload lists the rest.
+        const turnWrap = document.getElementById("turnWrap"),
+              turnSel = document.getElementById("turn");
+        if (!research && Array.isArray(g.turns) && g.turns.length) {
+          turnWrap.style.display = "";
+          const want = (g.turns.map(t => t.turn_id).join("|"));
+          if (turnSel.dataset.keys !== want) {
+            turnSel.dataset.keys = want;
+            turnSel.innerHTML = g.turns.map((t, i) =>
+              `<option value="${t.turn_id}">${i + 1}. ${String(t.prompt || "request")
+                 .replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))
+                 .slice(0, 60)}</option>`).join("");
+          }
+          if (g.turn_id) turnSel.value = g.turn_id;
+        } else { turnWrap.style.display = "none"; }
         // The execution graph now carries only what ran: an agent node exists
         // because the agent acted. The roster is no longer seeded into it, so
         // there is nothing left here to filter out.
@@ -333,8 +360,11 @@
             const isGoal = n.kind === "goal", isResult = n.kind === "result";
             const c = colorOf(n);
             const node = { id:n.id, title:titleOf(n), label:labelOf(n), shape:shapeOf(n),
-              margin: { top:8, bottom:8, left:12, right:12 },
-              widthConstraint: { maximum: isGoal ? 260 : 200 },
+              margin: { top:9, bottom:9, left:12, right:12 },
+              // Fixed, and the same number the server packs lanes with
+              // (projection._CARD_WIDTH). If the two disagree the cards overlap.
+              widthConstraint: { minimum: (n.card_width || 190) - 26,
+                                 maximum: (n.card_width || 190) - 26 },
               color:{ background: rgba(c, isGoal || isResult ? 0.22 : 0.16),
                       border: borderOf(n) === "#20232a" ? c : borderOf(n),
                       highlight: { background: rgba(c, 0.32), border: c } },
@@ -455,16 +485,42 @@
         + provHtml + `</div>`;
       document.getElementById("detail").style.display = "block";
     }
+    // Long text is shown to a fold with the rest one click away, rather than
+    // cut off: a truncated tool result is the half you cannot check.
+    const FOLD_AT = 900;
+    function textBlock(title, value){
+      if (value === null || value === undefined || value === "") return "";
+      const text = (typeof value === "object")
+        ? Object.entries(value).map(([k, v]) =>
+            `${k}: ${typeof v === "object" ? JSON.stringify(v, null, 2) : v}`).join("\n")
+        : String(value);
+      if (text.length <= FOLD_AT)
+        return `<div class="k">${title}</div><pre>${esc(text)}</pre>`;
+      const id = "fold" + Math.random().toString(36).slice(2, 9);
+      return `<div class="k">${title}`
+        + `<button class="foldbtn" onclick="toggleFold('${id}', this)">`
+        + `show all ${text.length.toLocaleString()} chars</button></div>`
+        + `<pre id="${id}" data-full="${esc(text)}" class="folded">`
+        + `${esc(text.slice(0, FOLD_AT))}…</pre>`;
+    }
+    function toggleFold(id, button){
+      const box = document.getElementById(id);
+      if (!box) return;
+      const open = box.classList.toggle("open");
+      const full = box.dataset.full || "";
+      box.textContent = open ? full : full.slice(0, FOLD_AT) + "…";
+      button.textContent = open ? "collapse"
+        : `show all ${full.length.toLocaleString()} chars`;
+    }
+
     function showDetailClassic(n){
       const row=(k,v)=>(v||v===0)?`<div class="attr"><span class="ak">${k}:</span> ${esc(v)}</div>`:"";
-      const block=(k,v)=>v?`<div class="k">${k}</div><pre>${esc(v)}</pre>`:"";
       const dur=(n.t_start&&n.t_end)?(n.t_end-n.t_start).toFixed(2)+"s":"";
       document.getElementById("detail").innerHTML =
         `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${esc(labelOf(n))}</h3><div class="sub">${esc(n.kind||"")}</div></div><div class="dbody">`
         + row("agent",n.executor_agent)+row("status",n.status)+row("duration",dur)+row("id",n.id)
-        + block("input", typeof n.input==="object"?JSON.stringify(n.input,null,2):n.input)
-        + block("output", n.output) + `</div>`;
+        + textBlock("input", n.input) + textBlock("output", n.output) + `</div>`;
       document.getElementById("detail").style.display = "block";
     }
     function closeDetail(){ selectedId=null; document.getElementById("detail").style.display="none"; }
@@ -494,6 +550,7 @@
     document.getElementById("refresh").onclick = poll;
     document.getElementById("view").onchange = () => { hardReset(); makeNetwork(); updateChrome(); poll(); };
     document.getElementById("prov").onchange = () => { hardReset(); poll(); };
+    document.getElementById("turn").onchange = () => { hardReset(); poll(); };
     let timer=null;
     function loop(){ if (document.getElementById("auto").checked) poll(); timer=setTimeout(loop,1500); }
     // Honour ?view= so a link can open the view it means. Without this the page
@@ -502,6 +559,14 @@
     (() => {
       const q = new URLSearchParams(location.search);
       const wanted = q.get("view");
+      // A link may name the request to open; the picker is filled on first poll.
+      const wantedTurn = q.get("turn");
+      if (wantedTurn) {
+        const sel = document.getElementById("turn");
+        sel.innerHTML = `<option value="${wantedTurn}">…</option>`;
+        sel.value = wantedTurn;
+        document.getElementById("turnWrap").style.display = "";
+      }
       const sel = document.getElementById("view");
       if (wanted && [...sel.options].some(o => o.value === wanted)) sel.value = wanted;
       const back = document.getElementById("totrace");

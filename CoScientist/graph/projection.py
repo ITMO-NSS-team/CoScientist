@@ -82,6 +82,44 @@ def local_view(full: dict, node_id: str) -> str:
     return "REASONING PATH that led to this task (top → here):\n" + path
 
 
+def _turn_resolver(nodes: List[Dict[str, Any]]):
+    """Answer "which request does this node belong to" for a whole graph.
+
+    Shared by the trace list and the per-request graph so the two can never
+    disagree about where a call belongs. `turn_id` is authoritative; snapshots
+    written before it existed carry the request in the old namespaced id
+    ``goal:{inv}::tool:{call}``; anything still unmarked belongs to the last
+    request that started before it, because a request is a stretch of time.
+    """
+    def tagged(node: Dict[str, Any]) -> Optional[str]:
+        if node.get("turn_id"):
+            return node["turn_id"]
+        nid = str(node.get("id", ""))
+        for prefix in ("goal:", "result:"):
+            if nid.startswith(prefix):
+                return nid[len(prefix):].split("::", 1)[0]
+        return None
+
+    goals = sorted(((n.get("t_start") or 0.0, tagged(n) or n["id"])
+                    for n in nodes if n.get("kind") == "goal"),
+                   key=lambda pair: pair[0])
+
+    def resolve(node: Dict[str, Any]) -> str:
+        marked = tagged(node)
+        if marked:
+            return marked
+        started = node.get("t_start") or 0.0
+        current = None
+        for goal_start, goal_turn in goals:
+            if goal_start <= started:
+                current = goal_turn
+            else:
+                break
+        return current or "untagged"
+
+    return resolve
+
+
 def turns(full: Dict[str, Any]) -> Dict[str, Any]:
     """The session's execution graph as a chronological list of turns.
 
@@ -104,36 +142,9 @@ def turns(full: Dict[str, Any]) -> Dict[str, Any]:
     nodes = {n["id"]: n for n in full.get("nodes", [])}
     order = {"goal": 0, "tool_call": 1, "result": 2}
 
-    def tagged_turn(node: Dict[str, Any]) -> Optional[str]:
-        if node.get("turn_id"):
-            return node["turn_id"]
-        nid = str(node.get("id", ""))
-        for prefix in ("goal:", "result:"):
-            if nid.startswith(prefix):
-                # `goal:{inv}` and the namespaced `goal:{inv}::tool:{call}`.
-                return nid[len(prefix):].split("::", 1)[0]
-        return None
-
     members = [n for n in nodes.values() if n.get("kind") in order]
     members.sort(key=lambda n: (n.get("t_start") or 0.0, order[n["kind"]]))
-
-    # Goals in the order they started, so an untagged call can be placed under
-    # the one that was open when it ran.
-    goals = [(g.get("t_start") or 0.0, tagged_turn(g) or g["id"])
-             for g in members if g["kind"] == "goal"]
-
-    def turn_of(node: Dict[str, Any]) -> str:
-        tag = tagged_turn(node)
-        if tag:
-            return tag
-        started = node.get("t_start") or 0.0
-        current = None
-        for goal_start, goal_turn in goals:
-            if goal_start <= started:
-                current = goal_turn
-            else:
-                break
-        return current or "untagged"
+    turn_of = _turn_resolver(list(nodes.values()))
 
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for node in members:
@@ -172,8 +183,16 @@ def turns(full: Dict[str, Any]) -> Dict[str, Any]:
     return {"turns": out, "count": len(out)}
 
 
-def execution_tree(full: Dict[str, Any]) -> Dict[str, Any]:
-    """The call graph as one tree per user request, ready to draw left to right.
+def execution_tree(full: Dict[str, Any],
+                   turn: Optional[str] = None) -> Dict[str, Any]:
+    """The call graph of ONE user request, ready to draw left to right.
+
+    A session's worth of requests on one canvas was the wrong unit: lanes
+    collided across requests, the canvas ran to thousands of pixels, and the
+    thing a reader actually wants to follow — what this prompt caused — was
+    buried. One request is drawn at a time; ``turn`` picks it, and the newest
+    is used when nothing is asked for. Every request in the graph is listed
+    back under ``turns`` so a caller can offer the choice.
 
     The stored graph is not shaped for reading. Older snapshots still carry the
     seeded roster — every configured agent wired to a hub by ``has_member``,
@@ -189,8 +208,28 @@ def execution_tree(full: Dict[str, Any]) -> Dict[str, Any]:
     node can be shared by several requests and inference would pin it to
     whichever one reached it first.
     """
-    nodes = {n["id"]: dict(n) for n in full.get("nodes", [])}
-    edges = [e for e in full.get("edges", []) if e.get("type") != "has_member"]
+    every = full.get("nodes", [])
+    resolve = _turn_resolver(every)
+
+    catalogue, seen = [], set()
+    for node in sorted((n for n in every if n.get("kind") == "goal"),
+                       key=lambda n: n.get("t_start") or 0.0):
+        key = resolve(node)
+        if key in seen:
+            continue
+        seen.add(key)
+        catalogue.append({"turn_id": key, "prompt": node.get("label") or "",
+                          "t_start": node.get("t_start")})
+
+    chosen = turn or (catalogue[-1]["turn_id"] if catalogue else None)
+    if chosen is not None:
+        every = [n for n in every
+                 if n.get("kind") == "system" or resolve(n) == chosen]
+
+    nodes = {n["id"]: dict(n) for n in every}
+    edges = [e for e in full.get("edges", [])
+             if e.get("type") != "has_member"
+             and e.get("src") in nodes and e.get("dst") in nodes]
 
     roots = [n for n in nodes.values() if n.get("kind") == "system"]
     for root in roots:                       # the hub is a fixture, not an event
@@ -239,16 +278,23 @@ def execution_tree(full: Dict[str, Any]) -> Dict[str, Any]:
     ordered = sorted(nodes.values(),
                      key=lambda n: (n.get("t_start") or 0.0, n["level"]))
     _place_in_time(ordered, edges)
-    return {"run_id": full.get("run_id"), "nodes": ordered, "edges": edges}
+    return {"run_id": full.get("run_id"), "nodes": ordered, "edges": edges,
+            "turns": catalogue, "turn_id": chosen}
 
 
-#: Horizontal pixels between two calls that began at the same moment, and the
-#: most a single idle stretch is allowed to occupy. A run waits forty minutes
-#: for a sandbox; drawn to scale that gap is the whole picture and the calls on
-#: either side of it are a smudge, so long waits are compressed and the order
-#: is what survives.
-_MIN_STEP, _MAX_STEP, _PIXELS_PER_SECOND = 34, 260, 6.0
-_ROW_HEIGHT = 120
+#: A card is this wide on screen, and two of them in one lane need this much
+#: clear space between their left edges or they overlap. Getting this wrong is
+#: what made consecutive calls sit on top of each other: time alone decided x,
+#: and a busy second put several 190-pixel cards inside forty pixels.
+_CARD_WIDTH, _CARD_GAP = 190, 26
+_LANE_PITCH = _CARD_WIDTH + _CARD_GAP
+
+#: How far the clock moves a node, and the most a single idle stretch may
+#: occupy. A run waits forty minutes for a sandbox; drawn to scale that gap is
+#: the whole picture and the calls either side of it are a smudge, so long
+#: waits compress and the order is what survives.
+_MAX_STEP, _PIXELS_PER_SECOND = 420, 8.0
+_ROW_HEIGHT = 150
 
 
 def _place_in_time(ordered: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> None:
@@ -302,17 +348,33 @@ def _place_in_time(ordered: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -
         if agent is not None and agent not in rows:
             rows[agent] = len(rows) + 1
 
+    # One pass, in time order. Each node starts at least a card's width to the
+    # right of the one before it, and further when the clock says so. The floor
+    # is global rather than per lane: packing lanes separately let a busy lane
+    # push its cards past a quiet one, so x stopped agreeing with time. With the
+    # floor applied to every step, reading left to right is reading forward in
+    # time everywhere, and no two cards can overlap in any lane.
     previous_start, x = None, 0.0
     for node in ordered:
         started = node.get("t_start")
-        if previous_start is not None and started is not None:
-            gap = max(0.0, started - previous_start) * _PIXELS_PER_SECOND
-            x += min(_MAX_STEP, max(_MIN_STEP, gap))
-        elif previous_start is not None:
-            x += _MIN_STEP
+        if previous_start is not None:
+            gap = (max(0.0, started - previous_start) * _PIXELS_PER_SECOND
+                   if started is not None else 0.0)
+            x += max(_LANE_PITCH, min(_MAX_STEP, gap))
         if started is not None:
             previous_start = started
-        node["x"] = round(x)
-        node["row"] = 0 if node.get("kind") in ("goal", "result") \
+        row = 0 if node.get("kind") in ("goal", "result") \
             else rows.get(agent_of(node) or "", 1)
-        node["y"] = node["row"] * _ROW_HEIGHT
+        node["row"] = row
+        node["x"] = round(x)
+        node["y"] = row * _ROW_HEIGHT
+        node["card_width"] = _CARD_WIDTH
+
+    # The answer closes the request, so it sits past everything the request did.
+    # Its own timestamp cannot be trusted for this: older snapshots recorded it
+    # without one, which left it drawn in the middle of the work it summarises.
+    answers = [n for n in ordered if n.get("kind") == "result"]
+    if answers:
+        rightmost = max(n["x"] for n in ordered if n.get("kind") != "result")
+        for offset, answer in enumerate(answers):
+            answer["x"] = round(rightmost + _LANE_PITCH * (offset + 1))

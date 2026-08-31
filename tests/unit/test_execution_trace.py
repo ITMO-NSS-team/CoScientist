@@ -211,6 +211,14 @@ def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
     # Reading left to right reads forward in time.
     order = sorted(placed.values(), key=lambda n: n["x"])
     assert [n["id"] for n in order] == ["goal:i1", "a:One", "t:1", "t:2", "a:Two", "t:3"]
+    # And no two cards in one lane can sit on top of each other.
+    from CoScientist.graph.projection import _CARD_WIDTH
+    by_row = {}
+    for node in placed.values():
+        by_row.setdefault(node["row"], []).append(node["x"])
+    for xs in by_row.values():
+        xs.sort()
+        assert all(b - a >= _CARD_WIDTH for a, b in zip(xs, xs[1:]))
 
     # Calls sit in the row of the agent that made them, not at their depth.
     assert placed["t:1"]["row"] == placed["t:2"]["row"] == placed["a:One"]["row"]

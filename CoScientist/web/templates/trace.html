@@ -38,6 +38,9 @@
     .turn .n { color:var(--accent); font-weight:700; font-variant-numeric:tabular-nums; }
     .turn .p { font-weight:600; flex:1; }
     .turn .d { color:var(--ink3); font-variant-numeric:tabular-nums; font-size:12px; }
+    .turn .g { color:var(--ink3); font-size:12px; text-decoration:none;
+      border:1px solid var(--line); border-radius:6px; padding:2px 7px; }
+    .turn .g:hover { color:var(--ink); border-color:var(--accent); }
     .calls { padding:6px 0; }
     .call { display:grid; grid-template-columns:74px 150px 1fr 200px 62px; gap:10px;
       align-items:center; padding:5px 14px; cursor:pointer; }
@@ -51,7 +54,7 @@
     .io { display:none; grid-column:1/-1; padding:8px 0 4px; }
     .call.open .io { display:block; }
     .io pre { margin:4px 0; padding:8px 10px; background:var(--bg); border:1px solid var(--line);
-      border-radius:7px; max-height:230px; overflow:auto; white-space:pre-wrap;
+      border-radius:7px; max-height:460px; overflow:auto; white-space:pre-wrap;
       word-break:break-word; font-size:11.5px; color:var(--ink2); }
     .io b { color:var(--ink3); font-size:10.5px; letter-spacing:.5px; text-transform:uppercase; }
     .ans { padding:10px 14px; border-top:1px solid var(--line); color:var(--ink2); }
@@ -139,6 +142,9 @@ function renderTurn(t, n) {
         <span class="n">#${n}</span>
         <span class="p">${esc(t.prompt || "(no prompt recorded)")}</span>
         <span class="d">${clock(t.t_start)} · ${secs(t.duration)} · ${t.calls.length} calls</span>
+        <a class="g" href="/graph?user_id=${encodeURIComponent(userId)}`
+          + `&session_id=${encodeURIComponent(sessionId)}&view=execution`
+          + `&turn=${encodeURIComponent(t.turn_id)}" title="this request as a graph">graph →</a>
       </header>
       <div class="calls">${t.calls.map(c => renderCall(c, t.t_start, span)).join("")
         || '<div class="empty" style="padding:10px 14px">No tool calls in this turn.</div>'}</div>

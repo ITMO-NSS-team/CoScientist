@@ -100,9 +100,49 @@ def _enabled() -> bool:
     return value not in ("0", "false", "False")
 
 
-def _short(value: Any, limit: int = 300) -> str:
-    s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
-    return s if len(s) <= limit else s[:limit] + "…"
+#: Room for an input and for an output on a node. Generous rather than
+#: unbounded: the whole graph is rewritten to disk on every single write, so a
+#: half-megabyte sandbox log on one node is paid for again on every node that
+#: follows it. What is cut says so, and says how much was cut.
+_INPUT_LIMIT, _OUTPUT_LIMIT = 4000, 20000
+
+
+def _readable(value: Any) -> str:
+    """A tool's arguments or result as prose, not as a JSON dump.
+
+    The panel used to show `{"query": "aspirin mechanism", "max_results": 5}`,
+    which is the wire format and not something anyone wants to read. A mapping
+    becomes one `key: value` line each, a list becomes one item per line, and a
+    string is already what it should be. Nested structures fall back to JSON,
+    indented, because inventing prose for them would hide their shape.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        lines = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list, tuple)):
+                rendered = json.dumps(item, ensure_ascii=False, indent=2,
+                                      default=str)
+                lines.append(f"{key}:\n" + "\n".join(
+                    "  " + line for line in rendered.splitlines()))
+            else:
+                lines.append(f"{key}: {item}")
+        return "\n".join(lines)
+    if isinstance(value, (list, tuple)):
+        return "\n".join(_readable(item) for item in value)
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _short(value: Any, limit: int = _INPUT_LIMIT) -> str:
+    text = _readable(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n… [{len(text) - limit} more characters]"
 
 
 def _content_text(content: Any) -> str:
@@ -330,7 +370,7 @@ class GraphMemoryPlugin(BasePlugin):
             if nid:
                 graph.set_status(
                     nid, status="failed" if _is_error(result) else "success",
-                    output=_short(result, 400), t_end=time.time(),
+                    output=_short(result, _OUTPUT_LIMIT), t_end=time.time(),
                 )
         except Exception:  # noqa: BLE001
             pass
@@ -347,7 +387,7 @@ class GraphMemoryPlugin(BasePlugin):
             )
             if nid:
                 graph.set_status(
-                    nid, status="failed", output=_short(str(error), 300), t_end=time.time(),
+                    nid, status="failed", output=_short(str(error), _OUTPUT_LIMIT), t_end=time.time(),
                 )
         except Exception:  # noqa: BLE001
             pass
