@@ -323,3 +323,62 @@ def test_dataset_link_is_validated_stored_and_broadcast_per_session():
             assert websocket.receive_json() == {"type": "dataset_url", "dataset_url": ""}
         assert key not in runtime.dataset_urls
         assert adk_session.state[web_app.DATASET_URL_STATE_KEY] == ""
+
+
+def test_report_language_is_validated_stored_and_broadcast_per_session():
+    """The composer's language picker: a closed enum, per session, on reconnect."""
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Gleb")
+        session = _create_session(client, user["id"], "Work")
+        other = _create_session(client, user["id"], "Other")
+        key = (user["id"], session["id"])
+        url = f"/ws?user_id={user['id']}&session_id={session['id']}"
+
+        with client.websocket_connect(url) as websocket:
+            websocket.receive_json()                       # connected
+            # Empty, not "ru": the server must not pick for the browser, or the
+            # UI default could never follow the interface language.
+            assert websocket.receive_json()["report_language"] == ""
+
+            # Anything outside the enum is refused before it reaches the session.
+            for bad in ("de", "russian", "en-US"):
+                websocket.send_json({
+                    "type": "set_report_language", "report_language": bad,
+                })
+                rejected = websocket.receive_json()
+                assert rejected["type"] == "report_language_rejected"
+                assert rejected["message"]
+            assert key not in runtime.report_languages
+
+            websocket.send_json({"type": "set_report_language", "report_language": "en"})
+            accepted = websocket.receive_json()
+            assert accepted == {"type": "report_language", "report_language": "en"}
+            assert runtime.report_languages[key] == "en"
+
+        # Mirrored into ADK state, where inject_report_language reads it.
+        adk_session = runtime.session_service.sessions[APP_NAME][user["id"]][session["id"]]
+        assert adk_session.state[web_app.REPORT_LANGUAGE_STATE_KEY] == "en"
+
+        # A reconnecting tab gets it back; a sibling session is unaffected.
+        with client.websocket_connect(url) as websocket:
+            websocket.receive_json()
+            assert websocket.receive_json()["report_language"] == "en"
+        with client.websocket_connect(
+            f"/ws?user_id={user['id']}&session_id={other['id']}"
+        ) as websocket:
+            websocket.receive_json()
+            assert websocket.receive_json()["report_language"] == ""
+
+        # Clearing drops the mirror and empties the agent-visible state, which
+        # hands the session back to the callback's default.
+        with client.websocket_connect(url) as websocket:
+            websocket.receive_json()
+            websocket.receive_json()
+            websocket.send_json({"type": "set_report_language", "report_language": ""})
+            assert websocket.receive_json() == {
+                "type": "report_language", "report_language": "",
+            }
+        assert key not in runtime.report_languages
+        assert adk_session.state[web_app.REPORT_LANGUAGE_STATE_KEY] == ""

@@ -807,6 +807,11 @@ def _inject_dataset_context():
     return inject_dataset_context
 
 
+def _inject_report_language():
+    from CoScientist.agents.callbacks import inject_report_language
+    return inject_report_language
+
+
 def _inject_research_context(ctx):
     """before_agent callback seeding state['research_context']. The orchestrator
     (root) gets the overview + trigger digest; a worker gets its focus slice.
@@ -922,6 +927,9 @@ _cb("inject_research_context", "before_agent", factory=_inject_research_context)
 # Tell the agent about the dataset archive the user attached in the web UI; it
 # decides itself which calls need the link.
 _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_dataset_context())
+# Report language the user picked for this session: inject the whole block
+# (headings, substitution rule, glossary), not a bare language name.
+_cb("inject_report_language", "before_agent", factory=lambda ctx: _inject_report_language())
 # Human-In-The-Loop approval callback before model/agent execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())

@@ -15,6 +15,7 @@ Bundle contents
     agent_events.json               — WebRuntime.agent_events log (chat + tool activity)
     metrics.json                    — WebRuntime.metrics (cost snapshot)
     dataset_url.json                — attached dataset URL
+    report_language.json            — report language chosen for the session
     settings_snapshot.json          — settings at export time (read-only, informational)
     graphs/execution.json           — execution graph snapshot
     graphs/research_active.json     — research graph snapshot
@@ -33,6 +34,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
+from CoScientist.agents.callbacks.report_language import REPORT_LANGUAGES
+
 logger = logging.getLogger("CoScientist.web.session_bundle")
 
 BUNDLE_VERSION = 1
@@ -44,6 +47,7 @@ _ADK_SESSION = "adk_session.json"
 _AGENT_EVENTS = "agent_events.json"
 _METRICS = "metrics.json"
 _DATASET_URL = "dataset_url.json"
+_REPORT_LANGUAGE = "report_language.json"
 _SETTINGS = "settings_snapshot.json"
 _GRAPH_EXECUTION = "graphs/execution.json"
 _GRAPH_RESEARCH = "graphs/research_active.json"
@@ -106,6 +110,7 @@ async def export_session(
 
     # 5. Dataset URL
     dataset_url = runtime.dataset_urls.get(key, "")
+    report_language = runtime.report_languages.get(key, "")
 
     # 6. Settings snapshot
     settings_snapshot: Dict[str, Any] = {}
@@ -163,6 +168,9 @@ async def export_session(
         if metrics is not None:
             zf.writestr(_METRICS, _json_bytes(metrics))
         zf.writestr(_DATASET_URL, _json_bytes({"dataset_url": dataset_url}))
+        # No BUNDLE_VERSION bump: an older bundle without this member reads
+        # back as {}, and older code ignores a zip entry it does not know.
+        zf.writestr(_REPORT_LANGUAGE, _json_bytes({"report_language": report_language}))
         zf.writestr(_SETTINGS, _json_bytes(settings_snapshot))
         if execution_graph is not None:
             zf.writestr(_GRAPH_EXECUTION, _json_bytes(execution_graph))
@@ -219,6 +227,7 @@ async def import_session(
     agent_events = _read_json(_AGENT_EVENTS) or []
     metrics = _read_json(_METRICS)
     dataset_url_data = _read_json(_DATASET_URL) or {}
+    report_language_data = _read_json(_REPORT_LANGUAGE) or {}
     research_graph_data = _read_json(_GRAPH_RESEARCH)
     execution_graph_data = _read_json(_GRAPH_EXECUTION)
 
@@ -284,6 +293,17 @@ async def import_session(
     dataset_url = dataset_url_data.get("dataset_url", "")
     if dataset_url:
         runtime.dataset_urls[key] = dataset_url
+    report_language = report_language_data.get("report_language", "")
+    # A bundle is a file the user can edit, so it does not get to bypass the
+    # enum the socket enforces. An unknown value leaves the session with no
+    # choice, and the callback normalizer supplies the default.
+    if report_language in REPORT_LANGUAGES:
+        runtime.report_languages[key] = report_language
+    elif report_language:
+        logger.warning(
+            "Session bundle carries an unknown report language %r. Ignored.",
+            report_language,
+        )
 
     # --- Restore graphs ---
     _restore_graph_files(user_id, session_id, execution_graph_data, research_graph_data)
