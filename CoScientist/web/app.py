@@ -17,6 +17,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
+from CoScientist.agents.callbacks.report_language import (
+    REPORT_LANGUAGES,
+    REPORT_LANGUAGE_STATE_KEY,
+)
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.web.session_registry import LocalSessionRegistry
@@ -96,6 +100,23 @@ def _validated_dataset_url(raw: Any) -> str:
     if not parsed.path.lower().endswith(".zip"):
         raise ValueError("Dataset link must point to a .zip archive.")
     return url
+
+
+def _validated_report_language(raw: Any) -> str:
+    """Normalize the report language the user picked; "" clears the choice.
+
+    A closed enum, so a typo becomes an immediate message instead of a finished
+    report in the wrong language. Clearing it hands the session back to the
+    default that ``normalize_report_language`` applies.
+    """
+    lang = str(raw or "").strip().lower()
+    if not lang:
+        return ""
+    if lang not in REPORT_LANGUAGES:
+        raise ValueError(
+            "Report language must be one of: " + ", ".join(REPORT_LANGUAGES) + "."
+        )
+    return lang
 
 
 def _apply_frontend_settings(frontend: dict) -> None:
@@ -258,6 +279,10 @@ class WebRuntime:
         # here as well as in ADK state so a reconnecting tab and a session whose
         # manager has not been built yet both see the same link.
         self.dataset_urls: dict[SessionKey, str] = {}
+        # Report language chosen for a session from the chat composer. Holds
+        # ONLY explicit choices — an absent key means the browser has not spoken
+        # yet, which is what lets the UI default follow its interface language.
+        self.report_languages: dict[SessionKey, str] = {}
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
         self.hitl_handler.set_sender(self.send_socket)
@@ -485,6 +510,7 @@ class WebRuntime:
                     "run_status_version": version,
                     "metrics": self.metrics.get(key),
                     "dataset_url": self.dataset_urls.get(key, ""),
+                    "report_language": self.report_languages.get(key, ""),
                 })
             except Exception:
                 self.detach_socket(key, ws)
@@ -525,6 +551,57 @@ class WebRuntime:
                 author="user",
                 actions=EventActions(
                     state_delta={DATASET_URL_STATE_KEY: current},
+                ),
+            ),
+        )
+        return current
+
+    async def apply_report_language(
+        self,
+        key: SessionKey,
+        lang: str | None = None,
+    ) -> str:
+        """Set/clear the session's report language and mirror it into ADK state.
+
+        ``lang=None`` re-syncs the stored choice without changing it — called at
+        the start of every run, because the ADK session may not have existed yet
+        when the user picked the language.
+
+        The mirror holds only explicit choices, and an unset session mirrors ""
+        into state rather than a language. That keeps the one fallback site in
+        ``normalize_report_language``. Writing a default here would turn "the UI
+        default follows its interface language" into "the default is always
+        Russian".
+        """
+        if lang is not None:
+            if lang:
+                self.report_languages[key] = lang
+            else:
+                self.report_languages.pop(key, None)
+        current = self.report_languages.get(key, "")
+        if lang is None and not current:
+            # A re-sync must never downgrade a language already in state to "".
+            # Only an explicit clear does that, so a session whose state carries
+            # a choice the mirror has lost keeps it.
+            return current
+
+        user_id, session_id = key
+        adk_session = await self.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if adk_session is None:
+            return current
+        if adk_session.state.get(REPORT_LANGUAGE_STATE_KEY, "") == current:
+            return current
+        await self.session_service.append_event(
+            adk_session,
+            Event(
+                invocation_id=f"reportlang_{uuid4().hex}",
+                author="user",
+                actions=EventActions(
+                    state_delta={REPORT_LANGUAGE_STATE_KEY: current},
                 ),
             ),
         )
@@ -1557,6 +1634,22 @@ def create_app() -> FastAPI:
                         "type": "dataset_url",
                         "dataset_url": url,
                     })
+                elif msg_type == "set_report_language":
+                    try:
+                        lang = _validated_report_language(data.get("report_language"))
+                    except ValueError as exc:
+                        await runtime.send_socket(ws, {
+                            "type": "report_language_rejected",
+                            "message": str(exc),
+                        }, key)
+                        continue
+                    await runtime.apply_report_language(key, lang)
+                    # Broadcast: the report is one document, so every tab on the
+                    # session agrees on its language, whichever one picked it.
+                    await runtime.send(key, {
+                        "type": "report_language",
+                        "report_language": lang,
+                    })
                 elif msg_type == "hitl_response":
                     _handle_hitl_response(runtime, key, data)
                 elif msg_type == "ping":
@@ -1628,6 +1721,9 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         # manager), so mirror it into state now that the session exists — this is
         # what puts the link in front of CoderAgent.
         await runtime.apply_dataset_url(key)
+        # Same reason as the attachment above: the language may have been picked
+        # before the ADK session existed.
+        await runtime.apply_report_language(key)
         runtime.registry.touch_session(user_id, session_id, status="processing")
         execution_lock = runtime.execution_locks[key]
 
@@ -1699,6 +1795,8 @@ async def _run_chat_invocation(
     # The Result Aggregator runs as the terminal stage of the SAME run_async, so its
     # format_results reads report_config mid-invocation — set it before the run.
     # TODO(planning): thread a real ReportConfig (e.g. --latex mode) from the web layer.
+    # The report LANGUAGE is not part of this — it travels as session state
+    # (report_language) and reaches the prompt through inject_report_language.
     report_config = ReportConfig()
     await manager._set_state("report_config", report_config.to_state())
 

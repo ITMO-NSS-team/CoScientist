@@ -186,7 +186,7 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      before_agent: [inject_research_context]
+      before_agent: [inject_research_context, inject_report_language]
     output_key: final_report
 
   HypothesesAgent:

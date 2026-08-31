@@ -1,4 +1,4 @@
-"""Agent callbacks: tool/reranker, critic, medical, and research callbacks.
+"""Agent callbacks: tool/reranker, critic, medical, research, and report-language callbacks.
 
 Re-exported here so callers can use `from CoScientist.agents.callbacks import
 <name>` regardless of which submodule defines it.
@@ -13,6 +13,7 @@ from CoScientist.agents.callbacks.med_callbacks import (
     med_agent_before_model,
 )
 from CoScientist.agents.callbacks.json_output import sanitize_json_output
+from CoScientist.agents.callbacks.report_language import inject_report_language
 from CoScientist.agents.callbacks.research_callbacks import (
     cleanup_uploaded_papers,
     ensure_local_papers_uploaded,
@@ -54,5 +55,6 @@ __all__ = [
     "before_get_task",
     "inject_graph_root",
     "inject_dataset_context",
+    "inject_report_language",
     "sanitize_json_output",
 ]

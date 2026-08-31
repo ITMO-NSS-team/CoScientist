@@ -2105,10 +2105,10 @@ typed graph of ResearchQuestion → Hypotheses (each confirmed / refuted / postp
 node. Your job is to read that graph and synthesize ONE cohesive, visually rich,
 self-contained Markdown report — the final deliverable a researcher will read.
 
-**WRITE THE REPORT IN RUSSIAN.** Everything the reader sees — headings, prose,
-captions, list items, conclusions — is Russian. These instructions are in English,
-the report is not. The "Language" section below names the parts that stay
-untranslated.
+These instructions are in English. The report is written in the language the
+**Report language** section at the end mandates — in full: headings, prose,
+captions, list items, and conclusions. That section also fixes the section
+headings and the entity names, so read it before you write a line.
 
 The graph is your source of truth, NOT a chat transcript (you have none). The
 system solves open-ended, de-novo scientific questions — do NOT assume this was a
@@ -2128,43 +2128,29 @@ A starting digest of the graph:
    data table the run produced into the report folder and returns ready-to-embed
    Markdown blocks (image embeds with relative paths like `figures/<name>.png`, and
    tables). Embed those blocks VERBATIM — do not rewrite the paths or re-type tables.
-   Exactly two substitutions are allowed, and no others: the block heading
-   `## Figures` becomes `## Иллюстрации`, and `## Data tables` becomes
-   `## Таблицы данных`. The `### <label>` lines under them are FILENAMES — never
-   translate or rename them. Put your Russian caption in a sentence of your own
-   next to the figure instead.
-3. **Write the report.** Structure it clearly with these Russian headings:
-   - **Цель** — the ResearchQuestion in your own words.
-   - **Подход** — the hypotheses explored and the methods/tools/agents used.
-   - **Результаты** — the findings, keyed to the graph's Conclusions and Evidence,
+   Only the heading substitutions listed in the **Report language** section are
+   allowed, and no others. The `### <label>` lines are FILENAMES — never translate
+   or rename them. Put your caption in a sentence of your own next to the figure
+   instead.
+3. **Write the report.** Give it these five sections, in this order. The heading
+   STRING for each one comes from the **Report language** section — use it exactly.
+   - *Objective* — the ResearchQuestion in your own words.
+   - *Approach* — the hypotheses explored and the methods/tools/agents used.
+   - *Results* — the findings, keyed to the graph's Conclusions and Evidence,
      with figures/tables from step 2 placed where they support the text. State
      concrete numbers from the actual Evidence nodes. Report refuted or postponed
      hypotheses honestly as negative results — do not hide them.
-   - **Обсуждение** — interpretation, caveats, discrepancies, and any failures.
-   - **Ограничения и дальнейшие шаги** — what a researcher should do to extend or
-     verify.
+   - *Discussion* — interpretation, caveats, discrepancies, and any failures.
+   - *Limitations & next steps* — what a researcher should do to extend or verify.
 4. **Ground every claim in a graph node.** Do not invent numbers, citations, or
    figures. If the graph is empty or a branch failed, say so plainly rather than
    papering over it.
 5. **No placeholders.** The report must render on its own — every referenced figure
    and table must be one `format_results` actually collected.
 
-### Language
-The graph, its node labels and the digest above are written in English. Translate
-their substance into Russian — never quote an English sentence into the report.
-Keep these untranslated:
-   - numbers, units, formulas, and dates;
-   - node ids, file paths, and links;
-   - citation strings, author names, and paper titles;
-   - code, tool, agent, and parameter identifiers.
-For a domain term whose Russian form is ambiguous, write the Russian term and give
-the English one in parentheses at its first use. Name the graph entities with the
-spec's Russian terms: ResearchQuestion — исследовательский вопрос, Hypothesis —
-гипотеза, Evidence — свидетельство, Conclusion — заключение, VerificationMethod —
-метод проверки, Constraint — ограничение, Tool — инструмент. Report hypothesis
-statuses as подтверждена / опровергнута / отложена.
+{report_language_block?}
 
-Output the complete Markdown report, written in Russian, as your final message.
+Output the complete Markdown report, in the mandated language, as your final message.
 ''')
 
 

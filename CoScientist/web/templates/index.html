@@ -356,6 +356,14 @@
               </button>
             </div>
           </div>
+          <!-- Report language for THIS session. Separate from the interface
+               language toggle (lang-btn-en / lang-btn-ru) in the sidebar. -->
+          <select id="report-lang-select" onchange="onReportLanguageChange()"
+            title="Report language / Язык отчёта"
+            class="shrink-0 bg-surface-container-highest border border-outline-variant/20 text-on-surface-variant text-[10px] font-mono rounded-md px-2 py-1 focus:border-primary/40 focus:ring-0 cursor-pointer">
+            <option value="ru" data-i18n="composer.reportLang.ru">Отчёт: RU</option>
+            <option value="en" data-i18n="composer.reportLang.en">Отчёт: EN</option>
+          </select>
           <textarea id="chat-input" rows="3" wrap="soft" spellcheck="false" autocomplete="off"
             class="bg-transparent border-none focus:ring-0 text-sm flex-1 py-1.5 text-on-surface placeholder:text-outline-variant/50 font-medium no-scrollbar"
             placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"
@@ -444,6 +452,10 @@
       'nav.noUser': { en: 'No user selected', ru: 'Пользователь не выбран' },
       'nav.disconnected': { en: 'Disconnected', ru: 'Отключено' },
       'nav.orchestrator': { en: 'ORCHESTRATOR', ru: 'ОРКЕСТРАТОР' },
+
+      // ── Composer: report language (NOT the interface language) ──
+      'composer.reportLang.ru': { en: 'Report: RU', ru: 'Отчёт: RU' },
+      'composer.reportLang.en': { en: 'Report: EN', ru: 'Отчёт: EN' },
 
       // Agent descriptions in side nav
       'agent.OrchestratorAgent.desc': { en: 'Master Orchestrator', ru: 'Главный оркестратор' },
@@ -2333,6 +2345,7 @@
       clearChat();
       // Drop the previous session's attachment; the snapshot brings the new one.
       applyDatasetUrl('');
+      applyReportLanguage('');
       connect();
     }
 
@@ -2419,6 +2432,15 @@
 
       // The attachment belongs to the session the snapshot describes.
       applyDatasetUrl(snapshot.dataset_url);
+      // A session that already has a language keeps it. A fresh one adopts the
+      // interface language AND records it, so flipping the interface toggle
+      // later does not silently rewrite a report language already in use.
+      if (snapshot.report_language) {
+        applyReportLanguage(snapshot.report_language);
+      } else {
+        applyReportLanguage(currentLang);
+        sendReportLanguage(currentLang);
+      }
       updateCoderSandboxButton(null);
 
       for (const message of messages) {
@@ -2609,6 +2631,14 @@
             addSystemMsg('Dataset link rejected: ' + data.message);
             addTelemetry('DATASET :: rejected');
             break;
+          case 'report_language':
+            applyReportLanguage(data.report_language);
+            addTelemetry('REPORT LANG :: ' + data.report_language);
+            break;
+          case 'report_language_rejected':
+            addSystemMsg('Report language rejected: ' + data.message);
+            addTelemetry('REPORT LANG :: rejected');
+            break;
           case 'chat_accepted': {
             const input = document.getElementById('chat-input');
             if (input.value.trim() === String(data.message_text || '').trim()) {
@@ -2693,6 +2723,36 @@
     // is only a mirror of what the last snapshot/broadcast said.
     // =========================================================================
     let datasetUrl = '';
+
+    // Report language for the current session. Like the dataset link it lives
+    // on the SERVER, so this is only a mirror of the last snapshot/broadcast.
+    // '' means the server has no choice for this session yet.
+    let reportLanguage = '';
+
+    function applyReportLanguage(lang) {
+      reportLanguage = String(lang || '');
+      const select = document.getElementById('report-lang-select');
+      // With no server-side choice, show the interface language as the default.
+      if (select) select.value = reportLanguage || currentLang;
+    }
+
+    function sendReportLanguage(lang) {
+      if (!ws || ws.readyState !== 1) return false;
+      ws.send(JSON.stringify({ type: 'set_report_language', report_language: lang }));
+      return true;
+    }
+
+    function onReportLanguageChange() {
+      // Send only; the mirror is set when the server echoes, as with the dataset.
+      const select = document.getElementById('report-lang-select');
+      if (sendReportLanguage(select.value)) return;
+      // The socket is down, so the server never heard the pick. Put the select
+      // back to the language that is still in effect, or the report comes out
+      // in a language the UI no longer shows.
+      applyReportLanguage(reportLanguage);
+      addSystemMsg('Not connected — reconnect and try again.');
+      addTelemetry('REPORT LANG :: not sent, socket is down');
+    }
 
     function toggleAttachMenu(show) {
       const menu = document.getElementById('attach-menu');
