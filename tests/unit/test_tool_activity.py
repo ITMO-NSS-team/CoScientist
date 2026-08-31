@@ -107,6 +107,27 @@ def test_oversized_payload_degrades_to_truncated_text(sink):
     (_, payload), = sink
     assert isinstance(payload["result"], str)
     assert len(payload["result"]) <= tool_activity._PREVIEW_LIMIT + 2
+    # The full (untruncated) value rides alongside the preview so the web app
+    # can stash it for on-demand fetch — it must actually contain everything.
+    assert payload["result_truncated"] is True
+    # Well under the (much larger) full-value ceiling, so structure survives.
+    assert payload["result_full"] == {"blob": "x" * 50_000}
+
+
+def test_small_payload_carries_no_full_copy(sink):
+    """No point doubling memory for a value that was never truncated."""
+    plugin = tool_activity.ToolActivityPlugin()
+
+    asyncio.run(plugin.after_tool_callback(
+        tool=SimpleNamespace(name="tavily_search"),
+        tool_args={},
+        tool_context=agent_tool_context(),
+        result={"answer": "206.29"},
+    ))
+
+    (_, payload), = sink
+    assert payload["result_truncated"] is False
+    assert "result_full" not in payload
 
 
 def test_a_failing_sink_cannot_break_the_run(monkeypatch):

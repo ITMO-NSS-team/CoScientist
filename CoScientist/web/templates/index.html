@@ -1269,7 +1269,7 @@
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">You</span>
         </div>
         <div class="bg-primary/5 p-4 rounded-xl rounded-tr-none border border-primary/20">
-          <p class="text-sm text-on-surface">${escHtml(text)}</p>
+          <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap break-words">${escHtml(text)}</p>
         </div>
       </div>
     </div>`);
@@ -3406,6 +3406,7 @@
     let agentNodes = new Map();        // agent name -> { name, calls: [], firstSeenAt }
     let agentOrder = [];               // agent names, in first-seen order
     let agentParent = new Map();       // child agent name -> parent agent name
+    let agentSpawnCall = new Map();    // child agent name -> uid of its delegation call
     const collapsedAgents = new Set(); // agent names whose branch is folded
     let toolSeq = 0;
     const tvOpenCards = new Set();     // uids whose bodies are unfolded
@@ -3417,6 +3418,7 @@
       agentNodes = new Map();
       agentOrder = [];
       agentParent = new Map();
+      agentSpawnCall = new Map();
       collapsedAgents.clear();
       tvOpenCards.clear();
       tvExpandedBlocks.clear();
@@ -3468,7 +3470,8 @@
       // First delegator wins — if the same agent gets invoked again later
       // (by the same or another caller) it stays put in the tree rather than
       // jumping to a new parent.
-      if (target && !agentParent.has(target)) {
+      const spawnsChild = !!target && !agentParent.has(target);
+      if (spawnsChild) {
         agentParent.set(target, author);
       }
       const rec = {
@@ -3486,6 +3489,9 @@
         startedAt: at,
         endedAt: null,
       };
+      // Remember which card opened the branch, so the subordinate's own
+      // calls render directly beneath that `delegates` row.
+      if (spawnsChild) agentSpawnCall.set(target, rec.uid);
       agentNode(author).calls.push(rec);
       toolCallRecords.push(rec);
       toolCallsById.set(rec.uid, rec);
@@ -3733,6 +3739,10 @@
       if (toolCallRecords.length <= EXPERIMENT_LOG_LIMIT) return;
       const dropped = toolCallRecords.splice(0, toolCallRecords.length - EXPERIMENT_LOG_LIMIT);
       const touchedAgents = new Set();
+      const droppedUids = new Set(dropped.map(rec => rec.uid));
+      agentSpawnCall.forEach((uid, child) => {
+        if (droppedUids.has(uid)) agentSpawnCall.delete(child);
+      });
       dropped.forEach(rec => {
         toolCallsById.delete(rec.uid);
         tvOpenCards.delete(rec.uid);
@@ -3754,6 +3764,7 @@
         agentNodes.delete(name);
         agentOrder = agentOrder.filter(n => n !== name);
         agentParent.delete(name);
+        agentSpawnCall.delete(name);
         collapsedAgents.delete(name);
       });
     }
@@ -3872,15 +3883,31 @@
         </div>`;
     }
 
-    // One branch of the call tree: the agent's own tool calls, then its
-    // children — agents it delegated to — nested and indented beneath it.
-    // Two agents active at once are simply two branches, so parallel
-    // activity never interleaves into a single confusing list.
+    // One branch of the call tree: the agent's own tool calls, each child
+    // branch nested and indented directly under the `delegates` card that
+    // spawned it. Two agents delegated to in parallel therefore stay next to
+    // their own hand-off rows instead of both piling up after the parent's
+    // last call, where neither could be told apart.
     function renderAgentNode(name) {
       const node = agentNodes.get(name);
       if (!node) return '';
       const calls = node.calls;
       const children = agentOrder.filter(n => agentParent.get(n) === name);
+      // A child whose delegation card is gone — trimmed out of the log, or
+      // never seen because the feed joined the run late — still belongs to
+      // this branch: it goes at the tail rather than disappearing.
+      const ownUids = new Set(calls.map(rec => rec.uid));
+      const childrenByCall = new Map();
+      const tailChildren = [];
+      children.forEach(child => {
+        const uid = agentSpawnCall.get(child);
+        if (uid && ownUids.has(uid)) {
+          if (!childrenByCall.has(uid)) childrenByCall.set(uid, []);
+          childrenByCall.get(uid).push(child);
+        } else {
+          tailChildren.push(child);
+        }
+      });
       const running = calls.filter(rec => rec.status === 'running').length;
       const failed = calls.filter(rec => rec.status === 'error').length;
       const done = calls.length - running;
@@ -3894,13 +3921,15 @@
         ? (calls[calls.length - 1].endedAt || calls[calls.length - 1].startedAt)
         : node.firstSeenAt;
 
+      const nestBranches = names => names.length ? `
+            <div class="ml-3 pl-3 border-l-2 border-outline-variant/15 space-y-1.5">
+              ${names.map(renderAgentNode).join('')}
+            </div>` : '';
+
       const body = collapsed ? '' : `
         <div class="px-2 pb-2 space-y-1.5">
-          ${calls.map(renderToolCard).join('')}
-          ${children.length ? `
-            <div class="ml-3 pl-3 border-l-2 border-outline-variant/15 space-y-1.5">
-              ${children.map(renderAgentNode).join('')}
-            </div>` : ''}
+          ${calls.map(rec => renderToolCard(rec) + nestBranches(childrenByCall.get(rec.uid) || [])).join('')}
+          ${nestBranches(tailChildren)}
         </div>`;
 
       return `
@@ -4746,6 +4775,38 @@
     </div>
   </div>
 
+  <!-- MCP Rebuild Confirmation Modal — shown during import when the bundle contains MCP builds -->
+  <div id="mcp-rebuild-modal"
+    class="hidden fixed inset-0 z-[130] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-lg shadow-2xl p-6 mx-4">
+      <div class="flex items-start justify-between mb-5">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">build</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface uppercase tracking-wider">MCP Servers Found</h3>
+            <p class="text-[10px] text-outline-variant mt-1">This session contains MCP tool server builds</p>
+          </div>
+        </div>
+      </div>
+      <div id="mcp-rebuild-list" class="space-y-2 max-h-[200px] overflow-y-auto mb-5">
+      </div>
+      <p class="text-[10px] text-outline-variant mb-5">
+        <strong>Rebuild</strong> will launch Docker builds for each server (takes ~10–30 min per server).
+        <strong>Skip</strong> will import the session without starting the servers — build logs and metadata will still be available.
+      </p>
+      <div class="flex justify-end gap-3">
+        <button id="mcp-rebuild-skip-btn"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Skip</button>
+        <button id="mcp-rebuild-confirm-btn"
+          class="px-4 py-2 bg-primary text-on-primary rounded-md font-bold text-[10px] uppercase tracking-wider hover:brightness-110 transition-all">
+          Rebuild</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // === Session Export / Import / Save / Restore ===
 
@@ -4811,8 +4872,23 @@
       if (!activeUser) return openIdentityModal();
       try {
         addSystemMsg('📤 Importing session from ' + file.name + '…');
+        // Step 1: preview the bundle for MCP builds
+        const previewForm = new FormData();
+        previewForm.append('file', file);
+        const previewResp = await fetch('/api/import-session/preview', {
+          method: 'POST', body: previewForm
+        });
+        let rebuildMcp = false;
+        if (previewResp.ok) {
+          const preview = await previewResp.json();
+          if (preview.has_mcp_builds) {
+            rebuildMcp = await showMcpRebuildModal(preview.mcp_builds);
+          }
+        }
+        // Step 2: actual import
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('rebuild_mcp', rebuildMcp ? 'true' : 'false');
         const resp = await fetch(`/api/users/${encodeURIComponent(activeUser.id)}/import-session`, {
           method: 'POST',
           body: formData
@@ -4824,7 +4900,6 @@
         const result = await resp.json();
         const importedUser = result.user;
         const importedSession = result.session;
-        // If the imported user is different from current, switch to it
         if (importedUser.id !== activeUser.id) {
           if (!knownUsers.find(u => u.id === importedUser.id)) {
             knownUsers.push(importedUser);
@@ -4832,10 +4907,11 @@
           activeUser = importedUser;
           populateUserSelectors();
         }
-        // Add session and switch to it
         knownSessions.unshift(importedSession);
         await activateSession(activeUser, importedSession);
-        addSystemMsg('✅ Session imported: ' + importedSession.title);
+        let msg = '✅ Session imported: ' + importedSession.title;
+        if (rebuildMcp) msg += ' (MCP rebuilds launched)';
+        addSystemMsg(msg);
       } catch (err) { addSystemMsg('❌ Import failed: ' + err.message); }
     }
 
@@ -4846,6 +4922,40 @@
 
     function closeSavedSessionsModal() {
       document.getElementById('saved-sessions-modal').classList.add('hidden');
+    }
+
+    // --- MCP Rebuild Modal ---
+    let _mcpRebuildResolve = null;
+
+    function showMcpRebuildModal(builds) {
+      return new Promise(resolve => {
+        _mcpRebuildResolve = resolve;
+        const list = document.getElementById('mcp-rebuild-list');
+        const repos = [...new Set(builds.filter(b => b.repo_url).map(b => b.repo_url))];
+        list.innerHTML = repos.map(url => {
+          const name = url.split('/').pop().replace(/\.git$/, '');
+          const job = builds.find(b => b.repo_url === url);
+          const status = job ? job.status : 'unknown';
+          const badge = status === 'done'
+            ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-bold uppercase">done</span>'
+            : `<span class="text-[9px] px-1.5 py-0.5 rounded bg-outline-variant/15 text-outline-variant font-bold uppercase">${escHtml(status)}</span>`;
+          return `<div class="flex items-center justify-between bg-surface-container-high rounded-lg px-3 py-2 border border-outline-variant/10">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="material-symbols-outlined text-primary text-sm">dns</span>
+              <span class="text-[10px] text-on-surface font-mono truncate">${escHtml(name)}</span>
+            </div>
+            ${badge}
+          </div>`;
+        }).join('');
+        document.getElementById('mcp-rebuild-skip-btn').onclick = () => { closeMcpRebuildModal(); resolve(false); };
+        document.getElementById('mcp-rebuild-confirm-btn').onclick = () => { closeMcpRebuildModal(); resolve(true); };
+        document.getElementById('mcp-rebuild-modal').classList.remove('hidden');
+      });
+    }
+
+    function closeMcpRebuildModal() {
+      document.getElementById('mcp-rebuild-modal').classList.add('hidden');
+      _mcpRebuildResolve = null;
     }
 
     async function loadSavedSessionsList() {
@@ -4886,11 +4996,29 @@
 
     async function restoreSavedSession(filename) {
       try {
+        // Step 1: preview via reading the saved bundle
+        let rebuildMcp = false;
+        try {
+          const previewResp = await fetch(`/api/saved-sessions/${encodeURIComponent(filename)}/download`);
+          if (previewResp.ok) {
+            const blob = await previewResp.blob();
+            const previewForm = new FormData();
+            previewForm.append('file', blob, filename);
+            const pResp = await fetch('/api/import-session/preview', { method: 'POST', body: previewForm });
+            if (pResp.ok) {
+              const preview = await pResp.json();
+              if (preview.has_mcp_builds) {
+                rebuildMcp = await showMcpRebuildModal(preview.mcp_builds);
+              }
+            }
+          }
+        } catch (_) { /* preview is best-effort */ }
+        // Step 2: actual restore
         addSystemMsg('📂 Restoring session from ' + filename + '…');
         const resp = await fetch('/api/restore-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename })
+          body: JSON.stringify({ filename, rebuild_mcp: rebuildMcp })
         });
         if (!resp.ok) {
           const errMsg = await fetchErrorMessage(resp);
@@ -4907,7 +5035,9 @@
         knownSessions.unshift(restoredSession);
         await activateSession(activeUser, restoredSession);
         closeSavedSessionsModal();
-        addSystemMsg('✅ Session restored: ' + restoredSession.title);
+        let msg = '✅ Session restored: ' + restoredSession.title;
+        if (rebuildMcp) msg += ' (MCP rebuilds launched)';
+        addSystemMsg(msg);
       } catch (err) { addSystemMsg('❌ Restore failed: ' + err.message); }
     }
 

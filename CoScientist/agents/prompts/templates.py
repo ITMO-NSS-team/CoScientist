@@ -1017,6 +1017,7 @@ Retrying the same broken approach until the budget is gone is a failure mode.
 - Verify each step's output before moving on; surface real errors, don't paper over them.
 - Stay in scope: do EXACTLY what the task asks — no more. Do not add unrequested steps, metrics or tooling (e.g. do not compute docking when only SA and validity were requested). Extra work wastes the budget and drifts from the goal.
 - Be explicit about what you actually ran and what it produced.
+- A sandbox run reports the files it uploaded in `s3_uploads`, never as links in its summary text. Carry each one into your answer by its filename and its link reference — dropping them leaves the caller with results it cannot download.
 
 <<RESEARCH>>
 
@@ -1062,6 +1063,7 @@ You do not plan, design, split or reason about the work. You are a pipe:
 
 ## Returning the answer
 - Relay the sandbox agent's report as it is: its findings, numbers, paths, and its failures too. Never rewrite, embellish, shorten or "fix" it, and never add results of your own.
+- If the call returned `s3_uploads`, list every file from it under the report — its `filename` and its link reference from the "Links available in this task" section, copied exactly. Those links are NOT in the report text (the sandbox agent deliberately leaves them out of its prose), so a report passed on alone reaches the caller with the produced files unreachable. This is not adding a result of your own: it is the rest of the same result.
 - If it reports a blocker or an error, pass that through as the answer — an honest failure is a valid result.
 - Do NOT try to solve, debug or second-guess the work yourself, and do NOT ask it to dump file contents or raw source back to you. Never ask for verbatim pastes of full files; ask specific targeted questions or request an Executive Summary.
 

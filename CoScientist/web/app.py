@@ -1128,23 +1128,50 @@ def create_app() -> FastAPI:
         filename = save_to_disk(bundle_bytes, title, user_id, session_id)
         return JSONResponse({"status": "success", "filename": filename})
 
-    @app.post("/api/users/{user_id}/import-session")
-    async def import_session_endpoint(user_id: str, request: Request):
-        """Import a session from an uploaded .cossession.zip bundle.
+    @app.post("/api/import-session/preview")
+    async def preview_import_endpoint(request: Request):
+        """Inspect a .cossession.zip bundle without importing it.
 
-        Accepts ``multipart/form-data`` with a ``file`` field, OR raw bytes
-        with ``application/zip``/``application/octet-stream``.
+        Returns manifest info and whether MCP builds are included.
         """
-        from CoScientist.web.session_bundle import import_session
+        from CoScientist.web.session_bundle import preview_bundle
 
         content_type = (request.headers.get("content-type") or "").lower()
         if "multipart" in content_type:
-            from fastapi import UploadFile
             form = await request.form()
             upload = form.get("file")
             if upload is None:
                 raise HTTPException(status_code=400, detail="No file uploaded.")
             bundle_bytes = await upload.read()
+        else:
+            bundle_bytes = await request.body()
+        if not bundle_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+        try:
+            result = preview_bundle(bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post("/api/users/{user_id}/import-session")
+    async def import_session_endpoint(user_id: str, request: Request):
+        """Import a session from an uploaded .cossession.zip bundle.
+
+        Accepts ``multipart/form-data`` with a ``file`` field (and an optional
+        ``rebuild_mcp`` field), OR raw bytes with
+        ``application/zip``/``application/octet-stream``.
+        """
+        from CoScientist.web.session_bundle import import_session
+
+        rebuild_mcp = False
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "multipart" in content_type:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise HTTPException(status_code=400, detail="No file uploaded.")
+            bundle_bytes = await upload.read()
+            rebuild_mcp = str(form.get("rebuild_mcp", "")).lower() in ("true", "1", "yes")
         else:
             bundle_bytes = await request.body()
 
@@ -1154,7 +1181,8 @@ def create_app() -> FastAPI:
         # Always import into the ITMO_DEV user, ignoring the URL user_id
         target_nickname = "ITMO_DEV"
         try:
-            result = await import_session(runtime, target_nickname, bundle_bytes)
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)
@@ -1179,9 +1207,11 @@ def create_app() -> FastAPI:
             bundle_bytes = read_saved_bundle(filename)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        rebuild_mcp = bool(data.get("rebuild_mcp", False))
         target_nickname = "ITMO_DEV"
         try:
-            result = await import_session(runtime, target_nickname, bundle_bytes)
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)

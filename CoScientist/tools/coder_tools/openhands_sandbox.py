@@ -32,6 +32,11 @@ Server-side contract used here (see ``api/routes.py``):
 * Terminal statuses are ``cooldown``/``completed`` (success), ``error`` and
   ``cancelled``.  ``cooldown`` means "finished, container still alive" — that
   is the state a follow-up can be sent into.
+* ``GET /api/v1/status?task_id=<id>`` carries the run's uploaded artifacts as
+  a structured ``s3_uploads`` list (``filename``/``url``/``size``/``key``).
+  That list is the ONLY carrier of those links — the sandbox agent keeps them
+  out of its ``summary`` prose — so every layer between here and the model
+  passes the field through untouched instead of re-reading it out of text.
 * ``GET /api/v1/metrics?task_id=<id>`` returns what the run cost: wall clock,
   CPU/GPU work, energy, LLM tokens and money.
 
@@ -949,7 +954,8 @@ def run_sandbox_task(
 
     Returns:
         A dict with ``status``, ``sandbox_id``, ``session``, ``reused``,
-        ``summary``, ``watch_url``, ``vscode_url`` and ``error``.
+        ``summary``, ``s3_uploads``, ``watch_url``, ``vscode_url`` and
+        ``error``.
         ``status`` is one of the server statuses plus ``submitted`` (when
         ``wait_for_result=False``), ``busy``, ``timeout`` or ``error``.
         Metrics are deliberately NOT among these keys; they are metadata for
@@ -1131,6 +1137,7 @@ async def await_sandbox_task(
 def _normalize(result: Dict[str, Any]) -> Dict[str, Any]:
     """Guarantee the same key set on every return path of :func:`run_sandbox_task`."""
     result.setdefault("summary", "")
+    result.setdefault("s3_uploads", [])
     result.setdefault("watch_url", "")
     result.setdefault("vscode_url", "")
     result.setdefault("error", None)
@@ -1179,6 +1186,12 @@ class _PollState:
                 "status": status,
                 "succeeded": status in SUCCESS_STATUSES,
                 "summary": task_details.get("summary", ""),
+                # The artifacts the run uploaded, as the server structured
+                # them. Carried through verbatim and NOT re-derived from the
+                # summary: the sandbox agent no longer writes its links into
+                # that text at all, and a presigned URL is the one string a
+                # model cannot be trusted to reproduce anyway.
+                "s3_uploads": task_details.get("s3_uploads") or [],
                 "watch_url": task_details.get("watch_url", ""),
                 "vscode_url": task_details.get("vscode_url", ""),
                 "error": task_details.get("error"),
@@ -1307,6 +1320,7 @@ def get_sandbox_status(
         "busy": status in ("queued", "running"),
         "accepts_followup": status == "cooldown",
         "summary": task_details.get("summary", ""),
+        "s3_uploads": task_details.get("s3_uploads") or [],
         "watch_url": task_details.get("watch_url", ""),
         "vscode_url": task_details.get("vscode_url", ""),
         "error": task_details.get("error"),

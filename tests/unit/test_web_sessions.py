@@ -382,3 +382,57 @@ def test_report_language_is_validated_stored_and_broadcast_per_session():
             }
         assert key not in runtime.report_languages
         assert adk_session.state[web_app.REPORT_LANGUAGE_STATE_KEY] == ""
+
+
+def test_truncated_tool_result_is_stashed_and_fetchable_on_demand():
+    """A truncated tool result never goes out whole on the socket, but the
+    ToolsViewer's "Show full result" can still fetch it afterwards — the
+    untruncated value is kept server-side, keyed by call_id, instead.
+    """
+    from CoScientist.logging import tool_activity
+
+    class Socket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, payload):
+            self.messages.append(payload)
+
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Nadia")
+        session = _create_session(client, user["id"], "Big results")
+        key = (user["id"], session["id"])
+        socket = Socket()
+        runtime.attach_socket(key, socket)
+
+        full_result = {"status": "success", "result": ["tool"] * 500}
+        asyncio.run(tool_activity._sink(key, {
+            "phase": "result",
+            "author": "ToolRetrieverAgent",
+            "tool": "retrieve_tools",
+            "call_id": "fc_42",
+            "result": "{\"status\": \"success\" …",
+            "result_truncated": True,
+            "result_full": full_result,
+        }))
+
+        # The broadcast preview must not carry the full payload.
+        (event,) = socket.messages
+        assert event["result_truncated"] is True
+        assert "result_full" not in event
+        assert runtime.tool_full_values[key]["fc_42"]["result"] == full_result
+
+        response = client.get(
+            f"/api/users/{user['id']}/sessions/{session['id']}/tool-activity/fc_42"
+        )
+        assert response.status_code == 200
+        assert response.json()["result"] == full_result
+
+        # An id nobody stashed a full value under (never truncated, wrong
+        # session, made up) is a 404, not an empty success.
+        missing = client.get(
+            f"/api/users/{user['id']}/sessions/{session['id']}/tool-activity/no-such-call"
+        )
+        assert missing.status_code == 404

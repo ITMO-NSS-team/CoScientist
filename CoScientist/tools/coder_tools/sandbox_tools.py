@@ -184,6 +184,12 @@ def _shape(result: Dict[str, Any], *, waited: int) -> Dict[str, Any]:
     shaped = {
         "status": norm,
         "summary": result.get("summary", ""),
+        # Kept as the structured list the server sent, not folded into the
+        # summary text: `register_tool_result_links` registers each URL from
+        # here and the model gets a `[[linkN]]` for it, so the link reaches
+        # the caller as code wrote it. Always present — an empty list is the
+        # answer "this run uploaded nothing".
+        "s3_uploads": result.get("s3_uploads") or [],
         "sandbox_id": result.get("sandbox_id"),
         "reused": result.get("reused", False),
         "watch_url": result.get("watch_url", ""),
@@ -223,8 +229,8 @@ async def run_sandbox_task(
 
     IMPORTANT — this is NOT your `execute_bash` workspace. It is a different
     machine, and files do not move between the two. Send data in via
-    `dataset_url`; get results back through the returned summary, and verify
-    them with `list_sandbox_files`.
+    `dataset_url`; get results back through the returned summary and the
+    download links in `s3_uploads`, and verify them with `list_sandbox_files`.
 
     Use it for work that is too heavy or too long for `execute_bash`. For
     ordinary code, shell and git work, keep using `execute_bash`.
@@ -241,8 +247,10 @@ async def run_sandbox_task(
 
     Returns:
         Dict with status ("success" | "running" | "busy" | "error"), the
-        sandbox agent's summary, sandbox_id, watch_url (live console),
-        vscode_url, and next_step when a follow-up call is needed.
+        sandbox agent's summary, s3_uploads (the files the run uploaded, each
+        with filename, url, size and key — the summary text does NOT repeat
+        these links, so pass them on from here), sandbox_id, watch_url (live
+        console), vscode_url, and next_step when a follow-up call is needed.
     """
     result = await sandbox.arun_sandbox_task(
         task,
@@ -326,7 +334,8 @@ async def check_sandbox_task(tool_context: ToolContext = None) -> Dict[str, Any]
 
     Returns:
         Dict with status ("success" | "running" | "error"), the sandbox agent's
-        summary, sandbox_id, watch_url and vscode_url.
+        summary, s3_uploads (the files the run uploaded, each with filename,
+        url, size and key), sandbox_id, watch_url and vscode_url.
     """
     result = await sandbox.await_sandbox_task(
         session_id=_session(tool_context),

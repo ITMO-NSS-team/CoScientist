@@ -117,10 +117,43 @@ def test_run_passes_the_session_and_bounded_wait_through(monkeypatch):
     result = asyncio.run(sandbox_tools.run_sandbox_task("train it", tool_context=ctx))
 
     assert captured["session_id"] == sandbox_tools._session(ctx)
+    assert captured["tool_context"] is ctx                # so the binding lands in ADK state too
     assert captured["timeout"] == sandbox_tools.RUN_WAIT  # bounded, not forever
     assert captured["new_sandbox"] is False               # reuse is the default
     assert result["status"] == "success"
     assert result["summary"] == "ok"
+
+
+def test_run_pins_the_sandbox_id_into_adk_session_state(monkeypatch):
+    """The binding must survive a process restart / a different worker picking
+
+    up the session later (e.g. a session-bundle export) — that only works if
+    it lands in the persisted ADK session state, not just the process-local
+    registry.
+    """
+    order = []
+    _stub_server(monkeypatch, order)
+
+    ctx = _ctx({})
+    result = asyncio.run(sandbox_tools.run_sandbox_task("train it", tool_context=ctx))
+
+    assert result["status"] == "success"
+    assert ctx.state[client.SESSION_STATE_KEY] == "s1"
+
+
+def test_check_task_forwards_tool_context_too(monkeypatch):
+    captured = {}
+
+    async def fake_wait(**kwargs):
+        captured.update(kwargs)
+        return {"status": "cooldown", "summary": "ok", "sandbox_id": "s1"}
+
+    monkeypatch.setattr(sandbox_tools.sandbox, "await_sandbox_task", fake_wait)
+
+    ctx = _ctx({})
+    asyncio.run(sandbox_tools.check_sandbox_task(tool_context=ctx))
+
+    assert captured["tool_context"] is ctx
 
 
 # ── live links (they are only useful while the sandbox runs) ─────────────────
@@ -249,6 +282,53 @@ def test_expiry_is_surfaced_so_the_model_knows_the_files_are_gone():
         {"status": "cooldown", "sandbox_expired": True}, waited=60,
     )
     assert "NEW empty one" in shaped["note"]
+
+
+# ── The files a run uploaded ─────────────────────────────────────────────────
+# The sandbox reports its uploads as a structured `s3_uploads` list and keeps
+# those links OUT of the summary prose. Every layer between the server and the
+# model shapes the result through an explicit key set, so a layer that forgets
+# the field drops the run's artifacts silently — the caller gets a report about
+# files it has no way to fetch. These pin the field to each of those layers.
+
+_UPLOADS = [
+    {"filename": "data.tar.gz", "size": 15728640,
+     "key": "sandbox/c1/results/data.tar.gz",
+     "url": "https://s3.example.com/d/data.tar.gz?X-Amz-Signature=abc"},
+]
+
+
+def test_a_finished_run_carries_its_uploads_out_of_the_poll_loop():
+    state = client._PollState(timeout=None, verbose=False)
+    finished = state.on_poll({
+        "status": "completed",
+        "summary": "Processed the dataset and uploaded the results.",
+        "s3_uploads": _UPLOADS,
+    })
+    assert finished["s3_uploads"] == _UPLOADS
+
+
+def test_a_status_read_carries_the_uploads_too(monkeypatch):
+    monkeypatch.setattr(client, "resolve_sandbox_url", lambda explicit=None: "http://sb")
+    monkeypatch.setattr(
+        client, "_fetch_task",
+        lambda api_url, sandbox_id: {"status": "cooldown", "s3_uploads": _UPLOADS},
+    )
+    status = client.get_sandbox_status(session_id="s", sandbox_id="box-1")
+    assert status["s3_uploads"] == _UPLOADS
+
+
+def test_the_uploads_reach_the_model_through_the_tool_result():
+    shaped = sandbox_tools._shape(
+        {"status": "cooldown", "summary": "done", "s3_uploads": _UPLOADS}, waited=60,
+    )
+    assert shaped["s3_uploads"] == _UPLOADS
+
+
+def test_the_field_is_always_there_so_its_absence_means_nothing_was_uploaded():
+    # An empty list is an answer; a missing key makes the model guess.
+    assert client._normalize({"status": "submitted"})["s3_uploads"] == []
+    assert sandbox_tools._shape({"status": "error"}, waited=60)["s3_uploads"] == []
 
 
 def test_tools_drop_out_when_no_sandbox_is_configured(monkeypatch):
