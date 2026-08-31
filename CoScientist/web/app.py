@@ -1040,6 +1040,16 @@ def create_app() -> FastAPI:
                 # ordered by time — what the call graph cannot show.
                 from CoScientist.graph.projection import turns
                 return turns(execution)
+            if view not in ("", "execution"):
+                # `knowledge` and `memory` were served here until the knowledge
+                # memory was removed. Falling through to the execution graph
+                # would answer a bookmark for one view with the contents of
+                # another, so say plainly that the view is gone.
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown graph view '{view}' — use research, "
+                           f"execution or trace; the slide is at .../graph.svg",
+                )
             return execution
         except HTTPException:
             raise
