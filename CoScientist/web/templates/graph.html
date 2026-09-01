@@ -268,7 +268,9 @@
       });
       network.on("click", params => {
         if (!params.nodes.length) { closeDetail(); return; }
-        selectedId = params.nodes[0]; showDetail(nodeData[selectedId]);
+        selectedId = params.nodes[0];
+        lastDetailStamp = JSON.stringify(nodeData[selectedId]);
+        showDetail(nodeData[selectedId]);
       });
     }
 
@@ -383,7 +385,17 @@
             nodes.update(node);
           }
         });
-        if (selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);
+        // Only redraw the panel when the node it shows has actually changed.
+        // It was rebuilt on every poll, which threw away the scroll position:
+        // reading down a long tool result, the box snapped back to the top
+        // every 1.5 seconds.
+        if (selectedId && nodeData[selectedId]) {
+          const stamp = JSON.stringify(nodeData[selectedId]);
+          if (stamp !== lastDetailStamp) {
+            lastDetailStamp = stamp;
+            showDetail(nodeData[selectedId]);
+          }
+        }
         (g.edges || []).forEach(e => {
           if (e.overlay && !(research && prov)) return;
           if (!research && (hidden.has(e.src) || hidden.has(e.dst))) return;
@@ -512,7 +524,8 @@
         + textBlock("input", n.input) + textBlock("output", n.output) + `</div>`;
       document.getElementById("detail").style.display = "block";
     }
-    function closeDetail(){ selectedId=null; document.getElementById("detail").style.display="none"; }
+    function closeDetail(){ selectedId=null; lastDetailStamp=null;
+      document.getElementById("detail").style.display="none"; }
 
     // Jump from an Evidence's provenance to the exact tool-call node in the
     // execution log (glues the research graph to the execution trace).
@@ -534,7 +547,8 @@
     }
 
     // ── wiring ────────────────────────────────────────────────────────────────
-    function hardReset(){ nodes.clear(); edges.clear(); seenEdges.clear();
+    let lastDetailStamp = null;
+    function hardReset(){ nodes.clear(); edges.clear(); seenEdges.clear(); lastDetailStamp = null;
       for (const k in nodeData) delete nodeData[k]; closeDetail(); }
     document.getElementById("refresh").onclick = poll;
     document.getElementById("view").onchange = () => { hardReset(); makeNetwork(); updateChrome(); poll(); };

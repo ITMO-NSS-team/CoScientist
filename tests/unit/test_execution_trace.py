@@ -213,10 +213,11 @@ def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
     assert [n["id"] for n in order] == ["goal:i1", "a:One", "t:1", "t:2", "a:Two", "t:3"]
     # And no two cards in one lane can sit on top of each other.
     from CoScientist.graph.projection import _CARD_WIDTH
-    by_row = {}
+    # Only cards sharing a lane AND a sub-row can collide.
+    by_cell = {}
     for node in placed.values():
-        by_row.setdefault(node["row"], []).append(node["x"])
-    for xs in by_row.values():
+        by_cell.setdefault((node["row"], node.get("sub_row", 0)), []).append(node["x"])
+    for xs in by_cell.values():
         xs.sort()
         assert all(b - a >= _CARD_WIDTH for a, b in zip(xs, xs[1:]))
 

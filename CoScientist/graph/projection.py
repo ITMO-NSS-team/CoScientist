@@ -299,7 +299,9 @@ _LANE_PITCH = _CARD_WIDTH + _CARD_GAP
 #: the whole picture and the calls either side of it are a smudge, so long
 #: waits compress and the order is what survives.
 _MAX_STEP, _PIXELS_PER_SECOND = 420, 8.0
-_ROW_HEIGHT = 150
+_ROW_HEIGHT = 210
+#: Distance between two sub-rows inside one agent's band.
+_SUB_ROW_HEIGHT = 68
 
 
 def _place_in_time(ordered: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> None:
@@ -359,20 +361,44 @@ def _place_in_time(ordered: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -
     # push its cards past a quiet one, so x stopped agreeing with time. With the
     # floor applied to every step, reading left to right is reading forward in
     # time everywhere, and no two cards can overlap in any lane.
+    # An agent with many calls gets a band of sub-rows rather than one long
+    # line: twenty calls in a single row is a strip the reader has to scroll
+    # sideways forever, and it wastes the vertical space beside it. Cards in
+    # different sub-rows may sit closer horizontally, since only cards sharing
+    # a sub-row can collide, so stacking also shortens the picture.
+    per_agent: Dict[str, int] = {}
+    for node in ordered:
+        if node.get("kind") in ("goal", "result"):
+            continue
+        agent = agent_of(node) or ""
+        per_agent[agent] = per_agent.get(agent, 0) + 1
+    bands = {agent: (3 if count > 12 else 2 if count > 5 else 1)
+             for agent, count in per_agent.items()}
+
+    seen_in_lane: Dict[str, int] = {}
     previous_start, x = None, 0.0
     for node in ordered:
         started = node.get("t_start")
+        is_bookend = node.get("kind") in ("goal", "result")
+        agent = "" if is_bookend else (agent_of(node) or "")
+        band = 1 if is_bookend else bands.get(agent, 1)
+
         if previous_start is not None:
             gap = (max(0.0, started - previous_start) * _PIXELS_PER_SECOND
                    if started is not None else 0.0)
-            x += max(_LANE_PITCH, min(_MAX_STEP, gap))
+            x += max(_LANE_PITCH / band, min(_MAX_STEP, gap))
         if started is not None:
             previous_start = started
-        row = 0 if node.get("kind") in ("goal", "result") \
-            else rows.get(agent_of(node) or "", 1)
-        node["row"] = row
+
+        index = seen_in_lane.get(agent, 0)
+        seen_in_lane[agent] = index + 1
+        lane = 0 if is_bookend else rows.get(agent, 1)
+        sub = 0 if is_bookend else index % band
+
+        node["row"] = lane
+        node["sub_row"] = sub
         node["x"] = round(x)
-        node["y"] = row * _ROW_HEIGHT
+        node["y"] = round(lane * _ROW_HEIGHT + sub * _SUB_ROW_HEIGHT)
         node["card_width"] = _CARD_WIDTH
 
     # The answer closes the request, so it sits past everything the request did.
