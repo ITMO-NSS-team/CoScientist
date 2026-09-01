@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -23,10 +25,46 @@ from CoScientist.tools import alembic_tools
 router = APIRouter()
 
 
+def _running_containers() -> set[str]:
+    """Names of currently running docker containers (empty set on any failure —
+    docker missing, daemon down, permission denied). Used only to annotate the
+    builds list, so failure just leaves builds marked "unknown"."""
+    if not shutil.which("docker"):
+        return set()
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if out.returncode != 0:
+        return set()
+    return {n.strip() for n in out.stdout.splitlines() if n.strip()}
+
+
+def _annotate_container_status(builds: list) -> list:
+    """Add ``container_active`` (bool|None) to each build snapshot: True if the
+    build's container name is in ``docker ps``, False if it isn't, None when
+    docker itself is unreachable or the build has no container yet."""
+    running = _running_containers()
+    docker_ok = bool(shutil.which("docker"))
+    for b in builds:
+        name = b.get("container")
+        if not name:
+            b["container_active"] = None
+        elif not docker_ok:
+            b["container_active"] = None
+        else:
+            b["container_active"] = name in running
+    return builds
+
+
 # ── list + snapshot ────────────────────────────────────────────────────────
 @router.get("/api/builds")
 async def api_builds():
-    return JSONResponse({"builds": alembic_tools.web_list_builds()})
+    builds = await asyncio.to_thread(alembic_tools.web_list_builds)
+    return JSONResponse({"builds": _annotate_container_status(builds)})
 
 
 @router.post("/api/builds")
@@ -63,6 +101,7 @@ async def api_build(job_id: str):
     snap = alembic_tools.web_build_snapshot(job_id)
     if snap is None:
         raise HTTPException(status_code=404, detail=f"unknown build {job_id!r}")
+    _annotate_container_status([snap])
     return JSONResponse(snap)
 
 

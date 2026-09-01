@@ -80,6 +80,7 @@
             <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Status</th>
             <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Build</th>
             <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Repository</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">MCP</th>
             <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Stage</th>
             <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Started</th>
             <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Duration</th>
@@ -140,6 +141,22 @@
       const short = url.replace(/^https?:\/\/(www\.)?/, "").replace(/\.git$/, "");
       return `<a href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="font-mono text-[12px] text-primary hover:underline break-all">${esc(short)}</a>`;
     }
+    // MCP endpoint + docker-ps container status. `active` is true/false/null
+    // (null = docker unreachable, or build has no container yet).
+    function mcpCell(b) {
+      const url = b.mcp_url;
+      if (!url) return `<span class="text-outline">—</span>`;
+      const hostport = url.replace(/^https?:\/\//, "").replace(/\/mcp\/?$/, "");
+      let pill;
+      if (b.container_active === true) {
+        pill = `<span class="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-secondary" title="container ${esc(b.container || '')} running"><span class="material-symbols-outlined text-[13px]">circle</span>active</span>`;
+      } else if (b.container_active === false) {
+        pill = `<span class="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-error" title="container ${esc(b.container || '')} not in docker ps"><span class="material-symbols-outlined text-[13px]">circle</span>stopped</span>`;
+      } else {
+        pill = `<span class="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-outline" title="docker status unknown"><span class="material-symbols-outlined text-[13px]">help</span>unknown</span>`;
+      }
+      return `<div class="flex flex-col gap-0.5"><a href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="font-mono text-[12px] text-primary hover:underline break-all">${esc(hostport)}</a>${pill}</div>`;
+    }
     function rowHtml(b) {
       const s = STATUS[b.status] || { color: "#8c90a1", icon: "help", label: b.status || "?", cls: "" };
       return `<tr data-jid="${esc(b.job_id)}">
@@ -150,6 +167,7 @@
         </td>
         <td class="px-4 py-3 font-mono text-[12px] text-on-surface">${esc(b.job_id)}</td>
         <td class="px-4 py-3">${repoCell(b.repo_url)}</td>
+        <td class="px-4 py-3">${mcpCell(b)}</td>
         <td class="px-4 py-3 font-mono text-[11px] text-outline">${esc(b.stage || '')}</td>
         <td class="px-4 py-3 font-mono text-[11px] text-on-surface-dim" title="${esc(fmtStartedTitle(b.started_at))}">${fmtStarted(b.started_at)}</td>
         <td class="px-4 py-3 font-mono text-[11px] text-on-surface-dim">${fmtDuration(b.elapsed_seconds)}</td>

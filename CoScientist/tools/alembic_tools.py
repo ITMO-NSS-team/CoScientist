@@ -26,10 +26,15 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from dotenv import load_dotenv
 from google.adk.tools import ToolContext
 
 # /<root>/CoScientist/tools/alembic_tools.py -> /<root>
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Hydrate os.environ from the project .env so subprocess builds inherit vars
+# like A2A_HOST (advertise host for the served MCP). Idempotent; a no-op when
+# the main app already called load_dotenv earlier.
+load_dotenv(PROJECT_ROOT / ".env")
 START_CHAIN = PROJECT_ROOT / "CoScientist" / "alembic" / "start_chain.py"
 # Host-side stdout logs of the build subprocesses (the pipeline's own logs live
 # inside the build container; this is the start_chain wrapper output).
