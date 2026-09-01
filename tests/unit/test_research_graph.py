@@ -805,3 +805,35 @@ def test_validator_discards_result_if_research_changes_during_llm_call():
 
     assert result is None
     assert not graph.committed
+
+
+def test_the_view_speaks_the_reader_s_language(tmp_path):
+    """A scientist reads the graph, so it must not answer in storage format."""
+    from CoScientist.graph.research.store import (
+        ResearchGraphStore, _fields, _headline,
+    )
+
+    # A budget is a sentence, not the record it is stored as, and what the
+    # sentence already says is not repeated underneath it.
+    budget = {"resource_type": "GPU-hours", "remaining": "50", "limit": "50"}
+    headline = _headline("Resource", budget)
+    assert headline == "GPU-hours: 50 of 50 left"
+    assert _fields(budget, headline, "Resource") == {}
+
+    store = ResearchGraphStore(directory=str(tmp_path), active_file="v.json")
+    store.commit(source="OrchestratorAgent", nodes=[
+        {"type": "ResearchQuestion", "attrs": {"formulation": "Does it work?"}},
+    ])
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "attrs": {"formulation": "It works", "priority": "high"}},
+    ])
+
+    view = {n["type_word"]: n for n in store.to_view()["nodes"] if not n.get("overlay")}
+
+    question = view["Question"]
+    assert question["label"] == "Does it work?", "the id belongs in the panel"
+    assert not question["label"].startswith("Q1")
+
+    hypothesis = view["Hypothesis"]
+    assert hypothesis["status_word"] == "proposed", "formulated is not English"
+    assert hypothesis["input"]["Priority"] == "high", "attrs need reader-facing names"

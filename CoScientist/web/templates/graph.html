@@ -169,8 +169,10 @@
       formulated_for:"criterion for", regulates:"regulates", constrains:"constrains",
       derived_from:"derived from", contextualizes:"frames", defines_scope:"scope of",
       relates_to:"relates to", applies_to:"applies to", via:"via" };
-    const rTypeName = n => { const m = String(n.id||"").match(/\d+/);
-      return (R_TYPE_NAME[n.kind] || n.kind || "") + (m ? " " + m[0] : ""); };
+    // The server now names the type and the status in the words a scientist
+    // uses; the client keeps its own table only as a fallback for older data.
+    const rTypeName = n => n.type_word || R_TYPE_NAME[n.kind] || n.kind || "";
+    const rStatusWord = n => n.status_word || String(n.status || "").replace(/_/g, " ");
     const RESEARCH_KINDS = new Set(Object.keys(R_LEVEL));
     // hex -> "r,g,b" for translucent fills
     function rgba(hex, a){ const m = hex.replace('#',''); const v = m.length===3
@@ -229,7 +231,7 @@
       // taller card. Keep a ceiling only so one pathological node cannot fill
       // the canvas.
       const txt = rText(n); const short = txt.length>700 ? txt.slice(0,700)+"…" : txt;
-      const sw = (n.status||"").replace(/_/g," ");
+      const sw = rStatusWord(n);
       // line 1: status glyph + type icon + readable name + status word; line 2: full text
       return `<b>${st.g} ${icon} ${esc(rTypeName(n))}${sw ? " · " + esc(sw) : ""}</b>\n${esc(short)}`;
     }
@@ -477,9 +479,12 @@
         `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}</h3>`
         + `<div class="sub">${esc(n.id)}${n.executor_agent?" · by "+esc(n.executor_agent):""}</div>`
-        + `<span class="badge" style="background:${rgba(st.c,.18)};color:${st.c};border:1px solid ${st.c}">${st.g} ${esc(n.status||"")}</span></div>`
+        + `<span class="badge" style="background:${rgba(st.c,.18)};color:${st.c};border:1px solid ${st.c}">${st.g} ${esc(rStatusWord(n))}</span></div>`
         + `<div class="dbody">`
-        + (rows ? `<div class="k">attributes</div>${rows}` : "")
+        // The node's own sentence first: the panel used to open on a list of
+        // attributes, so the thing the node actually says was somewhere in it.
+        + (n.label ? `<div class="k">what this says</div><pre>${esc(n.label)}</pre>` : "")
+        + (rows ? `<div class="k">details</div>${rows}` : "")
         + provHtml + `</div>`;
       document.getElementById("detail").style.display = "block";
     }

@@ -107,6 +107,133 @@ def _short(value: Any, n: int = 200) -> str:
     return s if len(s) <= n else s[: n] + "…"
 
 
+
+# ── the record, said in words ────────────────────────────────────────────────
+# The viewer is read by scientists who do not read the code. Everything below
+# turns the store's internal vocabulary into the words they already use: node
+# types become the thing they stand for, statuses become what happened, and
+# attribute keys become field names rather than identifiers.
+
+_KIND_WORDS = {
+    "ResearchQuestion": "Question", "Hypothesis": "Hypothesis",
+    "VerificationMethod": "Method", "ConfirmationCriteria": "Acceptance criteria",
+    "Evidence": "Evidence", "Conclusion": "Conclusion", "Constraint": "Constraint",
+    "Tool": "Tool", "Resource": "Budget", "EmpiricalBase": "Data",
+    "CodeArtifact": "Code", "GeneratedData": "Generated data", "Report": "Report",
+    "Publication": "Publication", "Spec": "Specification",
+    "CostModel": "Cost", "EfficiencyMetric": "Efficiency",
+    "EfficiencyJustification": "Efficiency rationale",
+}
+
+_STATUS_WORDS = {
+    "open": "open", "decomposed": "broken down", "closed": "closed",
+    "formulated": "proposed", "under_verification": "being tested",
+    "confirmed": "confirmed", "refuted": "refuted", "postponed": "set aside",
+    "obtained": "collected", "validated": "validated", "rejected": "rejected",
+    "planned": "planned", "running": "running", "done": "done", "failed": "failed",
+    "not_met": "not met yet", "met": "met",
+    "available": "available", "exhausted": "used up",
+    "needs_adaptation": "needs adaptation", "being_created": "being built",
+    "creation_failed": "could not be built",
+    "draft": "draft", "approved": "approved", "created": "recorded", "active": "active",
+}
+
+_FIELD_WORDS = {
+    "formulation": "Statement", "rationale": "Why", "priority": "Priority",
+    "content": "Finding", "subtype": "Kind", "reliability": "Confidence",
+    "source_ref": "Source", "synthesis": "Conclusion",
+    "validity_bounds": "Limits of validity", "new_question": "Opens next",
+    "procedure": "Procedure", "limits": "Limits", "threshold": "Threshold",
+    "metric": "Metric", "value": "Value", "name": "Name", "location": "Where",
+    "tool_type": "Type", "base_type": "Type", "volume": "Size",
+    "resource_type": "Resource", "remaining": "Remaining", "limit": "Total",
+    "domain": "Field", "gap": "Knowledge gap", "not_tested_reason": "Why untested",
+    "description": "Description", "method_type": "Type", "path": "File",
+}
+
+#: Never shown: bookkeeping the reader has no use for.
+_HIDDEN_FIELDS = {"_provenance", "selected", "display", "postponed_reason"}
+
+
+def _headline(kind: str, attrs: Dict[str, Any]) -> str:
+    """One line saying what this node is, in the reader's own words.
+
+    A budget used to be rendered as its raw record — `{"resource_type":
+    "GPU-hours", "remaining": 50, "limit": 50}` — which is the storage format
+    and not a sentence. Each type gets the phrasing that suits it, and only
+    something genuinely unnameable falls back to the record.
+    """
+    def text(*keys: str) -> str:
+        for key in keys:
+            value = attrs.get(key)
+            if value not in (None, "", [], {}):
+                return str(value).strip()
+        return ""
+
+    if kind == "Resource":
+        left, total = attrs.get("remaining"), attrs.get("limit")
+        unit = text("resource_type") or "budget"
+        if left is not None and total is not None:
+            return f"{unit}: {left} of {total} left"
+        return unit
+    if kind == "EmpiricalBase":
+        size = text("volume")
+        base = text("name", "description", "base_type") or "dataset"
+        return f"{base} — {size}" if size else base
+    if kind == "ConfirmationCriteria":
+        return text("threshold", "content", "description") or "acceptance criteria"
+    if kind == "Evidence":
+        found = text("content", "description", "finding", "summary")
+        if found:
+            return found
+        metric, value = text("metric"), text("value")
+        return f"{metric}: {value}" if metric and value else "measurement"
+    if kind == "Tool":
+        return text("name", "description") or "tool"
+    if kind == "Conclusion":
+        return text("synthesis", "content", "description") or "conclusion"
+
+    said = text("formulation", "content", "synthesis", "name", "title",
+                "description", "rule", "threshold", "path")
+    if said:
+        return said
+    readable = [f"{_FIELD_WORDS.get(k, k)}: {v}" for k, v in attrs.items()
+                if k not in _HIDDEN_FIELDS and v not in (None, "", [], {})]
+    return "; ".join(readable)
+
+
+#: Keys a headline already speaks for, per type; repeating them underneath is
+#: the same sentence twice.
+_CONSUMED_BY_HEADLINE = {
+    "Resource": {"resource_type", "remaining", "limit"},
+    "EmpiricalBase": {"base_type", "volume", "name", "description"},
+    "ConfirmationCriteria": {"threshold", "content", "description"},
+    "Tool": {"name", "description"},
+    "Conclusion": {"synthesis", "content", "description"},
+    "Evidence": {"content", "description", "finding", "summary"},
+}
+
+
+def _fields(attrs: Dict[str, Any], headline: str,
+            kind: str = "") -> Dict[str, str]:
+    """The node's attributes under names a reader recognises.
+
+    The panel used to list the record verbatim, keys and all, so a scientist
+    read `base_type` and `source_ref`. Whatever the headline already says is
+    dropped rather than repeated underneath it.
+    """
+    out: Dict[str, str] = {}
+    spoken = _CONSUMED_BY_HEADLINE.get(kind, set())
+    for key, value in attrs.items():
+        if key in _HIDDEN_FIELDS or key in spoken or value in (None, "", [], {}):
+            continue
+        rendered = _short(value, 600) if not isinstance(value, str) else value
+        if rendered.strip() and rendered.strip() == headline.strip():
+            continue
+        out[_FIELD_WORDS.get(key, key.replace("_", " ").capitalize())] = rendered
+    return out
+
+
 class ResearchGraphStore:
     def __init__(self, directory: Optional[str] = None,
                  active_file: Optional[str] = None) -> None:
@@ -350,17 +477,23 @@ class ResearchGraphStore:
             for n, d in self._g.nodes(data=True):
                 attrs = d.get("attrs") or {}
                 provenance = attrs.get("_provenance") or []
-                display_attrs = {k: _short(v, 300) for k, v in attrs.items()
-                                 if k != "_provenance"}
+                node_type = d.get("type", "?")
+                status = d.get("status", "")
+                headline = _headline(node_type, attrs)
                 nodes.append({
                     "id": n,
                     "run_id": self._research_id,
-                    "kind": d.get("type", "?").lower(),
-                    "label": f"{n} · {self._label(d, 60)}",
-                    "status": d.get("status", ""),
+                    "kind": node_type.lower(),
+                    # The id used to open every label. It means nothing to a
+                    # reader and cost a third of the line, so it moves to the
+                    # panel and the label says what the node is instead.
+                    "label": headline,
+                    "type_word": _KIND_WORDS.get(node_type, node_type),
+                    "status": status,
+                    "status_word": _STATUS_WORDS.get(status, status),
                     "executor_agent": d.get("source", ""),
-                    "input": display_attrs,
-                    "output": self._label(d, 450),
+                    "input": _fields(attrs, headline, node_type),
+                    "output": headline,
                     "provenance": provenance,
                     "t_start": d.get("created_at"),
                     "t_end": d.get("updated_at"),
