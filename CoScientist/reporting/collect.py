@@ -16,10 +16,16 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from CoScientist.reporting.artifact_index import load as load_artifact_index
+
 logger = logging.getLogger(__name__)
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp")
 _TABLE_EXTS = (".csv", ".tsv")
+# Source material a tool pulled in, not a result the run produced. The papers
+# search server uploads every PDF it downloads and returns a link to each one.
+# The report shows figures and tables, so these only add noise to it.
+_SOURCE_EXTS = (".pdf", ".doc", ".docx", ".zip", ".tar", ".gz")
 _MAX_TABLE_ROWS = 15
 
 # Workspace scan guards: dependency/VCS/cache dirs that carry bundled example
@@ -172,6 +178,7 @@ def collect_artifacts(
     reports_root: Path | str = "logs/reports",
     workspace_root: Path | str = "workspace",
     graph_nodes: Optional[List[Dict[str, Any]]] = None,
+    index_key: Optional[tuple] = None,
 ) -> Dict[str, Any]:
     """Copy/download run artifacts into the report folder; return markdown blocks.
 
@@ -186,6 +193,11 @@ def collect_artifacts(
                        artifact URL recorded on a node's ``attrs`` (e.g. a MinIO
                        presigned figure URL an agent committed to an Evidence node)
                        is downloaded too.
+        index_key:     ``(user_id, session_id)`` scope of the on-disk artifact
+                       index. It is not always the ``session_id`` above: inside
+                       an AgentTool child the raw session id is a transient
+                       random one, while the index keeps the public web scope.
+                       Without it the index is found by ``session_id`` alone.
 
     Returns a dict with ``report_dir``, ``figures``, ``tables``, and
     ``blocks_markdown`` (the concatenation the agent should embed).
@@ -203,11 +215,12 @@ def collect_artifacts(
     figures: List[str] = []
     tables: List[str] = []
 
-    # 1) Captured artifacts in session state (remote URLs). Accept fedot_artifacts
-    #    plus any other list state key ending in "_artifacts" (e.g. mcp_artifacts
-    #    captured at the tool boundary), then any artifact URL an agent recorded on
-    #    a research-graph node.
-    artifact_lists: List[Dict[str, Any]] = []
+    # 1) Captured artifacts. The on-disk index comes first: it survives a restart,
+    #    while session state does not. Session state is the fallback, and both are
+    #    read because a run that started before this index existed has state only.
+    #    Then any artifact URL an agent recorded on a research-graph node.
+    index_user, index_session = index_key or (None, session_id)
+    artifact_lists: List[Dict[str, Any]] = list(load_artifact_index(index_session, index_user))
     for key, val in state.items():
         if key == "fedot_artifacts" or (isinstance(key, str) and key.endswith("_artifacts")):
             if isinstance(val, list):
@@ -219,11 +232,21 @@ def collect_artifacts(
         for url in find_artifact_urls(node.get("attrs") or {}):
             artifact_lists.append({"url": url, "tool": label or "graph"})
     seen_urls = set()
+    unresolved = 0
     for art in artifact_lists:
         url = art.get("url")
-        if not url or url in seen_urls:
+        # A durable reference whose cached URL is gone or dead. It needs the
+        # vault get_download_link to become a file again, which is the next
+        # branch. Count it, so the gap shows up in the log.
+        if not url:
+            if art.get("s3_key"):
+                unresolved += 1
+            continue
+        if url in seen_urls:
             continue
         seen_urls.add(url)
+        if _looks_like(url, _SOURCE_EXTS):
+            continue
         label = art.get("tool") or art.get("name") or "artifact"
         if _looks_like(url, _IMAGE_EXTS):
             name = f"{label}_{_url_filename(url, '.png')}"
@@ -231,6 +254,8 @@ def collect_artifacts(
             if _download(url, dest):
                 figures.append(str(dest))
                 figure_blocks.append(f"### {label}\n\n![{label}](figures/{name})")
+            elif art.get("s3_key"):
+                unresolved += 1
         else:  # default remote artifacts to tabular
             name = f"{label}_{_url_filename(url, '.csv')}"
             dest = tables_dir / name
@@ -239,6 +264,8 @@ def collect_artifacts(
                 md = _table_to_markdown(dest)
                 head = f"### {label} — [download]({_rel(dest, report_dir)})"
                 table_blocks.append(f"{head}\n\n{md}" if md else head)
+            elif art.get("s3_key"):
+                unresolved += 1
 
     # 2) Files the run itself LEFT in the sandbox workspace. Prune vendored trees
     #    aggressively: a coder step may `git clone` a whole library (e.g. the RDKit
@@ -300,6 +327,11 @@ def collect_artifacts(
         "collect: session=%s figures=%d tables=%d -> %s",
         session_id, len(figures), len(tables), report_dir,
     )
+    if unresolved:
+        logger.warning(
+            "collect: %d indexed artifact(s) have a key but no usable URL. "
+            "They need the vault download tool to reach the report.", unresolved,
+        )
     return {
         "report_dir": str(report_dir),
         "figures": figures,

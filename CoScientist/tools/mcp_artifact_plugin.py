@@ -21,7 +21,9 @@ from typing import Any
 
 from google.adk.plugins import BasePlugin
 
+from CoScientist.reporting.artifact_index import record
 from CoScientist.reporting.collect import find_artifact_urls
+from CoScientist.utils.s3_refs import find_s3_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +39,17 @@ class McpArtifactCapturePlugin(BasePlugin):
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result):  # noqa: ANN001
         try:
             urls = find_artifact_urls(result)
+            artifacts = find_s3_artifacts(result)
         except Exception:  # noqa: BLE001 — capture must never break a tool call
             return None
+        if not urls and not artifacts:
+            return None
+
+        # Durable copy first. Session state lives in an InMemorySessionService and
+        # does not survive a restart, so the file on disk is what the report finds
+        # afterwards.
+        self._record_index(tool, tool_context, urls, artifacts)
+
         if not urls:
             return None
         try:
@@ -58,3 +69,28 @@ class McpArtifactCapturePlugin(BasePlugin):
         except Exception:  # noqa: BLE001
             pass
         return None  # never mutate the tool result itself
+
+    @staticmethod
+    def _record_index(tool, tool_context, urls, artifacts) -> None:
+        """Append this call's artifacts to the on-disk index of the session."""
+        tool_name = getattr(tool, "name", None)
+        entries = [
+            {
+                "bucket": a["bucket"],
+                "s3_key": a["s3_key"],
+                "tool": tool_name,
+                "label": a["s3_key"].rsplit("/", 1)[-1],
+                # A capability with an expiry, kept so the report can download
+                # inside the same run. The bucket and key above are the reference.
+                "url": a.get("url"),
+            }
+            for a in artifacts
+        ]
+        # A server that returns a bare presigned URL and no key. Keep the URL so
+        # nothing is lost, and change 2 gives these servers the full contract.
+        claimed = {a.get("url") for a in artifacts if a.get("url")}
+        entries.extend(
+            {"bucket": None, "s3_key": None, "tool": tool_name, "label": "artifact", "url": url}
+            for url in urls if url not in claimed
+        )
+        record(entries, tool_context)
