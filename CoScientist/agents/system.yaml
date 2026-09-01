@@ -190,22 +190,26 @@ agents:
     output_key: final_report
 
   HypothesesAgent:
-    class: llm
+    class: custom:hypothesis_subsystem
     description: >-
-      generates candidate hypotheses and returns the selected hypothesis(es) to verify next 
-      the alternatives stay in the graph as postponed backlog).
+      generates structured, falsifiable scientific hypotheses using PubMed
+      literature mining, LLM generation, and iterative critic refinement;
+      always delegates hypothesis generation to its internal tool pipeline
+      (MooseChem → critic loop) — never fabricates hypotheses from its own
+      knowledge.
     routing: >-
-      when the direction is unclear or approaches need to be proposed. It comes
-      back with selected hypothesis(es) — verify those; do not start the
-      alternatives in parallel unless they are among the selected set.
+      when the user asks to generate or propose a new hypothesis.
+      The agent produces testable hypotheses with concrete verification plans
+      and Popperian refutation criteria.
     planning: |-
-      Use this to generate hypotheses when the solution is unclear or approaches need to be proposed.
-      It picks the single most relevant hypothesis to test first, so plan ONE verification branch after it.
-      Decision-making and compatibility assessment based on gathered facts.
-    prompt: hypotheses
+      Use this to generate and test hypotheses with built-in critic validation.
+      The agent always delegates generation to its internal tool pipeline.
     output_key: hypotheses
     report_output: true
-    tools: [task_tracker, graph, research_graph]
+    # The subsystem's internal strategy tools are declared here so the assembler
+    # attaches them — keeping guard_unknown_tools' whitelist populated and making
+    # the generator + critic loop visible to the ADK runtime as regular tools.
+    tools: [generate_via_moosechem, run_critic_loop]
     callbacks:
       before_agent: [before_get_task, inject_research_context]
       after_model: [guard_unknown_tools]
