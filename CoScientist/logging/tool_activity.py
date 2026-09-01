@@ -41,6 +41,12 @@ _PREVIEW_LIMIT = 1500
 # cover virtually any real tool output, but still bounded so one pathological
 # call (a multi-MB dump) can't be pulled whole into a session's memory.
 _FULL_LIMIT = 2_000_000
+# A tool's own one-liner, carried on the `call` record so an observer can say
+# what a tool *does* when its name means nothing. MCP servers are built at
+# runtime here (see ``McpBuilderAgent``), so their tool names are whatever the
+# source repository happened to call them — the description is the only stable
+# thing about a tool nobody has ever seen before.
+_DESCRIPTION_LIMIT = 200
 
 _sink: Optional[ToolActivitySink] = None
 
@@ -93,6 +99,21 @@ def _preview_and_full(value: Any) -> tuple[Any, Any, bool]:
     return preview, full, True
 
 
+def _short_description(tool: Any) -> Optional[str]:
+    """The tool's own description, on one line and capped.
+
+    Only the first sentence-ish is useful to a consumer classifying the call,
+    and a full MCP description can run to several paragraphs.
+    """
+    text = getattr(tool, "description", None)
+    if not isinstance(text, str):
+        return None
+    text = " ".join(text.split())
+    if not text:
+        return None
+    return text[:_DESCRIPTION_LIMIT]
+
+
 def _agent_name(tool_context: Any) -> str:
     return getattr(tool_context, "agent_name", None) or "system"
 
@@ -137,6 +158,9 @@ class ToolActivityPlugin(BasePlugin):
             "args": preview,
             "args_truncated": truncated,
         }
+        description = _short_description(tool)
+        if description:
+            payload["description"] = description
         if truncated:
             payload["args_full"] = full
         await self._dispatch(tool_context, payload)

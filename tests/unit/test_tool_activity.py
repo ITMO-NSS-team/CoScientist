@@ -153,3 +153,52 @@ def test_plugin_is_inert_without_a_sink(monkeypatch):
         tool_args={},
         tool_context=agent_tool_context(),
     )) is None
+
+
+def test_a_call_record_carries_the_tool_s_own_description(sink):
+    """Consumers classify an unknown MCP tool by what it says it does."""
+    plugin = tool_activity.ToolActivityPlugin()
+    tool = SimpleNamespace(
+        name="qsr_lookup_v2",
+        description="  Search PubMed\n  for clinical trials matching a query.  ",
+    )
+    context = agent_tool_context()
+
+    asyncio.run(plugin.before_tool_callback(
+        tool=tool, tool_args={"q": "aspirin"}, tool_context=context
+    ))
+
+    payload = sink[0][1]
+    assert payload["description"] == (
+        "Search PubMed for clinical trials matching a query."
+    )
+
+
+def test_a_description_is_capped_and_optional(sink):
+    plugin = tool_activity.ToolActivityPlugin()
+    context = agent_tool_context()
+
+    asyncio.run(plugin.before_tool_callback(
+        tool=SimpleNamespace(name="verbose", description="x " * 500),
+        tool_args={}, tool_context=context,
+    ))
+    asyncio.run(plugin.before_tool_callback(
+        tool=SimpleNamespace(name="bare"), tool_args={}, tool_context=context,
+    ))
+
+    verbose, bare = (payload for _, payload in sink)
+    assert len(verbose["description"]) == tool_activity._DESCRIPTION_LIMIT
+    # Nothing to say is not the same as an empty string on the wire.
+    assert "description" not in bare
+
+
+def test_a_result_record_does_not_repeat_the_description(sink):
+    """It never changes mid-call, and every frame goes to every open tab."""
+    plugin = tool_activity.ToolActivityPlugin()
+    tool = SimpleNamespace(name="tavily_search", description="Search the web.")
+
+    asyncio.run(plugin.after_tool_callback(
+        tool=tool, tool_args={}, tool_context=agent_tool_context(), result={"ok": 1},
+    ))
+
+    assert "description" not in sink[0][1]

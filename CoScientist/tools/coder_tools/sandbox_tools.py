@@ -97,6 +97,27 @@ def set_sandbox_start_sink(sink: Optional[StartSink]) -> None:
     _start_sink = sink
 
 
+#: ``(session_key, info) -> None | Awaitable`` for the sandbox agent's own plan.
+#: Same shape as :data:`StartSink`; the info carries ``plan`` and the agent
+#: that started the run.
+PlanSink = StartSink
+
+_plan_sink: Optional[PlanSink] = None
+
+
+def set_sandbox_plan_sink(sink: Optional[PlanSink]) -> None:
+    """Register where the sandbox agent's plan updates go; ``None`` unregisters.
+
+    The agent inside the container keeps a task list of its own and rewrites it
+    as the work goes. It is the only account of what is happening in there
+    between "task submitted" and the final summary — the tool call itself
+    returns nothing until the job is over — so the Web runtime wires itself in
+    here and relays each new revision to the tabs watching the session.
+    """
+    global _plan_sink
+    _plan_sink = sink
+
+
 def _host_session(tool_context: Optional[ToolContext]) -> Optional[Tuple[str, str]]:
     """The host's ``(user_id, session_id)`` for this call, if there is one.
 
@@ -158,6 +179,22 @@ def _start_notifier(tool_context: Optional[ToolContext]):
             await result
 
     return announce
+
+
+def _plan_notifier(tool_context: Optional[ToolContext]):
+    """Build the ``on_plan`` callback that relays the agent's plan to the host."""
+    host_key = _host_session(tool_context)
+    agent = getattr(tool_context, "agent_name", None) or "CoderAgent"
+
+    async def relay(plan: Dict[str, Any]) -> None:
+        sink = _plan_sink
+        if sink is None:
+            return
+        result = sink(host_key, {"agent": agent, "plan": plan})
+        if inspect.isawaitable(result):
+            await result
+
+    return relay
 
 
 def _shape(result: Dict[str, Any], *, waited: int) -> Dict[str, Any]:
@@ -264,6 +301,9 @@ async def run_sandbox_task(
         # is over, so waiting for its result to carry the links would show them
         # when there is nothing left to watch.
         on_start=_start_notifier(tool_context),
+        # The sandbox agent's own plan, relayed as it changes: without it the
+        # UI has nothing to say for the minutes (or hours) this call takes.
+        on_plan=_plan_notifier(tool_context),
         metrics_sink=_metrics_sink(tool_context),
     )
     logger.info(
@@ -343,6 +383,7 @@ async def check_sandbox_task(tool_context: ToolContext = None) -> Dict[str, Any]
         timeout=CHECK_WAIT,
         poll_interval=POLL_INTERVAL,
         metrics_sink=_metrics_sink(tool_context),
+        on_plan=_plan_notifier(tool_context),
     )
     return _shape(result, waited=CHECK_WAIT)
 

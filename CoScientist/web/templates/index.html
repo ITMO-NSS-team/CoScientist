@@ -13,6 +13,9 @@
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <!-- Live status indicator: the reducer that turns the raw event stream
+       into one human sentence. Vendored locally, no CDN. -->
+  <script src="/static/status_indicator.js"></script>
   <script id="tailwind-config">
     tailwind.config = {
       darkMode: "class",
@@ -116,27 +119,83 @@
       animation: fadeIn .3s ease-out;
     }
 
-    .typing-dot {
-      animation: pulse 1.2s infinite;
+    /* Live status indicator — the one line above the composer that says what
+       the system is doing right now. Motion is decorative only: every rule
+       below is switched off under prefers-reduced-motion, and the indicator
+       stays fully readable without it. */
+    .si-icon {
+      animation: si-pulse 1.8s ease-in-out infinite;
     }
 
-    .typing-dot:nth-child(2) {
-      animation-delay: .2s;
+    .si-bar {
+      animation: si-glow 2s ease-in-out infinite;
     }
 
-    .typing-dot:nth-child(3) {
-      animation-delay: .4s;
+    /* A slow highlight sweeping across the phrase. The gradient needs literal
+       colours (currentColor would resolve to the transparent text colour set
+       right below it), so it is pinned to the `on-surface` token — which is
+       what every animated phase renders in. */
+    .si-shimmer {
+      background: linear-gradient(100deg, #e1e2eb 0%, #e1e2eb 40%, #ffffff 50%, #e1e2eb 60%, #e1e2eb 100%);
+      background-size: 220% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation: si-sweep 3.2s linear infinite;
     }
 
-    @keyframes pulse {
+    @keyframes si-pulse {
 
       0%,
       100% {
-        opacity: .3
+        opacity: .55;
+        transform: scale(.96)
+      }
+
+      50% {
+        opacity: 1;
+        transform: scale(1.06)
+      }
+    }
+
+    @keyframes si-glow {
+
+      0%,
+      100% {
+        opacity: .45
       }
 
       50% {
         opacity: 1
+      }
+    }
+
+    @keyframes si-sweep {
+      0% {
+        background-position: 120% 0
+      }
+
+      100% {
+        background-position: -120% 0
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+
+      .si-icon,
+      .si-bar,
+      .si-shimmer {
+        animation: none
+      }
+
+      .si-icon {
+        opacity: 1;
+        transform: none
+      }
+
+      .si-shimmer {
+        background: none;
+        color: #e1e2eb
       }
     }
 
@@ -381,9 +440,9 @@
           <span class="material-symbols-outlined text-primary text-sm">science</span>
         </div>
         <div>
-          <p id="active-nickname" data-i18n="nav.noUser" class="text-[10px] font-bold text-on-surface">No user selected
+          <p id="active-nickname" class="text-[10px] font-bold text-on-surface">No user selected
           </p>
-          <p id="conn-status" data-i18n="nav.disconnected"
+          <p id="conn-status"
             class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
         </div>
       </div>
@@ -432,7 +491,7 @@
             class="text-[#424656] hover:text-primary transition-colors">
             <span class="material-symbols-outlined text-base">timeline</span>
           </button>
-          <div id="active-badge" data-i18n="chat.offline"
+          <div id="active-badge"
             class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
             Offline</div>
         </div>
@@ -463,8 +522,13 @@
         </div>
       </div>
 
+      <!-- Live status: what the system is doing right now, in one sentence.
+           Sits between the feed and the composer so it is the last thing read
+           before typing, and never scrolls away with the conversation. -->
+      <div id="status-indicator" class="hidden px-6 pt-1 pb-0" role="status" aria-live="polite"></div>
+
       <!-- Chat Input -->
-      <div class="p-6 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
+      <div class="p-6 pt-4 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
         <!-- Context attached to this session (dataset archive, …) -->
         <div id="attachment-chips" class="hidden flex flex-wrap items-center gap-2 mb-2"></div>
 
@@ -632,6 +696,7 @@
       'nav.user': { en: 'User', ru: 'Пользователь' },
       'nav.session': { en: 'Session', ru: 'Сессия' },
       'nav.noUser': { en: 'No user selected', ru: 'Пользователь не выбран' },
+      'nav.connected': { en: 'Connected', ru: 'Подключено' },
       'nav.disconnected': { en: 'Disconnected', ru: 'Отключено' },
       'nav.orchestrator': { en: 'ORCHESTRATOR', ru: 'ОРКЕСТРАТОР' },
 
@@ -650,6 +715,7 @@
 
       // Chat controls & Header
       'chat.missionControl': { en: 'Mission Control', ru: 'Центр управления' },
+      'chat.online': { en: 'Online', ru: 'Онлайн' },
       'chat.offline': { en: 'Offline', ru: 'Офлайн' },
       'chat.sendQuery': { en: 'Send a query to begin orchestration', ru: 'Отправьте запрос для начала работы' },
       'chat.placeholder': { en: 'Send system command…  (Enter — send, Shift+Enter — new line)', ru: 'Введите запрос… (Enter — отправить, Shift+Enter — новая строка)' },
@@ -868,6 +934,9 @@
       localStorage.setItem(LANG_STORAGE_KEY, currentLang);
       document.documentElement.lang = currentLang;
 
+      // The indicator builds its phrases in JS, not from data-i18n attributes.
+      if (window.StatusIndicator) StatusIndicator.setLang(currentLang);
+
       document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         const entry = i18n[key];
@@ -878,6 +947,30 @@
         const entry = i18n[key];
         if (entry && entry[currentLang]) el.placeholder = entry[currentLang];
       });
+
+      // Динамические элементы статуса и пользователя
+      const nicknameEl = document.getElementById('active-nickname');
+      if (nicknameEl) {
+        if (activeUser && activeUser.nickname) {
+          nicknameEl.textContent = activeUser.nickname;
+        } else {
+          const entry = i18n['nav.noUser'];
+          nicknameEl.textContent = (entry && entry[currentLang]) || 'No user selected';
+        }
+      }
+      const isWsOpen = ws && ws.readyState === 1;
+      const connStatusEl = document.getElementById('conn-status');
+      if (connStatusEl) {
+        const key = isWsOpen ? 'nav.connected' : 'nav.disconnected';
+        const entry = i18n[key];
+        connStatusEl.textContent = (entry && entry[currentLang]) || (isWsOpen ? 'Connected' : 'Disconnected');
+      }
+      const badgeEl = document.getElementById('active-badge');
+      if (badgeEl) {
+        const key = isWsOpen ? 'chat.online' : 'chat.offline';
+        const entry = i18n[key];
+        badgeEl.textContent = (entry && entry[currentLang]) || (isWsOpen ? 'Online' : 'Offline');
+      }
 
       // Обновляем кнопки переключателя языка
       const btnEn = document.getElementById('lang-btn-en');
@@ -1073,12 +1166,7 @@
       if (placeholder) {
         feed.innerHTML = '';
       }
-      const typing = document.getElementById('typing-indicator');
-      if (typing) {
-        typing.insertAdjacentHTML('beforebegin', html);
-      } else {
-        feed.insertAdjacentHTML('beforeend', html);
-      }
+      feed.insertAdjacentHTML('beforeend', html);
       scrollChat();
     }
 
@@ -1275,35 +1363,19 @@
     </div>`);
     }
 
+    // The three bouncing dots that used to live in the feed are gone: the
+    // status indicator above the composer says the same thing and much more,
+    // without pushing the conversation around. Both functions stay as shims so
+    // every existing call site keeps working — the indicator derives its state
+    // from the event stream itself, so only "a run is live" is worth relaying.
     function showTyping() {
-      const feed = document.getElementById('chat-feed');
-      const placeholder = feed.querySelector('.text-outline-variant.font-medium');
-      if (placeholder) {
-        feed.innerHTML = '';
-      }
-      const existing = document.getElementById('typing-indicator');
-      if (existing) {
-        feed.appendChild(existing);
-        scrollChat();
-        return;
-      }
-      feed.insertAdjacentHTML('beforeend', `
-    <div id="typing-indicator" class="flex items-center gap-3 msg-enter">
-      <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-        <span class="material-symbols-outlined text-sm text-primary animate-pulse">smart_toy</span>
-      </div>
-      <div class="flex gap-1.5 px-4 py-3 bg-surface-container-high rounded-xl border border-outline-variant/5">
-        <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
-        <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
-        <span class="w-2 h-2 bg-primary/50 rounded-full typing-dot"></span>
-      </div>
-    </div>`);
-      scrollChat();
+      StatusIndicator.feed({ type: '__typing__' });
     }
 
     function hideTyping() {
-      const el = document.getElementById('typing-indicator');
-      if (el) el.remove();
+      // No-op by design: `final_response` / `error` / `status` already close
+      // the run in the indicator, and a bare hideTyping() must not erase a
+      // state (e.g. "waiting for your answer") that is still true.
     }
 
     // =========================================================================
@@ -2391,6 +2463,7 @@
         || sessions.find(item => item.id === user.last_session_id)
         || sessions[0];
       await activateSession(user, selected);
+      closeIdentityModal();
     }
 
     async function registerLocalUser() {
@@ -2543,7 +2616,7 @@
         let savedUser = knownUsers.find(item => item.id === savedUserId);
         if (data.defaultUsername) {
           const envNick = data.defaultUsername.trim().toLowerCase();
-          const envUser = knownUsers.find(item => item.nickname.toLowerCase() === envNick);
+          const envUser = knownUsers.find(item => item.nickname && item.nickname.trim().toLowerCase() === envNick);
           if (envUser) {
             savedUser = envUser;
           }
@@ -2554,7 +2627,8 @@
           knownSessions = [];
           localStorage.removeItem(USER_STORAGE_KEY);
           localStorage.removeItem(SESSION_STORAGE_KEY);
-          document.getElementById('active-nickname').textContent = 'No user selected';
+          const noUserEntry = i18n['nav.noUser'];
+          document.getElementById('active-nickname').textContent = (noUserEntry && noUserEntry[currentLang]) || 'No user selected';
           populateSessionSelector();
           openIdentityModal();
           return;
@@ -2604,6 +2678,7 @@
       const messages = snapshot.messages || [];
       resetExperimentViewer();
       activityReset();
+      StatusIndicator.reset();
       eventCount = 0;
       document.getElementById('event-count').textContent = 'Events: 0';
       feed.innerHTML = '';
@@ -2628,6 +2703,9 @@
       updateCoderSandboxButton(null);
 
       for (const message of messages) {
+        // Quiet replay: the indicator recomputes its state from the history so
+        // a reconnect lands on the truth, without re-announcing every step.
+        StatusIndicator.feed(message, true);
         if (message.type === 'user_message') {
           addUserMsg(message.message, message.timestamp);
         } else if (message.type === 'agent_event') {
@@ -2657,6 +2735,7 @@
       document.getElementById('event-count').textContent = 'Events: ' + eventCount;
 
       applyRunStatus(snapshot.status, snapshot.run_status_version);
+      StatusIndicator.feed({ type: 'status', status: snapshot.status });
       populateUserSelectors();
       populateSessionSelector();
     }
@@ -2676,22 +2755,28 @@
       ws = socket;
 
       socket.onopen = () => {
-        document.getElementById('conn-status').textContent = 'Connected';
+        const connEntry = i18n['nav.connected'];
+        document.getElementById('conn-status').textContent = (connEntry && connEntry[currentLang]) || 'Connected';
         document.getElementById('conn-status').className = 'text-[8px] text-secondary uppercase font-bold tracking-widest';
         document.getElementById('live-dot').className = 'w-2 h-2 bg-secondary rounded-full animate-pulse';
-        document.getElementById('active-badge').textContent = 'Online';
+        const badgeEntry = i18n['chat.online'];
+        document.getElementById('active-badge').textContent = (badgeEntry && badgeEntry[currentLang]) || 'Online';
         document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-primary border border-primary/20 uppercase font-bold tracking-widest';
         document.getElementById('telemetry-live').innerHTML = '<span class="w-1 h-1 bg-secondary rounded-full"></span> Live';
         document.getElementById('telemetry-live').className = 'text-[8px] font-bold text-secondary animate-pulse font-mono tracking-tighter uppercase flex items-center gap-1';
         addTelemetry('CONNECTED to backend');
+        StatusIndicator.setConnected(true);
       };
 
       socket.onclose = (event) => {
         if (ws === socket) ws = null;
-        document.getElementById('conn-status').textContent = 'Disconnected';
+        StatusIndicator.setConnected(false);
+        const connEntry = i18n['nav.disconnected'];
+        document.getElementById('conn-status').textContent = (connEntry && connEntry[currentLang]) || 'Disconnected';
         document.getElementById('conn-status').className = 'text-[8px] text-error uppercase font-bold tracking-widest';
         document.getElementById('live-dot').className = 'w-2 h-2 bg-[#424656] rounded-full';
-        document.getElementById('active-badge').textContent = 'Offline';
+        const badgeEntry = i18n['chat.offline'];
+        document.getElementById('active-badge').textContent = (badgeEntry && badgeEntry[currentLang]) || 'Offline';
         document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest';
         if (intentionalDisconnect || !activeUser || !activeSession
           || activeUser.id !== userId || activeSession.id !== sessionId) return;
@@ -2709,6 +2794,9 @@
 
       socket.onmessage = (e) => {
         const data = JSON.parse(e.data);
+        // One entry point for the status indicator: it reduces the whole
+        // stream itself, so no case below has to know it exists.
+        StatusIndicator.feed(data);
         switch (data.type) {
           case 'connected':
             addTelemetry('INIT :: ' + data.message);
@@ -2899,6 +2987,7 @@
       if (!ws || ws.readyState !== 1) return;
       ws.send(JSON.stringify({ type: 'stop_chat' }));
       addTelemetry('STOP :: user requested stop');
+      StatusIndicator.markStopped();
     }
 
     // =========================================================================
@@ -3040,6 +3129,7 @@
 
     function clearChat() {
       activityReset();
+      StatusIndicator.reset();
       document.getElementById('chat-feed').innerHTML = `
     <div class="flex flex-col items-center justify-center h-full opacity-50">
       <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
@@ -3167,6 +3257,10 @@
     // =========================================================================
     initAgentNav();
     renderActivityRail();
+    // Before bootstrap(), not on DOMContentLoaded: bootstrap starts restoring a
+    // session while the page is still parsing, and the indicator has to be
+    // mounted by then or its first frames land with nowhere to draw.
+    StatusIndicator.mount(document.getElementById('status-indicator'));
     applySideNavState();
     bootstrap();
     connectDatasetLogsSSE();

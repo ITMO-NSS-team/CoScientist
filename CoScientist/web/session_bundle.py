@@ -549,6 +549,26 @@ def read_saved_bundle(filename: str) -> bytes:
     return path.read_bytes()
 
 
+def read_saved_events(filename: str) -> list[Dict[str, Any]]:
+    """Return just the ``agent_events.json`` log of a saved bundle.
+
+    Reading the whole bundle to get at its event log means shipping the ADK
+    session, the graphs and possibly a sandbox trajectory to the browser — tens
+    of megabytes for a list the status indicator's demo mode replays in a few
+    seconds. This reads the one member and nothing else.
+    """
+    safe = Path(filename).name
+    path = _snapshots_dir() / safe
+    if not path.is_file():
+        raise FileNotFoundError(f"No saved session '{safe}'.")
+    with zipfile.ZipFile(path, "r") as zf:
+        try:
+            events = json.loads(zf.read(_AGENT_EVENTS))
+        except (KeyError, json.JSONDecodeError):
+            return []
+    return events if isinstance(events, list) else []
+
+
 def delete_saved_session(filename: str) -> bool:
     """Delete a saved bundle by filename."""
     safe = Path(filename).name

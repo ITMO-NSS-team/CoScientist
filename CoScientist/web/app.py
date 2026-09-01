@@ -709,6 +709,30 @@ def _wire_sandbox_links(runtime: WebRuntime) -> None:
     sandbox_tools.set_sandbox_start_sink(deliver)
 
 
+def _wire_sandbox_plan(runtime: WebRuntime) -> None:
+    """Relay the sandbox agent's own plan to the tabs watching the session.
+
+    A sandbox task is the longest single thing the system does — one tool call
+    that can run for hours — and it reports nothing until it is over. The agent
+    in the container does keep a task list, though, and rewrites it as it goes;
+    the client relays each new revision here, which is what lets the status
+    line say *which step* is running instead of "writing and running code" for
+    the whole job.
+
+    Live-only, deliberately: the plan describes what is happening right now, a
+    replayed one would describe a container that is already gone. A tab that
+    reconnects mid-run picks the current revision up on the next poll.
+    """
+    from CoScientist.tools.coder_tools import sandbox_tools
+
+    async def deliver(key: SessionKey | None, info: dict[str, Any]) -> None:
+        if key is None or (key not in runtime.sockets and key not in runtime.active_runs):
+            return
+        await runtime.send(key, {"type": "sandbox_plan", **_json_safe(info)})
+
+    sandbox_tools.set_sandbox_plan_sink(deliver)
+
+
 def _wire_metrics(runtime: WebRuntime) -> None:
     """Stream the running cost of a session to the tabs watching it.
 
@@ -888,6 +912,7 @@ def create_app() -> FastAPI:
     runtime = WebRuntime()
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
+    _wire_sandbox_plan(runtime)
     _wire_tool_activity(runtime)
     _wire_agent_output(runtime)
     _wire_metrics(runtime)
@@ -1215,6 +1240,21 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)
+
+    @app.get("/api/saved-sessions/{filename}/events")
+    async def saved_session_events_endpoint(filename: str):
+        """The event log of a saved bundle, for replaying a run in the UI.
+
+        Feeds the status indicator's `?demo=<filename>` mode: the frontend can
+        drive its state machine off a real recorded run instead of costing a
+        live one.
+        """
+        from CoScientist.web.session_bundle import read_saved_events
+        try:
+            events = read_saved_events(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"events": events})
 
     @app.delete("/api/saved-sessions/{filename}")
     async def delete_saved_session_endpoint(filename: str):

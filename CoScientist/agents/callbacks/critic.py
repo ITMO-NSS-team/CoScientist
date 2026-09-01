@@ -39,7 +39,10 @@ from google.adk.agents import callback_context
 
 from opik import track
 
+import asyncio
 import json
+import os
+import time
 from copy import deepcopy
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
@@ -51,11 +54,48 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
+from CoScientist.agents.callbacks.json_output import _extract_json
 from CoScientist.config import get_settings
 
 
 _settings = get_settings()
 _CRITIC_MODEL = _settings.llm.main_model
+
+# A critic call is a bare litellm call: it bypasses `RetryingLiteLlm` and with it
+# every protection agent calls get — the wall-clock deadline (`llm_timeout:` in
+# system.yaml), the retry, the proxy pre-flight. It is awaited inline in the
+# orchestrator's event loop (and the plan critic inside SessionAgent's review
+# loop), so a call that does not come back stops the whole run.
+#
+# The deadline is a backstop, not a duplicate of litellm's `timeout=`: that one
+# is httpx's, i.e. a PER-READ budget, so it only bounds a peer that goes silent.
+# A peer that keeps the socket busy — or anything that stalls outside the read
+# loop — is bounded by nothing else (cf. `deadline_s` in agents/common.py, and
+# the ToolReranker note in system.yaml).
+# 90s, not 60: measured directly, a verdict on this stack costs ~15s, and the
+# budget has to absorb a slow route on top of that. One long attempt beats two
+# short ones — same wall time, but a single connection that is merely slow gets
+# to finish instead of being cut twice.
+_CRITIC_TIMEOUT_S = float(os.getenv("CRITIC__TIMEOUT", "90"))
+# Kept under the wall-clock deadline on purpose. Given the same number both
+# clocks race and the deadline wins, reporting a bare `TimeoutError()` that says
+# nothing about where it hung; a lower one lets litellm report the fault it can
+# actually name ("Timeout passed=45.0, time taken=45.05").
+_CRITIC_HTTP_TIMEOUT_S = _CRITIC_TIMEOUT_S * 0.75
+# One retry only: the critic runs on every orchestrator turn, so its worst case
+# has to stay a bounded fraction of a turn. The deadline itself is NOT retried
+# (see below) — a second full budget on a route that just proved it cannot
+# answer in time only doubles the stall.
+_CRITIC_MAX_ATTEMPTS = int(os.getenv("CRITIC__MAX_ATTEMPTS", "2"))
+# The cap covers REASONING PLUS the answer, which is why it is nowhere near the
+# size of a verdict. The main model reasons before it answers — measured at
+# 164-186 reasoning tokens against a 242-251 token completion on a short plan,
+# and reasoning grows with the plan under review. A cap that binds does not
+# yield a shorter verdict, it yields an EMPTY one: the budget is spent before
+# the JSON starts, `content` comes back "" and the critic silently approves.
+# So this is a guard against a runaway generation, set well above the envelope,
+# not a budget meant to bite. `finish_reason` is logged when it does.
+_CRITIC_MAX_TOKENS = int(os.getenv("CRITIC__MAX_TOKENS", "2000"))
 
 
 # ---------------------------------------------------------------------------
@@ -220,34 +260,117 @@ def _format_pending_calls(calls: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _usage_note(resp: Any) -> str:
+    """`completion=N (reasoning=M) of cap` — what the answer actually spent."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return f"no usage reported, cap={_CRITIC_MAX_TOKENS}"
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning = getattr(details, "reasoning_tokens", None)
+    return (
+        f"completion_tokens={getattr(usage, 'completion_tokens', '?')}"
+        + (f" (reasoning={reasoning})" if reasoning else "")
+        + f" of cap={_CRITIC_MAX_TOKENS}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # LLM critic invocation
 # ---------------------------------------------------------------------------
 async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
-    """Returns parsed JSON dict; on any failure returns {} (permissive default).
+    """Returns the critic's parsed JSON verdict; on any failure approves.
 
     Uses the async litellm API so the critic's network call does not block the
-    orchestrator's event loop (the callbacks run inside it).
+    orchestrator's event loop (the callbacks run inside it), under a hard
+    wall-clock deadline so a stalled provider cannot park the run forever
+    (see `_CRITIC_TIMEOUT_S`). A timed-out or otherwise failed critic approves:
+    a verdict nobody could produce must not hold up the work.
     """
-    try:
-        resp = await litellm.acompletion(
-            model=_CRITIC_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
-        # The critic bypasses the agent tree, so no model callback prices it —
-        # but it runs on every orchestrator turn and is not free.
-        from CoScientist.logging.metrics import record_completion
-        record_completion(resp, model=_CRITIC_MODEL, agent="Critic")
-        raw = resp["choices"][0]["message"]["content"]
-        return json.loads(raw)
-    except Exception as e:
-        print(f"[Critic] LLM call failed ({e!r}); defaulting to permissive verdict.")
-        return {"verdict": "approve"}
+    # Shares the agent tree's notion of a retryable upstream fault, and its
+    # proxy pre-flight. Imported lazily to keep this module out of
+    # `agents.common`'s import graph.
+    from CoScientist.agents.common import RetryingLiteLlm, _is_transient
+
+    for attempt in range(1, _CRITIC_MAX_ATTEMPTS + 1):
+        started = time.perf_counter()
+        try:
+            # Same pre-flight every agent call gets: a proxy whose VPN is down
+            # accepts the connection and then answers nothing, so without this
+            # the critic buys the full deadline twice over to learn that. Fails
+            # in ~5s with the reason named. No-op when the proxy is off.
+            await RetryingLiteLlm._verify_proxy_reachable()
+            # `timeout=` is only httpx's per-read budget; `asyncio.timeout` is
+            # what actually caps a provider that stalls mid-response.
+            async with asyncio.timeout(_CRITIC_TIMEOUT_S):
+                resp = await litellm.acompletion(
+                    model=_CRITIC_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    # No `response_format`: OpenRouter hands it to the provider
+                    # as a constrained decode, which this repo has already seen
+                    # hang with no timeout (ToolReranker carries no
+                    # `output_schema` for that reason — see system.yaml). Every
+                    # critic prompt already mandates bare JSON, and
+                    # `_extract_json` copes with fences or prose around it.
+                    temperature=0.0,
+                    max_tokens=_CRITIC_MAX_TOKENS,
+                    timeout=_CRITIC_HTTP_TIMEOUT_S,
+                    num_retries=0,
+                )
+
+            # The critic bypasses the agent tree, so no model callback prices it —
+            # but it runs on every orchestrator turn and is not free.
+            from CoScientist.logging.metrics import record_completion
+            record_completion(resp, model=_CRITIC_MODEL, agent="Critic")
+
+            choice = resp["choices"][0]
+            raw = choice["message"]["content"]
+            payload = _extract_json(raw or "")
+            if isinstance(payload, dict):
+                return payload
+            # An empty or unparseable answer needs `finish_reason` and the token
+            # counts to be actionable: "length" with the content empty means the
+            # cap was spent before the JSON started (a model that reasons out
+            # loud first), which is a different fix from a model that answered
+            # in prose.
+            print(
+                f"[Critic] unparseable verdict ({_truncate(raw, 300)!r}); "
+                f"finish_reason={choice.get('finish_reason')!r}, "
+                f"{_usage_note(resp)}; defaulting to permissive verdict."
+            )
+            return {"verdict": "approve"}
+        except Exception as e:  # noqa: BLE001 — a critic never takes the run down
+            # `_is_transient` counts a TimeoutError as retryable, which is right
+            # for an agent (its deadline covers time-to-FIRST-response, so a
+            # retry costs little). Here the deadline covers the whole call: once
+            # it blows, a second attempt buys the same wait again for a route
+            # that just failed to answer within it. Give up and approve instead.
+            deadline_blown = isinstance(e, TimeoutError)
+            retryable = (
+                attempt < _CRITIC_MAX_ATTEMPTS
+                and not deadline_blown
+                and _is_transient(e)
+            )
+            # Elapsed time and route are what tell a stalled provider apart from
+            # a stalled transport after the fact: the deadline reports a bare
+            # `TimeoutError()`, which on its own names neither.
+            route = (
+                f"via proxy {_settings.services.proxy_url}"
+                if _settings.web.use_proxy
+                else "direct"
+            )
+            print(
+                f"[Critic] LLM call failed after {time.perf_counter() - started:.1f}s "
+                f"({route}, attempt {attempt}/{_CRITIC_MAX_ATTEMPTS}, {e!r}); "
+                + ("retrying." if retryable else "defaulting to permissive verdict.")
+            )
+            if not retryable:
+                return {"verdict": "approve"}
+            await asyncio.sleep(min(1.5 ** attempt, 8.0))
+
+    return {"verdict": "approve"}
 
 
 # ---------------------------------------------------------------------------

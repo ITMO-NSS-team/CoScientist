@@ -5,11 +5,11 @@ import os as _os
 from pathlib import Path
 from typing import List, Optional
 
-from dotenv import load_dotenv as _load_dotenv
+from dotenv import find_dotenv as _find_dotenv, load_dotenv as _load_dotenv
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_load_dotenv()
+_load_dotenv(_find_dotenv())
 
 from rag_tools.config import Settings as ToolRAGSettings
 

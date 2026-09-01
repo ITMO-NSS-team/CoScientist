@@ -915,6 +915,7 @@ def run_sandbox_task(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     timeout: Optional[float] = None,
     on_start: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    on_plan: Optional[Callable[[Dict[str, Any]], Any]] = None,
     collect_metrics: bool = True,
     metrics_sink: Optional[Callable[[Dict[str, Any]], Any]] = None,
     verbose: bool = True,
@@ -942,6 +943,11 @@ def run_sandbox_task(
         poll_interval: Seconds between status polls.
         timeout: Give up waiting after this many seconds (the task keeps
             running server-side; the returned ``sandbox_id`` stays valid).
+        on_plan: Called with the sandbox agent's own task list each time the
+            agent edits it (``{revision, current, progress, items}``), so a
+            host can show which step is in progress while the run is still
+            going. Never called twice for the same ``revision``, and never at
+            all for a task the agent did not plan.
         on_start: Called with ``sandbox_id``/``watch_url``/``vscode_url``/
             ``reused`` as soon as the sandbox is up — i.e. while the task is
             still running, which is the only time the live URLs are useful.
@@ -993,6 +999,7 @@ def run_sandbox_task(
         poll_interval=poll_interval,
         timeout=timeout,
         verbose=verbose,
+        on_plan=on_plan,
     )
     _collect_metrics(
         api_url=sub.api_url,
@@ -1025,6 +1032,7 @@ async def arun_sandbox_task(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     timeout: Optional[float] = None,
     on_start: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    on_plan: Optional[Callable[[Dict[str, Any]], Any]] = None,
     collect_metrics: bool = True,
     metrics_sink: Optional[Callable[[Dict[str, Any]], Any]] = None,
     verbose: bool = False,
@@ -1034,7 +1042,8 @@ async def arun_sandbox_task(
     Use this from any asyncio runtime (ADK, LangGraph, FastAPI).  Session
     semantics, arguments and the returned shape are identical; only the I/O is
     non-blocking, so a long wait costs a coroutine rather than a thread.
-    ``on_start`` may be a coroutine function here and is awaited.
+    ``on_start`` and ``on_plan`` may be coroutine functions here and are
+    awaited.
     """
     try:
         sub = _prepare(
@@ -1068,6 +1077,7 @@ async def arun_sandbox_task(
         sandbox_id=base_result["sandbox_id"],
         poll_interval=poll_interval,
         timeout=timeout,
+        on_plan=on_plan,
     )
     await _acollect_metrics(
         api_url=sub.api_url,
@@ -1096,6 +1106,7 @@ async def await_sandbox_task(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     collect_metrics: bool = True,
     metrics_sink: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    on_plan: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Dict[str, Any]:
     """Wait (without blocking the event loop) for the session's sandbox task.
 
@@ -1121,6 +1132,7 @@ async def await_sandbox_task(
     result = await _await_completion(
         api_url=api_url, sandbox_id=target,
         poll_interval=poll_interval, timeout=timeout,
+        on_plan=on_plan,
     )
     await _acollect_metrics(
         api_url=api_url,
@@ -1226,6 +1238,70 @@ class _PollState:
         }
 
 
+class _PlanRelay:
+    """Forward the sandbox agent's own task list to a watcher, once per edit.
+
+    The agent keeps a plan of its own (the SDK's ``task_tracker`` tool) and
+    rewrites it as the work goes; ``/status`` returns the current snapshot on
+    every poll, unchanged for minutes at a time. ``revision`` rises only on a
+    real edit, so it is the only correct "this changed" signal — everything
+    else is dropped here rather than re-announced to the watcher.
+
+    A broken watcher must never take a run down: every dispatch is guarded,
+    exactly like :func:`_announce`.
+    """
+
+    def __init__(self, on_plan: Optional[Callable[[Dict[str, Any]], Any]]) -> None:
+        self._on_plan = on_plan
+        self._revision: Any = None
+
+    def _next(self, task_details: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if self._on_plan is None or not isinstance(task_details, dict):
+            return None
+        plan = task_details.get("plan")
+        if not isinstance(plan, dict):
+            # ``plan: null`` is the normal state of a task the agent never
+            # planned — a short job can finish without one.
+            return None
+        revision = plan.get("revision")
+        if revision is not None and revision == self._revision:
+            return None
+        self._revision = revision
+        return plan
+
+    def _dispatch(self, plan: Dict[str, Any]) -> Any:
+        try:
+            return self._on_plan(dict(plan))
+        except Exception:  # noqa: BLE001 - the observer is not worth failing a run
+            logger.warning("Sandbox plan callback failed.", exc_info=True)
+            return None
+
+    def offer(self, task_details: Optional[Dict[str, Any]]) -> None:
+        """Blocking API: nothing can be awaited here."""
+        plan = self._next(task_details)
+        if plan is None:
+            return
+        pending = self._dispatch(plan)
+        if inspect.isawaitable(pending):
+            logger.warning(
+                "on_plan returned an awaitable in the blocking API; use "
+                "arun_sandbox_task for coroutine callbacks."
+            )
+            getattr(pending, "close", lambda: None)()
+
+    async def aoffer(self, task_details: Optional[Dict[str, Any]]) -> None:
+        """Async twin of :meth:`offer`; awaits a coroutine callback."""
+        plan = self._next(task_details)
+        if plan is None:
+            return
+        pending = self._dispatch(plan)
+        if inspect.isawaitable(pending):
+            try:
+                await pending
+            except Exception:  # noqa: BLE001
+                logger.warning("Sandbox plan callback failed.", exc_info=True)
+
+
 def _wait_for_completion(
     *,
     api_url: str,
@@ -1233,12 +1309,16 @@ def _wait_for_completion(
     poll_interval: float,
     timeout: Optional[float],
     verbose: bool,
+    on_plan: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Dict[str, Any]:
     """Poll ``/status`` until the task is terminal, times out, or vanishes."""
     state = _PollState(timeout, verbose)
+    plans = _PlanRelay(on_plan)
     while True:
         try:
-            done = state.on_poll(_fetch_task(api_url, sandbox_id))
+            task_details = _fetch_task(api_url, sandbox_id)
+            plans.offer(task_details)
+            done = state.on_poll(task_details)
         except Exception as exc:  # noqa: BLE001 - transient network errors
             done = state.on_failure(exc)
         if done is not None:
@@ -1256,12 +1336,16 @@ async def _await_completion(
     poll_interval: float,
     timeout: Optional[float],
     verbose: bool = False,
+    on_plan: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Dict[str, Any]:
     """Async twin of :func:`_wait_for_completion`."""
     state = _PollState(timeout, verbose)
+    plans = _PlanRelay(on_plan)
     while True:
         try:
-            done = state.on_poll(await _afetch_task(api_url, sandbox_id))
+            task_details = await _afetch_task(api_url, sandbox_id)
+            await plans.aoffer(task_details)
+            done = state.on_poll(task_details)
         except Exception as exc:  # noqa: BLE001 - transient network errors
             done = state.on_failure(exc)
         if done is not None:
