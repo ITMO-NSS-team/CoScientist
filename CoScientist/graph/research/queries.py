@@ -335,12 +335,41 @@ def study_open(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
         reason = str(attrs.get("not_tested_reason") or "").strip()
         if status in ("confirmed", "refuted"):
             settled.append({"hypothesis": h, "status": status})
+        elif status == "inconclusive":
+            # Tested and not settled. It counts as work done — the study is not
+            # idle — but the question it was asked is still open, so it is
+            # reported separately rather than as a verdict.
+            settled.append({"hypothesis": h, "status": "inconclusive",
+                            "reason": str(attrs.get("inconclusive_reason") or "").strip()})
         elif reason:
             settled.append({"hypothesis": h, "status": "not tested", "reason": reason})
         else:
             unsettled.append({"hypothesis": h, "label": _label(g, h), "status": status})
 
-    verdicts = [i for i in settled if i["status"] in ("confirmed", "refuted")]
+    verdicts = [i for i in settled
+                if i["status"] in ("confirmed", "refuted", "inconclusive")]
+    active = [h for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order)
+              if _status(g, h) == "under_verification"]
+
+    # A branch still being tested means the study is open, whatever the answer
+    # being drafted says. This is the case that produced a final report reading
+    # "H1 SUPPORTED", with tables and p-values, while the graph still held the
+    # literature-only evidence the branch started with: the work happened and
+    # was never committed, so the validator judged what it could see and
+    # disagreed with the answer the user was given.
+    if active:
+        return {
+            "items": unsettled, "settled": settled, "open": True,
+            "rendered": (
+                "STUDY NOT FINISHED: "
+                + ", ".join(f"{h} \"{_label(g, h)}\"" for h in active)
+                + " is still under verification. Do NOT report a verdict in your "
+                  "answer that the graph does not hold. Commit the evidence you "
+                  "obtained (research_commit) and let the validator write the "
+                  "verdict; if you have no evidence to commit, say so instead of "
+                  "concluding."),
+        }
+
     rendered = ""
     if unsettled and verdicts:
         rendered = (

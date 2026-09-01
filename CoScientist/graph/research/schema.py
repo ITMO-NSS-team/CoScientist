@@ -51,12 +51,20 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
     ),
     NodeTypeSpec(
         "Hypothesis", "H", 1,
-        statuses=("formulated", "under_verification", "confirmed", "refuted", "postponed"),
+        # `inconclusive` is the verdict a validator reaches when the branch was
+        # tested and the evidence did not settle it. Without it that outcome was
+        # written as `postponed`, which means "in the backlog, not attempted" —
+        # so a hypothesis that had been worked on for an hour was recorded as
+        # never having been tried, and the graph reported an idle study.
+        statuses=("formulated", "under_verification", "confirmed", "refuted",
+                  "inconclusive", "postponed"),
         creatable=("formulated", "postponed"),
         attr_docs={
             "formulation": "the testable statement",
             "rationale": "why it is plausible",
             "priority": "verification priority (e.g. 1..5 or high/medium/low)",
+            "inconclusive_reason": "what the evidence failed to settle — required "
+                                   "when a verdict of inconclusive is written",
             "not_tested_reason": "why this hypothesis was left untested — set it "
                                  "instead of verifying, when a verdict already "
                                  "obtained makes the test unnecessary",
@@ -184,7 +192,9 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                              ("formulated", "postponed"),
                              ("under_verification", "confirmed"),
                              ("under_verification", "refuted"),
+                             ("under_verification", "inconclusive"),
                              ("under_verification", "postponed"),
+                             ("inconclusive", "under_verification"),
                              ("postponed", "formulated")}),
     "Evidence": frozenset({("obtained", "validated"), ("obtained", "rejected")}),
     "Conclusion": frozenset({("draft", "approved")}),
@@ -399,7 +409,6 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
             ("Conclusion", "draft", "approved"),               # approval
             ("Hypothesis", "formulated", "under_verification"),  # start verification
             ("Hypothesis", "formulated", "postponed"),
-            ("Hypothesis", "under_verification", "postponed"),
             ("Hypothesis", "postponed", "formulated")),          # scheduling only
         edges=_edges("contextualizes", "defines_scope", "derived_from", "applies_to",
                      "motivates", "regulates", "constrains",
@@ -415,7 +424,9 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         transitions=_transitions(
             ("Hypothesis", "under_verification", "confirmed"),
             ("Hypothesis", "under_verification", "refuted"),
-            ("Hypothesis", "under_verification", "postponed"),
+            # A branch that was tested and did not settle is inconclusive, not
+            # postponed: writing it as postponed says the work never happened.
+            ("Hypothesis", "under_verification", "inconclusive"),
             "ConfirmationCriteria", "Evidence"),
         # supports/refutes/refines: the validator assigns the POLARITY of evidence
         # that reached the hypothesis only as relates_to (focus auto-link).

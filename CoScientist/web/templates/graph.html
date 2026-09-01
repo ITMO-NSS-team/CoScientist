@@ -103,7 +103,7 @@
     <label id="turnWrap" style="display:none">request
       <select id="turn" style="max-width:340px"></select>
     </label>
-    <label id="provWrap"><input type="checkbox" id="prov" /> provenance</label>
+    <label id="provWrap"><input type="checkbox" id="prov" checked /> tool calls</label>
     <label><input type="checkbox" id="auto" checked /> live</label>
     <button id="refresh">↻</button>
     <span class="spacer"></span>
@@ -136,6 +136,8 @@
       confirmed:{c:GOOD,g:'✓'}, validated:{c:GOOD,g:'✓'}, met:{c:GOOD,g:'✓'},
       available:{c:GOOD,g:'✓'}, done:{c:GOOD,g:'✓'}, approved:{c:GOOD,g:'✓'},
       refuted:{c:CRIT,g:'✗'}, rejected:{c:CRIT,g:'✗'}, failed:{c:CRIT,g:'✗'}, creation_failed:{c:CRIT,g:'✗'},
+      // Tested and not settled: neither a verdict nor an untouched branch.
+      inconclusive:{c:ORANGE,g:'≈'},
       under_verification:{c:WARN,g:'⧗'}, running:{c:WARN,g:'⧗'}, obtained:{c:WARN,g:'●'}, draft:{c:WARN,g:'✎'},
       formulated:{c:INFO,g:'○'}, open:{c:INFO,g:'○'}, planned:{c:INFO,g:'○'}, not_met:{c:INFO,g:'○'},
       needs_adaptation:{c:ORANGE,g:'⚙'}, being_created:{c:ORANGE,g:'⚙'},
@@ -225,16 +227,32 @@
     const showProv = () => document.getElementById("prov").checked;
     function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
     function rText(n){ return String(n.output||n.label||"").replace(/\s+/g," ").trim(); }
+    // A card is a headline, not the document. Seven hundred characters of
+    // formulation per node turned the canvas into a wall of prose nobody scans;
+    // the whole text is one click away in the panel, so the card carries the
+    // first sentence and the facts you scan for: what it is, how it stands, who
+    // wrote it, and whether a tool call backs it.
+    function firstSentence(text, cap){
+      const trimmed = String(text || "").replace(/\s+/g, " ").trim();
+      if (trimmed.length <= cap) return trimmed;
+      const stop = trimmed.slice(0, cap).search(/[.!?;](?=\s|$)[^]*$/);
+      const cut = trimmed.lastIndexOf(" ", cap);
+      return trimmed.slice(0, stop > cap * 0.4 ? stop + 1 : (cut > 0 ? cut : cap)) + " …";
+    }
     function researchLabel(n){
       const st = rStatus(n.status); const icon = R_ICON[n.kind]||"•";
-      // No ellipsis: a card that cuts its own text mid-sentence is worse than a
-      // taller card. Keep a ceiling only so one pathological node cannot fill
-      // the canvas.
-      const txt = rText(n); const short = txt.length>700 ? txt.slice(0,700)+"…" : txt;
       const sw = rStatusWord(n);
-      // line 1: status glyph + type icon + readable name + status word; line 2: full text
-      return `<b>${st.g} ${icon} ${esc(rTypeName(n))}${sw ? " · " + esc(sw) : ""}</b>\n${esc(short)}`;
+      const head = `<b>${st.g} ${icon} ${esc(rTypeName(n))}${sw ? " · " + esc(sw) : ""}</b>`;
+      const body = esc(firstSentence(rText(n), 190));
+      const calls = Array.isArray(n.provenance) ? n.provenance.length : 0;
+      const by = n.executor_agent ? esc(shortAgent(n.executor_agent)) : "";
+      // The footer is what makes a verdict checkable without opening the logs:
+      // who recorded it, and how many tool calls it came from.
+      const foot = [by, calls ? `🛠️ ${calls} call${calls > 1 ? "s" : ""}` : ""]
+        .filter(Boolean).join("  ·  ");
+      return head + "\n" + body + (foot ? `\n<i>${foot}</i>` : "");
     }
+    const shortAgent = a => String(a).replace(/Agent$/, "");
     const titleOf = n => [ "id: "+n.id, "type: "+(n.kind||""),
       n.executor_agent?"source: "+n.executor_agent:"", "status: "+(n.status||""),
       n.output?String(n.output).slice(0,300):"" ].filter(Boolean).join("\n");
@@ -286,7 +304,7 @@
         font: { color: INK, size: n.overlay ? 12 : 16, multi: "html",
                 face: "-apple-system, Segoe UI, sans-serif", align: "left" },
         borderWidth: n.overlay ? 1 : 2, shapeProperties: { borderRadius: 9 },
-        widthConstraint: { minimum: 250, maximum: 420 }, margin: 14,
+        widthConstraint: { minimum: 230, maximum: 320 }, margin: 12,
       };
       if (n.overlay) { node.borderWidthSelected = 2; node.shadow = false;
         node.label = `<b>🛠️ ${esc(n.label)}</b>`; node.font.color = "#9aa3af"; }

@@ -3,7 +3,7 @@
 NOT an ADK sub-agent and NOT dependent on the orchestrator. It is a plugin that
 watches the graph: whenever evidence lands on a hypothesis, it fires a
 fire-and-forget asyncio task that judges the hypothesis (confirmed / refuted /
-postponed) and writes the Conclusion. The main orchestration loop never awaits
+inconclusive) and writes the Conclusion. The main orchestration loop never awaits
 it — on the web's persistent event loop the verdict lands in the graph a moment
 later and the live viewer shows it. Judgment runs in a SMALL focused context
 (one hypothesis' slice), not the orchestrator's.
@@ -53,9 +53,12 @@ _SYSTEM = (
     "irrelevant). Then weigh it against the criteria and return a verdict. Be "
     "conservative: confirm only when supporting evidence is strong, consistent and "
     "meets the criteria; refute when there is decisive contradicting evidence; "
-    "otherwise postpone. Reply with STRICT JSON only, no prose:\n"
+    "otherwise the branch is INCONCLUSIVE — it was tested and the evidence did "
+    "not settle it. Say what is missing in `reason`. Do not use inconclusive "
+    "for a hypothesis nobody worked on; that is the orchestrator's backlog, not "
+    "a verdict. Reply with STRICT JSON only, no prose:\n"
     '{"evidence":{"<evidence_id>":"supports|refutes|refines|irrelevant"},'
-    '"verdict":"confirmed|refuted|postponed",'
+    '"verdict":"confirmed|refuted|inconclusive",'
     '"criteria":{"<criteria_id>":"met|not_met"},'
     '"conclusion":"one-paragraph synthesis of the finding",'
     '"validity_bounds":"limits of validity",'
@@ -200,7 +203,13 @@ async def judge_hypothesis(
         if not data:
             return None
         verdict = str(data.get("verdict", "")).strip().lower()
-        if verdict not in ("confirmed", "refuted", "postponed"):
+        # `postponed` used to be accepted here and written onto the hypothesis,
+        # which recorded an hour of testing as "never attempted" and left the
+        # study reading as idle. It is still tolerated on input, since a model
+        # may reach for the old word, and mapped to the verdict it means.
+        if verdict == "postponed":
+            verdict = "inconclusive"
+        if verdict not in ("confirmed", "refuted", "inconclusive"):
             return None
 
         # The LLM call yields control for long enough that the same store may

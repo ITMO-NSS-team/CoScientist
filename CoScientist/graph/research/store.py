@@ -128,7 +128,8 @@ _KIND_WORDS = {
 _STATUS_WORDS = {
     "open": "open", "decomposed": "broken down", "closed": "closed",
     "formulated": "proposed", "under_verification": "being tested",
-    "confirmed": "confirmed", "refuted": "refuted", "postponed": "set aside",
+    "confirmed": "confirmed", "refuted": "refuted",
+    "inconclusive": "tested — not settled", "postponed": "set aside",
     "obtained": "collected", "validated": "validated", "rejected": "rejected",
     "planned": "planned", "running": "running", "done": "done", "failed": "failed",
     "not_met": "not met yet", "met": "met",
@@ -179,9 +180,17 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
     if kind == "EmpiricalBase":
         size = text("volume")
         base = text("name", "description", "base_type") or "dataset"
-        return f"{base} — {size}" if size else base
+        where = text("source_ref")
+        # A node whose only content is `base_type` used to render as the bare
+        # word "dataset", which tells a reader nothing about which dataset.
+        detail = size or where
+        return f"{base} — {detail}" if detail else base
     if kind == "ConfirmationCriteria":
-        return text("threshold", "content", "description") or "acceptance criteria"
+        stated = text("threshold", "content", "description")
+        extra = text("confirmations_needed", "reproducibility")
+        if stated and extra:
+            return f"{stated}; {extra}"
+        return stated or extra or "acceptance criteria"
     if kind == "Evidence":
         found = text("content", "description", "finding", "summary")
         if found:
@@ -190,6 +199,8 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
         return f"{metric}: {value}" if metric and value else "measurement"
     if kind == "Tool":
         return text("name", "description") or "tool"
+    if kind == "VerificationMethod":
+        return text("description", "procedure", "method_type") or "method"
     if kind == "Conclusion":
         return text("synthesis", "content", "description") or "conclusion"
 

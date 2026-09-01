@@ -837,3 +837,37 @@ def test_the_view_speaks_the_reader_s_language(tmp_path):
     hypothesis = view["Hypothesis"]
     assert hypothesis["status_word"] == "proposed", "formulated is not English"
     assert hypothesis["input"]["Priority"] == "high", "attrs need reader-facing names"
+
+
+def test_a_tested_branch_is_not_recorded_as_untried(tmp_path):
+    """The verdict for "we tested it and it did not settle" must be its own."""
+    from CoScientist.graph.research import queries
+    from CoScientist.graph.research.store import ResearchGraphStore
+
+    store = ResearchGraphStore(directory=str(tmp_path), active_file="v.json")
+    store.commit(source="OrchestratorAgent",
+                 nodes=[{"type": "ResearchQuestion", "attrs": {"formulation": "Q"}}])
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis",
+                         "attrs": {"formulation": "H", "selected": "true"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification",
+                                  "reason": "start"}])
+
+    # While a branch is open the study is open, whatever answer is being drafted.
+    assert "STUDY NOT FINISHED" in queries.study_open(store)["rendered"]
+
+    # Only the validator may reach a verdict, and it has one for this outcome.
+    denied = store.commit(source="OrchestratorAgent",
+                          status_updates=[{"id": "H1", "status": "inconclusive",
+                                           "reason": "no numbers"}])
+    assert not denied.ok
+
+    verdict = store.commit(source="ValidatorAgent",
+                           status_updates=[{"id": "H1", "status": "inconclusive",
+                                            "reason": "no quantitative results"}])
+    assert verdict.ok
+
+    node = next(n for n in store.to_view()["nodes"] if n["id"] == "H1")
+    assert node["status_word"] == "tested — not settled"
+    assert node["status"] != "postponed", "tested is not the same as never tried"
