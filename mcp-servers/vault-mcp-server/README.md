@@ -32,7 +32,12 @@ The server builds every key. Callers never compose keys.
 ## Tool surfaces
 
 The env var `VAULT_SURFACE` selects the registered tools: `worker`, `framework`, or
-`all` (default). Run two instances in production.
+`all` (default).
+
+CoScientist runs one instance with `all`. The worker toolset names the two tools
+it wants, so an agent sees the worker surface only, and framework code reaches
+`promote_artifact` on the same port. Two instances also work, for a deployment
+that must keep the split on the server.
 
 - Worker surface: `get_upload_link`, `get_download_link`.
 - Framework surface: `promote_artifact`, `cleanup_session`, `update_artifact_metadata`,
@@ -43,16 +48,22 @@ Every tool returns JSON with `bucket`, `s3_key`, and a URL field. The pair
 
 ## Installation and setup
 
-1. Copy `.env.example` to `.env` and fill in the values.
+1. Copy `.env.example` to `.env` and fill in the values. Against an external S3
+   or MinIO, set `S3__ENDPOINT_URL` and `S3__EXTERNAL_ENDPOINT_URL` to the same
+   routable address.
 
-2. Start the server from `mcp-servers/`:
+2. Copy `mcp-servers/.env.example` to `mcp-servers/.env`. Docker Compose reads
+   that file for the build proxy. Without it, the image build runs `pip` with no
+   proxy, which fails on a host with restricted egress.
+
+3. Start the server from `mcp-servers/`:
    ```bash
    docker compose up -d --build vault-mcp-server
    ```
    It listens on host port 7338. Inside the network it listens on 7331, the same
    port as every sibling MCP server.
 
-3. To get a local MinIO with it, add the `local-s3` profile:
+4. To get a local MinIO with it, add the `local-s3` profile:
    ```bash
    docker compose --profile local-s3 up -d --build
    ```
@@ -64,7 +75,7 @@ Every tool returns JSON with `bucket`, `s3_key`, and a URL field. The pair
    compose file does not define, so a MinIO that starts by itself would change
    where they write.
 
-4. Against an external MinIO, run the last two setup commands once by hand:
+5. Against an external MinIO, run the last two setup commands once by hand:
    ```bash
    mc ilm rule add --expire-days 7 --prefix ephemeral/ <alias>/<bucket>
    mc anonymous set download <alias>/<bucket>/permanent
@@ -72,7 +83,7 @@ Every tool returns JSON with `bucket`, `s3_key`, and a URL field. The pair
    Skip them and nothing under `ephemeral/` expires, and the plain `permanent/`
    URLs do not resolve.
 
-5. Point an agent at the HTTP endpoint: `http://localhost:7338/mcp`
+6. Point an agent at the HTTP endpoint: `http://localhost:7338/mcp`
 
 ## Health and verification
 
@@ -101,13 +112,16 @@ Set `VAULT_MCP_URL` to reach a server on another host or port.
 
 ## Configuration
 
-- `S3__ENDPOINT_URL`: Internal Docker address for MinIO (`http://minio:9000`).
-- `S3__EXTERNAL_ENDPOINT_URL`: How the client sees MinIO (`http://localhost:9000`).
+- `S3__ENDPOINT_URL`: Where the server reaches S3. For a MinIO in this Compose
+  project, the service name (`http://minio:9000`).
+- `S3__EXTERNAL_ENDPOINT_URL`: How the caller sees S3 (`http://localhost:9000`).
+  Against an external S3 or MinIO, both keys hold the same routable address.
 - `S3__ACCESS_KEY`, `S3__SECRET_KEY`, `S3__BUCKET_NAME`: Credentials and bucket.
 - `EPHEMERAL_TTL_DAYS`: Lifetime of ephemeral objects. Default 7. The lifecycle
   rule in `docker-compose.yml` reads the same name from the compose `.env` file.
   Set it in both places, or a link outlives its object.
-- `VAULT_SURFACE`: `worker`, `framework`, or `all`. Default `all`.
+- `VAULT_SURFACE`: `worker`, `framework`, or `all`. Default `all`. See
+  "Tool surfaces" above.
 - `MCP_PORT`: Port inside the container. Default 8000. The compose file sets
   7331 to match the sibling servers.
 - `MINIO_*` names work as fallback aliases for one release.
