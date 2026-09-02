@@ -48,6 +48,11 @@ _RETRYABLE_TYPES = (
 )
 _LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 
+# Seconds a single model call may take, and — separately — the longest silence
+# tolerated between streamed chunks. A provider that goes quiet raises nothing
+# on its own, so without this the agent waits forever.
+REQUEST_TIMEOUT = settings.llm.request_timeout
+
 
 def _is_transient(err: Exception) -> bool:
     if type(err).__name__ in _RETRYABLE_TYPES:
@@ -63,6 +68,36 @@ class RetryingLiteLlm(LiteLlm):
     duplicated) and only for transient errors; everything else propagates.
     """
 
+    async def _stream(self, llm_request: LlmRequest, stream: bool):
+        """Yield the upstream response, bounding the wait between chunks.
+
+        litellm's own `timeout` covers getting the request away, not the silence
+        after. A provider that opens the stream and then stops sending leaves
+        `async for` waiting on a chunk that never comes: the socket stays
+        established, nothing raises, and the agent is parked for good. Giving
+        each chunk a deadline turns that silence into an error the caller can
+        classify and retry.
+        """
+        source = super().generate_content_async(llm_request, stream=stream)
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        source.__anext__(), timeout=REQUEST_TIMEOUT
+                    )
+                except StopAsyncIteration:
+                    return
+                except asyncio.TimeoutError:
+                    # Bare TimeoutError carries no message; say what happened so
+                    # `_is_transient` recognises it and the log names the cause.
+                    raise TimeoutError(
+                        f"model sent nothing for {REQUEST_TIMEOUT}s — request timed out"
+                    ) from None
+                yield chunk
+        finally:
+            # Drop the stalled HTTP response rather than leaking the connection.
+            await source.aclose()
+
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
@@ -70,7 +105,7 @@ class RetryingLiteLlm(LiteLlm):
         while True:
             yielded = False
             try:
-                async for resp in super().generate_content_async(llm_request, stream=stream):
+                async for resp in self._stream(llm_request, stream=stream):
                     yielded = True
                     yield resp
                 return
@@ -104,13 +139,6 @@ hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 # pass `api_base` here — doing so makes litellm strip the provider prefix, fail
 # to re-infer the provider, and spam "Provider List: ..." warnings.
 CODER_MODEL = settings.llm.coder_model or settings.llm.main_model
-
-
-# A provider that accepts the connection and then sends nothing raises no error,
-# so the retry above never fires and the agent waits forever — a run that looks
-# frozen with an empty log. The timeout turns that silence into a Timeout, which
-# `_is_transient` already classifies as retryable.
-REQUEST_TIMEOUT = settings.llm.request_timeout
 
 
 def make_llm(model: str = MODEL) -> LiteLlm:
