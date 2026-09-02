@@ -137,6 +137,47 @@
         opacity: 1
       }
     }
+
+    /* Rendered markdown inside a chat bubble. Tailwind's preflight strips the
+       defaults off h1/ul/table, so every element a report uses is restated. */
+    .md > *:first-child { margin-top: 0; }
+    .md > *:last-child { margin-bottom: 0; }
+    .md p { margin: 0 0 .7em; line-height: 1.6; }
+    .md .md-h { font-weight: 700; line-height: 1.3; margin: 1.2em 0 .5em; }
+    .md .md-h1 { font-size: 1.25em; }
+    .md .md-h2 { font-size: 1.15em; }
+    .md .md-h3 { font-size: 1.05em; }
+    .md .md-h4, .md .md-h5, .md .md-h6 { font-size: 1em; }
+    .md .md-list { margin: 0 0 .7em; padding-left: 1.35em; }
+    .md ul.md-list { list-style: disc; }
+    .md ol.md-list { list-style: decimal; }
+    .md .md-list li { margin: .2em 0; line-height: 1.55; }
+    .md strong { font-weight: 700; }
+    .md em { font-style: italic; }
+    .md del { text-decoration: line-through; opacity: .7; }
+    .md .md-rule { border: 0; border-top: 1px solid rgb(var(--md-outline-variant, 120 120 120) / .25); margin: 1em 0; }
+    .md .md-quote {
+      margin: 0 0 .7em; padding: .1em 0 .1em .8em;
+      border-left: 2px solid currentColor; opacity: .8;
+    }
+    .md .md-inline-code, .md .md-code code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: .88em;
+    }
+    .md .md-inline-code {
+      background: rgb(127 127 127 / .16); padding: .1em .35em; border-radius: .25em;
+    }
+    .md .md-code {
+      background: rgb(127 127 127 / .12); border-radius: .5em;
+      padding: .7em .8em; margin: 0 0 .7em; overflow-x: auto;
+    }
+    /* Wide tables scroll inside the bubble instead of stretching the chat. */
+    .md .md-table-wrap { overflow-x: auto; margin: 0 0 .7em; }
+    .md .md-table { border-collapse: collapse; width: 100%; font-size: .92em; }
+    .md .md-table th, .md .md-table td {
+      border: 1px solid rgb(127 127 127 / .28); padding: .35em .6em; vertical-align: top;
+    }
+    .md .md-table th { background: rgb(127 127 127 / .12); font-weight: 700; }
   </style>
 </head>
 
@@ -629,6 +670,110 @@
       }).join('');
     }
 
+    // Agents write markdown — headings, tables, lists, code. Rendering it as
+    // flat pre-wrapped text turned a report into a wall of asterisks and pipes.
+    // Small on purpose: the subset the agents actually emit, nothing more.
+    function renderMarkdown(raw) {
+      const text = String(raw == null ? '' : raw).replace(/\r\n?/g, '\n');
+
+      // Fenced code is lifted out first so nothing below reformats its insides.
+      const fences = [];
+      const withoutCode = text.replace(/```[ \t]*([\w+-]*)\n([\s\S]*?)```/g, (_, lang, body) => {
+        fences.push('<pre class="md-code"><code>' + escHtml(body.replace(/\n$/, '')) + '</code></pre>');
+        return 'CSFENCE' + (fences.length - 1) + 'ENDCS';
+      });
+
+      const inline = (line) => {
+        // Escape first: everything below emits trusted markup onto safe text.
+        let out = escHtml(line);
+        const spans = [];
+        out = out.replace(/`([^`]+)`/g, (_, code) => {
+          spans.push('<code class="md-inline-code">' + code + '</code>');
+          return 'CSSPAN' + (spans.length - 1) + 'ENDCS';
+        });
+        out = out
+          .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s.,;:!?)]|$)/g, '$1<em>$2</em>')
+          .replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:!?)]|$)/g, '$1<em>$2</em>')
+          .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+        out = linkify(out);
+        return out.replace(/CSSPAN(\d+)ENDCS/g, (_, i) => spans[Number(i)]);
+      };
+
+      const cells = (row) => row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+
+      const lines = withoutCode.split('\n');
+      const html = [];
+      let list = null;
+      let paragraph = [];
+
+      const closeList = () => { if (list) { html.push('</' + list + '>'); list = null; } };
+      const closeParagraph = () => {
+        if (!paragraph.length) return;
+        html.push('<p>' + paragraph.map(inline).join('<br>') + '</p>');
+        paragraph = [];
+      };
+      const close = () => { closeParagraph(); closeList(); };
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        if (!line.trim()) { close(); continue; }
+
+        const fence = line.match(/^CSFENCE(\d+)ENDCS$/);
+        if (fence) { close(); html.push(fences[Number(fence[1])]); continue; }
+
+        const heading = line.match(/^(#{1,6})\s+(.*)$/);
+        if (heading) {
+          close();
+          const level = heading[1].length;
+          html.push('<h' + level + ' class="md-h md-h' + level + '">' + inline(heading[2]) + '</h' + level + '>');
+          continue;
+        }
+
+        if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) { close(); html.push('<hr class="md-rule">'); continue; }
+
+        // A table needs its separator row to be a table at all.
+        if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
+          close();
+          const head = cells(line);
+          const align = cells(lines[i + 1]).map(spec =>
+            /^:-+:$/.test(spec) ? 'center' : /-+:$/.test(spec) ? 'right' : 'left');
+          const rows = [];
+          i += 2;
+          while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(cells(lines[i])); i++; }
+          i--;
+          const cell = (tag, value, j) =>
+            '<' + tag + ' style="text-align:' + (align[j] || 'left') + '">' + inline(value || '') + '</' + tag + '>';
+          html.push(
+            '<div class="md-table-wrap"><table class="md-table"><thead><tr>' +
+            head.map((h, j) => cell('th', h, j)).join('') + '</tr></thead><tbody>' +
+            rows.map(r => '<tr>' + head.map((_, j) => cell('td', r[j], j)).join('') + '</tr>').join('') +
+            '</tbody></table></div>');
+          continue;
+        }
+
+        const quote = line.match(/^\s*>\s?(.*)$/);
+        if (quote) { close(); html.push('<blockquote class="md-quote">' + inline(quote[1]) + '</blockquote>'); continue; }
+
+        const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+        const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+        if (bullet || numbered) {
+          closeParagraph();
+          const want = bullet ? 'ul' : 'ol';
+          if (list !== want) { closeList(); list = want; html.push('<' + want + ' class="md-list">'); }
+          html.push('<li>' + inline((bullet || numbered)[1]) + '</li>');
+          continue;
+        }
+
+        closeList();
+        paragraph.push(line);
+      }
+      close();
+      return html.join('');
+    }
+
     let activeSandboxWatchUrl = null;
 
     function getBaseSandboxUrl() {
@@ -701,22 +846,52 @@
       return typeof value === 'string' && value.trim().length > 0;
     }
 
-    function addAgentMsg(author, text, timestamp = null) {
+    // An agent's own working-out, not its answer: worth showing, but it must
+    // not read like the reply. Muted, labelled, and folded when it runs long.
+    const THINKING_FOLD = 420;
+
+    function addAgentMsg(author, text, timestamp = null, isFinal = true) {
       // Blank-but-present text produces an empty bubble; such events carry a
       // function call, not an utterance. (Also guards history recorded before
       // the backend started filtering them.)
       if (!hasText(text)) return;
+
+      const body = renderMarkdown(text.trim());
+
+      if (!isFinal) {
+        const folded = text.trim().length > THINKING_FOLD;
+        appendMsgToFeed(`
+    <div class="flex items-start gap-4 max-w-3xl msg-enter">
+      <div class="w-8 h-8 rounded-lg bg-surface-container-highest border border-outline-variant/20 flex items-center justify-center shrink-0">
+        <span class="material-symbols-outlined text-sm text-outline-variant">psychology</span>
+      </div>
+      <div class="flex flex-col gap-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs font-bold text-outline-variant font-headline uppercase tracking-tight">${escHtml(author)}</span>
+          <span class="text-[9px] font-mono uppercase tracking-widest text-outline-variant bg-outline-variant/10 border border-outline-variant/20 px-1.5 py-0.5 rounded">Thinking</span>
+        </div>
+        <div class="flex flex-col gap-2 bg-surface-container/40 px-4 py-3 rounded-xl rounded-tl-none border border-dashed border-outline-variant/25">
+          <div class="md text-[13px] text-outline-variant leading-relaxed break-words ${folded ? 'max-h-28 overflow-hidden' : ''}">${body}</div>
+          ${folded ? `<button onclick="toggleAgentOutput(this)"
+             class="self-start text-[10px] font-mono uppercase tracking-widest text-outline-variant hover:text-on-surface transition-colors">
+             Show full reasoning</button>` : ''}
+        </div>
+      </div>
+    </div>`);
+        return;
+      }
+
       appendMsgToFeed(`
     <div class="flex items-start gap-4 max-w-3xl msg-enter">
       <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
         <span class="material-symbols-outlined text-sm text-primary">smart_toy</span>
       </div>
-      <div class="flex flex-col gap-1">
-        <div class="flex items-center gap-2">
+      <div class="flex flex-col gap-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(author)}</span>
         </div>
         <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
-          <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">${linkify(escHtml(text))}</p>
+          <div class="md text-sm text-on-surface leading-relaxed break-words">${body}</div>
         </div>
       </div>
     </div>`);
@@ -751,9 +926,7 @@
           ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml(caller)}</span>` : ''}
         </div>
         <div class="flex flex-col gap-2 bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-secondary/20">
-          <div class="${folded ? 'max-h-64 overflow-hidden' : ''}">
-            <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap break-words">${linkify(escHtml(body))}</p>
-          </div>
+          <div class="md text-sm text-on-surface leading-relaxed break-words ${folded ? 'max-h-64 overflow-hidden' : ''}">${renderMarkdown(body)}</div>
           ${toggle}
         </div>
       </div>
@@ -763,9 +936,16 @@
     function toggleAgentOutput(button) {
       const box = button.previousElementSibling;
       if (!box) return;
-      const collapsed = box.classList.toggle('max-h-64');
+      // Reasoning folds shorter than a deliverable, so the height class the
+      // bubble was built with is the one to toggle.
+      const clamp = button.dataset.clamp
+        || (button.dataset.clamp = [...box.classList].find(c => c.startsWith('max-h-')) || 'max-h-64');
+      // Capture the button's own wording before the first toggle overwrites it.
+      const opened = button.dataset.openLabel
+        || (button.dataset.openLabel = button.textContent.trim() || 'Show full output');
+      const collapsed = box.classList.toggle(clamp);
       box.classList.toggle('overflow-hidden', collapsed);
-      button.textContent = collapsed ? 'Show full output' : 'Collapse';
+      button.textContent = collapsed ? opened : 'Collapse';
       if (collapsed) box.scrollIntoView({ block: 'nearest' }); else scrollChat();
     }
 
@@ -2099,7 +2279,7 @@
         } else if (message.type === 'agent_event') {
           activityTouchAgent(message.author, message.timestamp);
           if (hasText(message.content)) {
-            addAgentMsg(message.author || 'system', message.content, message.timestamp);
+            addAgentMsg(message.author || 'system', message.content, message.timestamp, !!message.is_final);
             const foundUrl = extractSandboxUrlFromText(message.content);
             if (foundUrl) updateCoderSandboxButton(foundUrl);
           }
@@ -2196,7 +2376,7 @@
             if (hasText(data.content)) {
               hideTyping();
               highlightAgent(data.author);
-              addAgentMsg(data.author, data.content, data.timestamp);
+              addAgentMsg(data.author, data.content, data.timestamp, !!data.is_final);
               const foundUrl = extractSandboxUrlFromText(data.content);
               if (foundUrl) updateCoderSandboxButton(foundUrl);
               addTelemetry('EVENT :: ' + data.author + (data.is_final ? ' [FINAL]' : ''));
