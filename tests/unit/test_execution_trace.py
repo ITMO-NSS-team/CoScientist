@@ -226,3 +226,87 @@ def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
     assert placed["t:3"]["row"] == placed["a:Two"]["row"]
     assert placed["a:One"]["row"] != placed["a:Two"]["row"]
     assert placed["goal:i1"]["row"] == 0
+
+
+def _two_requests_sharing_agents():
+    """Two prompts served by the same agent nodes — the shape the plugin writes.
+
+    An agent node is created once per session and reused, so its ``turn_id``
+    names whichever request reached it first. Everything else is per-request.
+    """
+    return {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "first ask",
+         "t_start": 100.0, "t_end": 150.0},
+        {"id": "t:1", "kind": "tool_call", "turn_id": "one", "label": "search",
+         "executor_agent": "Orchestrator", "t_start": 110.0, "t_end": 111.0},
+        {"id": "t:2", "kind": "tool_call", "turn_id": "one", "label": "read",
+         "executor_agent": "Research", "t_start": 120.0, "t_end": 121.0},
+
+        {"id": "goal:2", "kind": "goal", "turn_id": "two", "label": "second ask",
+         "t_start": 200.0, "t_end": 260.0},
+        {"id": "t:3", "kind": "tool_call", "turn_id": "two", "label": "search",
+         "executor_agent": "Orchestrator", "t_start": 210.0, "t_end": 211.0},
+        {"id": "t:4", "kind": "tool_call", "turn_id": "two", "label": "read",
+         "executor_agent": "Research", "t_start": 220.0, "t_end": 221.0},
+        {"id": "res:2", "kind": "result", "turn_id": "two", "output": "done",
+         "t_start": 260.0, "t_end": 260.0},
+
+        # Written once, on the first request, and reused by the second.
+        {"id": "a:Orchestrator", "kind": "agent", "turn_id": "one",
+         "executor_agent": "Orchestrator", "t_start": 100.0},
+        {"id": "a:Research", "kind": "agent", "turn_id": "one",
+         "executor_agent": "Research", "t_start": 105.0},
+    ], "edges": [
+        {"src": "goal:1", "dst": "a:Orchestrator", "type": "caused_by"},
+        {"src": "goal:2", "dst": "a:Orchestrator", "type": "caused_by"},
+        {"src": "a:Orchestrator", "dst": "t:1", "type": "caused_by"},
+        {"src": "a:Orchestrator", "dst": "t:3", "type": "caused_by"},
+        {"src": "a:Orchestrator", "dst": "a:Research", "type": "delegated_to"},
+        {"src": "a:Research", "dst": "t:2", "type": "caused_by"},
+        {"src": "a:Research", "dst": "t:4", "type": "caused_by"},
+        {"src": "a:Orchestrator", "dst": "res:2", "type": "produced"},
+    ]}
+
+
+def test_a_shared_agent_appears_in_every_request_it_served():
+    """The reported bug: request 7 drawn as loose cards with no edges.
+
+    Scoping an agent to the one request its ``turn_id`` names dropped it from
+    all the others, and every edge that named it went with it.
+    """
+    from CoScientist.graph.projection import execution_tree
+
+    full = _two_requests_sharing_agents()
+    for turn_id in ("one", "two"):
+        tree = execution_tree(full, turn_id)
+        present = {n["id"] for n in tree["nodes"]}
+        assert "a:Orchestrator" in present, turn_id
+        assert "a:Research" in present, turn_id
+
+        # Every node hangs off something: a trace, not a scatter of cards.
+        touched = {end for e in tree["edges"] for end in (e["src"], e["dst"])}
+        assert present - touched == set(), turn_id
+        assert len(tree["edges"]) == len(present) - 1, turn_id
+
+
+def test_a_request_keeps_only_its_own_calls():
+    """Pulling shared agents in must not drag the other request's work along."""
+    from CoScientist.graph.projection import execution_tree
+
+    tree = execution_tree(_two_requests_sharing_agents(), "one")
+    present = {n["id"] for n in tree["nodes"]}
+    assert {"goal:1", "t:1", "t:2"} <= present
+    assert not present & {"goal:2", "t:3", "t:4", "res:2"}
+
+
+def test_an_agent_that_did_nothing_here_stays_out():
+    """An agent joins a request by acting in it, not by existing."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = _two_requests_sharing_agents()
+    full["nodes"].append({"id": "a:Idle", "kind": "agent", "turn_id": "one",
+                          "executor_agent": "Idle", "t_start": 106.0})
+    full["edges"].append({"src": "a:Orchestrator", "dst": "a:Idle",
+                          "type": "delegated_to"})
+
+    assert "a:Idle" not in {n["id"] for n in execution_tree(full, "two")["nodes"]}

@@ -228,8 +228,7 @@ def execution_tree(full: Dict[str, Any],
 
     chosen = turn or (catalogue[-1]["turn_id"] if catalogue else None)
     if chosen is not None:
-        every = [n for n in every
-                 if n.get("kind") == "system" or resolve(n) == chosen]
+        every = _scope_to_turn(every, full.get("edges", []), resolve, chosen)
 
     nodes = {n["id"]: dict(n) for n in every}
     edges = [e for e in full.get("edges", [])
@@ -285,6 +284,57 @@ def execution_tree(full: Dict[str, Any],
     _place_in_time(ordered, edges)
     return {"run_id": full.get("run_id"), "nodes": ordered, "edges": edges,
             "turns": catalogue, "turn_id": chosen}
+
+
+_AGENTS = ("agent", "agent_call")
+
+
+def _scope_to_turn(every, all_edges, resolve, chosen):
+    """The nodes belonging to one request, agents included.
+
+    A goal, a tool call and an answer each happen once, so they belong to the
+    request that produced them. An agent node does not: it is written once and
+    reused by every request it serves. Scoping it the same way hands it to one
+    request and strands the rest — their calls keep the edges that named an
+    agent no longer there, the edges are dropped as dangling, and the request
+    is drawn as a row of cards joined by nothing.
+
+    So an agent joins a request when it acted in it — when an edge ties it to
+    that request's own goal, call or answer — and the agents above it in the
+    delegation chain come with it, since a sub-agent drawn without its caller
+    hangs off the picture unreached.
+    """
+    by_id = {n["id"]: n for n in every}
+    scoped = [n for n in every
+              if n.get("kind") == "system" or resolve(n) == chosen]
+    inside = {n["id"] for n in scoped}
+    # Only the request's own one-off nodes may vouch for an agent; letting one
+    # shared agent vouch for another would pull in the whole roster.
+    anchors = {n["id"] for n in scoped if n.get("kind") not in _AGENTS}
+
+    edges = [e for e in all_edges if e.get("type") != "has_member"]
+    extra = set()
+    for edge in edges:
+        for near, far in ((edge.get("src"), edge.get("dst")),
+                          (edge.get("dst"), edge.get("src"))):
+            if near in anchors and far not in inside:
+                node = by_id.get(far)
+                if node is not None and node.get("kind") in _AGENTS:
+                    extra.add(far)
+
+    # Walk up the delegation chain so a nested agent keeps its caller.
+    delegations = [(e["src"], e["dst"]) for e in edges
+                   if e.get("type") == "delegated_to"
+                   and e.get("src") in by_id and e.get("dst") in by_id]
+    growing = True
+    while growing:
+        growing = False
+        for parent, child in delegations:
+            if child in extra and parent not in extra and parent not in inside:
+                extra.add(parent)
+                growing = True
+
+    return scoped + [by_id[node_id] for node_id in extra]
 
 
 #: A card is this wide on screen, and two of them in one lane need this much
