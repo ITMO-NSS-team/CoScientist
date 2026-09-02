@@ -1089,8 +1089,11 @@ You do not plan, design, split or reason about the work. You are a pipe:
 - If it reports a blocker or an error, pass that through as the answer — an honest failure is a valid result.
 - Do NOT try to solve, debug or second-guess the work yourself, and do NOT ask it to dump file contents or raw source back to you.
 
+<<RESEARCH>>
+
 <<HITL>>
-''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
+''', TOOLS=ctx.render_tools(), RESEARCH=render_research_protocol(ctx),
+        HITL=ctx.render_hitl())
 
 
 # ── DatasetCollectorAgent ────────────────────────────────────────────────────

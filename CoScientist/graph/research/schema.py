@@ -27,6 +27,11 @@ class NodeTypeSpec:
     attr_docs: Dict[str, str] = field(default_factory=dict)
     subtypes: Tuple[str, ...] = ()   # allowed attrs.subtype values
     subtype_required: bool = False
+    #: subtype -> attributes that subtype cannot be created without. Declared
+    #: here so `permitted_summary` can tell an agent what it must supply: a
+    #: requirement the validator enforces and the prompt never mentions is a
+    #: refusal the agent cannot act on.
+    required_attrs_by_subtype: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
 
 
 NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
@@ -86,6 +91,8 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         },
         subtypes=("literature", "experimental", "computational", "expert", "meta"),
         subtype_required=True,
+        required_attrs_by_subtype={"computational": ("measured_on",),
+                                   "experimental": ("measured_on",)},
     ),
     NodeTypeSpec(
         "Conclusion", "CL", 1,
@@ -558,12 +565,11 @@ def validate_node_draft(agent: str, node_type: str, status: str,
         # hypothesis named returned 404, and reported the result as a comparison
         # of the named systems: the substitution was mentioned in the coder's
         # report and nowhere in the record, so nothing downstream could see it.
-        if node_type == "Evidence" and subtype in ("computational", "experimental") \
-                and not str((attrs or {}).get("measured_on", "")).strip():
-            errors.append(
-                f"{subtype} Evidence requires attrs.measured_on — name what was "
-                f"actually measured (repo and commit, dataset, deployed service). "
-                f"If it stands in for what the hypothesis names, say that here.")
+        for needed in spec.required_attrs_by_subtype.get(subtype, ()):
+            if not str((attrs or {}).get(needed, "")).strip():
+                errors.append(
+                    f"{subtype} {node_type} requires attrs.{needed} — "
+                    f"{spec.attr_docs.get(needed, 'see the schema')}")
         # The human may file evidence, but only the kind a human actually is:
         # expert judgement. Routing a computational or literature result through
         # the HITL bridge would launder its provenance.
@@ -633,7 +639,10 @@ def permitted_summary(agent: str) -> Dict[str, List[str]]:
     for t in sorted(perm.create):
         spec = NODE_TYPES[t]
         sub = f" (attrs.subtype: {'/'.join(spec.subtypes)})" if spec.subtype_required else ""
-        create.append(f"{t}{sub}")
+        must = "; ".join(
+            f"{st} REQUIRES attrs.{', attrs.'.join(keys)}"
+            for st, keys in sorted(spec.required_attrs_by_subtype.items()))
+        create.append(f"{t}{sub}" + (f" — {must}" if must else ""))
     edges_by_type: Dict[str, List[str]] = {}
     for edge, f, t in sorted(perm.edges):
         edges_by_type.setdefault(edge, []).append(f"{f}→{t}")
