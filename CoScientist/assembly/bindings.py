@@ -36,6 +36,11 @@ def _papers_search():
     return papers_search_toolset_instance
 
 
+def _vault():
+    from CoScientist.tools import vault_toolset_instance
+    return vault_toolset_instance
+
+
 def _retrieval():
     from CoScientist.tools import retrieval_toolset_instance
     return retrieval_toolset_instance
@@ -196,6 +201,33 @@ REGISTRY.register_tool(ToolEntry(
             name="explore_my_papers",
             signature="explore_my_papers(question, s3_keys)",
             purpose="Answers questions using user-uploaded or previously downloaded papers.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="vault",
+    factory=_vault,
+    optional=True,  # built only when MCP__VAULT_URL is configured
+    runtime_resolved=True,
+    docs=(
+        ToolDoc(
+            name="get_upload_link",
+            signature="get_upload_link(filename, feature=None)",
+            purpose=(
+                "Returns a one-hour upload_url for a new file, plus the bucket "
+                "and s3_key that identify it for good. Upload with a plain HTTP "
+                "PUT and no extra headers. Report the bucket and the s3_key, "
+                "never the URL: the URL expires and the object does not."
+            ),
+        ),
+        ToolDoc(
+            name="get_download_link",
+            signature="get_download_link(s3_key)",
+            purpose=(
+                "Turns an s3_key from an earlier step back into a one-hour "
+                "download URL. Use it when a link you were given no longer works."
+            ),
         ),
     ),
 ))
