@@ -238,6 +238,7 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
+            timeout=_settings.llm.request_timeout,
         )
         # The critic bypasses the agent tree, so no model callback prices it —
         # but it runs on every orchestrator turn and is not free.

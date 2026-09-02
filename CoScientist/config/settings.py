@@ -33,6 +33,13 @@ class LLMSettings(BaseModel):
     # endpoint, so no separate URL is needed.
     coder_model: Optional[str] = None
 
+    # Seconds to wait for a single completion before giving up. Without this a
+    # provider that accepts the connection and then goes quiet never raises, so
+    # the agent waits forever and the run looks frozen with nothing in the log.
+    # A timeout turns that silence into a retryable error. Override with
+    # LLM__REQUEST_TIMEOUT.
+    request_timeout: int = 180
+
     service_url: Optional[str] = None
     service_cc_url: Optional[str] = None
 

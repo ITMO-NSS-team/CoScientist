@@ -106,11 +106,18 @@ hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 CODER_MODEL = settings.llm.coder_model or settings.llm.main_model
 
 
+# A provider that accepts the connection and then sends nothing raises no error,
+# so the retry above never fires and the agent waits forever — a run that looks
+# frozen with an empty log. The timeout turns that silence into a Timeout, which
+# `_is_transient` already classifies as retryable.
+REQUEST_TIMEOUT = settings.llm.request_timeout
+
+
 def make_llm(model: str = MODEL) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the main model (or an override)."""
-    return RetryingLiteLlm(model=model)
+    return RetryingLiteLlm(model=model, timeout=REQUEST_TIMEOUT)
 
 
 def make_coder_llm() -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the dedicated coder model."""
-    return RetryingLiteLlm(model=CODER_MODEL)
+    return RetryingLiteLlm(model=CODER_MODEL, timeout=REQUEST_TIMEOUT)

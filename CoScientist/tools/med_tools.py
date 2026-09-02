@@ -34,6 +34,7 @@ async def _llm_json(prompt: str) -> dict:
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.0,
+        timeout=settings.llm.request_timeout,
     )
     return json.loads(response.choices[0].message.content)
 

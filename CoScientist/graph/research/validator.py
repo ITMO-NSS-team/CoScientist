@@ -85,6 +85,7 @@ async def _complete(system: str, user: str) -> str:
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
         temperature=0,
+        timeout=s.request_timeout,
     )
     # Judged in the background, off the agent tree: the ambient session binding
     # is what keeps this call attached to the run that triggered it.
