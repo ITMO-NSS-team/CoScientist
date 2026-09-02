@@ -341,6 +341,21 @@ async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
         return
     rec["registered"] = True  # one attempt per build, however often it is polled
 
+    # Loopback URL in a shared catalogue is a broken entry — other machines
+    # resolve it to their own localhost. Skip registration and tell the user
+    # how to opt in.
+    from urllib.parse import urlparse
+
+    from CoScientist.alembic.remote import _LOCAL_HOSTS
+
+    if urlparse(rec["mcp_url"]).hostname in _LOCAL_HOSTS:
+        rec["registered"] = False
+        rec["registration_error"] = (
+            "работает локально, в каталог не добавлен, "
+            "задай A2A_HOST в .env если нужна регистрация"
+        )
+        return
+
     from CoScientist.tools.registry_bridge import register_mcp_server
 
     name = _repo_name(rec["repo_url"])
