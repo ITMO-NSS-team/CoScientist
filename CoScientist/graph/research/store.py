@@ -548,6 +548,75 @@ class ResearchGraphStore:
                     "updated_at": max(stamps) if stamps else None,
                     "node_count": self._g.number_of_nodes()}
 
+    def view_of(self, study_id: Optional[str] = None) -> Dict[str, Any]:
+        """One study's projection, plus the list of the session's other studies.
+
+        Mirrors the execution log, where a session lists its requests and draws
+        one. `study_id` is "active" or an archive filename; the live study is
+        used when nothing is asked for.
+        """
+        catalogue = self.studies()
+        chosen = study_id or "active"
+        if chosen == "active":
+            view = self.to_view()
+        else:
+            view = self.archived_view(chosen)
+        view["studies"] = catalogue
+        view["study_id"] = chosen
+        return view
+
+    # ── the studies this session holds ───────────────────────────────────────
+
+    def studies(self) -> List[Dict[str, Any]]:
+        """Every study in this session, newest first, the live one first of all.
+
+        `research_init` archives the study in progress and starts a new one, so
+        a session accumulates them. Only the live one was ever reachable, which
+        made a finished study look deleted and a stale one look like the current
+        run's output.
+        """
+        out = [{"study_id": "active", "label": self._study_label(self._serialize()),
+                "updated_at": self._latest_stamp(), "live": True,
+                "node_count": self._g.number_of_nodes()}]
+        for path in sorted(self._dir.glob("research_*.json"), reverse=True):
+            if path.name == self._path.name:
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            nodes = data.get("nodes") or []
+            stamps = [n.get("updated_at") or n.get("created_at") for n in nodes]
+            stamps = [t for t in stamps if isinstance(t, (int, float))]
+            out.append({"study_id": path.name, "label": self._study_label(data),
+                        "updated_at": max(stamps) if stamps else None,
+                        "live": False, "node_count": len(nodes)})
+        return out
+
+    @staticmethod
+    def _study_label(data: Dict[str, Any]) -> str:
+        """A study is known by the question it asks."""
+        for node in data.get("nodes") or []:
+            if node.get("type") == "ResearchQuestion":
+                said = (node.get("attrs") or {}).get("formulation")
+                if said:
+                    return str(said)
+        return "untitled study"
+
+    def _latest_stamp(self) -> Optional[float]:
+        stamps = [d.get("updated_at") or d.get("created_at")
+                  for _, d in self._g.nodes(data=True)]
+        stamps = [t for t in stamps if isinstance(t, (int, float))]
+        return max(stamps) if stamps else None
+
+    def archived_view(self, study_id: str) -> Dict[str, Any]:
+        """The same projection, over a study that has already been archived."""
+        path = self._dir / study_id
+        if path.name != study_id or not path.is_file():
+            raise KeyError(f"no archived study '{study_id}' in this session")
+        frozen = ResearchGraphStore(directory=str(self._dir), active_file=study_id)
+        return frozen.to_view()
+
     def reset(self, archive: bool = True) -> Optional[str]:
         """Start over with an empty graph. The old graph is archived (never
         silently destroyed) unless archive=False. Returns the archive path."""

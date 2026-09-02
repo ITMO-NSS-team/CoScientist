@@ -923,3 +923,31 @@ def test_a_claim_cannot_outrun_the_bar_set_for_it(tmp_path):
         {"id": "CC1", "status": "met"},
     ])
     assert allowed.ok, allowed.errors
+
+
+def test_a_session_can_reach_every_study_it_holds(tmp_path):
+    """research_init archives; only the live study used to be reachable."""
+    from CoScientist.graph.research.store import ResearchGraphStore
+
+    store = ResearchGraphStore(directory=str(tmp_path),
+                               active_file="research_active.json")
+    store.commit(source="OrchestratorAgent", nodes=[
+        {"type": "ResearchQuestion", "attrs": {"formulation": "First question"}}])
+    store.reset(archive=True)
+    store.commit(source="OrchestratorAgent", nodes=[
+        {"type": "ResearchQuestion", "attrs": {"formulation": "Second question"}}])
+
+    studies = store.studies()
+    assert [s["live"] for s in studies] == [True, False], "the live study comes first"
+    assert studies[0]["label"] == "Second question"
+    assert studies[1]["label"] == "First question", "a study is known by its question"
+
+    # The default is the live study, and it lists the others beside it.
+    live = store.view_of()
+    assert live["study_id"] == "active"
+    assert len(live["studies"]) == 2
+
+    archived = store.view_of(studies[1]["study_id"])
+    labels = [n["label"] for n in archived["nodes"] if not n.get("overlay")]
+    assert labels == ["First question"]
+    assert len(archived["studies"]) == 2, "the picker stays populated"

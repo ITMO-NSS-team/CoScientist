@@ -1028,10 +1028,12 @@ def create_app() -> FastAPI:
             from CoScientist.graph.research.store import get_research_graph
 
             if view == "research":
+                # One study at a time, and the session's others listed beside
+                # it — the same shape the execution log uses for requests.
                 return get_research_graph(
                     user_id=user_id,
                     session_id=session_id,
-                ).to_view()
+                ).view_of(turn)
             execution = get_knowledge_graph(
                 user_id=user_id,
                 session_id=session_id,
@@ -1067,6 +1069,7 @@ def create_app() -> FastAPI:
         user_id: str,
         session_id: str,
         view: str = "execution",
+        # Which request (execution log) or which study (research graph) to draw.
         turn: str | None = None,
     ):
         try:
