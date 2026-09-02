@@ -431,9 +431,22 @@
           edges.update(edge);
         });
         if (research) renderHeader(g.nodes || []);
+        // A research graph outlives one prompt, so a session can be showing a
+        // study that has not moved since yesterday. Say when it last changed;
+        // otherwise "the new run produced nothing" looks like a stale view.
+        let age = "";
+        if (research && g.updated_at) {
+          const mins = (Date.now() / 1000 - g.updated_at) / 60;
+          age = " · last written "
+            + (mins < 2 ? "just now"
+             : mins < 90 ? Math.round(mins) + " min ago"
+             : mins < 60 * 36 ? Math.round(mins / 60) + " h ago"
+             : new Date(g.updated_at * 1000).toLocaleString());
+        }
         document.getElementById("status").textContent =
           (g.nodes||[]).filter(n=>!n.overlay && !hidden.has(n.id)).length + " nodes · " +
-          (g.edges||[]).filter(e=>!e.overlay && !(!research && (hidden.has(e.src)||hidden.has(e.dst)))).length + " edges";
+          (g.edges||[]).filter(e=>!e.overlay && !(!research && (hidden.has(e.src)||hidden.has(e.dst)))).length
+          + " edges" + age;
       } catch (err) { document.getElementById("status").textContent = "error: " + err; }
     }
 

@@ -536,7 +536,17 @@ class ResearchGraphStore:
                     rep = sorted(comp, key=self._sort_key_id)[0]
                     edges.append({"src": root, "dst": rep, "type": "context",
                                   "synthetic": True})
-            return {"run_id": self._research_id, "nodes": nodes, "edges": edges}
+            # When this study was last written to. A research graph outlives a
+            # single prompt, so a session can show one that has not moved for a
+            # day — which reads as "the new run produced nothing" only if the
+            # reader can see the date. Without it the stale graph is
+            # indistinguishable from a fresh one.
+            stamps = [d.get("updated_at") or d.get("created_at")
+                      for _, d in self._g.nodes(data=True)]
+            stamps = [t for t in stamps if isinstance(t, (int, float))]
+            return {"run_id": self._research_id, "nodes": nodes, "edges": edges,
+                    "updated_at": max(stamps) if stamps else None,
+                    "node_count": self._g.number_of_nodes()}
 
     def reset(self, archive: bool = True) -> Optional[str]:
         """Start over with an empty graph. The old graph is archived (never
