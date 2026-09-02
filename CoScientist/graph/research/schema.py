@@ -76,6 +76,11 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         attr_docs={
             "subtype": "REQUIRED — literature / experimental / computational / expert / meta",
             "content": "the observation or fact",
+            "measured_on": "REQUIRED for computational/experimental evidence — "
+                           "WHAT was actually measured, named exactly: the repo "
+                           "and commit, the dataset, the deployed service. Say so "
+                           "here if it is a stand-in for what the hypothesis names "
+                           "(e.g. 'local reimplementation; upstream repo 404')",
             "reliability": "weight / reliability estimate",
             "source_ref": "paper DOI, dataset, run id, …",
         },
@@ -548,6 +553,17 @@ def validate_node_draft(agent: str, node_type: str, status: str,
             errors.append(
                 f"{node_type} requires attrs.subtype — one of: "
                 f"{', '.join(spec.subtypes)}.")
+        # Measured evidence must say what it was measured on. A run once
+        # benchmarked a locally written stand-in because the repository the
+        # hypothesis named returned 404, and reported the result as a comparison
+        # of the named systems: the substitution was mentioned in the coder's
+        # report and nowhere in the record, so nothing downstream could see it.
+        if node_type == "Evidence" and subtype in ("computational", "experimental") \
+                and not str((attrs or {}).get("measured_on", "")).strip():
+            errors.append(
+                f"{subtype} Evidence requires attrs.measured_on — name what was "
+                f"actually measured (repo and commit, dataset, deployed service). "
+                f"If it stands in for what the hypothesis names, say that here.")
         # The human may file evidence, but only the kind a human actually is:
         # expert judgement. Routing a computational or literature result through
         # the HITL bridge would launder its provenance.

@@ -632,6 +632,17 @@ class ResearchGraphStore:
                                      "attrs": d.get("attrs") or {}})
 
         # -- status updates: existing nodes only ------------------------------
+        # Criteria this commit marks met, whatever order they arrive in. The
+        # validator writes the verdict and the criteria it rests on together,
+        # and it lists the verdict first, so scanning only what is already
+        # staged would judge the verdict against a bar this very commit is
+        # raising.
+        met_here = {
+            str(d.get("id"))
+            for d in status_drafts
+            if isinstance(d, dict)
+            and schema.normalize_token(d.get("status") or "") == "met"
+        }
         staged_status: List[Dict[str, Any]] = []
         for k, d in enumerate(status_drafts):
             if not isinstance(d, dict):
@@ -662,6 +673,20 @@ class ResearchGraphStore:
             tr_errs = schema.validate_transition(source, ntype, cur, new,
                                                 enforce_permissions=enforce_permissions)
             errors.extend(f"status_updates[{k}]: {e}" for e in tr_errs)
+            unmet = ([c for c in self._unmet_criteria(nid) if c not in met_here]
+                     if (ntype, new) == ("Hypothesis", "confirmed") else [])
+            if unmet:
+                # A hypothesis is confirmed against the bar written for it. A run
+                # once reported "all criteria satisfied" while both of its
+                # criteria still stood at not_met, and nothing contradicted it:
+                # the claim and the bar were separate objects that never had to
+                # agree. Now they do, and the refusal names what is outstanding.
+                errors.append(
+                    f"status_updates[{k}]: {nid} cannot be confirmed while its "
+                    f"acceptance criteria are unmet ({', '.join(unmet)}). Either "
+                    f"mark each criterion met with the measurement that meets it, "
+                    f"or record the verdict as refuted or inconclusive.")
+                continue
             if not tr_errs:
                 staged_status.append({"id": nid, "type": ntype, "from": cur,
                                       "to": new, "reason": d.get("reason")})
@@ -820,6 +845,19 @@ class ResearchGraphStore:
                 committed["status_updates"].append(
                     {"id": hid, "from": "formulated", "to": "under_verification",
                      "auto": True})
+
+
+    def _unmet_criteria(self, hypothesis_id: str) -> List[str]:
+        """Criteria written for this hypothesis that are still not met."""
+        outstanding = []
+        for src, dst, key in self._g.in_edges(hypothesis_id, keys=True):
+            if key != "formulated_for":
+                continue
+            node = self._g.nodes[src]
+            if node.get("type") == "ConfirmationCriteria" \
+                    and node.get("status") != "met":
+                outstanding.append(src)
+        return sorted(outstanding)
 
     def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
                                         warnings: List[str]) -> None:

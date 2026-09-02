@@ -457,7 +457,8 @@ def test_closable_and_missing_criteria(store):
                  status_updates=[{"id": "H1", "status": "under_verification"}])
     store.commit(source="ExperimentAgent",
                  nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "computational",
-                         "content": "docking -9"}}],
+                         "content": "docking -9",
+                         "measured_on": "AutoDock Vina 1.2.5, 5R84 receptor"}}],
                  edges=[{"type": "supports", "from": "#e", "to": "H1"}])
     # CC not met yet → awaiting, not closable
     res = queries.closable_hypotheses(store)
@@ -871,3 +872,54 @@ def test_a_tested_branch_is_not_recorded_as_untried(tmp_path):
     node = next(n for n in store.to_view()["nodes"] if n["id"] == "H1")
     assert node["status_word"] == "tested — not settled"
     assert node["status"] != "postponed", "tested is not the same as never tried"
+
+
+def test_a_claim_cannot_outrun_the_bar_set_for_it(tmp_path):
+    """The three ways one recorded run reported a result its graph denied."""
+    from CoScientist.graph.research import queries
+    from CoScientist.graph.research.store import ResearchGraphStore
+
+    store = ResearchGraphStore(directory=str(tmp_path), active_file="v.json")
+    store.commit(source="OrchestratorAgent",
+                 nodes=[{"type": "ResearchQuestion", "attrs": {"formulation": "Q"}}])
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "ref": "h",
+         "attrs": {"formulation": "hierarchical beats flat", "selected": "true"}},
+        {"type": "ConfirmationCriteria", "ref": "cc",
+         "attrs": {"threshold": "p < 0.05 in at least 2 of 3 environments"}},
+    ], edges=[{"type": "formulated_for", "from": "#cc", "to": "#h"}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+
+    # 1. Work happening outside the record is visible while it is still fixable.
+    assert "WORK NOT IN THE RECORD" in queries.verdict_without_evidence(store)["rendered"]
+
+    # 2. Measured evidence must say what it was measured on. A run benchmarked a
+    #    local stand-in for a repository that 404'd and reported it as the real
+    #    comparison; the substitution appeared nowhere in the record.
+    refused = store.commit(source="CoderAgent", nodes=[
+        {"type": "Evidence", "attrs": {"subtype": "computational",
+                                       "content": "hierarchical wins, p=0.0006"}}])
+    assert not refused.ok
+    assert "measured_on" in refused.errors[0]
+
+    store.commit(source="CoderAgent", nodes=[
+        {"type": "Evidence", "ref": "e",
+         "attrs": {"subtype": "computational", "content": "hierarchical wins in 2 of 3",
+                   "measured_on": "local reimplementation; upstream repo 404"}}],
+        edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    # 3. Confirmation cannot outrun the criteria written for the hypothesis.
+    denied = store.commit(source="ValidatorAgent",
+                          status_updates=[{"id": "H1", "status": "confirmed",
+                                           "reason": "the benchmark says so"}])
+    assert not denied.ok
+    assert "CC1" in denied.errors[0]
+
+    # Marking the criterion met in the SAME commit is the shape the schema asks
+    # for, and the verdict may lead the list.
+    allowed = store.commit(source="ValidatorAgent", status_updates=[
+        {"id": "H1", "status": "confirmed", "reason": "criterion met"},
+        {"id": "CC1", "status": "met"},
+    ])
+    assert allowed.ok, allowed.errors

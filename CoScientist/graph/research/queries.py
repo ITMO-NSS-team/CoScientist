@@ -307,6 +307,47 @@ def unresolved_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[st
     return {"items": items, "rendered": "\n".join(lines)}
 
 
+def verdict_without_evidence(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """Branches being tested that have nothing attached, and criteria never measured.
+
+    A run once benchmarked for an hour, wrote a table of p-values into its chat
+    answer, and committed none of it. The validator reads the graph, found no
+    measurement, and rejected a result that existed — so the answer and the
+    record contradicted each other and neither could be trusted.
+
+    The condition is computable before that happens: a hypothesis under
+    verification with no evidence, or with criteria none of which has been
+    marked met or not met, means the work is happening somewhere the record
+    cannot see.
+    """
+    g = _graph(store).full_graph()
+    stalled = []
+    for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order):
+        if _status(g, h) != "under_verification":
+            continue
+        evidence = set(_in(g, h, "supports")) | set(_in(g, h, "refutes")) \
+            | set(_in(g, h, "relates_to"))
+        criteria = [c for c in _in(g, h, "formulated_for")
+                    if g.nodes[c].get("type") == "ConfirmationCriteria"]
+        untouched = [c for c in criteria if _status(g, c) == "not_met"]
+        if evidence and len(untouched) < len(criteria):
+            continue
+        stalled.append({"hypothesis": h, "label": _label(g, h),
+                        "evidence": len(evidence),
+                        "criteria": len(criteria), "untouched": len(untouched)})
+
+    lines = []
+    for item in stalled:
+        missing = ("no evidence is attached" if not item["evidence"]
+                   else f"none of its {item['criteria']} criteria has been measured")
+        lines.append(
+            f"WORK NOT IN THE RECORD: {item['hypothesis']} is under verification and "
+            f"{missing}. Whatever was run has to be committed as Evidence, with the "
+            f"criteria it meets marked met, BEFORE any verdict or final answer "
+            f"cites it — an answer the graph cannot support will be rejected.")
+    return {"items": stalled, "rendered": "\n".join(lines)}
+
+
 def study_open(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
     """Whether the study may be called finished — as a graph condition.
 
@@ -528,6 +569,7 @@ TRIGGERS = {
     "unresolved_hypotheses": unresolved_hypotheses,
     "closable_hypotheses": closable_hypotheses,
     "study_open": study_open,
+    "verdict_without_evidence": verdict_without_evidence,
     "pending_conclusions": pending_conclusions,
     "missing_tools": missing_tools,
     "resources_low": resources_low,
