@@ -376,15 +376,25 @@ def research(ctx: PromptContext) -> str:
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
+        steps.append(
+            f"{n}. If there are NO user-uploaded papers, ALWAYS call the internal "
+            "scientific literature database first: `explore_scientific_database` "
+            "(argument `task`). If that name is not in your tool list, call "
+            "`explore_chemistry_database` instead. Do this even if you plan to use "
+            "`search_papers` afterwards. Do not treat the RAG answer as the end of "
+            "a literature review."
+        )
+        n += 1
 
     if papers_search:
         steps.append(
-            f"{n}. For a literature / publication / citation review, call `search_papers` "
-            "first (exact name) even when no user papers are uploaded. Never invent names "
-            "such as `explore_scientific_database`. OpenAlex indexes n-grams: pass keywords "
-            "as a single space-separated string, no quotes around phrases. "
-            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
-            "do not paraphrase, stem, or replace Unicode symbols."
+            f"{n}. Then, for a literature / publication / citation review, ALWAYS call "
+            "`search_papers` (exact name) with argument `keywords` (not `query`). "
+            "Do this even when no user papers are uploaded and even if the internal "
+            "database already returned an answer. OpenAlex indexes n-grams: pass "
+            "keywords as a single space-separated string, no quotes around phrases. "
+            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from "
+            "the query; do not paraphrase, stem, or replace Unicode symbols."
         )
         n += 1
         steps.append(
@@ -397,19 +407,10 @@ def research(ctx: PromptContext) -> str:
         )
         n += 1
 
-    if paper_analysis:
-        steps.append(
-            f"{n}. Use `explore_chemistry_database` only for chemical-composition / "
-            "internal chemistry-RAG questions, or after `search_papers` if the corpus "
-            "is still insufficient. Do not open a literature review with this tool."
-        )
-        n += 1
-
     if lit:
         steps.append(
-            f"{n}. If `search_papers` or `download_papers_from_search` error (429, SSL, "
-            "timeout, empty), immediately fall back to `tavily_search`. Do not stop after "
-            "a failed literature-tool call. Never use Tavily before the first literature attempt."
+            f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. "
+            "Never use Tavily before the literature tools."
         )
     else:
         steps.append(
@@ -445,7 +446,10 @@ WORKFLOW
 RULES
 --------------------------------------------------
 
-<<PREFER_LINE>>- Stop once sufficient evidence is obtained
+<<PREFER_LINE>>- Stop once sufficient evidence is obtained. An internal-database
+  (`explore_scientific_database` / `explore_chemistry_database`) answer alone
+  is NOT sufficient for a literature / publication review — still
+  call `search_papers`.
 - If a literature tool returned papers or hits, finish with those findings.
   Do not mark the task FAILED for "insufficient literature" after a tool hit;
   state remaining gaps in the notes.
@@ -456,7 +460,9 @@ RULES
 - Be concise, try to fit the answer within 2000 characters
 - Use tools to answer, it is prohibited to answer directly without them
 - Never invent tool names. Copy them exactly from the tool list.
-  `explore_scientific_database` is not a tool; for papers use `search_papers`.
+  For the internal scientific literature database use
+  `explore_scientific_database(task=…)` (or `explore_chemistry_database` if
+  that is the name in your tool list). For OpenAlex use `search_papers(keywords=…)`.
 
 --------------------------------------------------
 OUTPUT FORMAT
@@ -1195,7 +1201,7 @@ data or invent rows, columns, ids, or statistics.
     * ChEMBL (bioactivity, IC50/Ki, targets): `pip install chembl_webresource_client`
       then query activities/targets/molecules.
     * PubChem (compound properties, identifiers): `pip install pubchempy`.
-    * OpenAlex (paper metadata, no key): query `https://api.openalex.org/works?filter=...`.
+    * OpenAlex (paper metadata; pass `api_key` and `mailto`/`email`): query `https://api.openalex.org/works?filter=...`.
 - **Web / direct URL** — when a source gives a downloadable file or table, fetch
   it directly (curl/wget) or scrape the table; use web search to locate it.
 

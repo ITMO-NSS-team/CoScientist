@@ -1,6 +1,7 @@
 """Bridge system HypothesesAgent output into planner hypothesis_refs."""
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -647,6 +648,27 @@ def _coerce_commit_arg_lists(args: dict[str, Any]) -> tuple[dict[str, Any], bool
     return out, changed
 
 
+def _extract_args_from_call_syntax(call_str: str) -> dict[str, Any]:
+    """Parse python-syntax tool calls like research_commit(nodes=[...], edges=[...])."""
+    try:
+        clean = call_str.strip()
+        if not clean.endswith(")"):
+            clean += ")"
+        tree = ast.parse(clean)
+        if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Call):
+            call_node = tree.body[0].value
+            result: dict[str, Any] = {}
+            for kw in call_node.keywords:
+                try:
+                    result[kw.arg] = ast.literal_eval(kw.value)
+                except Exception:
+                    pass
+            return result
+    except Exception:
+        pass
+    return {}
+
+
 def normalize_em_hypothesis_commit(
     callback_context: CallbackContext, llm_response: LlmResponse,
 ) -> Optional[LlmResponse]:
@@ -666,10 +688,20 @@ def normalize_em_hypothesis_commit(
     for part in parts:
         fc = getattr(part, "function_call", None)
         name = getattr(fc, "name", None) if fc is not None else None
+        if not name:
+            new_parts.append(part)
+            continue
+        extracted_args = {}
+        if name != "research_commit" and ("research_commit(" in name or name.startswith("research_commit")):
+            extracted_args = _extract_args_from_call_syntax(name)
+            name = "research_commit"
         if name != "research_commit":
             new_parts.append(part)
             continue
         args = dict(getattr(fc, "args", None) or {})
+        if not args and extracted_args:
+            args = extracted_args
+            mutated = True
         args, coerced = _coerce_commit_arg_lists(args)
         shrunk, refs, changed = _shrink_commit_args(args)
         if refs:
@@ -680,7 +712,7 @@ def normalize_em_hypothesis_commit(
                 f"EXPERIMENT_HYPOTHESES_FC_STASHED count={len(ids)}",
                 stdout=f"EXPERIMENT_HYPOTHESES_FC_STASHED count={len(ids)} ids={ids}",
             )
-        if changed and shrunk.get("nodes"):
+        if (changed or extracted_args) and shrunk.get("nodes"):
             mutated = True
             new_parts.append(
                 types.Part.from_function_call(name="research_commit", args=shrunk)
@@ -691,7 +723,7 @@ def normalize_em_hypothesis_commit(
                 f"chars≈{_estimate_commit_chars(shrunk)}",
                 stdout=f"EXPERIMENT_HYPOTHESES_COMMIT_SHRUNK nodes={len(shrunk['nodes'])}",
             )
-        elif coerced:
+        elif coerced or extracted_args:
             # Not shrunk (e.g. edges/status-only or non-Hypothesis nodes) but a
             # string list arg was repaired — ship the coerced, dispatchable form.
             mutated = True

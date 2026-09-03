@@ -328,6 +328,10 @@ class ExperimentsSettings(BaseModel):
     route_alembic: bool = False
     task_max_attempts: int = Field(default=2, ge=1, le=2)
     max_plan_tasks: int = Field(default=8, ge=1, le=20)
+    # Outer hops after a result-review reject. Skip planner at replan_count >= this.
+    max_replans: int = Field(default=2, ge=1, le=8)
+    # Inner schema/critique regenerations of ExperimentPlan within one planner hop.
+    max_plan_revisions: int = Field(default=2, ge=1, le=8)
     require_task_design: bool = True
     # When True (default), schema invents baselines/metrics for weak planners so
     # completeness majors for unspecified/empty design cannot fire. Set False

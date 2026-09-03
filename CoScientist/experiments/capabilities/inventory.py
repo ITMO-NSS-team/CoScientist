@@ -24,77 +24,8 @@ RESEARCH_SERVER_ID = "__research__"
 MEDICAL_SERVER_ID = "__medical__"
 _SYNTHETIC_SERVER_IDS = frozenset({RESEARCH_SERVER_ID, MEDICAL_SERVER_ID})
 
-# request regex ↔ tool-text regex. PRIMARY_CAP_PRIORITY picks the required family.
-CAPABILITY_SPECS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
-    (
-        "docking",
-        re.compile(
-            r"\b("
-            r"dock|docking|vina|affinity\s*score|"
-            r"selectivity|"
-            r"not\s+(?:allowed\s+to\s+)?inhibit|"
-            r"bind(?:ing)?(?:\s+affinity)?(?:\s+to)?(?:\s+the)?\s+"
-            r"(?:kras|hras|nras|protein|receptor|pocket)|"
-            r"докинг|аффинност|селективн|ингибировать"
-            r")\b",
-            re.I,
-        ),
-        re.compile(r"\b(dock|docking|vina|affinity)\b|докинг|аффин", re.I),
-    ),
-    (
-        "toxicity_profile",
-        re.compile(
-            r"\b(toxic|toxicity|ld50|ld₅₀|dili|hepato|cardio.?toxic|carcinogen|"
-            r"токсич|гепато|кардиот|канцер|ld\s*50)\b", re.I),
-        re.compile(
-            r"\b(toxic|toxicity|ld50|dili|hepato|cardio|carcinogen|"
-            r"molecule[_\s]?profile|general[_\s]?toxicity)\b|токсич|гепато|кардиот|канцер",
-            re.I),
-    ),
-    (
-        "molecule_generation",
-        re.compile(
-            r"\b("
-            r"generat\w*\s+\w*\s*candidat|generat\w*.{0,80}(mol\w*|inhibitor\w*)|"
-            r"develop\w*.{0,80}mol\w*|design\w*.{0,80}(mol\w*|inhibitor\w*)|"
-            r"several\s+molecules|de\s*novo|generate_case_mols|generate_mols|"
-            r"drug[_\s-]?like\s+mol\w*|new\s+drug\w*|suggest.{0,40}mol\w*|"
-            r"discover.{0,40}(therapeutic|agent\w*|inhibitor\w*|mol\w*)|"
-            r"генерац\w*\s+молекул|кандидат\w*"
-            r")\b", re.I),
-        re.compile(
-            r"\b(generate[_\s]?case[_\s]?mols|generate[_\s]?mols|generat\w*\s+mol|"
-            r"molecule generation|gan)\b", re.I),
-    ),
-    (
-        "molecular_properties",
-        re.compile(
-            r"\b(synthesizab|sa\s*score|molecular\s+propert|smiles2prop|дескриптор|"
-            r"синтезируем\w*|synspace)\b", re.I),
-        re.compile(r"\b(smiles2prop|molecular\s+propert|descriptor|sa\s*score|synthesiz|synspace)\b", re.I),
-    ),
-    (
-        "chemical_clustering",
-        re.compile(r"\b(cluster|clustering|chemical.?space|butina|tsne|кластер)", re.I),
-        re.compile(r"\b(cluster|clustering|butina|tsne|chemical.?space)\b", re.I),
-    ),
-    (
-        "dataset_curation",
-        re.compile(r"\b(dataset.?overview|curat|metabolite.?selection|dedup|обзор\s+датасет)\b", re.I),
-        re.compile(r"\b(dataset.?overview|curat|dedup|metabolite.?selection)\b", re.I),
-    ),
-    (
-        "medchem_filter",
-        re.compile(r"\b(medchem|apply.?medchem.?filter|фильтр\w*\s+medchem)\b", re.I),
-        re.compile(r"\b(medchem|apply.?medchem)\b", re.I),
-    ),
-)
-
-PRIMARY_CAP_PRIORITY: tuple[str, ...] = (
-    "molecule_generation", "chemical_clustering", "dataset_curation",
-    "toxicity_profile", "medchem_filter", "molecular_properties", "docking",
-)
-_GENERATOR_TOOLS = frozenset({"generate_mols", "generate_case_mols"})
+CAPABILITY_SPECS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = ()
+PRIMARY_CAP_PRIORITY: tuple[str, ...] = ()
 
 # Tool names + purposes from CoScientist.assembly.bindings ToolDoc entries
 # for ResearchAgent / MedicalAgent. Coverage is still name/score bind, not
@@ -106,6 +37,8 @@ _DECLARED_FAMILY_TOOLS: tuple[tuple[str, str, str, str], ...] = (
      "Read the content of specific pages/URLs."),
     (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "tavily_crawl",
      "Crawl a site starting from a URL when one page is not enough."),
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_scientific_database",
+     "RAG search over an internal scientific literature database."),
     (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_chemistry_database",
      "RAG search over an internal scientific literature database."),
     (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_my_papers",
@@ -146,85 +79,43 @@ def declared_family_capabilities(*families: str) -> list[dict[str, Any]]:
     return out
 
 
-def request_capabilities(request: str) -> set[str]:
-    text = request or ""
-    return {name for name, req_re, _ in CAPABILITY_SPECS if req_re.search(text)}
+def request_capabilities(request: str = "") -> set[str]:
+    return set()
 
 
-def tool_capabilities(tool_name: str, description: str = "") -> set[str]:
-    blob = f"{str(tool_name or '').replace('_', ' ')} {description}"
-    return {name for name, _, tool_re in CAPABILITY_SPECS if tool_re.search(blob)}
+def tool_capabilities(tool_name: str = "", description: str = "") -> set[str]:
+    return set()
 
 
-def is_paper_demo_tool(tool_name: str, description: str = "") -> bool:
-    blob = f"{tool_name} {description}".lower()
-    return bool(re.search(
-        r"\b(reproduce_figure|paper\s+(fig|table|section)|"
-        r"characterised molecules|characterized molecules|"
-        r"six characterised|demo.?only)\b", blob,
-    ))
-
-
-def _row_covers_primary(
-    item: Mapping[str, Any], primary: str, *, name: str = "",
-) -> bool:
-    tool = str(item.get("tool") or name or "")
-    desc = str(item.get("description") or "")
-    if not tool or is_paper_demo_tool(tool, desc):
-        return False
-    if primary == "molecule_generation":
-        return tool in _GENERATOR_TOOLS
-    return primary in tool_capabilities(tool, desc)
-
-
-def primary_needed_capability(needed: Iterable[str]) -> str | None:
-    want = {str(item).strip() for item in needed if str(item).strip()}
-    for cap in PRIMARY_CAP_PRIORITY:
-        if cap in want:
-            return cap
-    return next(iter(sorted(want)), None)
+def primary_needed_capability(needed: Iterable[str] = ()) -> str | None:
+    return None
 
 
 def inventory_covers_capabilities(
     by_tool: Mapping[str, Mapping[str, Any]],
-    needed: Iterable[str],
+    needed: Iterable[str] = (),
 ) -> bool:
-    """True when a non-demo inventory tool covers the **primary** needed family.
-
-    Secondary families (tox/QED on a generate+dock ask) are nice-to-have.
-    molecule_generation requires generate_mols / generate_case_mols by name.
-    """
-    needed_set = {str(item).strip() for item in needed if str(item).strip()}
-    if not needed_set or not by_tool:
+    """True when an inventory tool covers compute capabilities."""
+    if not by_tool:
         return False
-    primary = primary_needed_capability(needed_set)
-    if not primary:
-        return False
-    return any(_row_covers_primary(item, primary, name=name) for name, item in by_tool.items())
+    return any(row_family(item) == FAMILY_MCP for item in by_tool.values())
 
 
 def filter_inventory_to_needed(
     available_tools: Iterable[Mapping[str, Any]],
-    needed: Iterable[str],
+    needed: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
-    """Drop paper-demo and leftover families that do not intersect needed.
-
-    If needed is empty, keep compute MCP rows (no family filter).
-    """
-    needed_set = {str(item).strip() for item in needed if str(item).strip()}
+    """Keep compute MCP rows."""
     out: list[dict[str, Any]] = []
     for item in available_tools:
         if not isinstance(item, Mapping):
             continue
         tool = str(item.get("tool") or item.get("name") or "").strip()
-        desc = str(item.get("description") or "")
-        if not tool or is_paper_demo_tool(tool, desc):
+        if not tool:
             continue
         if row_family(item) != FAMILY_MCP:
             continue
         if str(item.get("server_id") or "") in _SYNTHETIC_SERVER_IDS:
-            continue
-        if needed_set and not (tool_capabilities(tool, desc) & needed_set):
             continue
         out.append(dict(item))
     return out
@@ -323,34 +214,8 @@ def _named_match(text: str, by_tool: dict[str, dict[str, Any]]) -> dict[str, Any
             return by_tool[token]
     low = text.lower().replace("-", "_")
     for tool, item in by_tool.items():
-        if tool.lower() in low:
-            return item
-    return None
-
-
-def match_inventory_tool(
-    blob: str, by_tool: dict[str, dict[str, Any]], *, source_request: str = "",
-) -> dict[str, Any] | None:
-    """Pick inventory tool: exact name, else primary family. No leftover score bind."""
-    if not by_tool:
-        return None
-    task_text = (blob or "").strip()
-    if not task_text and not source_request:
-        return None
-    if task_text:
-        if hit := _named_match(task_text, by_tool):
-            return hit
-    request = (source_request or "").strip()
-    if request:
-        if hit := _named_match(request, by_tool):
-            return hit
-    combined = f"{task_text}\n{request}".strip()
-    needed = request_capabilities(task_text or combined)
-    primary = primary_needed_capability(needed)
-    if not primary:
-        return None
-    for item in by_tool.values():
-        if _row_covers_primary(item, primary):
+        pattern = rf"(?<![\w-]){re.escape(tool.lower())}(?![\w-])"
+        if re.search(pattern, low):
             return item
     return None
 
@@ -358,12 +223,10 @@ def match_inventory_tool(
 def match_named_inventory_tool(
     blob: str, by_tool: dict[str, dict[str, Any]], *, source_request: str = "",
 ) -> dict[str, Any] | None:
-    """Like match_inventory_tool but never fall back to max retrieval score."""
+    """Match an inventory tool by exact name against task text or source request."""
     if not by_tool:
         return None
     task_text = (blob or "").strip()
-    if not task_text and not source_request:
-        return None
     if task_text:
         if hit := _named_match(task_text, by_tool):
             return hit
@@ -372,6 +235,13 @@ def match_named_inventory_tool(
         if hit := _named_match(request, by_tool):
             return hit
     return None
+
+
+def match_inventory_tool(
+    blob: str, by_tool: dict[str, dict[str, Any]], *, source_request: str = "",
+) -> dict[str, Any] | None:
+    """Match an inventory tool by exact name (alias to match_named_inventory_tool)."""
+    return match_named_inventory_tool(blob, by_tool, source_request=source_request)
 
 
 def match_named_family_capability(blob: str) -> dict[str, Any] | None:
@@ -442,7 +312,6 @@ __all__ = [
     "inventory_covers_capabilities",
     "inventory_nonempty",
     "inventory_pairs",
-    "is_paper_demo_tool",
     "match_inventory_tool",
     "match_named_family_capability",
     "match_named_inventory_tool",

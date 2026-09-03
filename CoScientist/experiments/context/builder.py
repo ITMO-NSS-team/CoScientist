@@ -25,6 +25,7 @@ _CLEAR_ON_NEW_RUN = (
     "experiment_artifacts_manifest",
     "experiment_last_route_response", "experiment_active_envelope",
     "experiment_plan_validation_errors", "experiment_plan_review_paused",
+    "experiment_plan_revision_count", "experiment_inventory_blocker_hits",
     "experiment_no_matching_tool", "experiment_execution_summary",
     "experiment_repo_candidates",
     "accumulated_tools", "filtered_tools", "retrieval_queries",
@@ -353,27 +354,18 @@ def _inventory_covers_ask(
     source_request: str,
     operations: Iterable[Any] = (),
 ) -> bool:
-    """True when this-run retrieve covers the **primary** needed family.
-
-    Leftover tox / smiles2prop / paper-demo do not cover generate/dock.
-    Frame operations are extra text for needed, not automatic cover.
-    """
-    from CoScientist.context_init.operations import normalize_operation_rows
+    """True when this-run retrieve covers compute capabilities."""
     from CoScientist.experiments.capabilities.inventory import (
         index_inventory_tools,
         inventory_covers_capabilities,
         match_named_inventory_tool,
-        request_capabilities,
     )
 
     by_tool = index_inventory_tools(planner_caps)
     if not by_tool:
         return False
-    ops = normalize_operation_rows(list(operations or []))
-    op_blob = " ".join(str(op.get("statement") or "") for op in ops)
-    needed = request_capabilities(f"{source_request}\n{op_blob}")
-    if needed:
-        return inventory_covers_capabilities(by_tool, needed)
+    if inventory_covers_capabilities(by_tool):
+        return True
     return match_named_inventory_tool(source_request, by_tool) is not None
 
 
@@ -648,12 +640,9 @@ def _session_accumulated_raw(callback_context: CallbackContext | None = None) ->
 
 
 def _filter_caps_for_ask(caps: list[dict[str, Any]], ask: str) -> list[dict[str, Any]]:
-    from CoScientist.experiments.capabilities.inventory import (
-        filter_inventory_to_needed,
-        request_capabilities,
-    )
+    from CoScientist.experiments.capabilities.inventory import filter_inventory_to_needed
 
-    return filter_inventory_to_needed(caps, request_capabilities(ask))
+    return filter_inventory_to_needed(caps)
 
 
 def stash_experiment_retrieved_capabilities(callback_context: CallbackContext) -> None:
@@ -719,6 +708,7 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         state.get("experiment_plan_validation_errors")
         or critique.get("verdict") == "revise"
         or previous_runtime.get("phase") == "awaiting_review"
+        or previous_runtime.get("phase") == "replan_requested"
     )
     source_request = persisted or (prev_request if planning_revision and prev_request else (user_text or prev_request))
     same_request = bool(source_request) and source_request == prev_request

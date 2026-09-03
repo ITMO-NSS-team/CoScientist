@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Mapping, MutableMapping, Optional
 
 from google.adk.models import LlmResponse
 from google.adk.tools.base_tool import BaseTool
@@ -25,8 +25,8 @@ ROUTE_ALREADY_RETURNED_MESSAGE = (
     "Route already returned for this attempt. Call record_result, retry_task, "
     "fallback_task, skip_task, or amend_task."
 )
-# Close/read tools while route_returned + no result. retry/fallback need stored
-# failure — refuse here so after_model can force record_result.
+NO_MATCHING_TOOL_STATE_KEY = "experiment_no_matching_tool"
+_NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
 _PENDING_RECORD_ALLOWED = frozenset(
     {"record_result", "skip_task", "amend_task", "get_experiment_plan"}
 )
@@ -38,6 +38,7 @@ RECORD_REQUIRED_MESSAGE = (
     "finish in prose."
 )
 
+
 def _stringify_agent_tool_request(args: dict[str, Any]) -> None:
     """ADK AgentTool requires ``request`` as a string (``Part.text``)."""
     if "request" not in args or isinstance(args["request"], str):
@@ -48,8 +49,7 @@ def _stringify_agent_tool_request(args: dict[str, Any]) -> None:
         else str(val) if val is not None else val
     )
 
-# Process-local fallback when a nested McpBuilder session copy is stale.
-# Canonical pin lives on experiment_runtime["alembic_pin"] / the attempt.
+
 _EM_ALEMBIC_PIN: dict[str, Any] = {}
 
 
@@ -93,17 +93,14 @@ def _read_em_alembic_pin(
     runtime: dict[str, Any] | None = None,
     attempt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    runtime = runtime if isinstance(runtime, dict) else None
     if runtime is None and isinstance(state, dict):
         raw = state.get("experiment_runtime")
         runtime = raw if isinstance(raw, dict) else None
-    for candidate in (
-        attempt.get("alembic_pin") if isinstance(attempt, dict) else None,
-        runtime.get("alembic_pin") if runtime is not None else None,
-        _EM_ALEMBIC_PIN,
-    ):
-        if isinstance(candidate, dict) and candidate.get("repo_url"):
-            return dict(candidate)
+    for candidate in (attempt, runtime):
+        if isinstance(candidate, dict):
+            pin = candidate.get("alembic_pin")
+            if isinstance(pin, dict) and pin.get("repo_url"):
+                return dict(pin)
     return dict(_EM_ALEMBIC_PIN)
 
 
@@ -112,17 +109,14 @@ def _alembic_snapshot(
     runtime: dict[str, Any] | None = None,
     attempt: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if isinstance(attempt, dict):
-        snap = attempt.get("alembic_snapshot")
-        if isinstance(snap, dict):
-            return snap
-        pin = attempt.get("alembic_pin")
-        if isinstance(pin, dict) and isinstance(pin.get("snapshot"), dict):
-            return pin["snapshot"]
-    if isinstance(runtime, dict):
-        pin = runtime.get("alembic_pin")
-        if isinstance(pin, dict) and isinstance(pin.get("snapshot"), dict):
-            return pin["snapshot"]
+    for candidate in (attempt, runtime):
+        if isinstance(candidate, dict):
+            snap = candidate.get("alembic_snapshot")
+            if isinstance(snap, dict):
+                return snap
+            pin = candidate.get("alembic_pin")
+            if isinstance(pin, dict) and isinstance(pin.get("snapshot"), dict):
+                return pin["snapshot"]
     snap = _EM_ALEMBIC_PIN.get("snapshot")
     return snap if isinstance(snap, dict) else None
 
@@ -226,9 +220,7 @@ def await_alembic_job_if_experiment(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext, tool_response: Any,
 ) -> Any:
     """after_tool on McpBuilder: block until the EM build is done or failed."""
-    if getattr(tool, "name", "") != "build_mcp_server":
-        return None
-    if not isinstance(tool_response, dict):
+    if getattr(tool, "name", "") != "build_mcp_server" or not isinstance(tool_response, dict):
         return None
     state = tool_context.state
     ctx = _em_alembic_attempt(state)
@@ -238,13 +230,16 @@ def await_alembic_job_if_experiment(
     job_id = str(tool_response.get("job_id") or "").strip()
     if not job_id:
         return None
+
+    from CoScientist.tools.alembic_tools import enrich_snapshot_with_tools, wait_mcp_build
+    from CoScientist.config import get_settings
+
     runtime = attempt = None
     if ctx is not None:
         runtime, _, attempt = ctx
         attempt["alembic_job_id"] = job_id
-    if tool_response.get("status") in {"done", "failed", "error"}:
-        from CoScientist.tools.alembic_tools import enrich_snapshot_with_tools
 
+    if tool_response.get("status") in {"done", "failed", "error"}:
         snap = enrich_snapshot_with_tools(dict(tool_response))
         _set_em_alembic_pin(
             repo_url=str(pin.get("repo_url") or (attempt or {}).get("alembic_pin", {}).get("repo_url") or ""),
@@ -265,16 +260,12 @@ def await_alembic_job_if_experiment(
             ),
         )
         return snap
-    from CoScientist.config import get_settings
-    from CoScientist.tools.alembic_tools import wait_mcp_build
 
     cfg = get_settings().experiments
     audit(logger, f"EXPERIMENT_ALEMBIC_WAIT job_id={job_id} timeout_s={cfg.alembic_timeout_s}")
     snap = wait_mcp_build(
         job_id, timeout_s=cfg.alembic_timeout_s, poll_s=cfg.alembic_poll_s,
     )
-    # alembic_timeout_s is a heartbeat, not a protocol exit: returning
-    # status=running lets FORCE_RECORD loop against alembic_build_running.
     while snap.get("status") == "running":
         audit(
             logger,
@@ -284,7 +275,6 @@ def await_alembic_job_if_experiment(
         snap = wait_mcp_build(
             job_id, timeout_s=cfg.alembic_timeout_s, poll_s=cfg.alembic_poll_s,
         )
-    from CoScientist.tools.alembic_tools import enrich_snapshot_with_tools
 
     snap = enrich_snapshot_with_tools(snap if isinstance(snap, dict) else {})
     _set_em_alembic_pin(
@@ -309,6 +299,7 @@ def await_alembic_job_if_experiment(
     )
     return snap
 
+
 def _pending_record_attempt(
     state: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
@@ -317,7 +308,6 @@ def _pending_record_attempt(
         runtime, task_runtime, attempt = active_attempt(state)
     except ExperimentRuntimeError:
         return None
-    # status stays "running" until record_result; result_id is the close signal.
     if (
         not attempt.get("route_returned")
         or attempt.get("result_id")
@@ -325,6 +315,7 @@ def _pending_record_attempt(
     ):
         return None
     return runtime, task_runtime, attempt
+
 
 def guard_route_agent_tool(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext,
@@ -382,6 +373,7 @@ def guard_route_agent_tool(
         }
     return None
 
+
 def _schema_from_tool(tool: BaseTool, tool_context: ToolContext) -> dict[str, Any]:
     for attr in ("input_schema", "schema"):
         val = getattr(tool, attr, None)
@@ -412,6 +404,7 @@ def force_molecule_generator_s3_upload(
     """Backward-compatible alias — schema-driven, not a named-tool list."""
     return force_schema_s3_upload(tool, args, tool_context)
 
+
 def on_route_agent_returned(
     tool: BaseTool, args: dict[str, Any], tool_context: ToolContext, tool_response: Any,
 ) -> None:
@@ -439,12 +432,14 @@ def on_route_agent_returned(
     except ExperimentRuntimeError:
         return
 
+
 def _force_call(name: str, args: dict[str, Any], role: str = "model") -> LlmResponse:
     """LlmResponse that replaces the model turn with one forced function call."""
     return LlmResponse(content=types.Content(
         role=role,
         parts=[types.Part.from_function_call(name=name, args=args)],
     ))
+
 
 def _llm_has_pending_close_call(llm_response: LlmResponse) -> bool:
     content = getattr(llm_response, "content", None)
@@ -453,6 +448,7 @@ def _llm_has_pending_close_call(llm_response: LlmResponse) -> bool:
         getattr(getattr(p, "function_call", None), "name", None) in _PENDING_RECORD_ALLOWED
         for p in (parts or [])
     )
+
 
 def _summary_from_last_route(state: dict[str, Any]) -> str:
     fallback = "Route returned; executor omitted record_result — auto-closing attempt."
@@ -467,34 +463,39 @@ def _summary_from_last_route(state: dict[str, Any]) -> str:
     text = str(last).strip()
     return text[:1500] if text else fallback
 
+
+def _make_criteria_checks(criteria: Any, passed: bool, details: str) -> list[dict[str, Any]]:
+    if not isinstance(criteria, list):
+        return []
+    return [
+        {"criterion_id": cid, "passed": passed, "details": details}
+        for item in criteria
+        if isinstance(item, dict) and (cid := str(item.get("criterion_id") or "").strip())
+    ]
+
+
 def _auto_record_result_payload(
     state: dict[str, Any], task_runtime: dict[str, Any], attempt: dict[str, Any],
 ) -> dict[str, Any]:
     """Best-effort TaskResult so the control loop cannot skip record_result."""
     from CoScientist.experiments.runtime.artifacts import captured_delta
+
     criteria = (task_runtime.get("task") or {}).get("success_criteria") or []
     summary = _summary_from_last_route(state)
     last = state.get("experiment_last_route_response")
     snap = last if isinstance(last, dict) else {}
     if not snap and isinstance(attempt.get("alembic_snapshot"), dict):
         snap = attempt["alembic_snapshot"]
-    mcp_url = ""
-    if str(attempt.get("route") or "") == "alembic_build":
+
+    route = str(attempt.get("route") or "")
+    if route == "alembic_build":
         from CoScientist.experiments.runtime.alembic_bridge import harvest_alembic_mcp_url
 
         task = task_runtime.get("task") if isinstance(task_runtime.get("task"), dict) else {}
         mcp_url = harvest_alembic_mcp_url(
-            snap,
-            last,
-            summary,
-            repo_url=str(task.get("repo_url") or "").strip() or None,
+            snap, last, summary, repo_url=str(task.get("repo_url") or "").strip() or None,
         )
         if mcp_url.startswith("http"):
-            checks = [
-                {"criterion_id": cid, "passed": True, "details": f"mcp_url={mcp_url}"}
-                for item in (criteria if isinstance(criteria, list) else [])
-                if isinstance(item, dict) and (cid := str(item.get("criterion_id") or "").strip())
-            ]
             return {
                 "status": "success",
                 "summary": f"Alembic MCP ready at {mcp_url}",
@@ -506,42 +507,33 @@ def _auto_record_result_payload(
                     "container": snap.get("container"),
                     "job_id": snap.get("job_id") or attempt.get("alembic_job_id"),
                 },
-                "criteria_checks": checks,
+                "criteria_checks": _make_criteria_checks(criteria, True, f"mcp_url={mcp_url}"),
                 "retryable": False,
                 "warnings": ["auto_recorded_alembic_success"],
             }
-    # Alembic evidence is mcp_url, not leftover captures. Success-without-URL
-    # raises alembic_mcp_url_missing and leaves the attempt running.
-    has_artifacts = (
-        bool(captured_delta(state, attempt))
-        and str(attempt.get("route") or "") != "alembic_build"
-    )
+
+    has_artifacts = bool(captured_delta(state, attempt)) and route != "alembic_build"
     detail = (
-        "Auto-recorded: route returned and executor omitted "
-        "record_result; evidence taken from route capture."
-        if has_artifacts else
-        "Auto-recorded failure: route returned with no "
-        "captured artifacts and executor omitted record_result."
+        "Auto-recorded: route returned and executor omitted record_result; evidence taken from route capture."
+        if has_artifacts
+        else "Auto-recorded failure: route returned with no captured artifacts and executor omitted record_result."
     )
-    checks = [
-        {"criterion_id": cid, "passed": has_artifacts, "details": detail}
-        for item in (criteria if isinstance(criteria, list) else [])
-        if isinstance(item, dict) and (cid := str(item.get("criterion_id") or "").strip())
-    ]
     base: dict[str, Any] = {
-        "summary": summary, "criteria_checks": checks, "outputs": {},
+        "summary": summary,
+        "criteria_checks": _make_criteria_checks(criteria, has_artifacts, detail),
+        "outputs": {},
         "warnings": ["auto_recorded_omitted_record_result"],
     }
     if has_artifacts:
         return {**base, "status": "success", "retryable": False}
     return {
-        **base, "status": "failure", "error_code": "route_failed_or_empty",
-        "error_message": (
-            "Auto-recorded: route returned without captured artifacts; "
-            "executor omitted record_result."
-        ),
+        **base,
+        "status": "failure",
+        "error_code": "route_failed_or_empty",
+        "error_message": "Auto-recorded: route returned without captured artifacts; executor omitted record_result.",
         "retryable": True,
     }
+
 
 def _alembic_job_still_running(attempt: dict[str, Any]) -> bool:
     if str(attempt.get("route") or "") != "alembic_build":
@@ -621,25 +613,25 @@ def _pending_route_agent(state: Any) -> tuple[str, dict[str, Any]] | None:
     return name, {"request": request}
 
 
-def _running_task_id(runtime: dict[str, Any]) -> str | None:
+def _iter_task_runtimes(runtime: dict[str, Any]):
     tasks = runtime.get("tasks") or {}
     for tid in runtime.get("task_order") or []:
-        tr = tasks.get(tid) if isinstance(tasks.get(tid), dict) else None
-        if tr and str(tr.get("status") or "") == "running":
-            return str(tid)
+        tr = tasks.get(tid)
+        if isinstance(tr, dict):
+            yield str(tid), tr
+
+
+def _running_task_id(runtime: dict[str, Any]) -> str | None:
+    for tid, tr in _iter_task_runtimes(runtime):
+        if str(tr.get("status") or "") == "running":
+            return tid
     return None
 
 
 def _next_control_action(runtime: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    """Pick the next deterministic control call while phase=execution."""
-    # v0 is single-flight: never nudge start/retry/fallback while a task runs.
     if _running_task_id(runtime) is not None:
         return None
-    tasks = runtime.get("tasks") or {}
-    for tid in runtime.get("task_order") or []:
-        tr = tasks.get(tid) if isinstance(tasks.get(tid), dict) else None
-        if not tr:
-            continue
+    for tid, tr in _iter_task_runtimes(runtime):
         status = str(tr.get("status") or "")
         if status == "ready":
             return "start_task", {"task_id": tid}
@@ -664,9 +656,7 @@ def enforce_continue_until_reporting(
             return None
         audit(logger, f"EXPERIMENT_FORCE_ROUTE_AGENT action={name}")
         return _force_call(name, args)
-    if _pending_record_attempt(state) is not None:
-        return None
-    if _llm_has_any_function_call(llm_response):
+    if _pending_record_attempt(state) is not None or _llm_has_any_function_call(llm_response):
         return None
     action = _next_control_action(runtime)
     if action is None:
@@ -690,33 +680,27 @@ def rewrite_mismatched_control_action(
     phase = str(runtime.get("phase") or "")
     content = getattr(llm_response, "content", None)
     parts = list(getattr(content, "parts", None) or [])
-    control_fcs: list[tuple[int, str, dict[str, Any]]] = []
-    for i, part in enumerate(parts):
-        fc = getattr(part, "function_call", None)
-        name = getattr(fc, "name", None) if fc is not None else None
-        if name in _CONTROL_TRANSITION_TOOLS:
-            control_fcs.append((i, name, dict(getattr(fc, "args", None) or {})))
+    control_fcs: list[tuple[int, str, dict[str, Any]]] = [
+        (i, str(getattr(getattr(p, "function_call", None), "name", "")), dict(getattr(getattr(p, "function_call", None), "args", None) or {}))
+        for i, p in enumerate(parts)
+        if getattr(getattr(p, "function_call", None), "name", None) in _CONTROL_TRANSITION_TOOLS
+    ]
 
     if phase == "execution" and _pending_record_attempt(state) is None:
         if pending_route := _pending_route_agent(state):
             name, args = pending_route
             if name not in _llm_function_names(llm_response):
-                called = {n for _, n, _ in control_fcs}
-                called.update(
+                called = {n for _, n, _ in control_fcs} | {
                     n for n in _llm_function_names(llm_response)
-                    if n in ROUTE_AGENT_NAMES or n in _CONTROL_TRANSITION_TOOLS
-                    or n == "get_experiment_plan"
-                )
+                    if n in ROUTE_AGENT_NAMES or n in _CONTROL_TRANSITION_TOOLS or n == "get_experiment_plan"
+                }
                 if called:
                     audit(
                         logger,
-                        f"EXPERIMENT_REWRITE_CONTROL from={sorted(called)} to={name} "
-                        f"reason=pending_route_agent",
+                        f"EXPERIMENT_REWRITE_CONTROL from={sorted(called)} to={name} reason=pending_route_agent",
                         stdout=f"EXPERIMENT_REWRITE_CONTROL to={name} reason=pending_route_agent",
                     )
-                    return _force_call(
-                        name, args, role=getattr(content, "role", None) or "model",
-                    )
+                    return _force_call(name, args, role=getattr(content, "role", None) or "model")
 
     if not control_fcs:
         return None
@@ -724,15 +708,11 @@ def rewrite_mismatched_control_action(
     def _suppress(reason: str) -> LlmResponse:
         audit(
             logger,
-            f"EXPERIMENT_REWRITE_CONTROL suppress reason={reason} "
-            f"from={[n for _, n, _ in control_fcs]} phase={phase}",
+            f"EXPERIMENT_REWRITE_CONTROL suppress reason={reason} from={[n for _, n, _ in control_fcs]} phase={phase}",
             stdout=f"EXPERIMENT_REWRITE_CONTROL suppress reason={reason} phase={phase}",
         )
-        return _force_call(
-            "get_experiment_plan", {}, role=getattr(content, "role", None) or "model",
-        )
+        return _force_call("get_experiment_plan", {}, role=getattr(content, "role", None) or "model")
 
-    # Outside execution, start/retry/fallback/skip hard-error — park on get_experiment_plan.
     if phase != "execution":
         return _suppress(f"phase_{phase or 'none'}")
 
@@ -741,60 +721,34 @@ def rewrite_mismatched_control_action(
 
     running = _running_task_id(runtime)
     if running is not None:
-        bad = [
-            (n, a) for _, n, a in control_fcs
-            if n in {"start_task", "retry_task", "fallback_task", "skip_task"}
-        ]
-        if bad:
+        if any(n in {"start_task", "retry_task", "fallback_task", "skip_task"} for _, n, _ in control_fcs):
             return _suppress(f"while_running:{running}")
         return None
 
     expected = _next_control_action(runtime)
     if expected is None:
-        # No legal transition — suppress orphan retry/fallback/skip/start.
         return _suppress("no_pending_transition")
 
     exp_name, exp_args = expected
-    # skip_task on the task that would otherwise start is a legal attempt to
-    # leave the queue; rewriting it back to start_task is what turned
-    # missing-artifact into an infinite start loop.
+    # Allow skip_task on the same task that would otherwise start
     for _, name, args in control_fcs:
-        if name != "skip_task" or exp_name != "start_task":
-            continue
-        if str(args.get("task_id") or "") == str(exp_args.get("task_id") or ""):
-            return None
-    # If any control call already matches the expected transition, leave alone.
-    for _, name, args in control_fcs:
+        if name == "skip_task" and exp_name == "start_task":
+            if str(args.get("task_id") or "") == str(exp_args.get("task_id") or ""):
+                return None
         if name == exp_name and str(args.get("task_id") or "") == str(exp_args.get("task_id") or ""):
             return None
-    # Build corrected args (fallback needs a reason).
+
     fixed_args = dict(exp_args)
     if exp_name == "fallback_task" and not str(fixed_args.get("reason") or "").strip():
         wrong = ",".join(sorted({n for _, n, _ in control_fcs}))
-        fixed_args["reason"] = (
-            f"Auto-corrected control action (model called {wrong}; "
-            f"runtime requires {exp_name})."
-        )
+        fixed_args["reason"] = f"Auto-corrected control action (model called {wrong}; runtime requires {exp_name})."
+
     audit(
         logger,
-        f"EXPERIMENT_REWRITE_CONTROL from={[n for _, n, _ in control_fcs]} "
-        f"to={exp_name} args={fixed_args}",
+        f"EXPERIMENT_REWRITE_CONTROL from={[n for _, n, _ in control_fcs]} to={exp_name} args={fixed_args}",
         stdout=f"EXPERIMENT_REWRITE_CONTROL to={exp_name} task_id={fixed_args.get('task_id')}",
     )
-    return _force_call(
-        exp_name, fixed_args, role=getattr(content, "role", None) or "model",
-    )
-
-
-# ── EM inventory feasibility (early NO_MATCHING_TOOL) ───────────────────────
-# After ToolPreparer, decide whether a structurally-gated ask (see
-# GATE_ROUTED_STATE_KEY) can be treated as compute. Explicit orchestrator
-# choices of the module are always trusted and never checked here — only asks
-# that arrived because enforce_experiment_module_first rewrote a Research call
-# are eligible for an early NO_MATCHING_TOOL, so unrelated retrieved tools
-# cannot drag a literature ask into Hypotheses→Plan→Coder.
-NO_MATCHING_TOOL_STATE_KEY = "experiment_no_matching_tool"
-_NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
+    return _force_call(exp_name, fixed_args, role=getattr(content, "role", None) or "model")
 
 
 def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
@@ -802,40 +756,30 @@ def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
     from CoScientist.experiments.capabilities.inventory import (
         index_inventory_tools,
         inventory_covers_capabilities,
-        request_capabilities,
     )
     from CoScientist.config import get_settings
 
     state = callback_context.state
-    getter = getattr(state, "get", None)
-    gate_routed = bool(getter(GATE_ROUTED_STATE_KEY)) if callable(getter) else False
-    if hasattr(state, "__setitem__"):
-        state[GATE_ROUTED_STATE_KEY] = None
+    gate_routed = bool(state.get(GATE_ROUTED_STATE_KEY))
+    state[GATE_ROUTED_STATE_KEY] = None
+
     by_tool = index_inventory_tools(session_inventory_rows(state))
-    ask = ""
-    if callable(getter):
-        ask = str(getter("experiment_source_request") or "").strip()
-    needed = request_capabilities(ask)
-    covered = inventory_covers_capabilities(by_tool, needed) if needed else False
-    alembic_on = False
+    covered = inventory_covers_capabilities(by_tool)
     try:
         alembic_on = bool(get_settings().experiments.route_alembic)
-    except Exception:  # noqa: BLE001
+    except Exception:
         alembic_on = False
 
-    # Leftover MCP is not compute coverage. Lit-only asks (no needed family)
-    # must not be dragged into Hypotheses by tox/generate leftovers.
     inventory_ok = covered
     if (not gate_routed) or inventory_ok or alembic_on:
-        if hasattr(state, "__setitem__"):
-            state[NO_MATCHING_TOOL_STATE_KEY] = None
+        state[NO_MATCHING_TOOL_STATE_KEY] = None
         audit(
             logger,
             f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
-            f"inventory={len(by_tool)} needed={sorted(needed)} covered={covered}",
+            f"inventory={len(by_tool)} covered={covered}",
             stdout=(
                 f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
-                f"inventory={len(by_tool)} needed={sorted(needed)} covered={covered}"
+                f"inventory={len(by_tool)} covered={covered}"
             ),
         )
         return
@@ -855,11 +799,9 @@ def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
 def skip_when_experiment_not_feasible(callback_context: Any) -> Optional[types.Content]:
     """before_agent: short-circuit EM children after an early NO_MATCHING_TOOL."""
     state = callback_context.state
-    message = state.get(NO_MATCHING_TOOL_STATE_KEY) if hasattr(state, "get") else None
+    message = state.get(NO_MATCHING_TOOL_STATE_KEY) if isinstance(state, Mapping) else None
     if not isinstance(message, str) or not message.strip():
         return None
-    # Surface on common EM output keys so the sequential module's last skip
-    # still leaves a readable summary for the orchestrator / aggregator.
     state["experiment_execution_summary"] = message
     state["experiment_summary"] = message
     state["hypotheses"] = message
@@ -868,24 +810,60 @@ def skip_when_experiment_not_feasible(callback_context: Any) -> Optional[types.C
 
 
 def skip_when_experiment_stage_complete(callback_context: Any) -> Optional[types.Content]:
-    """before_agent: do not start a second ExperimentPlan after result HITL accepted."""
+    """before_agent: skip completed EM hops, rediscovery on replan, or exhausted replans."""
     state = callback_context.state
-    getter = getattr(state, "get", None)
-    if not callable(getter):
+    if not isinstance(state, Mapping):
         return None
-    runtime = getter("experiment_runtime")
-    if not isinstance(runtime, dict) or runtime.get("phase") != "completed":
+    runtime = state.get("experiment_runtime")
+    if not isinstance(runtime, dict):
         return None
-    summary = getter("experiment_summary")
-    if not isinstance(summary, str) or not summary.strip():
-        summary = getter("experiment_execution_summary")
-    if not isinstance(summary, str) or not summary.strip():
-        summary = (
-            "Experiment stage already completed for this session; "
-            "not starting a second plan on the same ask."
+    phase = runtime.get("phase")
+    agent = str(getattr(callback_context, "agent_name", None) or "")
+    try:
+        replan_count = int(runtime.get("replan_count") or 0)
+    except (TypeError, ValueError):
+        replan_count = 0
+
+    if phase == "completed":
+        from CoScientist.experiments.review import result_tasks_ok
+        if not result_tasks_ok(runtime):
+            return None
+        summary = state.get("experiment_summary") or state.get("experiment_execution_summary")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = (
+                "Experiment stage already completed for this session; "
+                "not starting a second plan on the same ask."
+            )
+        audit(logger, "EXPERIMENT_SKIP_STAGE_COMPLETE")
+        return types.Content(role="model", parts=[types.Part(text=summary)])
+
+    if state.get("experiment_plan_review_paused"):
+        message = "Experiment plan review is paused for this session; not starting another plan."
+        audit(logger, "EXPERIMENT_SKIP_PLAN_PAUSED")
+        return types.Content(role="model", parts=[types.Part(text=message)])
+
+    if agent == "ToolPreparerAgent":
+        has_inventory = bool(
+            state.get("experiment_retrieved_capabilities")
+            or state.get("experiment_discovered_capabilities")
         )
-    audit(logger, "EXPERIMENT_SKIP_STAGE_COMPLETE")
-    return types.Content(role="model", parts=[types.Part(text=summary)])
+        if has_inventory and (phase == "replan_requested" or replan_count > 0):
+            message = "Reusing session inventory; skipping tool discovery on replan."
+            audit(logger, "EXPERIMENT_SKIP_DISCOVERY_REPLAN")
+            return types.Content(role="model", parts=[types.Part(text=message)])
+
+    if agent == "ExperimentPlannerAgent":
+        from CoScientist.config import get_settings
+        max_replans = get_settings().experiments.max_replans
+        if replan_count >= max_replans:
+            state["experiment_plan_review_paused"] = True
+            message = (
+                f"Experiment replan budget exhausted ({replan_count}/{max_replans}); "
+                "not starting another plan."
+            )
+            audit(logger, f"EXPERIMENT_SKIP_REPLAN_BUDGET count={replan_count}")
+            return types.Content(role="model", parts=[types.Part(text=message)])
+    return None
 
 
 def pin_fedot_alembic_task(

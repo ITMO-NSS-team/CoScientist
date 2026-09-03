@@ -150,13 +150,20 @@ class FedotMASToolset(BaseToolset):
             tool_context.state["fedot_artifact_tables"] = tables
         task_description = bind_upstream_inputs_to_task(task_description, tables, filtered_tools)
         envelope = state.get("experiment_active_envelope") or {}
-        launch_num = ((envelope.get("task") or {}).get("launch_params") or {}).get("num")
-        if launch_num is not None:
-            task_description = (
-                f"{task_description}\n\n"
-                f"REQUIRED MCP args: num={launch_num}. "
-                f"Do not generate more than {launch_num} molecules."
-            )
+        launch_params = (envelope.get("task") or {}).get("launch_params") or {}
+        if isinstance(launch_params, dict) and launch_params:
+            for k, v in launch_params.items():
+                if k == "num" and v is not None:
+                    task_description = (
+                        f"{task_description}\n\n"
+                        f"REQUIRED MCP args: num={v}. "
+                        f"Do not generate more than {v} molecules."
+                    )
+                elif v is not None and str(v).strip():
+                    task_description = (
+                        f"{task_description}\n"
+                        f"REQUIRED MCP arg: {k}={v}."
+                    )
 
         # F010.A3/A4: an after_tool_callback plugin captures S3 artifact links
         # (results_presigned_url) at the tool-call boundary, BEFORE FEDOT.MAS sub-agents

@@ -326,15 +326,12 @@ class ExperimentReviewSessionAgent(SessionAgent):
     """LLM plan/summary stage with deterministic validation and mandatory HITL."""
 
     review_kind: Literal["plan", "result"]
-    max_deterministic_revisions: int = 8
     max_inventory_blocker_hits: int = 2  # same inventory-absence blocker twice → pause
 
     def __init__(self, **data: Any):
         if data.get("hitl_handler") is None:
             data["hitl_handler"] = fail_closed_handler()
         super().__init__(**data)
-        self._deterministic_revisions = 0
-        self._inventory_blocker_hits = 0
 
     def _should_run_review(self) -> bool:
         # Deterministic schema/critique + initialize_runtime live in
@@ -354,18 +351,29 @@ class ExperimentReviewSessionAgent(SessionAgent):
         self, *, ctx: InvocationContext, detail: Any, pause_prefix: str, edit_prefix: str,
         inventory_blocker: bool = False, **_kwargs: Any,
     ) -> HITLResponse:
-        self._deterministic_revisions += 1
-        if inventory_blocker:
-            self._inventory_blocker_hits += 1
+        state = ctx.session.state
+        try:
+            revisions = int(state.get("experiment_plan_revision_count") or 0) + 1
+        except (TypeError, ValueError):
+            revisions = 1
+        state["experiment_plan_revision_count"] = revisions
+
+        try:
+            hits = int(state.get("experiment_inventory_blocker_hits") or 0) + (1 if inventory_blocker else 0)
+        except (TypeError, ValueError):
+            hits = 1 if inventory_blocker else 0
+        state["experiment_inventory_blocker_hits"] = hits
+
+        max_rev = get_settings().experiments.max_plan_revisions
         if not (
-            self._deterministic_revisions >= self.max_deterministic_revisions
-            or self._inventory_blocker_hits >= self.max_inventory_blocker_hits
+            revisions >= max_rev
+            or hits >= self.max_inventory_blocker_hits
         ):
             return HITLResponse(action=HITLAction.EDIT, approved=False, instructions=f"{edit_prefix} {detail}")
         ctx.session.state["experiment_plan_review_paused"] = True
         reason = (
             "inventory_blocker_repeated"
-            if self._inventory_blocker_hits >= self.max_inventory_blocker_hits
+            if hits >= self.max_inventory_blocker_hits
             else "max_deterministic_revisions"
         )
         _audit(f"EXPERIMENT_PLAN_REVIEW_PAUSED reason={reason}")

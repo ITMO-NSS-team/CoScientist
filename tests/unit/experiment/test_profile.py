@@ -58,7 +58,7 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     ]
     hyp = config.agent("HypothesesAgent")
     assert hyp.prompt == "hypotheses"
-    assert hyp.model == "openai/glm-4.7"
+    assert hyp.model == "openai/gemini-3.7-flash"
     assert hyp.tools == ["research_graph"]
     assert "commit_experiment_hypotheses" in hyp.callbacks.after_agent
     assert "seed_hypotheses_from_em_request" in hyp.callbacks.before_model
@@ -142,7 +142,7 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert "collect_reranked_tools_from_model" not in reranker.callbacks.after_model
 
     planner = config.agent("ExperimentPlannerAgent")
-    assert planner.model == "openai/glm-4.7"
+    assert planner.model == "openai/gemini-3.7-flash"
     assert planner.include_contents == "none"
     assert "skip_retriever_context" in planner.callbacks.before_model
     # ExperimentPlan is enforced by sanitize_json_output + deterministic critique.
@@ -183,7 +183,6 @@ def test_planner_and_coder_prompts_cover_multi_h_and_anti_fabrication():
     assert "role=data" in planner
     assert "different-family" in planner
     assert "Cover every distinct operation" in retriever
-    assert "1–8 tasks" in planner
     assert "one non-optional" in planner and "distinct target" in planner
     assert "also_tests" in planner
     assert "Uncovered hypothesis_refs" in planner
@@ -203,11 +202,16 @@ def test_research_prompt_opens_literature_with_search_papers():
     ctx.render_tools.return_value = ""
     ctx.render_hitl.return_value = ""
     prompt = research(ctx)
-    assert "call `search_papers` first" in prompt
-    assert "ALWAYS call `explore_chemistry_database`" not in prompt
-    assert "Do not open a literature review with this tool" in prompt
+    sci_at = prompt.find("`explore_scientific_database`")
+    papers_at = prompt.find("ALWAYS call `search_papers`")
+    assert sci_at != -1
+    assert papers_at != -1
+    assert sci_at < papers_at
+    assert "Do not treat the RAG answer as the end of a literature review" in prompt
     assert "Never invent tool names" in prompt
-    assert "immediately fall back to `tavily_search`" in prompt
+    assert "fall back to `tavily_search`" in prompt
+    assert "immediately fall back" not in prompt
+    assert "argument `keywords`" in prompt
 
 
 def test_fedot_tool_skips_legacy_hard_stop_for_experiment_runtime(monkeypatch):

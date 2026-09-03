@@ -494,10 +494,13 @@ def _coerce_also_tests(value: Any) -> list[str]:
         if not text:
             continue
         for part in re.split(r"[,/;]+", text):
-            token = part.strip().upper()
-            if re.fullmatch(r"H\d+", token) and token not in seen:
-                seen.add(token)
-                out.append(token)
+            token = part.strip()
+            if not token:
+                continue
+            norm = token.upper() if re.fullmatch(r"H\d+", token, flags=re.I) else token
+            if norm not in seen:
+                seen.add(norm)
+                out.append(norm)
     return out
 
 

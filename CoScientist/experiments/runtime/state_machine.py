@@ -275,6 +275,13 @@ def initialize_runtime(
         }
         for task in plan.tasks
     }
+    prev = state.get(RUNTIME_KEY)
+    prev_replan = 0
+    if isinstance(prev, dict):
+        try:
+            prev_replan = int(prev.get("replan_count") or 0)
+        except (TypeError, ValueError):
+            prev_replan = 0
     runtime = {
         "run_id": plan.experiment_run_id,
         "plan_id": plan.plan_id,
@@ -288,6 +295,7 @@ def initialize_runtime(
         "tasks": tasks,
         "results": [],
         "result_review_feedback": None,
+        "replan_count": prev_replan,
     }
     refresh_readiness(runtime)
     state[RUNTIME_KEY] = runtime
@@ -307,6 +315,8 @@ def approve_plan(state: MutableMapping[str, Any]) -> dict[str, Any]:
         raise ExperimentRuntimeError("critique_revise", "Plan cannot be approved while deterministic critique requires revision.")
     runtime["approved"] = True
     runtime["phase"] = "execution"
+    state["experiment_plan_revision_count"] = 0
+    state["experiment_inventory_blocker_hits"] = 0
     refresh_readiness(runtime)
     _publish_active_tasks(state, runtime)
     return {"status": "success", "phase": runtime["phase"], "plan_id": runtime["plan_id"]}
@@ -1176,8 +1186,15 @@ def mark_result_review(
     if approved:
         runtime["phase"] = "completed"
     else:
+        try:
+            count = int(runtime.get("replan_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        runtime["replan_count"] = count + 1
         runtime["phase"] = "replan_requested"
         runtime["result_review_feedback"] = feedback or "Result redesign requested."
+        state["experiment_plan_revision_count"] = 0
+        state["experiment_inventory_blocker_hits"] = 0
     return {"status": "success", "phase": runtime["phase"]}
 
 
