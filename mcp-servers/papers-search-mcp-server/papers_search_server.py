@@ -26,13 +26,23 @@ mcp = FastMCP("PapersSearch")
 
 
 def _get_credentials() -> tuple[str | None, str | None]:
-    """Return (email, api_key) from request headers."""
-    headers = get_http_request().headers
-    return headers.get("x-openalex-email"), headers.get("x-openalex-api-key")
+    """Return (email, api_key) from request headers or environment variables."""
+    email, api_key = None, None
+    try:
+        headers = get_http_request().headers
+        email = headers.get("x-openalex-email")
+        api_key = headers.get("x-openalex-api-key")
+    except Exception:
+        pass
+    email = email or os.getenv("OPENALEX_EMAIL") or os.getenv("SERVICES__OPENALEX_EMAIL")
+    api_key = api_key or os.getenv("OPENALEX_API_KEY") or os.getenv("SERVICES__OPENALEX_API_KEY")
+    return email, api_key
 
 
 def _sanitize_filename(name: str) -> str:
-    return re.sub(r'[\\/*?:"<>|]', "", name)
+    if not name:
+        return "unnamed_paper"
+    return re.sub(r'[\\/*?:"<>|]', "", str(name))
 
 @mcp.tool()
 def search_entity(entity_type: str, entity_name: str) -> dict:
@@ -44,8 +54,8 @@ def search_entity(entity_type: str, entity_name: str) -> dict:
         entity_type: Type of entity to search for ("author", "source", "institution")
         entity_name: Name of the entity to search for (e.g., author name, journal name, institution name)
     """
-    email, _ = _get_credentials()
-    client = OpenAlexClient(email=email)
+    email, api_key = _get_credentials()
+    client = OpenAlexClient(email=email, api_key=api_key)
     result = client.search_entity(entity_type=entity_type, entity_name=entity_name)
     if result:
         return {'answer': f'Entity ID: {result["id"]}'}
@@ -79,8 +89,8 @@ def search_papers(
         limit: Max number of results
         sort: OpenAlex sort field (e.g., "cited_by_count:desc")
     """
-    email, _ = _get_credentials()
-    client = OpenAlexClient(email=email)
+    email, api_key = _get_credentials()
+    client = OpenAlexClient(email=email, api_key=api_key)
     response = client.search_works(
         keywords=keywords,
         author_id=author_id,
@@ -135,7 +145,7 @@ def download_papers_from_search(
     bucket and the key are the durable reference. The URL expires in one hour.
     """
     email, api_key = _get_credentials()
-    client = OpenAlexClient(email=email)
+    client = OpenAlexClient(email=email, api_key=api_key)
     response = client.search_works(
         keywords=keywords,
         author_id=author_id,
@@ -160,10 +170,13 @@ def download_papers_from_search(
     uploaded = []
 
     for index, work in enumerate(works):
-        pdf_url = work.get("content_urls").get("pdf")
+        content_urls = work.get("content_urls") or {}
+        pdf_url = content_urls.get("pdf")
+        if not pdf_url:
+            continue
 
-        title = work.get("title")
-        file_name = f"{_sanitize_filename(title)}.pdf"
+        title = work.get("title") or f"paper_{work.get('id', index)}"
+        file_name = f"{_sanitize_filename(str(title))}.pdf"
         s3_key = f"{s3_prefix.rstrip('/')}/{file_name}"
 
         response = client.request_with_retry(endpoint=pdf_url, params={"api_key": api_key})
@@ -193,4 +206,5 @@ def download_papers_from_search(
 
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port=7331, path="/mcp")
+    port = int(os.getenv("PORT", "7333"))
+    mcp.run(transport="http", host="127.0.0.1", port=port, path="/mcp")
