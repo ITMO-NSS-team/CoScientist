@@ -1283,6 +1283,11 @@ def mark_result_review(
         runtime["replan_rounds"] = rounds
         runtime["phase"] = "replan_requested"
         runtime["result_review_feedback"] = feedback or "Result redesign requested."
+        # A replan is a fresh planning round, so the per-round revision budget
+        # starts over. Without this the next planner hop inherits a spent budget
+        # and can pause the experiment on its first stumble.
+        state["experiment_plan_revision_count"] = 0
+        state["experiment_inventory_blocker_hits"] = 0
 
     # Reassign, do not just mutate: ADK records a state delta on assignment, so
     # an in-place edit of the nested dict never reaches session state. That is

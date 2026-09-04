@@ -115,7 +115,10 @@ RULES:
       url>, post_build_route=fedot_mas, mcp_servers=[]. PREFERRED over coder when a repo fits.
    5) else required route=coder (for multi-target scripting, comparative data tables, plots, or uncovered operations).
    Mixed ask = one plan: research/medical evidence, fedot_mas compute, coder uncovered/comparative.
-6. Copy experiment_run_id + source_request verbatim; plan_id stable; revision≥1.
+6. Copy experiment_run_id + source_request verbatim. plan_id: one stable
+   non-empty id, e.g. PLAN-<uuid>; revision: integer >= 1. On a REVISION round
+   the runtime overwrites both from the previous plan, so never try to recall
+   the previous plan_id - but a first plan is used as written.
    success_criteria = execution verification, not claim status.
    expected_artifacts: bound MCP → what that tool produces (role=data). Mandatory markdown/HTML reports are forbidden
    for data/generator tools (required=false only).

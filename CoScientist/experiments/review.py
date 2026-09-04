@@ -139,11 +139,35 @@ def _json_payload(value: Any) -> Any:
     return parse_fenced_json(value)
 
 
-def _stamp_context_invariants(payload: Any, context: dict[str, Any]) -> Any:
-    """Authoritative context wins for run-id / source_request."""
-    if not isinstance(payload, dict) or not context:
+def _stamp_context_invariants(
+    payload: Any, context: dict[str, Any], previous: ExperimentPlan | None = None,
+) -> Any:
+    """Authoritative context wins for run-id / source_request / plan identity.
+
+    ``plan_id`` and ``revision`` are runtime bookkeeping, not planner output. The
+    model has no reliable way to recall the previous plan_id across a revision
+    round, and a wrong guess is a BLOCKING critique ("plan_id changed between
+    revisions" / "A revised plan must increment revision") that costs one round
+    of a budget only a few rounds deep. Observed 2026-09-04: a human HITL edit
+    re-entered planning, the regenerated plan came back as
+    ``PLAN-EXRUN-<uuid>`` where the runtime held ``PLAN-<uuid>``, and the whole
+    experiment stopped without a single MCP call.
+
+    The two validator checks stay where they are: stamping here makes them
+    unreachable for model formatting while they still catch real programming
+    errors, and it keeps the "validator repairs nothing" contract intact.
+    """
+    if not isinstance(payload, dict):
         return payload
     stamped = dict(payload)
+    # Plan identity comes from the runtime, not from context, so it is stamped
+    # even when experiment_context is empty - otherwise the two blocking checks
+    # this defuses would quietly come back in exactly that corner.
+    if previous is not None:
+        stamped["plan_id"] = previous.plan_id
+        stamped["revision"] = previous.revision + 1
+    if not context:
+        return stamped
     if run_id := context.get("experiment_run_id"):
         stamped["experiment_run_id"] = run_id
     if request := context.get("source_request"):
@@ -491,9 +515,9 @@ class ExperimentReviewSessionAgent(SessionAgent):
         user_id, session_id = session_key(ctx)
         try:
             context = state.get("experiment_context") or {}
-            payload = _stamp_context_invariants(_json_payload(output_text), context)
             runtime = state.get("experiment_runtime") or {}
             previous = ExperimentPlan.model_validate(runtime["plan"]) if runtime.get("plan") else None
+            payload = _stamp_context_invariants(_json_payload(output_text), context, previous)
             plan, critique = validate_and_critique_plan(
                 payload, settings=cfg,
                 available_tools=(
@@ -540,6 +564,13 @@ class ExperimentReviewSessionAgent(SessionAgent):
 
         state["experiment_plan_review_paused"] = False
         state["experiment_plan_validation_errors"] = None
+        # The budget bounds CONSECUTIVE failures, not a whole session. Until this
+        # reset it was only cleared in approve_plan, so a plan that validated but
+        # was never approved left the count standing: a later human HITL edit then
+        # re-entered planning with a partly spent budget and could exhaust it on
+        # the first stumble.
+        state["experiment_plan_revision_count"] = 0
+        state["experiment_inventory_blocker_hits"] = 0
         initialize_runtime(state, plan, critique=critique_json)
         if _headless_auto_approve():
             approve_plan(state)

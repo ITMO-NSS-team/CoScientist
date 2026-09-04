@@ -67,6 +67,24 @@ def _prefix_bare_models_in_obj(obj: Any) -> Any:
     return obj
 
 
+def _autonomous_kwargs(func: Any, autonomous: bool) -> dict[str, Any]:
+    """``{"autonomous": ...}`` when *func* accepts it, else ``{}``.
+
+    FEDOT.MAS gained a keyword-only ``autonomous`` on ``build`` and the routing
+    builders after the commit uv.lock pins (8c74cad -> 7d6ee16). Threading it
+    unconditionally breaks the pinned version; refusing it breaks the new one,
+    where BaseMAS.build_app calls ``self.build(config, autonomous=...)`` and our
+    override raised TypeError on every single FEDOT run.
+    """
+    try:
+        import inspect
+        if "autonomous" in inspect.signature(func).parameters:
+            return {"autonomous": autonomous}
+    except (TypeError, ValueError):  # builtins / C callables
+        pass
+    return {}
+
+
 def _install_proxy_model_strip() -> None:
     """Monkeypatch ``_ProxyClient.acompletion`` once so proxy calls strip providers."""
     if getattr(_ProxyClient.acompletion, "_coscientist_strips_provider", False):
@@ -168,7 +186,7 @@ class PatchedMAS(MAS):
         self._pending_task = user_query
         return await super().build_and_run(config, user_query, initial_state=initial_state, timeout=timeout)
 
-    def build(self, config: MASConfig) -> BaseAgent:
+    def build(self, config: MASConfig, *, autonomous: bool = True) -> BaseAgent:
         registry = self._mcp_registry
         worker_models = self._worker_map()
 
@@ -185,19 +203,28 @@ class PatchedMAS(MAS):
                 "PatchedMAS: single worker %r — skipping coordinator/transfer",
                 config.workers[0].name,
             )
-            return _build_routing_agent(config.workers[0], registry, worker_models)
+            return _build_routing_agent(
+                config.workers[0], registry, worker_models,
+                **_autonomous_kwargs(_build_routing_agent, autonomous),
+            )
 
         # Sanitize can equalize toolsets (empty-tool workers get all servers);
         # retry the collapse once before falling back to full transfer routing.
         picked = self._pick_single_worker(config)
         if picked is not None:
-            return _build_routing_agent(picked, registry, worker_models)
+            return _build_routing_agent(
+                picked, registry, worker_models,
+                **_autonomous_kwargs(_build_routing_agent, autonomous),
+            )
 
         _log.info(
             "PatchedMAS: building routing system (%d workers) with task injection",
             len(config.workers),
         )
-        return build_routing_system(config, mcp_registry=registry, worker_models=worker_models)
+        return build_routing_system(
+            config, mcp_registry=registry, worker_models=worker_models,
+            **_autonomous_kwargs(build_routing_system, autonomous),
+        )
 
     def _pick_single_worker(self, config: MASConfig) -> MASAgentConfig | None:
         """Reduce many workers to one when transfer routing adds no capability.
@@ -353,8 +380,11 @@ class PatchedMAW(MAW):
             config, user_query, initial_state=initial_state, timeout=timeout
         )
 
-    def build(self, config: MAWConfig) -> BaseAgent:
-        return super().build(self._sanitize_config(config))
+    def build(self, config: MAWConfig, *, autonomous: bool = True) -> BaseAgent:
+        return super().build(
+            self._sanitize_config(config),
+            **_autonomous_kwargs(super().build, autonomous),
+        )
 
     def _sanitize_config(self, config: MAWConfig) -> MAWConfig:
         """Keep only tool names the MCP registry actually knows.

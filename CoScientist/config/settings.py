@@ -341,8 +341,12 @@ class ExperimentsSettings(BaseModel):
     # counter kept inside the runtime.
     max_replans: int = Field(default=2, ge=1, le=8)
     # Inner schema/critique regenerations of ExperimentPlan within one planner
-    # hop. Was 8 hardcoded, which is up to six wasted rounds on a costly planner.
-    max_plan_revisions: int = Field(default=2, ge=1, le=8)
+    # hop, counted as CONSECUTIVE failures and reset on every plan that
+    # validates. Was 8 hardcoded, which is up to six wasted rounds on a costly
+    # planner; 2 proved too tight once a human HITL edit re-entered planning, so
+    # this leaves room for one human round plus a couple of genuine planner
+    # mistakes without letting a broken plan burn eight planner calls.
+    max_plan_revisions: int = Field(default=4, ge=1, le=8)
     # Which FEDOT engine backs the fedot_mas route.
     #
     # "mas" (default) is the single-shot routing config. "maw" is a fixed
