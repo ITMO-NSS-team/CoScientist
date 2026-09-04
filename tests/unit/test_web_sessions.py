@@ -118,19 +118,21 @@ def test_finished_run_cannot_discard_a_new_owner():
 
 
 def test_chat_controls_follow_server_status_broadcasts():
-    html = web_app.TEMPLATE_PATH.read_text(encoding="utf-8")
-    submit_handler = html.split(
+    chat_js = (web_app.WEB_DIR / "static" / "js" / "chat.js").read_text(encoding="utf-8")
+    ws_js = (web_app.WEB_DIR / "static" / "js" / "ws.js").read_text(encoding="utf-8")
+    sessions_js = (web_app.WEB_DIR / "static" / "js" / "sessions.js").read_text(encoding="utf-8")
+    submit_handler = chat_js.split(
         "document.getElementById('chat-form').addEventListener", 1
     )[1].split("function stopChat", 1)[0]
-    stop_handler = html.split("function stopChat", 1)[1].split(
-        "function clearChat", 1
+    stop_handler = chat_js.split("function stopChat", 1)[1].split(
+        "function applyReportLanguage", 1
     )[0]
 
-    assert "function applyRunStatus(status, version = null)" in html
-    assert "parsedVersion < runStatusVersion" in html
-    assert "case 'status':" in html
-    assert "applyRunStatus(data.status, data.run_status_version);" in html
-    assert "case 'chat_accepted':" in html
+    assert "function applyRunStatus(status, version = null)" in sessions_js
+    assert "parsedVersion < runStatusVersion" in sessions_js
+    assert "case 'status':" in ws_js
+    assert "applyRunStatus(data.status, data.run_status_version);" in ws_js
+    assert "case 'chat_accepted':" in ws_js
     assert "addUserMsg(msg);" not in submit_handler
     assert "input.value = '';" not in submit_handler
     assert "send-btn').disabled" not in submit_handler

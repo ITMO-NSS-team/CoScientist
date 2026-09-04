@@ -168,6 +168,59 @@ _REGISTRY = _SessionRegistry()
 _WARNED_NO_SESSION = False
 
 
+# ---------------------------------------------------------------------------
+# Per-session concurrency guard
+# ---------------------------------------------------------------------------
+#
+# ``arun_sandbox_task`` / ``await_sandbox_task`` read the session's current
+# binding, then (much later, after a network round-trip and — for a run — a
+# possibly long inline wait) write the new one. If the same session's agent
+# fires two calls a few seconds apart — a coder-agent slip, e.g. calling the
+# tool again before the first reply lands — both would read the SAME stale
+# binding and each provision (or attach to) a sandbox independently; whichever
+# write lands last silently orphans the other, splitting the session across
+# two containers instead of one.
+#
+# Rather than queue the second call behind the first (which could block a
+# tool call for the run's ENTIRE duration — up to the hour-plus jobs this
+# module is built for), a session with a call already in flight rejects the
+# second one immediately with the same ``status="busy"`` the server itself
+# already uses for this — the coder agent's tools already know to read that
+# as "try again shortly" (see ``sandbox_tools._shape``).
+
+_ACTIVE_SESSIONS: set = set()
+_ACTIVE_SESSIONS_GUARD = threading.Lock()
+
+
+def _try_acquire_session(session: str) -> bool:
+    """Claim ``session`` for the duration of one call; False if already claimed."""
+    with _ACTIVE_SESSIONS_GUARD:
+        if session in _ACTIVE_SESSIONS:
+            return False
+        _ACTIVE_SESSIONS.add(session)
+        return True
+
+
+def _release_session(session: str) -> None:
+    with _ACTIVE_SESSIONS_GUARD:
+        _ACTIVE_SESSIONS.discard(session)
+
+
+def _concurrent_busy_result(session: str, target_id: Optional[str]) -> Dict[str, Any]:
+    """The result a second concurrent call for ``session`` gets, unsubmitted."""
+    return _normalize({
+        "status": "busy",
+        "error": (
+            "Sandbox busy: another call for this session is already in "
+            "flight — wait for it to finish before calling again."
+        ),
+        "session": session,
+        "sandbox_id": target_id,
+        "reused": bool(target_id),
+        "sandbox_expired": False,
+    })
+
+
 def _scope_from_context(tool_context: Any) -> Optional[str]:
     """Best-effort session identity from a framework context object."""
     if tool_context is None:
@@ -1044,56 +1097,70 @@ async def arun_sandbox_task(
     non-blocking, so a long wait costs a coroutine rather than a thread.
     ``on_start`` and ``on_plan`` may be coroutine functions here and are
     awaited.
+
+    Calls for the SAME session are exclusive (see :func:`_try_acquire_session`):
+    if another call for this session is still in flight, this one is refused
+    at once with ``status="busy"`` instead of racing it for the binding — a
+    caller that fires the tool twice in quick succession gets a clean signal
+    to retry instead of silently splitting the session across two sandboxes.
     """
-    try:
-        sub = _prepare(
-            task=task, dataset_url=dataset_url, new_sandbox=new_sandbox,
-            session_id=session_id, sandbox_id=sandbox_id, tool_context=tool_context,
-            sandbox_url=sandbox_url, wait_in_queue=wait_in_queue, verbose=verbose,
+    session = resolve_session_key(session_id, tool_context)
+    if not _try_acquire_session(session):
+        return _concurrent_busy_result(
+            session, sandbox_id or read_binding(session, tool_context),
         )
-    except SandboxConfigError as exc:
-        return _normalize(_error(str(exc)))
-
     try:
-        async with httpx.AsyncClient(timeout=DEFAULT_SUBMIT_TIMEOUT) as client:
-            response = await client.post(sub.url, json=sub.body)
-        if response.status_code == 429:
-            return _busy_result(sub, response, verbose)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as exc:  # noqa: BLE001 - network/transport failures
-        return _submit_failure(sub, exc)
+        try:
+            sub = _prepare(
+                task=task, dataset_url=dataset_url, new_sandbox=new_sandbox,
+                session_id=session_id, sandbox_id=sandbox_id, tool_context=tool_context,
+                sandbox_url=sandbox_url, wait_in_queue=wait_in_queue, verbose=verbose,
+            )
+        except SandboxConfigError as exc:
+            return _normalize(_error(str(exc)))
 
-    base_result = _interpret(
-        sub, data, new_sandbox=new_sandbox, tool_context=tool_context, verbose=verbose,
-    )
-    await _aannounce(on_start, base_result)
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_SUBMIT_TIMEOUT) as client:
+                response = await client.post(sub.url, json=sub.body)
+            if response.status_code == 429:
+                return _busy_result(sub, response, verbose)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:  # noqa: BLE001 - network/transport failures
+            return _submit_failure(sub, exc)
 
-    if not wait_for_result:
-        return _normalize({**base_result, "status": "submitted"})
+        base_result = _interpret(
+            sub, data, new_sandbox=new_sandbox, tool_context=tool_context, verbose=verbose,
+        )
+        await _aannounce(on_start, base_result)
 
-    comp = await _await_completion(
-        api_url=sub.api_url,
-        sandbox_id=base_result["sandbox_id"],
-        poll_interval=poll_interval,
-        timeout=timeout,
-        on_plan=on_plan,
-    )
-    await _acollect_metrics(
-        api_url=sub.api_url,
-        session=sub.session,
-        sandbox_id=base_result["sandbox_id"],
-        status=comp.get("status"),
-        tool_context=tool_context,
-        sink=metrics_sink,
-        collect=collect_metrics,
-    )
-    merged = {**base_result, **comp}
-    if not merged.get("watch_url") and base_result.get("watch_url"):
-        merged["watch_url"] = base_result["watch_url"]
-    if not merged.get("vscode_url") and base_result.get("vscode_url"):
-        merged["vscode_url"] = base_result["vscode_url"]
-    return _normalize(merged)
+        if not wait_for_result:
+            return _normalize({**base_result, "status": "submitted"})
+
+        comp = await _await_completion(
+            api_url=sub.api_url,
+            sandbox_id=base_result["sandbox_id"],
+            poll_interval=poll_interval,
+            timeout=timeout,
+            on_plan=on_plan,
+        )
+        await _acollect_metrics(
+            api_url=sub.api_url,
+            session=sub.session,
+            sandbox_id=base_result["sandbox_id"],
+            status=comp.get("status"),
+            tool_context=tool_context,
+            sink=metrics_sink,
+            collect=collect_metrics,
+        )
+        merged = {**base_result, **comp}
+        if not merged.get("watch_url") and base_result.get("watch_url"):
+            merged["watch_url"] = base_result["watch_url"]
+        if not merged.get("vscode_url") and base_result.get("vscode_url"):
+            merged["vscode_url"] = base_result["vscode_url"]
+        return _normalize(merged)
+    finally:
+        _release_session(session)
 
 
 async def await_sandbox_task(
@@ -1113,6 +1180,12 @@ async def await_sandbox_task(
     Returns the same shape as :func:`run_sandbox_task`.  When ``timeout``
     elapses the status is ``"timeout"`` and the task keeps running server-side,
     so the call can simply be repeated.
+
+    Exclusive per session, same as :func:`arun_sandbox_task` — see
+    :func:`_try_acquire_session`. In practice this only ever contends with
+    another ``await_sandbox_task``/``arun_sandbox_task`` call for the SAME
+    session, since a running :func:`arun_sandbox_task` holds the claim for
+    its own inline wait and only releases it once that wait is over.
     """
     try:
         api_url = _api(resolve_sandbox_url(sandbox_url))
@@ -1120,30 +1193,37 @@ async def await_sandbox_task(
         return _normalize(_error(str(exc)))
 
     session = resolve_session_key(session_id, tool_context)
-    target = sandbox_id or read_binding(session, tool_context)
-    if not target:
-        return _normalize({
-            "status": "none",
-            "session": session,
-            "sandbox_id": None,
-            "message": "No sandbox is bound to this session yet.",
-        })
+    if not _try_acquire_session(session):
+        return _concurrent_busy_result(
+            session, sandbox_id or read_binding(session, tool_context),
+        )
+    try:
+        target = sandbox_id or read_binding(session, tool_context)
+        if not target:
+            return _normalize({
+                "status": "none",
+                "session": session,
+                "sandbox_id": None,
+                "message": "No sandbox is bound to this session yet.",
+            })
 
-    result = await _await_completion(
-        api_url=api_url, sandbox_id=target,
-        poll_interval=poll_interval, timeout=timeout,
-        on_plan=on_plan,
-    )
-    await _acollect_metrics(
-        api_url=api_url,
-        session=session,
-        sandbox_id=target,
-        status=result.get("status"),
-        tool_context=tool_context,
-        sink=metrics_sink,
-        collect=collect_metrics,
-    )
-    return _normalize({**result, "session": session, "sandbox_id": target})
+        result = await _await_completion(
+            api_url=api_url, sandbox_id=target,
+            poll_interval=poll_interval, timeout=timeout,
+            on_plan=on_plan,
+        )
+        await _acollect_metrics(
+            api_url=api_url,
+            session=session,
+            sandbox_id=target,
+            status=result.get("status"),
+            tool_context=tool_context,
+            sink=metrics_sink,
+            collect=collect_metrics,
+        )
+        return _normalize({**result, "session": session, "sandbox_id": target})
+    finally:
+        _release_session(session)
 
 
 def _normalize(result: Dict[str, Any]) -> Dict[str, Any]:

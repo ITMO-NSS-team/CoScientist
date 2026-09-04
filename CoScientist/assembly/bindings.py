@@ -92,6 +92,11 @@ def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
 
+def _sleep_tool():
+    from google.adk.tools import FunctionTool
+    from CoScientist.tools.sleep_tool import sleep_tool
+    return [FunctionTool(sleep_tool)]
+
 def _web_flag(field: str) -> bool:
     """Read a per-tool switch off ``settings.web`` (set from the web UI)."""
     try:
@@ -416,6 +421,24 @@ REGISTRY.register_tool(ToolEntry(
                 "Replace all tasks with a new plan. Each task needs title, "
                 "description and assignee, plus `id` and `parent_id` to state "
                 "which task must run first. Tasks are stored in execution order."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="sleep",
+    factory=_sleep_tool,
+    docs=(
+        ToolDoc(
+            name="sleep_tool",
+            signature="sleep_tool(minutes)",
+            purpose=(
+                "Pause before your next tool call instead of checking again "
+                "immediately — use this to space out status/log checks on a "
+                "long-running job (e.g. one that takes hours) instead of "
+                "polling it every turn. Capped at 10 minutes per call; call it "
+                "again afterwards if you need to wait longer."
             ),
         ),
     ),

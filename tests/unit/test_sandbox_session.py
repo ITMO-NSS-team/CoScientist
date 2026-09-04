@@ -218,6 +218,64 @@ def test_a_failing_watcher_never_takes_the_run_down(monkeypatch):
     assert result["status"] == "cooldown"
 
 
+def test_a_second_concurrent_call_for_the_same_session_is_rejected_not_raced(monkeypatch):
+    """Regression: the coder agent firing the tool twice within seconds used to
+    race two calls onto the same (stale) binding, each provisioning its own
+    sandbox — the loser's write silently orphaned the winner's container. The
+    second call must now be turned away with status "busy" before it ever
+    reads the binding or hits the network, instead of racing the first.
+    """
+    order = []
+    release = asyncio.Event()
+
+    class _Accepted:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"task_id": "s1", "watch_url": "w", "vscode_url": "v"}
+
+    async def fake_post(self, url, json=None):
+        order.append("submit")
+        return _Accepted()
+
+    async def fake_wait(**kwargs):
+        order.append("wait-start")
+        await release.wait()
+        return {"status": "cooldown", "summary": "done"}
+
+    monkeypatch.setenv("SANDBOX_URL", "http://sandbox.test")
+    monkeypatch.setattr(client.httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(client, "_await_completion", fake_wait)
+
+    async def scenario():
+        first = asyncio.create_task(
+            client.arun_sandbox_task("train it", session_id="sess-concurrent")
+        )
+        while "wait-start" not in order:  # let the first call reach its inline wait
+            await asyncio.sleep(0)
+        second = await client.arun_sandbox_task("train it", session_id="sess-concurrent")
+        release.set()
+        return await first, second
+
+    first_result, second_result = asyncio.run(scenario())
+
+    assert order.count("submit") == 1  # the second call never reached the network
+    assert second_result["status"] == "busy"
+    assert first_result["status"] == "cooldown"
+
+    # The claim is released once the in-flight call returns, so a later call
+    # for the same session behaves normally again (not permanently locked out).
+    order.clear()
+    result = asyncio.run(client.arun_sandbox_task("again", session_id="sess-concurrent"))
+    assert order == ["submit", "wait-start"]
+    assert result["status"] == "cooldown"
+
+
 def test_links_reach_the_host_session_while_the_task_still_runs(monkeypatch):
     """The tool hands the URLs to the host (Web UI) mid-run, not on return."""
     delivered = []

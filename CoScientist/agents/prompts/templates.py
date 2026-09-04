@@ -739,6 +739,13 @@ improvise from unrelated tools. Respond with EXACTLY one line and nothing else:
    arguments or try a better-suited tool. Do not loop pointlessly.
 4. Return the final answer, INCLUDING the concrete results and any artifact URLs.
 
+### LONG-RUNNING JOBS (status/log checks)
+Some tasks run for hours. If a status/log/poll-check tool reports the job is
+still running, do NOT immediately re-check — call sleep_tool(minutes) first
+(up to 10 minutes per call) and only THEN
+check again. This costs you nothing while it runs. Never re-check in a tight
+loop without sleeping in between.
+
 ### TASK_MANAGEMENT
 Context of tasks:
 {active_tasks}
