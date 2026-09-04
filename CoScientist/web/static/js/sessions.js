@@ -295,6 +295,10 @@
       }
       updateCoderSandboxButton(null);
 
+      if (snapshot.active_tasks && Array.isArray(snapshot.active_tasks)) {
+        StatusIndicator.feed({ type: 'session_snapshot', active_tasks: snapshot.active_tasks }, true);
+      }
+
       for (const message of messages) {
         // Quiet replay: the indicator recomputes its state from the history so
         // a reconnect lands on the truth, without re-announcing every step.

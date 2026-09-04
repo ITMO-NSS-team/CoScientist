@@ -330,7 +330,39 @@ class SystemConfig(BaseModel):
         ]
 
     def parents_of(self, name: str) -> List[AgentConfig]:
-        return [a for a in self.agents.values() if name in a.subordinates]
+        return [
+            a for a in self.agents.values()
+            if name in a.subordinates or name in a.children
+        ]
+
+    def agent_hierarchy_map(self) -> Dict[str, Any]:
+        """Return the complete static agent hierarchy (child -> parent and parent -> children)."""
+        parents: Dict[str, str] = {}
+        children: Dict[str, List[str]] = {}
+
+        for a in self.agents.values():
+            direct_children = list(a.subordinates) + list(a.children)
+            if direct_children:
+                children[a.name] = direct_children
+            for child_name in direct_children:
+                parents[child_name] = a.name
+
+        # Pipeline pre/post stages belong to the main orchestration lifecycle
+        root_name = self.root.name if hasattr(self, "root") and self.root else "OrchestratorAgent"
+        for pre in self.pipeline.pre:
+            if pre not in parents:
+                parents[pre] = root_name
+        for post in self.pipeline.post:
+            if post not in parents:
+                parents[post] = root_name
+
+        return {
+            "parents": parents,
+            "children": children,
+            "root": root_name,
+            "pipeline_pre": list(self.pipeline.pre),
+            "pipeline_post": list(self.pipeline.post),
+        }
 
     def delegatable_names(self) -> set:
         """Names of every agent that some agent delegates to via AgentTool."""

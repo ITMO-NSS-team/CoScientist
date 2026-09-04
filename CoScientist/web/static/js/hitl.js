@@ -138,19 +138,26 @@
 
     let currentPlannerHitlRequest = null;
 
+    function sendHitlResponse(payload) {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify(payload));
+      }
+      if (window.StatusIndicator) {
+        StatusIndicator.feed({ type: 'hitl_response', request_id: payload.request_id });
+      }
+    }
+
     function respondHITLInput(requestId) {
       const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
       const feedback = feedbackEl ? feedbackEl.value.trim() : '';
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({
-          type: 'hitl_response',
-          request_id: requestId,
-          action: 'provide_input',
-          approved: true,
-          instructions: feedback,
-          free_input: feedback,
-        }));
-      }
+      sendHitlResponse({
+        type: 'hitl_response',
+        request_id: requestId,
+        action: 'provide_input',
+        approved: true,
+        instructions: feedback,
+        free_input: feedback,
+      });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       addSystemMsg('💬 HITL Input: ' + (feedback || '(empty)'));
@@ -164,16 +171,14 @@
     function respondHITL(requestId, approved) {
       const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
       const feedback = feedbackEl ? feedbackEl.value.trim() : '';
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({
-          type: 'hitl_response',
-          request_id: requestId,
-          action: approved ? 'approve' : 'reject',
-          approved: approved,
-          instructions: feedback || null,
-          free_input: feedback || null,
-        }));
-      }
+      sendHitlResponse({
+        type: 'hitl_response',
+        request_id: requestId,
+        action: approved ? 'approve' : 'reject',
+        approved: approved,
+        instructions: feedback || null,
+        free_input: feedback || null,
+      });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       addSystemMsg(approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
@@ -186,17 +191,15 @@
 
     function respondHITLOption(requestId, option) {
       // A question-window option button: a complete answer by itself.
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({
-          type: 'hitl_response',
-          request_id: requestId,
-          action: 'select',
-          approved: true,
-          selected_option: option,
-          instructions: option,
-          free_input: option,
-        }));
-      }
+      sendHitlResponse({
+        type: 'hitl_response',
+        request_id: requestId,
+        action: 'select',
+        approved: true,
+        selected_option: option,
+        instructions: option,
+        free_input: option,
+      });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       addSystemMsg('☑ ' + option);
@@ -211,16 +214,14 @@
         if (feedbackEl) feedbackEl.focus();
         return;
       }
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({
-          type: 'hitl_response',
-          request_id: requestId,
-          action: 'edit',
-          approved: false,
-          instructions: feedback,
-          free_input: feedback,
-        }));
-      }
+      sendHitlResponse({
+        type: 'hitl_response',
+        request_id: requestId,
+        action: 'edit',
+        approved: false,
+        instructions: feedback,
+        free_input: feedback,
+      });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       addSystemMsg('✎ HITL Revision requested: ' + feedback);
@@ -305,15 +306,13 @@
           (formValues[block] = formValues[block] || {})[field] = v;
         });
       }
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({
-          type: 'hitl_response',
-          request_id: requestId,
-          action: 'approve',
-          approved: true,
-          form_values: formValues,
-        }));
-      }
+      sendHitlResponse({
+        type: 'hitl_response',
+        request_id: requestId,
+        action: 'approve',
+        approved: true,
+        form_values: formValues,
+      });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       const n = formValues ? Object.values(formValues).reduce((s, o) => s + Object.keys(o).length, 0) : 0;

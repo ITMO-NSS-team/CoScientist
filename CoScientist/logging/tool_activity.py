@@ -128,6 +128,42 @@ def _call_id(tool_context: Any) -> Optional[str]:
     return str(call_id) if call_id else None
 
 
+def _delegation_target(tool: Any, tool_args: Any = None) -> Optional[str]:
+    """Detect if a tool is delegating to a sub-agent."""
+    agent_attr = getattr(tool, "agent", None)
+    if agent_attr is not None and getattr(agent_attr, "name", None):
+        return str(agent_attr.name)
+    tool_name = getattr(tool, "name", "")
+    if tool_name == "transfer_to_agent" and isinstance(tool_args, dict):
+        return tool_args.get("agent_name") or tool_args.get("agentName")
+    try:
+        from CoScientist.assembly.schema import get_config
+        config = get_config()
+        if tool_name in config.agents:
+            return tool_name
+    except Exception:
+        pass
+    return None
+
+
+def _parent_agent_name(tool_context: Any, author: str) -> Optional[str]:
+    """Resolve the parent agent in the execution hierarchy (runtime or static config)."""
+    node = getattr(tool_context, "_node", None)
+    if node is not None:
+        parent_agent = getattr(node, "parent_agent", None)
+        if parent_agent and getattr(parent_agent, "name", None):
+            return str(parent_agent.name)
+    parent_ctx = getattr(tool_context, "_parent_ctx", None)
+    if parent_ctx is not None and getattr(parent_ctx, "agent_name", None):
+        return str(parent_ctx.agent_name)
+    try:
+        from CoScientist.assembly.schema import get_config
+        h_map = get_config().agent_hierarchy_map()
+        return h_map.get("parents", {}).get(author)
+    except Exception:
+        return None
+
+
 class ToolActivityPlugin(BasePlugin):
     """Report every tool call, result, and error to the registered sink."""
 
@@ -148,16 +184,44 @@ class ToolActivityPlugin(BasePlugin):
         except Exception as exc:  # noqa: BLE001 - an observer must not fail a run
             logger.warning("Tool activity sink failed: %s", exc)
 
+    async def before_agent_callback(self, *, agent, callback_context) -> None:
+        author = getattr(agent, "name", "unknown")
+        parent = getattr(getattr(agent, "parent_agent", None), "name", None) or _parent_agent_name(callback_context, author)
+        payload = {
+            "phase": "agent_start",
+            "author": author,
+            "parent": parent,
+            "agent_class": getattr(getattr(agent, "__class__", None), "__name__", "Agent"),
+        }
+        await self._dispatch(callback_context, payload)
+        return None
+
+    async def after_agent_callback(self, *, agent, callback_context) -> None:
+        author = getattr(agent, "name", "unknown")
+        payload = {
+            "phase": "agent_end",
+            "author": author,
+        }
+        await self._dispatch(callback_context, payload)
+        return None
+
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> None:
         preview, full, truncated = _preview_and_full(tool_args)
+        author = _agent_name(tool_context)
+        target = _delegation_target(tool, tool_args)
+        parent = _parent_agent_name(tool_context, author)
         payload = {
             "phase": "call",
-            "author": _agent_name(tool_context),
+            "author": author,
             "tool": getattr(tool, "name", "?"),
             "call_id": _call_id(tool_context),
             "args": preview,
             "args_truncated": truncated,
+            "parent": parent,
         }
+        if target:
+            payload["is_delegation"] = True
+            payload["target_agent"] = target
         description = _short_description(tool)
         if description:
             payload["description"] = description

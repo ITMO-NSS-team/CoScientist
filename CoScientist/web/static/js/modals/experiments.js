@@ -47,6 +47,7 @@
     function openToolsViewer() {
       const modal = document.getElementById('experiment-modal');
       modal.classList.remove('hidden');
+      loadAgentHierarchy();
       renderExperimentFeed();
     }
 
@@ -57,6 +58,12 @@
     function clearExperimentViewer() {
       resetExperimentViewer();
       renderExperimentFeed();
+    }
+
+    function safeTimeStr(val) {
+      if (!val) return '';
+      const d = (val instanceof Date) ? val : new Date(val);
+      return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en-GB', { hour12: false });
     }
 
     // The branch a call belongs to — created on first use, kept for the rest
@@ -72,27 +79,107 @@
       return node;
     }
 
+    const KNOWN_AGENTS = new Set([
+      'OrchestratorAgent', 'PlannerAgent', 'PlanningPipelineAgent',
+      'HypothesesAgent', 'ResearchAgent', 'TaskExecutorAgent',
+      'ToolPipelineAgent', 'ToolPreparerAgent', 'ParallelToolSearcherAgent',
+      'LocalToolsExtractorAgent', 'ToolRetrieverAgent', 'ToolWebSearcherAgent',
+      'ToolReranker', 'FullSetToolReranker', 'WebToolsDeployerAgent',
+      'ExperimentAgent', 'CoderAgent', 'DatasetCollectorAgent',
+      'MedicalAgent', 'McpBuilderAgent', 'ContextInitAgent',
+      'ContextInitSessionAgent', 'ResultAggregatorAgent', 'FedotAgent'
+    ]);
+
+    const STATIC_PARENT_MAP = new Map([
+      ['PlannerAgent', 'OrchestratorAgent'],
+      ['HypothesesAgent', 'OrchestratorAgent'],
+      ['ResearchAgent', 'OrchestratorAgent'],
+      ['TaskExecutorAgent', 'OrchestratorAgent'],
+      ['MedicalAgent', 'OrchestratorAgent'],
+      ['McpBuilderAgent', 'OrchestratorAgent'],
+      ['ToolPipelineAgent', 'TaskExecutorAgent'],
+      ['CoderAgent', 'TaskExecutorAgent'],
+      ['DatasetCollectorAgent', 'CoderAgent'],
+      ['ToolPreparerAgent', 'ToolPipelineAgent'],
+      ['ExperimentAgent', 'ToolPipelineAgent'],
+      ['ParallelToolSearcherAgent', 'ToolPreparerAgent'],
+      ['FullSetToolReranker', 'ToolPreparerAgent'],
+      ['WebToolsDeployerAgent', 'ToolPreparerAgent'],
+      ['LocalToolsExtractorAgent', 'ParallelToolSearcherAgent'],
+      ['ToolWebSearcherAgent', 'ParallelToolSearcherAgent'],
+      ['ToolRetrieverAgent', 'LocalToolsExtractorAgent'],
+      ['ToolReranker', 'LocalToolsExtractorAgent'],
+      ['ContextInitAgent', 'OrchestratorAgent'],
+      ['ContextInitSessionAgent', 'OrchestratorAgent'],
+      ['ResultAggregatorAgent', 'OrchestratorAgent'],
+    ]);
+
+    async function loadAgentHierarchy() {
+      try {
+        const resp = await fetch('/api/agents');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data && data.hierarchy && data.hierarchy.parents) {
+          for (const [child, parent] of Object.entries(data.hierarchy.parents)) {
+            STATIC_PARENT_MAP.set(child, parent);
+          }
+        }
+        if (data && Array.isArray(data.agents)) {
+          data.agents.forEach(a => KNOWN_AGENTS.add(a.name));
+        }
+      } catch {
+        // retain static defaults
+      }
+    }
+    loadAgentHierarchy();
+
+    function resolveAndLinkParent(child, parentHint = null, spawnUid = null) {
+      if (!child) return;
+      agentNode(child);
+      if (spawnUid && !agentSpawnCall.has(child)) {
+        agentSpawnCall.set(child, spawnUid);
+      }
+      if (agentParent.has(child)) return;
+
+      const parent = parentHint || STATIC_PARENT_MAP.get(child);
+      if (parent && parent !== child) {
+        agentParent.set(child, parent);
+        agentNode(parent);
+        resolveAndLinkParent(parent);
+      }
+    }
+
     // Mirrors the detection in `activityRecordCall` above: `transfer_to_agent`
     // (built-in routing) and an AgentTool call, whose tool name IS the
     // subordinate's agent name, are both a hand-off — the edge between two
     // branches of the tree, not a leaf tool call.
     function delegationTarget(tc) {
+      if (tc.target_agent) return tc.target_agent;
+      if (tc.is_delegation && tc.name) return tc.name;
       if (tc.name === 'transfer_to_agent') {
         return (tc.args && (tc.args.agent_name || tc.args.agentName)) || null;
       }
+      if (KNOWN_AGENTS.has(tc.name)) return tc.name;
       return /Agent$/.test(tc.name) ? tc.name : null;
+    }
+
+    function addExperimentAgentEvent(author, data) {
+      const node = agentNode(author);
+      if (data.agent_class) node.agentClass = data.agent_class;
+      resolveAndLinkParent(author, data.parent);
+      node.status = (data.phase === 'agent_start') ? 'running' : 'idle';
+      if (data.timestamp) {
+        node.lastActive = new Date(data.timestamp);
+      }
+      renderExperimentFeed();
     }
 
     function addExperimentToolCall(author, tc) {
       const at = tc.timestamp ? new Date(tc.timestamp) : new Date();
       const target = delegationTarget(tc);
-      // First delegator wins — if the same agent gets invoked again later
-      // (by the same or another caller) it stays put in the tree rather than
-      // jumping to a new parent.
-      const spawnsChild = !!target && !agentParent.has(target);
-      if (spawnsChild) {
-        agentParent.set(target, author);
-      }
+
+      resolveAndLinkParent(author, tc.parent);
+
       const rec = {
         uid: 'call-' + (++toolSeq),
         callId: tc.callId || null,
@@ -102,15 +189,18 @@
         argsTruncated: !!tc.truncated,
         argsUnknown: false,
         isDelegation: !!target,
+        targetAgent: target,
         result: null,
         resultTruncated: false,
         status: 'running',
         startedAt: at,
         endedAt: null,
       };
-      // Remember which card opened the branch, so the subordinate's own
-      // calls render directly beneath that `delegates` row.
-      if (spawnsChild) agentSpawnCall.set(target, rec.uid);
+
+      if (target) {
+        resolveAndLinkParent(target, author, rec.uid);
+      }
+
       agentNode(author).calls.push(rec);
       toolCallRecords.push(rec);
       toolCallsById.set(rec.uid, rec);
@@ -485,7 +575,7 @@
       const running = rec.status === 'running';
       const summary = tvArgsSummary(rec.args);
       const icon = rec.isDelegation ? 'alt_route' : st.icon;
-      const meta = rec.startedAt.toLocaleTimeString('en-GB', { hour12: false });
+      const meta = safeTimeStr(rec.startedAt);
       return `
         <div class="rounded-md border ${st.border} ${st.bg} overflow-hidden">
           <button type="button" onclick="toggleToolCard('${rec.uid}')"
@@ -507,11 +597,14 @@
     // spawned it. Two agents delegated to in parallel therefore stay next to
     // their own hand-off rows instead of both piling up after the parent's
     // last call, where neither could be told apart.
-    function renderAgentNode(name) {
+    function renderAgentNode(name, visited = new Set()) {
+      if (!name || visited.has(name)) return '';
+      visited.add(name);
+
       const node = agentNodes.get(name);
       if (!node) return '';
       const calls = node.calls;
-      const children = agentOrder.filter(n => agentParent.get(n) === name);
+      const children = agentOrder.filter(n => agentParent.get(n) === name && !visited.has(n));
       // A child whose delegation card is gone — trimmed out of the log, or
       // never seen because the feed joined the run late — still belongs to
       // this branch: it goes at the tail rather than disappearing.
@@ -530,19 +623,21 @@
       const running = calls.filter(rec => rec.status === 'running').length;
       const failed = calls.filter(rec => rec.status === 'error').length;
       const done = calls.length - running;
+      const isAgentRunning = node.status === 'running' || running > 0;
       const pills = [
-        running ? `<span class="text-tertiary">${running} running</span>` : '',
+        running ? `<span class="text-tertiary">${running} running</span>` : (node.status === 'running' ? `<span class="text-tertiary">running</span>` : ''),
         failed ? `<span class="text-error">${failed} failed</span>` : '',
         (!running && calls.length) ? `<span class="text-secondary">${done - failed}/${calls.length} ok</span>` : '',
+        (!calls.length && node.agentClass) ? `<span class="text-outline-variant/60 lowercase">${escHtml(node.agentClass)}</span>` : '',
       ].filter(Boolean).join('<span class="text-outline-variant/30">·</span>');
       const collapsed = collapsedAgents.has(name);
       const lastActive = calls.length
         ? (calls[calls.length - 1].endedAt || calls[calls.length - 1].startedAt)
-        : node.firstSeenAt;
+        : (node.lastActive || node.firstSeenAt);
 
       const nestBranches = names => names.length ? `
             <div class="ml-3 pl-3 border-l-2 border-outline-variant/15 space-y-1.5">
-              ${names.map(renderAgentNode).join('')}
+              ${names.map(childName => renderAgentNode(childName, new Set(visited))).join('')}
             </div>` : '';
 
       const body = collapsed ? '' : `
@@ -558,10 +653,10 @@
             <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${collapsed ? 'chevron_right' : 'expand_more'}</span>
             <span class="material-symbols-outlined text-[14px] text-primary shrink-0">${agentIcon(name)}</span>
             <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0">${escHtml(name)}</span>
-            ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : ''}
+            ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : (node.agentClass ? `<span class="text-[8px] font-mono uppercase px-1.5 py-0.5 rounded bg-outline-variant/10 text-outline-variant shrink-0">${escHtml(node.agentClass.replace('Agent', ''))}</span>` : '')}
             <span class="flex-1"></span>
             <span class="flex items-center gap-1.5 text-[9px] font-mono shrink-0">${pills}</span>
-            <span class="shrink-0 text-[9px] font-mono text-outline-variant/60">${lastActive.toLocaleTimeString('en-GB', { hour12: false })}</span>
+            <span class="shrink-0 text-[9px] font-mono text-outline-variant/60">${safeTimeStr(lastActive)}</span>
           </button>
           ${body}
         </div>`;
@@ -584,7 +679,7 @@
       const expandBtn = document.getElementById('experiment-expand-all');
       if (expandBtn) expandBtn.textContent = tvExpandAll ? 'Collapse all' : 'Expand all';
 
-      if (toolCallRecords.length === 0) {
+      if (toolCallRecords.length === 0 && agentNodes.size === 0) {
         feed.innerHTML = `
           <div class="flex flex-col items-center justify-center h-full opacity-40 py-16">
             <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">science</span>
@@ -603,3 +698,15 @@
       initTvToggles(feed);
       feed.scrollTop = atBottom ? feed.scrollHeight : keepTop;
     }
+
+    // Explicitly bind to window for global access across templates and scripts
+    window.openToolsViewer = openToolsViewer;
+    window.closeExperimentViewer = closeExperimentViewer;
+    window.clearExperimentViewer = clearExperimentViewer;
+    window.toggleToolCard = toggleToolCard;
+    window.toggleAgentNode = toggleAgentNode;
+    window.toggleExperimentExpandAll = toggleExperimentExpandAll;
+    window.toggleTvBlock = toggleTvBlock;
+    window.addExperimentAgentEvent = addExperimentAgentEvent;
+    window.addExperimentToolCall = addExperimentToolCall;
+    window.addExperimentToolResponse = addExperimentToolResponse;

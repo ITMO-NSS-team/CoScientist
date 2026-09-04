@@ -31,6 +31,7 @@ from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
 from CoScientist.agents.common import sync_proxy_session
+from CoScientist.utils.text import strip_thinking
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -829,6 +830,10 @@ def _wire_agent_output(runtime: WebRuntime) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
+        if "content" in payload and isinstance(payload["content"], str):
+            payload["content"] = strip_thinking(payload["content"])
+            if not payload["content"].strip():
+                return
         event = {"type": "agent_output", **_json_safe(payload)}
         runtime.agent_events[key].append(event)
         await runtime.send(key, event)
@@ -1600,20 +1605,28 @@ def create_app() -> FastAPI:
     # --- Agent info ---
     @app.get("/api/agents")
     async def get_agents():
-        """Return list of registered agents."""
+        """Return list of registered agents and system hierarchy."""
+        from CoScientist.assembly.schema import get_config
+        cfg = get_config()
+        hierarchy = cfg.agent_hierarchy_map()
+        agents_list = []
+        for name in cfg.build_order():
+            ac = cfg.agent(name)
+            agents_list.append({
+                "name": ac.name,
+                "class": ac.cls,
+                "role": ac.cls,
+                "description": ac.description,
+                "enabled": ac.is_enabled(),
+                "tools": list(ac.tools),
+                "subordinates": list(ac.subordinates),
+                "children": list(ac.children),
+                "is_root": bool(ac.root),
+            })
         return JSONResponse({
-            "agents": [
-                {"name": "OrchestratorAgent", "role": "orchestrator", "status": "idle"},
-                {"name": "PlannerAgent", "role": "planner", "status": "idle"},
-                {"name": "CoderAgent", "role": "coder", "status": "idle"},
-                {"name": "HypothesesAgent", "role": "hypothesis", "status": "idle"},
-                {"name": "ResearchAgent", "role": "research", "status": "idle"},
-                {"name": "ToolRetrieverAgent", "role": "tool_retriever", "status": "idle"},
-                {"name": "ToolRerankerAgent", "role": "tool_reranker", "status": "idle"},
-                {"name": "ToolWebSearcherAgent", "role": "tool_websearcher", "status": "idle"},
-                {"name": "ToolSearcherAgent", "role": "tool_searcher", "status": "idle"},
-                {"name": "ExperimentAgent", "role": "experiment", "status": "idle"},
-            ]
+            "agents": agents_list,
+            "hierarchy": hierarchy,
+            "delegatable_names": list(cfg.delegatable_names()),
         })
 
     # --- Events log ---
@@ -1950,10 +1963,17 @@ async def _run_chat_invocation(
                     # A model turn that only carries a function call often still
                     # ships a blank text part. Requiring real characters keeps
                     # it from surfacing as an empty message bubble.
-                    text_parts = [
-                        p.text for p in event.content.parts
-                        if p.text and p.text.strip()
-                    ]
+                    # Skip thinking/reasoning parts and strip inline thinking tags.
+                    text_parts = []
+                    for p in event.content.parts:
+                        if getattr(p, "thought", False):
+                            continue
+                        t = getattr(p, "text", None)
+                        if not t or not t.strip():
+                            continue
+                        cleaned = strip_thinking(t)
+                        if cleaned:
+                            text_parts.append(cleaned)
                     if text_parts:
                         event_data["content"] = "\n".join(text_parts)
 

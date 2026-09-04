@@ -33,10 +33,15 @@
 
     marked.setOptions({ breaks: true, gfm: true });
 
+    function stripThinking(text) {
+      if (!text || typeof text !== 'string') return '';
+      return text.replace(/<(think|thought)>[\s\S]*?(?:<\/\1>|$)/gi, '').trim();
+    }
+
     function renderMarkdown(text) {
       // Agents write their messages in markdown; render it to sanitized HTML
       // instead of showing the raw '**'/'`'/'#' syntax as plain text.
-      const raw = typeof text === 'string' ? text : String(text == null ? '' : text);
+      const raw = typeof text === 'string' ? stripThinking(text) : String(text == null ? '' : text);
       const withLocalLinks = raw
         .replace(/(^|\s)(\/api\/tz-document[^\s)]*)/g, '$1[$2]($2)')
         // Live MCP build page: /builds/<job_id> (agent surfaces it as progress_page).
@@ -113,14 +118,15 @@
     }
 
     function hasText(value) {
-      return typeof value === 'string' && value.trim().length > 0;
+      return typeof value === 'string' && stripThinking(value).length > 0;
     }
 
     function addAgentMsg(author, text, timestamp = null) {
       // Blank-but-present text produces an empty bubble; such events carry a
       // function call, not an utterance. (Also guards history recorded before
       // the backend started filtering them.)
-      if (!hasText(text)) return;
+      const cleanText = stripThinking(text);
+      if (!hasText(cleanText)) return;
       appendMsgToFeed(`
     <div class="flex items-start gap-4 max-w-3xl msg-enter">
       <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
@@ -132,7 +138,7 @@
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
-          <div class="text-sm text-on-surface leading-relaxed md-body">${renderMarkdown(text)}</div>
+          <div class="text-sm text-on-surface leading-relaxed md-body">${renderMarkdown(cleanText)}</div>
         </div>
       </div>
     </div>`);
@@ -147,8 +153,9 @@
     // its caller as an AgentTool result and is never spoken in the top-level
     // stream, so it is rendered here as that agent's own, distinct message.
     function addAgentOutputMsg(agent, text, timestamp = null, caller = null) {
-      if (!hasText(text)) return;
-      const body = text.trim();
+      const cleanText = stripThinking(text);
+      if (!hasText(cleanText)) return;
+      const body = cleanText;
       const folded = body.length > AGENT_OUTPUT_FOLD;
       const toggle = folded
         ? `<button onclick="toggleAgentOutput(this)"

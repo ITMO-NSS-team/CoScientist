@@ -139,12 +139,26 @@
       ResearchAgent: 'travel_explore',
       TaskExecutorAgent: 'alt_route',
       ToolPipelineAgent: 'checklist',
+      ToolPreparerAgent: 'precision_manufacturing',
+      ParallelToolSearcherAgent: 'manage_search',
+      LocalToolsExtractorAgent: 'inventory_2',
+      ToolRetrieverAgent: 'search',
+      ToolWebSearcherAgent: 'public',
+      ToolReranker: 'swap_vert',
+      FullSetToolReranker: 'sort',
+      WebToolsDeployerAgent: 'cloud_upload',
+      McpBuilderAgent: 'construction',
       CoderAgent: 'terminal',
       DatasetCollectorAgent: 'dataset',
       MedicalAgent: 'ecg_heart',
       ExperimentAgent: 'science',
       FedotAgent: 'network_intelligence',
+      ContextInitAgent: 'assignment',
+      ContextInitSessionAgent: 'assignment',
+      ResultAggregatorAgent: 'summarize',
     };
+
+    const KNOWN_AGENTS = new Set(Object.keys(AGENT_ICONS));
 
     function agentIcon(name) {
       if (AGENT_ICONS[name]) return AGENT_ICONS[name];
@@ -179,16 +193,13 @@
     }
 
     function activityAgent(name) {
-      const key = name || 'system';
-      let entry = activityAgents.get(key);
+      let entry = activityAgents.get(name);
       if (!entry) {
         entry = {
-          name: key, icon: agentIcon(key), tools: new Map(), calls: 0, lastSeen: 0,
-          // Outstanding calls: by ADK call id when available, plus a counter
-          // for any record that arrives without one.
-          pending: new Set(), running: 0,
+          name: name, icon: agentIcon(name), tools: new Map(), calls: 0, lastSeen: 0,
+          running: 0, transferred: false, pending: new Set(),
         };
-        activityAgents.set(key, entry);
+        activityAgents.set(name, entry);
       }
       return entry;
     }
@@ -197,30 +208,27 @@
       return entry.pending.size + entry.running;
     }
 
-    // A delegation that returned proves its agent is done, whatever became of
-    // the individual tool records inside it (a call whose result never
-    // surfaced would otherwise keep the chip pulsing for the whole session).
     function activityCloseAgent(name) {
       const entry = activityAgents.get(name);
       if (!entry) return;
-      entry.pending.clear();
       entry.running = 0;
-      // Its calls did finish — we just never saw the closing record for some.
-      entry.tools.forEach(tool => { tool.done = tool.calls; });
+      entry.pending.clear();
+      entry.transferred = false;
     }
 
     function activityTouchAgent(name, timestamp = null) {
+      if (!name) return;
       const entry = activityAgent(name);
       entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
-      if (!activityPinned) activitySelected = entry.name;
+      if (!activityPinned) activitySelected = name;
       renderActivityRail();
     }
 
-    function activityTool(entry, toolName) {
-      let tool = entry.tools.get(toolName);
+    function activityTool(entry, name) {
+      let tool = entry.tools.get(name);
       if (!tool) {
-        tool = { name: toolName, icon: toolIcon(toolName), calls: 0, done: 0, errors: 0, lastArgs: null };
-        entry.tools.set(toolName, tool);
+        tool = { name: name, icon: toolIcon(name), calls: 0, done: 0, errors: 0, lastArgs: null };
+        entry.tools.set(name, tool);
       }
       return tool;
     }
@@ -232,12 +240,10 @@
       entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
 
       // Delegation, not tool use — show the target agent as soon as it is
-      // picked, before it emits anything of its own. Two shapes reach us:
-      // ``transfer_to_agent`` (built-in routing) and an AgentTool call, whose
-      // tool name IS the subordinate's agent name.
-      const transferred = name === 'transfer_to_agent'
+      // picked, before it emits anything of its own.
+      const transferred = tc.target_agent || (tc.is_delegation ? tc.name : null) || (name === 'transfer_to_agent'
         ? (tc.args && (tc.args.agent_name || tc.args.agentName))
-        : (/Agent$/.test(name) ? name : null);
+        : (KNOWN_AGENTS.has(name) || /Agent$/.test(name) ? name : null));
       if (transferred) {
         const next = activityAgent(String(transferred));
         next.transferred = true;
@@ -263,9 +269,8 @@
     function activityRecordResponse(author, tr, timestamp = null) {
       const name = tr && tr.name;
       if (!name || name === 'transfer_to_agent') return;
-      // Mirror activityRecordCall: a hand-off was never counted as a tool call
-      // of the caller. Its return instead closes out the agent it delegated to.
-      if (/Agent$/.test(name)) {
+      const isDelegation = tr.is_delegation || KNOWN_AGENTS.has(name) || /Agent$/.test(name);
+      if (isDelegation) {
         activityCloseAgent(name);
         renderActivityRail();
         return;
@@ -287,14 +292,32 @@
     // at every nesting level (top-level agents and AgentTool sub-agents alike).
     function applyToolActivity(data, quiet = false) {
       const author = data.author || 'system';
+
+      if (data.phase === 'agent_start' || data.phase === 'agent_end') {
+        activityTouchAgent(author, data.timestamp);
+        if (data.phase === 'agent_end') {
+          activityCloseAgent(author);
+        }
+        if (typeof addExperimentAgentEvent === 'function') {
+          addExperimentAgentEvent(author, data);
+        }
+        renderActivityRail();
+        return;
+      }
+
       const tool = data.tool;
       if (!tool) return;
 
       if (data.phase === 'call') {
-        activityRecordCall(author, { name: tool, args: data.args, callId: data.call_id }, data.timestamp);
+        activityRecordCall(author, {
+          name: tool, args: data.args, callId: data.call_id,
+          is_delegation: data.is_delegation, target_agent: data.target_agent,
+        }, data.timestamp);
         addExperimentToolCall(author, {
           name: tool, args: data.args, callId: data.call_id,
           truncated: !!data.args_truncated, timestamp: data.timestamp,
+          parent: data.parent, is_delegation: data.is_delegation,
+          target_agent: data.target_agent,
         });
         if (!quiet) addTelemetry('TOOL_CALL :: ' + author + ' → ' + tool);
         return;
@@ -303,7 +326,10 @@
       const failed = data.phase === 'error';
       const response = failed ? { error: data.error } : data.result;
       const truncated = failed ? !!data.error_truncated : !!data.result_truncated;
-      activityRecordResponse(author, { name: tool, response: response, callId: data.call_id }, data.timestamp);
+      activityRecordResponse(author, {
+        name: tool, response: response, callId: data.call_id,
+        is_delegation: data.is_delegation, target_agent: data.target_agent,
+      }, data.timestamp);
       addExperimentToolResponse(author, {
         name: tool, response: response, callId: data.call_id,
         truncated: truncated, failed: failed, timestamp: data.timestamp,

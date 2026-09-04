@@ -13,6 +13,7 @@
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
   <!-- Live status indicator: the reducer that turns the raw event stream
        into one human sentence. Vendored locally, no CDN. -->
   <script src="/static/status_indicator.js"></script>
@@ -407,66 +408,184 @@
     </div>
   </div>
 
-  <!-- Roadmap Editor Modal -->
+  <!-- Roadmap & Execution Plan Modal -->
   <div id="roadmap-modal"
     class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
     <div
-      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] mx-4">
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] mx-4 transition-all">
       <!-- Modal Header -->
       <div
-        class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
-        <div class="flex items-center gap-3">
-          <span class="material-symbols-outlined text-primary">map</span>
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Roadmap Editor</h3>
+        class="px-6 py-4 border-b border-outline-variant/10 flex flex-col gap-3 bg-surface-container-low/60">
+        <div class="flex justify-between items-center">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+              <span class="material-symbols-outlined text-primary text-sm">account_tree</span>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider" id="roadmap-modal-title">Roadmap & Execution Plan</h3>
+                <span id="roadmap-counter-badge" class="text-[9px] font-mono font-semibold px-2 py-0.5 rounded-full bg-surface-container-highest text-primary border border-primary/20">0 tasks</span>
+              </div>
+              <p class="text-[9px] text-outline-variant/70 font-mono tracking-wide" id="roadmap-modal-subtitle">Execution steps for the current session</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <!-- View Mode Switcher -->
+            <div class="flex items-center bg-surface-container-highest/80 rounded-lg p-0.5 border border-outline-variant/15 text-[10px] font-semibold">
+              <button type="button" id="roadmap-view-visual-btn" onclick="switchRoadmapView('visual')"
+                class="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-on-primary shadow transition-all">
+                <span class="material-symbols-outlined text-xs">format_list_bulleted</span>
+                <span>Visual Plan</span>
+              </button>
+              <button type="button" id="roadmap-view-yaml-btn" onclick="switchRoadmapView('yaml')"
+                class="flex items-center gap-1 px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+                <span class="material-symbols-outlined text-xs">code</span>
+                <span>YAML</span>
+              </button>
+            </div>
+
+            <!-- Close Modal -->
+            <button onclick="closeRoadmapEditor()"
+              class="text-outline-variant hover:text-on-surface p-1 rounded-md hover:bg-surface-container-high transition-colors flex items-center">
+              <span class="material-symbols-outlined text-lg">close</span>
+            </button>
+          </div>
         </div>
-        <button onclick="closeRoadmapEditor()"
-          class="text-outline-variant hover:text-on-surface transition-colors flex items-center">
-          <span class="material-symbols-outlined text-lg">close</span>
-        </button>
+
+        <!-- Filter & Search Toolbar (shown in Visual mode) -->
+        <div id="roadmap-visual-toolbar" class="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-outline-variant/10">
+          <!-- Status Filter Tabs -->
+          <div class="flex items-center gap-1 text-[10px] font-medium" id="roadmap-filter-tabs">
+            <button onclick="filterRoadmapTasks('all')" data-filter="all"
+              class="roadmap-tab-btn active px-2.5 py-1 rounded-md bg-surface-container-highest text-primary font-semibold border border-primary/20 transition-all">
+              All (<span id="rf-all-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('active')" data-filter="active"
+              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              In Progress (<span id="rf-active-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('done')" data-filter="done"
+              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              Completed (<span id="rf-done-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('todo')" data-filter="todo"
+              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              Pending (<span id="rf-todo-count">0</span>)
+            </button>
+          </div>
+
+          <!-- Search Input -->
+          <div class="relative min-w-[200px] flex-1 max-w-xs">
+            <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline-variant/60 text-xs">search</span>
+            <input type="text" id="roadmap-search-input" oninput="searchRoadmapTasks(this.value)"
+              placeholder="Search tasks…"
+              class="w-full pl-7 pr-3 py-1 text-[11px] bg-surface-container-lowest/80 border border-outline-variant/15 rounded-md text-on-surface placeholder:text-outline-variant/40 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+          </div>
+        </div>
+
+        <!-- Progress Track -->
+        <div class="flex items-center gap-3 pt-1">
+          <div class="flex-1 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+            <div id="roadmap-progress-bar"
+              class="h-full bg-gradient-to-r from-primary via-primary to-secondary transition-all duration-500 rounded-full"
+              style="width: 0%;"></div>
+          </div>
+          <span id="roadmap-progress-text" class="text-[10px] font-mono text-outline-variant shrink-0 tabular-nums">0% completed</span>
+        </div>
       </div>
 
       <!-- Modal Body -->
-      <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4">
-        <p class="text-xs text-on-surface-variant leading-relaxed">
-          Edit the execution plan stored in the current user's active session.
-          This plan guides agent execution and is isolated from other sessions.
-        </p>
+      <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4 bg-gradient-to-b from-transparent to-surface-container-lowest/20">
 
-        <div class="relative flex-1 flex flex-col min-h-[300px]">
-          <textarea id="roadmap-textarea"
-            class="w-full flex-1 min-h-[300px] bg-surface-container-lowest border border-outline-variant/10 rounded-lg p-4 font-mono text-xs text-on-surface placeholder:text-outline-variant/30 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none leading-relaxed"
-            placeholder="1. Action...&#10;2. Action..."></textarea>
+        <!-- 1. Visual Cards View -->
+        <div id="roadmap-visual-view" class="flex flex-col gap-3">
+          <!-- Empty State -->
+          <div id="roadmap-empty-state" class="hidden flex flex-col items-center justify-center py-16 opacity-50">
+            <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">account_tree</span>
+            <p class="text-sm font-medium text-on-surface">No tasks found in roadmap</p>
+            <p class="text-xs text-outline-variant mt-1">PlannerAgent generates the plan, or switch to YAML view to create tasks manually.</p>
+          </div>
+
+          <!-- Cards Timeline List -->
+          <div id="roadmap-tasks-list" class="space-y-3 relative"></div>
         </div>
 
-        <div id="roadmap-feedback-container" class="hidden mt-2 flex flex-col gap-2">
-          <label class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Feedback / Revision
-            Instructions</label>
-          <input id="roadmap-feedback-input"
-            class="bg-surface-container-highest border border-outline-variant/10 rounded-md px-3 py-2 text-xs text-on-surface placeholder:text-outline-variant/50 focus:ring-1 focus:ring-primary/40 focus:border-primary/40"
-            placeholder="E.g. Add an extra step for data validation..." />
+        <!-- 2. YAML Code Editor View -->
+        <div id="roadmap-yaml-view" class="hidden flex-1 flex flex-col gap-2 min-h-[360px]">
+          <div class="flex items-center justify-between text-[10px] text-outline-variant bg-surface-container-lowest/70 px-3 py-1.5 rounded-t-lg border border-b-0 border-outline-variant/15 font-mono">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-xs text-primary">data_object</span>
+              <span>YAML Plan Representation (Auto-synced)</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button type="button" onclick="formatRoadmapYaml()"
+                class="hover:text-primary px-2 py-0.5 rounded hover:bg-surface-container-high transition-colors flex items-center gap-1">
+                <span class="material-symbols-outlined text-xs">reorder</span> Format YAML
+              </button>
+              <button type="button" onclick="copyRoadmapYaml()"
+                class="hover:text-primary px-2 py-0.5 rounded hover:bg-surface-container-high transition-colors flex items-center gap-1">
+                <span class="material-symbols-outlined text-xs">content_copy</span> Copy
+              </button>
+            </div>
+          </div>
+
+          <div class="relative flex-1 flex flex-col min-h-[320px]">
+            <textarea id="roadmap-textarea"
+              oninput="handleRoadmapYamlInput(this.value)"
+              class="w-full flex-1 min-h-[320px] bg-surface-container-lowest border border-outline-variant/15 rounded-b-lg p-4 font-mono text-xs text-on-surface placeholder:text-outline-variant/30 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none leading-relaxed"
+              placeholder="- id: TASK-1&#10;  title: Step title&#10;  assignee: ResearchAgent&#10;  status: TODO&#10;  description: Step details..."></textarea>
+          </div>
+
+          <div id="roadmap-yaml-status" class="text-[10px] font-mono text-outline-variant flex items-center gap-1.5 px-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+            <span>YAML valid</span>
+          </div>
         </div>
 
+        <!-- HITL Feedback Container -->
+        <div id="roadmap-feedback-container" class="hidden mt-2 p-4 rounded-xl border border-primary/25 bg-primary/5 flex flex-col gap-2.5">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary text-sm">edit_note</span>
+            <label class="text-[10px] font-bold text-primary uppercase tracking-widest">Feedback / Revision Instructions for Planner</label>
+          </div>
+          <textarea id="roadmap-feedback-input" rows="2"
+            class="w-full bg-surface-container-highest border border-outline-variant/15 rounded-md px-3 py-2 text-xs text-on-surface placeholder:text-outline-variant/50 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none"
+            placeholder="Specify what should be changed or added (e.g. Add validation against off-targets, split task 2)..."></textarea>
+        </div>
+
+        <!-- Operation Status Alert -->
         <div id="roadmap-status" class="text-[10px] font-mono text-outline-variant hidden"></div>
       </div>
 
       <!-- Modal Footer -->
-      <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 bg-surface-container-low/50">
-        <button onclick="closeRoadmapEditor()"
-          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
-          Cancel
-        </button>
-        <button id="save-roadmap-btn" onclick="saveRoadmap()"
-          class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">save</span> Save Changes
-        </button>
-        <button id="revise-roadmap-btn" onclick="reviseRoadmap()"
-          class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">edit</span> Revise Plan
-        </button>
-        <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
-          class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
-        </button>
+      <div class="px-6 py-3.5 border-t border-outline-variant/10 flex justify-between items-center bg-surface-container-low/60">
+        <div class="flex items-center gap-3 text-[10px] font-mono text-outline-variant/70">
+          <span id="roadmap-stat-total">Total: 0</span>
+          <span>·</span>
+          <span id="roadmap-stat-active" class="text-primary">In progress: 0</span>
+          <span>·</span>
+          <span id="roadmap-stat-done" class="text-secondary">Done: 0</span>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button onclick="closeRoadmapEditor()"
+            class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+            Cancel
+          </button>
+          <button id="save-roadmap-btn" onclick="saveRoadmap()"
+            class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">save</span> Save Changes
+          </button>
+          <button id="revise-roadmap-btn" onclick="reviseRoadmap()"
+            class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">edit</span> Revise Plan
+          </button>
+          <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
+            class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
+          </button>
+        </div>
       </div>
     </div>
   </div>

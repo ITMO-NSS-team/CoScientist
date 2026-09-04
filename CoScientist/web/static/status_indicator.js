@@ -33,9 +33,18 @@
   const RENDER_THROTTLE_MS = 350;
   // How long silence must last before "working" decays into "thinking".
   const SETTLE_GRACE_MS = 900;
-  // No event at all for this long: stop claiming a specific action.
-  const SILENCE_MS = 20000;
-  const LONG_RUN_MS = 60000;   // add the "this may take a few minutes" note
+  // No event at all for this long *and nothing open*: stop claiming an action.
+  // While a call is open, silence is not news — a sandbox task runs for forty
+  // minutes without emitting anything, and that IS the state to report.
+  //
+  // Measured against a recorded run, the gap between a tool result and the
+  // next call is 14 s at the median and 56 s at p90 — all of it the model
+  // reading what came back. A 20-second threshold turned most of those gaps
+  // into "Думаю над задачей"; past a minute and a half, that really is all
+  // there is to say.
+  const SILENCE_MS = 90000;
+  // How long a step must run before the wait is worth apologising for.
+  const LONG_STEP_MS = 90000;
   const DONE_LINGER_MS = 2600; // green check, then hide
   const ERROR_LINGER_MS = 8000;
   const STOPPED_LINGER_MS = 3000;
@@ -48,12 +57,12 @@
   const CATEGORIES = {
     web_search: { icon: 'travel_explore', ru: 'Ищу информацию в интернете', en: 'Searching the web' },
     papers: { icon: 'menu_book', ru: 'Читаю научные статьи', en: 'Reading scientific papers' },
-    rag: { icon: 'database', ru: 'Ищу в базе знаний', en: 'Searching the knowledge base' },
+    rag: { icon: 'database', ru: 'Проверяю архивы', en: 'Searching the knowledge base' },
     code: { icon: 'terminal', ru: 'Пишу и запускаю код', en: 'Writing and running code' },
-    data: { icon: 'dataset', ru: 'Готовлю данные', en: 'Preparing the data' },
+    data: { icon: 'dataset', ru: 'Обрабатываю данные', en: 'Preparing the data' },
     chem: { icon: 'science', ru: 'Считаю свойства молекул', en: 'Computing molecular properties' },
     plot: { icon: 'insert_chart', ru: 'Строю графики', en: 'Building charts' },
-    graph_write: { icon: 'hub', ru: 'Записываю найденное в граф знаний', en: 'Recording findings in the knowledge graph' },
+    graph_write: { icon: 'hub', ru: 'Дополняю граф знаний', en: 'Recording findings in the knowledge graph' },
     graph_read: { icon: 'account_tree', ru: 'Сверяюсь с картой исследования', en: 'Checking the research map' },
     mcp_build: { icon: 'construction', ru: 'Собираю новый инструмент', en: 'Building a new tool' },
     mcp_find: { icon: 'extension', ru: 'Подбираю инструменты для задачи', en: 'Picking tools for the task' },
@@ -88,43 +97,74 @@
   const GENERIC_RULE = [/search|query|lookup|find|browse/, 'web_search'];
 
   // Agent roles, as a user would name them. Anything missing falls back to the
+  // Agent roles, as a user would name them. Anything missing falls back to the
   // bare class name with the "Agent" suffix stripped.
   const AGENTS = {
-    OrchestratorAgent: { ru: 'Координатор', en: 'Orchestrator' },
-    PlannerAgent: { ru: 'Планировщик', en: 'Planner' },
-    ContextInitAgent: { ru: 'Уточнение задачи', en: 'Task intake' },
-    HypothesesAgent: { ru: 'Генератор гипотез', en: 'Hypotheses' },
-    ResearchAgent: { ru: 'Исследователь', en: 'Researcher' },
-    TaskExecutorAgent: { ru: 'Исполнитель', en: 'Executor' },
-    ToolPipelineAgent: { ru: 'Подбор инструментов', en: 'Tool pipeline' },
-    CoderAgent: { ru: 'Инженер', en: 'Engineer' },
-    DatasetCollectorAgent: { ru: 'Сбор данных', en: 'Data collector' },
-    MedicalAgent: { ru: 'Медицинский аналитик', en: 'Medical analyst' },
-    McpBuilderAgent: { ru: 'Сборщик инструментов', en: 'Tool builder' },
-    ToolPreparerAgent: { ru: 'Подготовка инструментов', en: 'Tool preparer' },
+    OrchestratorAgent: { ru: 'агент-координатор', en: 'orchestrator agent' },
+    PlannerAgent: { ru: 'агент-планировщик', en: 'planner agent' },
+    PlanningPipelineAgent: { ru: 'агент-планировщик', en: 'planner agent' },
+    ContextInitAgent: { ru: 'агент рамки исследования', en: 'research frame agent' },
+    ContextInitSessionAgent: { ru: 'агент рамки исследования', en: 'research frame agent' },
+    HypothesesAgent: { ru: 'агент генерации гипотез', en: 'hypotheses agent' },
+    ResearchAgent: { ru: 'агент-исследователь', en: 'researcher agent' },
+    TaskExecutorAgent: { ru: 'агент-исполнитель', en: 'executor agent' },
+    ToolPipelineAgent: { ru: 'агент подбора инструментов', en: 'tool pipeline agent' },
+    CoderAgent: { ru: 'агент-инженер', en: 'engineer agent' },
+    DatasetCollectorAgent: { ru: 'агент сбора данных', en: 'data collector agent' },
+    MedicalAgent: { ru: 'агент медицинского анализа', en: 'medical analyst agent' },
+    McpBuilderAgent: { ru: 'агент сборки инструментов', en: 'tool builder agent' },
+    ToolPreparerAgent: { ru: 'агент подготовки инструментов', en: 'tool preparer agent' },
     // The tool pipeline fans out into half a dozen internal agents. Naming each
     // one tells a user nothing — they are all the same activity to them.
-    ParallelToolSearcherAgent: { ru: 'Подбор инструментов', en: 'Tool search' },
-    LocalToolsExtractorAgent: { ru: 'Подбор инструментов', en: 'Tool search' },
-    ToolRetrieverAgent: { ru: 'Подбор инструментов', en: 'Tool search' },
-    ToolWebSearcherAgent: { ru: 'Подбор инструментов', en: 'Tool search' },
-    ToolReranker: { ru: 'Подбор инструментов', en: 'Tool search' },
-    FullSetToolReranker: { ru: 'Подбор инструментов', en: 'Tool search' },
-    WebToolsDeployerAgent: { ru: 'Подключаю инструменты', en: 'Deploying tools' },
-    ResultAggregatorAgent: { ru: 'Составитель отчёта', en: 'Report writer' },
-    ExperimentAgent: { ru: 'Эксперимент', en: 'Experiment' },
-    FedotAgent: { ru: 'AutoML', en: 'AutoML' },
-    system: { ru: 'Система', en: 'System' },
+    ParallelToolSearcherAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
+    LocalToolsExtractorAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
+    ToolRetrieverAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
+    ToolWebSearcherAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
+    ToolReranker: { ru: 'агент подбора инструментов', en: 'tool search agent' },
+    FullSetToolReranker: { ru: 'агент подбора инструментов', en: 'tool search agent' },
+    WebToolsDeployerAgent: { ru: 'агент подключения инструментов', en: 'tool deployer agent' },
+    ResultAggregatorAgent: { ru: 'агент составления отчёта', en: 'report writer agent' },
+    ExperimentAgent: { ru: 'агент экспериментов', en: 'experiment agent' },
+    FedotAgent: { ru: 'агент AutoML', en: 'AutoML agent' },
+    system: { ru: 'система', en: 'system' },
+  };
+
+  // What the agent is doing with what just came back. The gap between a tool
+  // result and the next call is the model generating — a median of 14 seconds
+  // and up to a minute — and "thinking" wastes it: the useful thing to say is
+  // what it is thinking *about*, which is whatever just finished.
+  const REVIEW = {
+    web_search: { ru: 'Изучаю найденное в интернете', en: 'Reading what the search returned' },
+    papers: { ru: 'Разбираю найденные статьи', en: 'Going through the papers' },
+    rag: { ru: 'Сверяюсь с базой знаний', en: 'Cross-checking the knowledge base' },
+    code: { ru: 'Разбираю результаты запуска', en: 'Reading the run output' },
+    data: { ru: 'Проверяю подготовленные данные', en: 'Checking the prepared data' },
+    chem: { ru: 'Оцениваю расчёты', en: 'Weighing the computed values' },
+    plot: { ru: 'Смотрю на графики', en: 'Looking at the charts' },
+    graph_write: { ru: 'Свожу выводы', en: 'Tying the findings together' },
+    graph_read: { ru: 'Сопоставляю с картой исследования', en: 'Matching the research map' },
+    mcp_build: { ru: 'Проверяю собранный инструмент', en: 'Checking the new tool' },
+    mcp_find: { ru: 'Выбираю из найденных инструментов', en: 'Choosing among the tools found' },
+    tasks: { ru: 'Сверяюсь с планом', en: 'Checking the plan' },
+    files: { ru: 'Читаю документы', en: 'Reading the documents' },
+    tool: { ru: 'Разбираю ответ инструмента', en: 'Reading the tool answer' },
+    delegation: { ru: 'Изучаю отчёт агента', en: 'Reading the agent report' },
   };
 
   // Phrases that are not about a tool at all.
   const PHASES = {
     starting: { icon: 'bolt', ru: 'Принимаю задачу', en: 'Picking up the task' },
+    framing: { icon: 'architecture', ru: 'Строю рамку исследования', en: 'Building research frame' },
     thinking: { icon: 'neurology', ru: 'Обдумываю', en: 'Thinking it through' },
     long_thinking: { icon: 'neurology', ru: 'Думаю над задачей', en: 'Working on the task' },
     delegating: { icon: 'alt_route', ru: 'Передаю задачу', en: 'Handing over to' },
+    // An AgentTool delegation stays open for as long as the subordinate works —
+    // hours, in a real study. "Handing over" is true for a second; who is
+    // working is true for the whole time, so that is what the line says.
+    agentWorking: { icon: 'groups', ru: 'Работает %s', en: '%s is working' },
     finalizing: { icon: 'auto_awesome', ru: 'Собираю итоговый отчёт', en: 'Assembling the final report' },
     waiting: { icon: 'front_hand', ru: 'Жду вашего ответа', en: 'Waiting for your answer' },
+    waiting_frame: { icon: 'front_hand', ru: 'Жду подтверждения рамки исследования', en: 'Waiting for research frame confirmation' },
     done: { icon: 'check_circle', ru: 'Готово', en: 'Done' },
     error: { icon: 'error', ru: 'Что-то пошло не так', en: 'Something went wrong' },
     stopped: { icon: 'stop_circle', ru: 'Остановлено', en: 'Stopped' },
@@ -137,6 +177,13 @@
     step: { ru: 'Шаг %d из %d', en: 'Step %d of %d' },
     details: { ru: 'Подробнее', en: 'Details' },
     ready: { ru: 'Результат готов', en: 'Result ready' },
+    total: { ru: 'Всего', en: 'Total' },
+    planHeader: { ru: 'План исследования', en: 'Research plan' },
+    openPlan: { ru: 'Открыть весь план', en: 'Open full roadmap' },
+    recentActivity: { ru: 'Недавние действия', en: 'Recent activity' },
+    openTools: { ru: 'Журнал инструментов', en: 'Tools viewer' },
+    moreTasks: { ru: 'ещё %d шагов в плане', en: '%d more steps in plan' },
+    reviewTool: { ru: 'Разбираю ответ инструмента «%s»', en: 'Reading the answer from tool «%s»' },
   };
 
   // Colour + iconography per phase, in the page's own Tailwind tokens.
@@ -149,7 +196,7 @@
   };
 
   const PHASE_TONE = {
-    waiting: 'wait', done: 'done', error: 'fail', stopped: 'mute', offline: 'mute',
+    waiting: 'wait', waiting_frame: 'wait', done: 'done', error: 'fail', stopped: 'mute', offline: 'mute',
   };
 
   const EXPAND_KEY = 'coscientist.status_expanded';
@@ -172,9 +219,18 @@
       toolName: null,      // only used by the unrecognised-tool phrase
       since: 0,            // when the current run started
       phraseSince: 0,      // when the visible phrase was last changed
+      activitySince: 0,    // when the activity the phrase names began
       lastEventAt: 0,
-      inflight: new Map(), // call_id -> {tool, agent, category, at}
-      anonymous: 0,        // in-flight calls that arrived without a call id
+      // Everything currently open, innermost last — tool calls AND AgentTool
+      // delegations, which are calls like any other and stay open for as long
+      // as the subordinate works. Keeping them here is what lets the line fall
+      // back to "Работает Инженер" when a nested tool finishes, instead of
+      // claiming the system is thinking while an agent runs for six hours.
+      open: new Map(),     // key -> {kind, tool, agent, category, detail, target, at}
+      anonSeq: 0,          // calls that arrive without a call id, closed LIFO
+      // The tool that closed last, while nothing is open: what the model is
+      // reading right now.
+      afterglow: null,
       steps: [],           // [{key, icon, text, status}]
       stepIndex: new Map(),// call_id -> step
       // The orchestrator's plan (the task tracker) and, nested inside one of
@@ -200,11 +256,18 @@
     return entry[lang] || entry.en || entry.ru || fallback || '';
   }
 
-  function agentLabel(name) {
+  function agentLabel(name, capitalize = false) {
     if (!name) return '';
     const known = AGENTS[name];
-    if (known) return pick(known, name);
-    return String(name).replace(/Agent$/, '') || name;
+    let label = known ? pick(known, name) : '';
+    if (!label) {
+      const bare = String(name).replace(/Agent$/, '');
+      label = (lang === 'ru') ? ('агент-' + bare.toLowerCase()) : (bare + ' agent');
+    }
+    if (capitalize && label) {
+      return label.charAt(0).toUpperCase() + label.slice(1);
+    }
+    return label;
   }
 
   /** Which category a tool call belongs to.
@@ -236,7 +299,9 @@
     if (toolName === 'transfer_to_agent') {
       return (args && (args.agent_name || args.agentName)) || null;
     }
-    return /Agent$/.test(String(toolName || '')) ? toolName : null;
+    const name = String(toolName || '');
+    if (AGENTS[name]) return name;
+    return /Agent$/.test(name) ? name : null;
   }
 
   /** The one argument worth showing a human — a query, a path, a molecule.
@@ -268,9 +333,13 @@
 
   function elapsed(ms) {
     const total = Math.max(0, Math.round(ms / 1000));
-    const m = Math.floor(total / 60);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
     const s = total % 60;
-    return m + ':' + String(s).padStart(2, '0');
+    // A delegation can be open for six hours; m:ss would read as "372:14".
+    return h
+      ? h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+      : m + ':' + String(s).padStart(2, '0');
   }
 
   function stamp(timestamp) {
@@ -305,6 +374,18 @@
    *  Terminal phases (done/error/stopped) always land immediately. */
   function setPhase(phase, patch, immediate) {
     const now = Date.now();
+    // `refresh()` runs on every frame of a long-running call and would keep
+    // re-announcing the same thing — re-arming the anti-flicker hold and
+    // resetting the phrase clock for no reason. Saying nothing new is free.
+    if (phase === st.phase
+      && (patch && 'category' in patch ? patch.category : null) === st.category
+      && (patch && 'detail' in patch ? patch.detail : null) === st.detail
+      && (patch && 'target' in patch ? patch.target : null) === st.target
+      && !holdTimer) {
+      if (patch && patch.agent) st.agent = patch.agent;
+      render();
+      return;
+    }
     const apply = () => {
       st.phase = phase;
       st.category = (patch && 'category' in patch) ? patch.category : null;
@@ -313,6 +394,9 @@
       st.toolName = (patch && 'toolName' in patch) ? patch.toolName : null;
       if (patch && patch.agent) st.agent = patch.agent;
       st.phraseSince = Date.now();
+      // The timer counts the *activity*, not the phrase: a phrase deferred by
+      // the anti-flicker hold must not reset a tool's clock to zero.
+      st.activitySince = (patch && patch.since) || st.phraseSince;
       render();
     };
     if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
@@ -325,25 +409,86 @@
     }
   }
 
-  /** Whatever is true once no tool call is outstanding.
+  // ── The open-work stack ───────────────────────────────────────────────────
+
+  /** The innermost thing currently running, or null. */
+  function topWork() {
+    let last = null;
+    st.open.forEach(entry => { last = entry; });
+    return last;
+  }
+
+  function openWork(callId, entry) {
+    st.open.set(callId || ('anon:' + (++st.anonSeq)), entry);
+    st.afterglow = null;
+  }
+
+  /** Close a call by its id; without one, close the innermost anonymous call. */
+  function closeWork(callId) {
+    if (callId && st.open.has(callId)) {
+      const entry = st.open.get(callId);
+      st.open.delete(callId);
+      return entry;
+    }
+    let lastAnon = null;
+    st.open.forEach((entry, key) => {
+      if (String(key).startsWith('anon:')) lastAnon = key;
+    });
+    if (lastAnon === null) return null;
+    const entry = st.open.get(lastAnon);
+    st.open.delete(lastAnon);
+    return entry;
+  }
+
+  /** Say whatever the stack says is true.
    *
-   *  Agents chain calls back to back — a result and the next call are often
-   *  milliseconds apart — so "thinking" is only declared after a short grace
-   *  period. Without it the line alternates work/think on every single tool. */
+   *  Sticky phases own the line until their own event releases it — a run that
+   *  ended, or a question waiting on the user. Everything else is a pure
+   *  function of what is open, which is why "thinking" is now rare: on a real
+   *  run something is open 99% of the time.
+   *
+   *  Agents chain calls back to back, so an empty stack is confirmed after a
+   *  short grace period rather than the instant a result lands. */
+  const STICKY = ['idle', 'waiting', 'waiting_frame', 'done', 'error', 'stopped'];
+
   let settleTimer = null;
 
-  function settle() {
-    if (st.phase === 'waiting') return;
-    if (st.inflight.size + st.anonymous > 0) return;
-    if (settleTimer) clearTimeout(settleTimer);
-    const apply = () => {
+  function refresh() {
+    cancelSettle();
+    if (STICKY.includes(st.phase)) return;
+    const work = topWork();
+    if (work) { announce(work); return; }
+    if (st.phase === 'starting') { announce(null); return; }
+    settleTimer = setTimeout(() => {
       settleTimer = null;
-      if (st.inflight.size + st.anonymous > 0) return;
-      if (st.phase === 'waiting' || st.phase === 'idle') return;
-      setPhase(finalStage() ? 'finalizing' : 'thinking', { agent: st.agent });
-    };
-    if (st.phase === 'starting' || st.phase === 'idle') apply();
-    else settleTimer = setTimeout(apply, SETTLE_GRACE_MS);
+      if (!topWork() && !STICKY.includes(st.phase)) announce(null);
+    }, SETTLE_GRACE_MS);
+  }
+
+  function announce(work) {
+    if (work && work.kind === 'delegation') {
+      setPhase('delegating', {
+        agent: work.agent, target: work.target, since: work.at,
+      });
+      return;
+    }
+    if (work) {
+      setPhase('working', {
+        category: work.category, detail: work.detail, agent: work.agent,
+        toolName: work.tool, since: work.at,
+      });
+      return;
+    }
+    if (finalStage()) { setPhase('finalizing', { agent: st.agent }); return; }
+    if (frameStage()) { setPhase('framing', { agent: st.agent }); return; }
+    if (st.afterglow) {
+      setPhase('reviewing', {
+        category: st.afterglow.category, agent: st.afterglow.agent,
+        toolName: st.afterglow.toolName, since: st.afterglow.at,
+      });
+      return;
+    }
+    setPhase('thinking', { agent: st.agent });
   }
 
   function cancelSettle() {
@@ -354,10 +499,14 @@
     return st.agent === 'ResultAggregatorAgent';
   }
 
+  function frameStage() {
+    return st.agent === 'ContextInitAgent' || st.agent === 'ContextInitSessionAgent';
+  }
+
   function startRun(at) {
     // A second message in the same session starts a new run: the previous
     // run's steps and plan counters must not bleed into it.
-    if (['idle', 'done', 'stopped', 'error'].includes(st.phase)) {
+    if (['idle', 'done', 'stopped', 'error', 'waiting', 'waiting_frame'].includes(st.phase)) {
       Object.assign(st, newState(), { since: at || Date.now() });
     }
     st.lastEventAt = Date.now();
@@ -371,8 +520,8 @@
     if (phase === 'done' && st.phase === 'error') return;
     cancelSettle();
     if (phase === 'done') st.note = null;
-    st.inflight.clear();
-    st.anonymous = 0;
+    st.open.clear();
+    st.afterglow = null;
     st.steps.forEach(step => { if (step.status === 'running') step.status = 'done'; });
     st.hideAt = Date.now() + linger;
     setPhase(phase, {}, true);
@@ -416,7 +565,10 @@
       : Array.isArray(result.tasks) ? result.tasks : null;
     if (list) {
       st.tasks = list.map(item => ({
-        id: item && item.id, title: item && item.title, status: item && item.status,
+        id: item && item.id,
+        title: item && item.title,
+        status: item && item.status,
+        assignee: item && item.assignee,
       }));
     } else if (result.task && result.task.id) {
       // `update_task_status` reports only the item it changed.
@@ -425,8 +577,14 @@
       if (known) {
         known.status = updated.status;
         known.title = updated.title || known.title;
+        if (updated.assignee) known.assignee = updated.assignee;
       } else {
-        st.tasks.push({ id: updated.id, title: updated.title, status: updated.status });
+        st.tasks.push({
+          id: updated.id,
+          title: updated.title,
+          status: updated.status,
+          assignee: updated.assignee,
+        });
       }
     } else {
       return;
@@ -480,17 +638,27 @@
 
       case 'agent_event':
         st.lastEventAt = now;
+        if ((st.phase === 'waiting' || st.phase === 'waiting_frame') && msg.author && msg.author !== 'user') {
+          st.phase = 'thinking';
+          st.phraseSince = now;
+        }
         // The export replays the user's own turns as authored events too.
         if (msg.author && msg.author !== 'user') st.agent = msg.author;
         st.note = null;
-        settle();
+        refresh();
         break;
 
       case 'agent_output':
         st.lastEventAt = now;
+        if (st.phase === 'waiting' || st.phase === 'waiting_frame') {
+          st.phase = 'thinking';
+          st.phraseSince = now;
+        }
         if (msg.agent) st.agent = msg.agent;
         pushStep(null, 'task_alt', agentLabel(msg.agent) + ' — ' + pick(TEXT.ready)).status = 'done';
-        settle();
+        // A subordinate just delivered; the caller is reading its report now.
+        st.afterglow = { category: 'delegation', agent: msg.agent, at: now };
+        refresh();
         break;
 
       case 'tool_activity':
@@ -502,19 +670,44 @@
         // only news that arrives during a sandbox run, which is the longest
         // single thing the system does.
         st.lastEventAt = now;
+        if (st.phase === 'waiting' || st.phase === 'waiting_frame') {
+          st.phase = 'thinking';
+          st.phraseSince = now;
+        }
         st.sandboxPlan = readSandboxPlan(msg.plan);
         if (msg.agent) st.agent = msg.agent;
         break;
 
+      case 'session_snapshot':
+        if (msg.active_tasks && Array.isArray(msg.active_tasks)) {
+          readPlan({ tasks: msg.active_tasks });
+        }
+        break;
+
+      case 'tasks_updated':
+        if (msg.tasks && Array.isArray(msg.tasks)) {
+          readPlan({ tasks: msg.tasks });
+        }
+        refresh();
+        break;
+
       case 'hitl_request':
         st.lastEventAt = now;
-        setPhase('waiting', { agent: msg.agent_name || st.agent }, true);
+        const isFrameReq = (msg.agent_name === 'ContextInitAgent' || msg.agent_name === 'ContextInitSessionAgent')
+          || Boolean(msg.form)
+          || frameStage();
+        setPhase(isFrameReq ? 'waiting_frame' : 'waiting', { agent: msg.agent_name || st.agent }, true);
         break;
 
       case 'hitl_timeout':
       case 'hitl_cancelled':
       case 'hitl_response':
-        if (st.phase === 'waiting') { st.phase = 'thinking'; st.phraseSince = now; settle(); render(); }
+        if (st.phase === 'waiting' || st.phase === 'waiting_frame') {
+          st.phase = 'thinking';
+          st.phraseSince = now;
+          refresh();
+          render();
+        }
         break;
 
       case 'final_response':
@@ -537,46 +730,60 @@
   function onToolActivity(msg, now) {
     const tool = msg.tool;
     if (!tool) return;
+    if (st.phase === 'idle') startRun(now);
     st.lastEventAt = now;
+    if (st.phase === 'waiting' || st.phase === 'waiting_frame') {
+      st.phase = 'thinking';
+      st.phraseSince = now;
+    }
     const author = msg.author || 'system';
 
     if (msg.phase === 'call') {
       const target = delegationTarget(tool, msg.args);
       if (target) {
+        // A delegation is a call like any other: it has an id, it gets a
+        // result, and it is open the whole time the subordinate works. Putting
+        // it on the stack is what keeps the line honest for those hours.
         st.agent = author;
-        pushStep(msg.call_id, 'alt_route', pick(PHASES.delegating) + ': ' + agentLabel(target)).status = 'done';
-        setPhase('delegating', { agent: author, target: target });
+        openWork(msg.call_id, {
+          kind: 'delegation', tool: tool, agent: author, target: target, at: now,
+        });
+        pushStep(msg.call_id, 'alt_route',
+          pick(PHASES.delegating) + ': ' + agentLabel(target));
+        st.note = null;
+        refresh();
         return;
       }
       const category = classify(tool, msg.description);
       const detail = detailOf(msg.args);
-      if (msg.call_id) {
-        st.inflight.set(msg.call_id, { tool: tool, agent: author, category: category, at: now });
-      } else {
-        st.anonymous++;
-      }
-      pushStep(msg.call_id, CATEGORIES[category].icon, phraseFor(category, tool));
-      cancelSettle();
-      st.note = null;
-      setPhase('working', {
-        category: category, detail: detail, agent: author, toolName: tool,
+      openWork(msg.call_id, {
+        kind: 'tool', tool: tool, agent: author, category: category,
+        detail: detail, at: now,
       });
+      pushStep(msg.call_id, CATEGORIES[category].icon, phraseFor(category, tool));
+      st.note = null;
+      refresh();
       return;
     }
 
     // result / error
     const failed = msg.phase === 'error';
-    if (msg.call_id && st.inflight.delete(msg.call_id)) {
-      // paired with its own call
-    } else if (st.anonymous > 0) {
-      st.anonymous--;
+    const closed = closeWork(msg.call_id);
+    // What the model is about to read. Only meaningful once nothing is left
+    // running — with work still open, that work is the better answer.
+    if (!failed) {
+      st.afterglow = {
+        category: closed && closed.kind === 'delegation'
+          ? 'delegation'
+          : (closed ? closed.category : classify(tool, msg.description)),
+        toolName: closed ? closed.tool : tool,
+        agent: closed ? closed.agent : author,
+        at: now,
+      };
     }
     closeStep(msg.call_id, failed);
     // The sandbox plan describes a container that is now done with this task.
     if (/run_sandbox_task|check_sandbox_task/.test(String(tool))) st.sandboxPlan = null;
-    // The query/path shown under the phrase belonged to the call that just
-    // closed — keeping it would caption the next minute of work with it.
-    if (st.inflight.size + st.anonymous === 0) st.detail = null;
     if (failed) {
       // One bad tool is routine — the run continues. Say so calmly, and never
       // flip the whole indicator into an error state for it.
@@ -584,7 +791,7 @@
     } else if (/plan|task/i.test(String(tool))) {
       readPlan(msg.result);
     }
-    settle();
+    refresh();
   }
 
   function phraseFor(category, tool) {
@@ -620,8 +827,13 @@
     // silence and elapsed time can change the phrase with no new events.
     let phase = st.phase;
     if (phase !== 'idle' && !connected) phase = 'offline';
+    // Silence only means "I have nothing to report" when nothing is running.
+    // A sandbox task runs for forty minutes without emitting a single event,
+    // and a delegation for hours: their silence is not absence of news, it IS
+    // the news, and decaying it into "Думаю над задачей" is how this line came
+    // to say nothing useful for 94% of a real run.
     const silent = st.lastEventAt && (Date.now() - st.lastEventAt) > SILENCE_MS;
-    if (silent && (phase === 'working' || phase === 'thinking' || phase === 'starting')) {
+    if (silent && !st.open.size && ['thinking', 'reviewing', 'starting'].includes(phase)) {
       phase = 'long_thinking';
     }
 
@@ -631,8 +843,17 @@
       icon = category.icon;
       text = phraseFor(st.category, st.toolName);
     } else if (phase === 'delegating') {
-      icon = PHASES.delegating.icon;
-      text = pick(PHASES.delegating) + ': ' + agentLabel(st.target);
+      icon = PHASES.agentWorking.icon;
+      text = pick(PHASES.agentWorking).replace('%s', agentLabel(st.target));
+    } else if (phase === 'reviewing') {
+      const category = CATEGORIES[st.category] || CATEGORIES.tool;
+      icon = st.category === 'delegation' ? 'groups' : category.icon;
+      if (st.toolName && st.category !== 'delegation') {
+        const base = pick(REVIEW[st.category] || REVIEW.tool);
+        text = `${base} «${st.toolName}»`;
+      } else {
+        text = pick(REVIEW[st.category] || REVIEW.tool);
+      }
     } else {
       const entry = PHASES[phase] || PHASES.thinking;
       icon = entry.icon;
@@ -646,18 +867,25 @@
     if (st.note) {
       parts.push(st.note);
     } else {
-      if (st.agent && phase !== 'done' && phase !== 'stopped') parts.push(agentLabel(st.agent));
+      if (st.agent && phase !== 'done' && phase !== 'stopped') parts.push(agentLabel(st.agent, true));
       const step = stepLine();
       // The step names the work better than a tool argument does, so it wins
       // the one slot they would otherwise share.
       if (!step && st.detail && phase === 'working') parts.push('«' + st.detail + '»');
       if (step) parts.push(step);
-      if (Date.now() - st.since > LONG_RUN_MS && (phase === 'long_thinking' || phase === 'working')) {
+      // The apology is for the case where nothing can be said: with work open,
+      // the line already names it and shows how long it has been running.
+      if (!st.open.size && phase === 'long_thinking'
+        && Date.now() - st.activitySince > LONG_STEP_MS) {
         parts.push(pick(TEXT.longRun));
       }
     }
     return parts.join(' · ');
   }
+
+  // A plan title shares one line with the agent name and the phrase, so it is
+  // cut shorter than a standalone detail would be.
+  const STEP_TITLE_LIMIT = 44;
 
   /** "Шаг 2 из 5: Обучить модель" — the plan position, named.
    *
@@ -670,7 +898,11 @@
     if (!plan || !plan.total) return null;
     const position = Math.min(plan.done + 1, plan.total);
     const counter = pick(TEXT.step).replace('%d', position).replace('%d', plan.total);
-    return plan.current ? counter + ': ' + plan.current : counter;
+    if (!plan.current) return counter;
+    const title = plan.current.length > STEP_TITLE_LIMIT
+      ? plan.current.slice(0, STEP_TITLE_LIMIT - 1) + '…'
+      : plan.current;
+    return counter + ': ' + title;
   }
 
   function paint() {
@@ -688,19 +920,37 @@
     root.classList.remove('hidden');
 
     const tone = TONES[PHASE_TONE[current.phase] || 'work'];
-    const live = ['working', 'thinking', 'starting', 'delegating', 'finalizing', 'long_thinking'].includes(current.phase);
+    const live = ['working', 'thinking', 'starting', 'delegating', 'reviewing',
+      'finalizing', 'long_thinking', 'framing'].includes(current.phase);
     const sub = subLine(current.phase);
-    const timer = st.since ? elapsed(Date.now() - st.since) : '';
+    // The elapsed time of the *current step*, not of the run: on hour three of
+    // a study the run total says nothing, while "12 мин" on this step says
+    // whether to worry. The run total moves to the card's tooltip.
+    const from = st.activitySince || st.since;
+    const timer = from ? elapsed(Date.now() - from) : '';
+    const title = st.since
+      ? pick(TEXT.total) + ': ' + elapsed(Date.now() - st.since)
+      : '';
     const steps = st.steps.slice().reverse();
+    const activePlan = st.sandboxPlan || st.plan;
+    const hasPlan = Boolean(activePlan && activePlan.total > 0);
+    const planPercent = hasPlan ? Math.min(100, Math.round((activePlan.done / activePlan.total) * 100)) : 0;
 
     root.innerHTML = `
-      <div class="si-card flex items-stretch gap-0 rounded-xl border ${tone.card} overflow-hidden transition-colors">
+      <div class="si-card flex items-stretch gap-0 rounded-xl border ${tone.card} overflow-hidden transition-colors" title="${esc(title)}">
         <span class="w-1 shrink-0 ${tone.bar} ${live ? 'si-bar' : ''}"></span>
         <div class="flex-1 min-w-0 flex items-center gap-3 px-3 py-2.5">
           <span class="material-symbols-outlined text-lg ${tone.icon} ${live ? 'si-icon' : ''}">${current.icon}</span>
           <div class="flex-1 min-w-0">
             <div class="text-[13px] font-semibold leading-tight ${tone.text} ${live ? 'si-shimmer' : ''} truncate">${esc(current.text)}</div>
             ${sub ? `<div class="text-[10px] text-outline-variant leading-tight truncate mt-0.5">${esc(sub)}</div>` : ''}
+            ${hasPlan ? `
+            <div class="mt-1 flex items-center gap-2">
+              <div class="si-mini-progress flex-1">
+                <div class="si-mini-progress-fill" style="width: ${planPercent}%"></div>
+              </div>
+              <span class="text-[9px] font-mono text-outline-variant/80 shrink-0 tabular-nums">${activePlan.done}/${activePlan.total} (${planPercent}%)</span>
+            </div>` : ''}
           </div>
           ${timer ? `<span class="text-[10px] font-mono text-outline-variant shrink-0 tabular-nums">${timer}</span>` : ''}
           <button type="button" title="${esc(pick(TEXT.details))}"
@@ -709,18 +959,77 @@
           </button>
         </div>
       </div>
-      ${expanded && steps.length ? `
-      <div class="mt-1.5 px-3 py-2 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/60 space-y-1">
-        ${steps.map(step => {
-          const stepTone = step.status === 'error' ? 'text-error'
-            : step.status === 'done' ? 'text-outline-variant' : 'text-primary';
-          const stepIcon = step.status === 'error' ? 'close'
-            : step.status === 'done' ? 'check' : step.icon;
-          return `<div class="flex items-center gap-2 ${stepTone}">
-            <span class="material-symbols-outlined text-[13px] ${step.status === 'running' ? 'si-icon' : ''}">${stepIcon}</span>
-            <span class="text-[10px] truncate">${esc(step.text)}</span>
-          </div>`;
-        }).join('')}
+      ${expanded && (steps.length || hasPlan) ? `
+      <div class="mt-1.5 space-y-1.5">
+        ${hasPlan ? `
+        <div class="p-2.5 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/80 space-y-2">
+          <div class="flex items-center justify-between text-[11px] font-semibold text-on-surface">
+            <div class="flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-sm text-primary">account_tree</span>
+              <span>${esc(pick(TEXT.planHeader))}</span>
+              <span class="text-[9px] font-mono font-normal text-outline-variant">(${activePlan.done} / ${activePlan.total})</span>
+            </div>
+            <button type="button" onclick="if (window.openRoadmapEditor) window.openRoadmapEditor();"
+              class="text-[10px] text-primary hover:underline flex items-center gap-0.5 font-medium transition-colors">
+              <span>${esc(pick(TEXT.openPlan))}</span>
+              <span class="material-symbols-outlined text-[13px]">open_in_new</span>
+            </button>
+          </div>
+
+          <div class="h-1 bg-surface-container-high rounded-full overflow-hidden">
+            <div class="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-300 rounded-full" style="width: ${planPercent}%;"></div>
+          </div>
+
+          <div class="space-y-1 pt-0.5">
+            ${(() => {
+            const list = st.tasks && st.tasks.length ? st.tasks : [];
+            const displayList = list.slice(0, 5);
+            const remaining = list.length - 5;
+            return displayList.map(task => {
+              const norm = DONE_STATUS.test(task.status) ? 'done' : (RUNNING_STATUS.test(task.status) ? 'active' : 'todo');
+              const icon = norm === 'done' ? 'check' : (norm === 'active' ? 'autorenew' : 'radio_button_unchecked');
+              const tone = norm === 'done' ? 'text-outline-variant' : (norm === 'active' ? 'text-primary font-medium' : 'text-outline-variant');
+              const spin = norm === 'active' ? 'si-icon' : '';
+              const assignee = task.assignee ? agentLabel(task.assignee) : '';
+              return `<div class="flex items-center gap-2 text-[10px] ${tone}">
+                  <span class="material-symbols-outlined text-[13px] shrink-0 ${spin}">${icon}</span>
+                  <span class="truncate flex-1 min-w-0">${task.id ? `<span class="font-mono text-[9px] opacity-75 mr-1">${esc(task.id)}</span>` : ''}${esc(task.title || '')}</span>
+                  ${assignee ? `<span class="text-[8px] font-mono shrink-0 px-1 py-0.2 rounded bg-surface-container-high text-outline-variant/80">${esc(assignee)}</span>` : ''}
+                </div>`;
+            }).join('') + (remaining > 0 ? `
+                <div class="pt-0.5">
+                  <button type="button" onclick="if (window.openRoadmapEditor) window.openRoadmapEditor();" class="text-[9px] font-mono text-primary/80 hover:underline">
+                    + ${pick(TEXT.moreTasks).replace('%d', remaining)} →
+                  </button>
+                </div>` : '');
+          })()}
+          </div>
+        </div>` : ''}
+
+        ${steps.length ? `
+        <div class="px-3 py-2 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/60 space-y-1">
+          <div class="text-[9px] font-mono text-outline-variant/70 mb-1 flex items-center justify-between">
+            <div class="flex items-center gap-1">
+              <span class="material-symbols-outlined text-xs">history</span>
+              <span>${esc(pick(TEXT.recentActivity))}</span>
+            </div>
+            <button type="button" onclick="if (window.openToolsViewer) window.openToolsViewer();"
+              class="text-[9px] text-primary hover:underline flex items-center gap-0.5 font-medium transition-colors">
+              <span>${esc(pick(TEXT.openTools))}</span>
+              <span class="material-symbols-outlined text-[12px]">open_in_new</span>
+            </button>
+          </div>
+          ${steps.map(step => {
+            const stepTone = step.status === 'error' ? 'text-error'
+              : step.status === 'done' ? 'text-outline-variant' : 'text-primary';
+            const stepIcon = step.status === 'error' ? 'close'
+              : step.status === 'done' ? 'check' : step.icon;
+            return `<div class="flex items-center gap-2 ${stepTone}">
+              <span class="material-symbols-outlined text-[13px] ${step.status === 'running' ? 'si-icon' : ''}">${stepIcon}</span>
+              <span class="text-[10px] truncate">${esc(step.text)}</span>
+            </div>`;
+          }).join('')}
+        </div>` : ''}
       </div>` : ''}`;
 
     const toggle = root.querySelector('.si-toggle');
