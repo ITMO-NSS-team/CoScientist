@@ -196,8 +196,16 @@ REGISTRY.register_tool(ToolEntry(
     runtime_resolved=True,
     docs=(
         ToolDoc(
+            name="explore_scientific_database",
+            signature="explore_scientific_database(task)",
+            purpose=(
+                "RAG over the internal scientific-literature corpus "
+                "(deployed paper-analysis MCP)."
+            ),
+        ),
+        ToolDoc(
             name="explore_chemistry_database",
-            signature="explore_chemistry_database(question)",
+            signature="explore_chemistry_database(task)",
             purpose="RAG search over an internal scientific literature database.",
         ),
         ToolDoc(
@@ -216,16 +224,21 @@ REGISTRY.register_tool(ToolEntry(
     docs=(
         ToolDoc(
             name="search_papers",
-            signature="search_papers(query, filters)",
+            signature="search_papers(keywords)",
             purpose=(
-                "Searches scientific papers in OpenAlex using metadata and "
-                "search filters. Does NOT download full paper files."
+                "Searches scientific papers in OpenAlex using keywords. "
+                "Does NOT download full paper files. Argument name is "
+                "`keywords`, not `query`. Optional `email` / `api_key` overlay "
+                "OpenAlex credentials from env/headers."
             ),
         ),
         ToolDoc(
             name="download_papers_from_search",
-            signature="download_papers_from_search(query)",
-            purpose="Searches and downloads papers for downstream analysis.",
+            signature="download_papers_from_search(keywords)",
+            purpose=(
+                "Searches and downloads papers for downstream analysis. "
+                "Optional `email` / `api_key` overlay OpenAlex credentials."
+            ),
         ),
     ),
 ))

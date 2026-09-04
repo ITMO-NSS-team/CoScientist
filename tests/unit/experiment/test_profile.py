@@ -58,7 +58,12 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     ]
     hyp = config.agent("HypothesesAgent")
     assert hyp.prompt == "hypotheses"
-    assert hyp.model == "openai/glm-4.7"
+    # openrouter/ prefix, not openai/: an "openai/"-prefixed id sends litellm
+    # straight to api.openai.com, which rejects this stand's OpenRouter key.
+    # The model itself matches the configuration the runs were measured on
+    # (2026-09-04): gemini-3.7-flash on the five decision-making agents,
+    # gpt-4o-mini behind the `main` alias for the rest.
+    assert hyp.model == "openrouter/google/gemini-3.7-flash"
     assert hyp.tools == ["research_graph"]
     assert "commit_experiment_hypotheses" in hyp.callbacks.after_agent
     assert "seed_hypotheses_from_em_request" in hyp.callbacks.before_model
@@ -142,7 +147,7 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert "collect_reranked_tools_from_model" not in reranker.callbacks.after_model
 
     planner = config.agent("ExperimentPlannerAgent")
-    assert planner.model == "openai/glm-4.7"
+    assert planner.model == "openrouter/google/gemini-3.7-flash"  # see HypothesesAgent note above
     assert planner.include_contents == "none"
     assert "skip_retriever_context" in planner.callbacks.before_model
     # ExperimentPlan is enforced by sanitize_json_output + deterministic critique.
@@ -193,7 +198,7 @@ def test_planner_and_coder_prompts_cover_multi_h_and_anti_fabrication():
     assert "phase is still" in executor and "reporting" in executor
 
 
-def test_research_prompt_opens_literature_with_search_papers():
+def test_research_prompt_requires_both_literature_tools():
     from unittest.mock import MagicMock
 
     from CoScientist.agents.prompts.templates import research
@@ -203,11 +208,20 @@ def test_research_prompt_opens_literature_with_search_papers():
     ctx.render_tools.return_value = ""
     ctx.render_hitl.return_value = ""
     prompt = research(ctx)
-    assert "call `search_papers` first" in prompt
-    assert "ALWAYS call `explore_chemistry_database`" not in prompt
-    assert "Do not open a literature review with this tool" in prompt
-    assert "Never invent tool names" in prompt
-    assert "immediately fall back to `tavily_search`" in prompt
+    # Порядок сменился в adc504b: раньше обзор ОТКРЫВАЛСЯ вызовом search_papers,
+    # а explore_* был запрещён как первый шаг; теперь сначала внутренняя RAG-база,
+    # затем обязательно search_papers. Инвариант, который тест и охраняет: обзор
+    # не может закончиться на ответе внутренней базы.
+    assert "ALWAYS call" in prompt
+    assert "`search_papers`" in prompt
+    assert "explore_scientific_database" in prompt
+    # Имя аргумента было неверным в ToolDoc (`query` вместо `keywords`) и роняло
+    # вызов; промпт теперь называет его явно.
+    assert "keywords" in prompt and "not `query`" in prompt
+    assert "Never invent" in prompt
+    # Tavily остаётся запасным вариантом и только после литературных инструментов.
+    assert "`tavily_search`" in prompt
+    assert "Never use Tavily before the literature tools" in prompt
 
 
 def test_fedot_tool_skips_legacy_hard_stop_for_experiment_runtime(monkeypatch):

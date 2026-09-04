@@ -21,7 +21,12 @@ from CoScientist.tools.fedot_artifact_handoff import (
     should_hard_stop_fedot,
     tables_from_state,
 )
-from CoScientist.tools.fedot_mas_patch import PatchedMAS, ensure_fedot_openai_proxy_compat
+from CoScientist.tools.fedot_mas_patch import (
+    MetaJsonRecoveryPlugin,
+    PatchedMAS,
+    PatchedMAW,
+    ensure_fedot_openai_proxy_compat,
+)
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
@@ -177,15 +182,29 @@ class FedotMASToolset(BaseToolset):
         result = None
         status, err = "success", None
         try:
-            # openai/<id> for MASConfig validation; PatchedMAS strips it again
-            # on the wire to the OpenAI-compatible proxy.
+            # openai/<id> for config validation; the patched engine strips it
+            # again on the wire to the OpenAI-compatible proxy.
             ensure_fedot_openai_proxy_compat()
-            mas = PatchedMAS(
+            # MAS stays the default. MAW splits config design into two smaller
+            # LLM calls, which looked like the fix for the dominant failure here
+            # ("did not produce <key> in session state"), but measuring it says
+            # otherwise: 3 of 11 pipelines built in 4010 s against MAS's 25 of 46
+            # in 499 s. Two calls means two places to fail, and the failure was
+            # never about config size — 82 of 88 were the missing-output-key
+            # error, which MetaJsonRecoveryPlugin below addresses directly.
+            # EXPERIMENTS__FEDOT_ENGINE=maw switches engines for a re-measure.
+            from CoScientist.config import get_settings as _app_settings
+            engine = str(_app_settings().experiments.fedot_engine).lower()
+            engine_cls = PatchedMAS if engine == "mas" else PatchedMAW
+            mas = engine_cls(
                 mcp_servers=servers_payload,
                 plugins=[
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=web_search_limit),
                     LangfusePlugin(trace_name="coscientist:fedot"),
+                    # Recovers a config the model answered with but ADK could not
+                    # store — the single largest cause of FEDOT route failures here.
+                    MetaJsonRecoveryPlugin(),
                     cap,
                 ],
             )

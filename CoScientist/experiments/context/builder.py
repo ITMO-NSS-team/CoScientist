@@ -25,6 +25,7 @@ _CLEAR_ON_NEW_RUN = (
     "experiment_artifacts_manifest",
     "experiment_last_route_response", "experiment_active_envelope",
     "experiment_plan_validation_errors", "experiment_plan_review_paused",
+    "experiment_plan_revision_count", "experiment_inventory_blocker_hits",
     "experiment_no_matching_tool", "experiment_execution_summary",
     "experiment_repo_candidates",
     "accumulated_tools", "filtered_tools", "retrieval_queries",
@@ -719,12 +720,21 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         state.get("experiment_plan_validation_errors")
         or critique.get("verdict") == "revise"
         or previous_runtime.get("phase") == "awaiting_review"
+        or previous_runtime.get("phase") == "replan_requested"
     )
     source_request = persisted or (prev_request if planning_revision and prev_request else (user_text or prev_request))
     same_request = bool(source_request) and source_request == prev_request
     revising = planning_revision and same_request
     run_id = previous_context.get("experiment_run_id") if revising else f"EXRUN-{uuid4().hex}"
     if not revising:
+        # Diagnostic for the re-planning loop: this is the only place that drops a
+        # finished runtime, so record when it fires and what phase it destroyed.
+        _prev_phase = previous_runtime.get("phase") if isinstance(previous_runtime, dict) else None
+        audit(
+            logger,
+            "EXPERIMENT_NEW_RUN_CLEAR prev_phase=%r same_request=%s planning_revision=%s"
+            % (_prev_phase, same_request, planning_revision),
+        )
         for key in _CLEAR_ON_NEW_RUN:
             if key in state:
                 state[key] = None
@@ -732,6 +742,12 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         if prev_request and not same_request:
             state[DISCOVERED_CAPABILITIES_KEY] = None
             state[RETRIEVED_CAPABILITIES_KEY] = None
+            # Same rule for the replan budget: a genuinely new ask starts with a
+            # full budget, a replan of the SAME ask keeps what it has spent.
+            # This key is deliberately absent from _CLEAR_ON_NEW_RUN — clearing
+            # it there would zero the counter on the very hop it must survive.
+            from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
+            state[REPLAN_ROUNDS_KEY] = 0
     # Mid-attempt filtered_tools is task-scoped; do not overwrite discovery.
     mid_attempt = bool(state.get("experiment_active_envelope"))
     live_discovery = _normalize_capabilities(state.get("filtered_tools")) if not mid_attempt else []

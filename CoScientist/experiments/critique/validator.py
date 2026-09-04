@@ -335,8 +335,7 @@ def critique_plan(
             if miss := [h for h in ctx if h not in req]:
                 co("major", f"Context hypothesis_refs uncovered by non-optional task design: {', '.join(miss)}.",
                    "Link each leftover id on an existing required task via "
-                   "design.hypothesis_ref or also_tests. Do not add another "
-                   "required task for the same operation_ref.")
+                   "design.hypothesis_ref or also_tests.")
             if plan_h and (mp := [h for h in ctx if h not in plan_h]):
                 add(category="consistency", severity="major",
                     message=f"plan.hypotheses omits context hypothesis ids: {', '.join(mp)}.",
@@ -372,18 +371,20 @@ def critique_plan(
                    "Add a required task per uncovered OP-n and set design.operation_ref. "
                    "Leftover MCP without a named tool on that slot is required coder, not coverage.")
             if missing_ref:
-                co("major",
+                sev = "major" if miss_ops else "minor"
+                co(sev,
                    f"Non-optional tasks missing design.operation_ref: {', '.join(missing_ref)}.",
-                   "Set design.operation_ref to a frame operation_id (OP-n). Do not invent slots.")
+                   "Set design.operation_ref to a frame operation_id (OP-n).")
             if extra_ops := [ref for ref in covered_set if ref not in ops_set]:
-                co("major",
+                sev = "major" if miss_ops else "minor"
+                co(sev,
                    f"Tasks reference operation ids absent from the frame: {', '.join(sorted(extra_ops))}.",
                    "Copy operation_id from experiment_context.operations; do not invent OP-n.")
             dupes = sorted({ref for ref in covered if covered.count(ref) > 1})
             if dupes:
-                co("major",
+                co("minor",
                    f"Multiple non-optional tasks share the same operation_ref: {', '.join(dupes)}.",
-                   "One non-optional task per frame operation.")
+                   "Multiple pipeline steps covering the same frame operation is supported.")
 
     for task in plan.tasks:
         tid = task.id
@@ -543,9 +544,9 @@ def critique_plan(
             add(category="consistency", severity="blocker", message="A revised plan must increment revision.",
                 suggestion=f"Use revision >= {previous_plan.revision + 1}.")
         if removed := sorted({t.id for t in previous_plan.tasks} - {t.id for t in plan.tasks}):
-            add(category="consistency", severity="major",
+            add(category="consistency", severity="minor",
                 message=f"Revised plan dropped task ids: {', '.join(removed)}.",
-                suggestion="Keep stable task ids; mark obsolete work optional instead of deleting.")
+                suggestion="Keep stable task ids when possible; mark obsolete work optional instead of deleting.")
 
     return PlanCritique(
         schema_version="plan-critique/0.1",

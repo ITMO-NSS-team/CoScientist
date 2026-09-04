@@ -1044,3 +1044,164 @@ def test_result_tasks_ok_ignores_unused_research_failure():
     assert result_tasks_ok(runtime) is True
     runtime["tasks"]["EXP-2"]["status"] = "failed"
     assert result_tasks_ok(runtime) is False
+
+
+# ── result review: state persistence and the replan budget ────────────────────
+# Regression cover for the loop observed on 2026-09-01, where one run built five
+# plans. Two independent defects had to line up:
+#   * mark_result_review mutated the runtime dict in place, so ADK never recorded
+#     a state delta and build_experiment_context's `phase == "completed"` gate
+#     never saw the finished stage;
+#   * the round counter lived inside that same runtime, which the builder nulls
+#     via _CLEAR_ON_NEW_RUN before every replan, so the budget bounded nothing.
+# Both are asserted on the ADK State delta, NOT on reading the dict back: a plain
+# read-back passes either way, because _runtime() hands out the live object.
+
+def _reported_state():
+    """An approved run that has reached reporting, ready for result review.
+
+    The phase is set directly rather than driven through record_result: these
+    tests are about what the review does to the phase and the replan budget, and
+    routing a real result through would drag in artifact-evidence plumbing that
+    has nothing to do with the loop being covered here.
+    """
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["experiment_runtime"]["phase"] = "reporting"
+    return state
+
+
+def _adk_state(plain: dict):
+    """Wrap a plain dict the way ADK does, so state deltas are observable."""
+    from google.adk.sessions.state import State
+    delta: dict = {}
+    return State(value=plain, delta=delta), delta
+
+
+def test_result_review_approval_records_a_state_delta():
+    """The whole point of the fix: assignment, not mutation.
+
+    Reading state["experiment_runtime"]["phase"] back would pass even without
+    the fix, because _runtime() returns the live nested dict. Only the delta
+    distinguishes a mutation from an assignment, and only the delta is what
+    reaches the next agent.
+    """
+    from CoScientist.experiments.runtime import mark_result_review
+    from CoScientist.experiments.runtime.state_machine import RUNTIME_KEY
+    st, delta = _adk_state(_reported_state())
+    out = mark_result_review(st, approved=True)
+    assert out["phase"] == "completed"
+    assert RUNTIME_KEY in delta, "phase=completed never reached session state"
+    assert delta[RUNTIME_KEY]["phase"] == "completed"
+
+
+def test_rejected_review_also_records_a_state_delta(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime import mark_result_review
+    from CoScientist.experiments.runtime.state_machine import RUNTIME_KEY
+    monkeypatch.setattr(get_settings().experiments, "max_replan_rounds", 1)
+    st, delta = _adk_state(_reported_state())
+    out = mark_result_review(st, approved=False, feedback="metrics missing")
+    assert out["phase"] == "replan_requested"
+    assert delta[RUNTIME_KEY]["phase"] == "replan_requested"
+
+
+def test_rejected_review_spends_one_replan_round(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime import mark_result_review
+    from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
+    monkeypatch.setattr(get_settings().experiments, "max_replan_rounds", 1)
+    state = _reported_state()
+    out = mark_result_review(state, approved=False, feedback="metrics missing")
+    assert out["replan_rounds"] == 1
+    assert out["replan_exhausted"] is False
+    assert state[REPLAN_ROUNDS_KEY] == 1
+    assert "metrics missing" in state["experiment_runtime"]["result_review_feedback"]
+
+
+def test_replan_budget_survives_the_builder_wiping_the_runtime(monkeypatch):
+    """The path production actually takes.
+
+    build_experiment_context runs as the planner's before_agent and nulls
+    experiment_runtime through _CLEAR_ON_NEW_RUN. An earlier version of this fix
+    kept the counter inside the runtime and passed its tests only because they
+    called initialize_runtime directly, stepping over exactly this wipe.
+    """
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.context.builder import _CLEAR_ON_NEW_RUN
+    from CoScientist.experiments.runtime import get_experiment_plan, mark_result_review
+    from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
+    monkeypatch.setattr(get_settings().experiments, "max_replan_rounds", 1)
+    assert REPLAN_ROUNDS_KEY not in _CLEAR_ON_NEW_RUN, (
+        "the counter must not be in the list that a replan clears"
+    )
+    state = _reported_state()
+    mark_result_review(state, approved=False, feedback="first objection")
+
+    for key in _CLEAR_ON_NEW_RUN:          # what the builder does on a replan hop
+        if key in state:
+            state[key] = None
+    initialize_runtime(state, _plan(_task("EXP-1")), critique=None)
+    assert get_experiment_plan(state)["replan_rounds"] == 1, "budget was reset by the wipe"
+
+    state["experiment_runtime"]["phase"] = "reporting"
+    out = mark_result_review(state, approved=False, feedback="second objection")
+    assert out["phase"] == "completed", "out of budget must finish, not replan again"
+    assert out["replan_exhausted"] is True
+
+
+def test_zero_budget_never_replans(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime import mark_result_review
+    monkeypatch.setattr(get_settings().experiments, "max_replan_rounds", 0)
+    out = mark_result_review(_reported_state(), approved=False, feedback="nope")
+    assert out["phase"] == "completed"
+    assert out["replan_exhausted"] is True
+
+
+def test_a_new_ask_starts_with_a_full_budget(monkeypatch):
+    """A different question is a new run, so it must not inherit spent rounds."""
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime import get_experiment_plan, mark_result_review
+    from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
+    monkeypatch.setattr(get_settings().experiments, "max_replan_rounds", 1)
+    state = _reported_state()
+    mark_result_review(state, approved=False, feedback="redo")
+    assert state[REPLAN_ROUNDS_KEY] == 1
+    state[REPLAN_ROUNDS_KEY] = 0           # what builder.py does when the ask changes
+    initialize_runtime(state, _plan(_task("EXP-1")), critique=None)
+    view = get_experiment_plan(state)
+    assert view["replan_rounds"] == 0
+    assert view["replan_rounds_remaining"] == 1
+
+
+def test_first_pass_plan_view_reports_a_full_budget(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime import get_experiment_plan
+    monkeypatch.setattr(get_settings().experiments, "max_replan_rounds", 1)
+    view = get_experiment_plan(_approved_state(_plan(_task("EXP-1"))))
+    assert view["replan_rounds"] == 0
+    assert view["replan_rounds_remaining"] == 1
+    assert "replan_reason" not in view
+
+
+def test_plan_approval_records_a_state_delta():
+    """approve_plan flips phase to execution — on the delta, not just in place.
+
+    Same class of defect as mark_result_review: the control tool that calls this
+    hands in an ADK State, and a nested mutation there is invisible to every
+    later agent, so the approved plan is re-approved on the next hop.
+    """
+    from CoScientist.experiments.runtime import approve_plan
+    from CoScientist.experiments.runtime.state_machine import RUNTIME_KEY
+
+    plain = _approved_state(_plan(_task("EXP-1")))
+    plain["experiment_runtime"]["phase"] = "awaiting_review"
+    plain["experiment_runtime"]["approved"] = False
+    st, delta = _adk_state(plain)
+
+    result = approve_plan(st)
+
+    assert result["phase"] == "execution"
+    assert RUNTIME_KEY in delta, "approve_plan mutated the runtime without reassigning it"
+    assert delta[RUNTIME_KEY]["phase"] == "execution"
+    assert delta[RUNTIME_KEY]["approved"] is True

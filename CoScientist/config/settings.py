@@ -3,7 +3,7 @@ Application configuration using Pydantic Settings.
 """
 import os as _os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from dotenv import load_dotenv as _load_dotenv
 from pydantic import BaseModel, Field, model_validator
@@ -328,6 +328,33 @@ class ExperimentsSettings(BaseModel):
     route_alembic: bool = False
     task_max_attempts: int = Field(default=2, ge=1, le=2)
     max_plan_tasks: int = Field(default=8, ge=1, le=20)
+    # How many times a rejected result review may send the module back to
+    # planning. `task_max_attempts` bounds retries of ONE task; nothing used to
+    # bound redoing the whole plan, and a stale phase turned that into an
+    # unbounded loop (observed 2026-09-01: five plans in one run, the first of
+    # which had already finished every task successfully). 0 disables replanning
+    # entirely; the cap is counted across the whole experiment run.
+    max_replan_rounds: int = Field(default=1, ge=0, le=5)
+    # Внешние заходы модуля после отказа на ревью результата. Бюджет диспатчей
+    # в coalesce.py читает именно его: он живёт на State оркестратора, то есть
+    # переживает границу AgentTool, в отличие от счётчика внутри runtime.
+    max_replans: int = Field(default=2, ge=1, le=8)
+    # Внутренние регенерации ExperimentPlan за один заход планировщика.
+    # Было 8 жёстко зашитых — на дорогом планировщике это до шести лишних кругов.
+    max_plan_revisions: int = Field(default=2, ge=1, le=8)
+    # Which FEDOT engine backs the fedot_mas route.
+    #
+    # "mas" (default) is the single-shot routing config. "maw" is a fixed
+    # Sequential/Parallel/Loop pipeline whose config is designed in two calls —
+    # an agent pool, then the pipeline tree. MAW was tried as a fix for config
+    # generation failures and measured WORSE on the same ask (2026-09-02): 3 of
+    # 11 pipelines completed against MAS's 25 of 46, and 4010s against 499s.
+    # The reason is that the dominant failure is not config size but the model
+    # not writing to output_key at all, so splitting the call into two just
+    # doubles the places that can fail, each with its own 4-attempt retry.
+    # Kept selectable because the pipeline shape is still the better model for
+    # deterministic multi-step work once generation is reliable.
+    fedot_engine: Literal["maw", "mas"] = "mas"
     require_task_design: bool = True
     # When True (default), schema invents baselines/metrics for weak planners so
     # completeness majors for unspecified/empty design cannot fire. Set False

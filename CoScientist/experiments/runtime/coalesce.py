@@ -121,6 +121,13 @@ def coalesce_experiment_module_calls(
             requests.append(req.strip())
 
     if em_idxs and hasattr(state, "__setitem__"):
+        getter = getattr(state, "get", None)
+        prior = getter("experiment_module_runs") if callable(getter) else None
+        try:
+            runs = int(prior or 0) + 1
+        except (TypeError, ValueError):
+            runs = 1
+        state["experiment_module_runs"] = runs
         state["experiment_module_dispatched"] = True
 
     if len(em_idxs) <= 1:
@@ -154,15 +161,33 @@ def suppress_experiment_module_after_completed(
     callback_context: CallbackContext,
     llm_response: LlmResponse,
 ) -> Optional[LlmResponse]:
-    """after_model: do not re-enter the module after result HITL accepted the stage with tasks_ok=true."""
+    """after_model: do not re-enter the module after result HITL accepted the stage or if planning is paused."""
     state = getattr(callback_context, "state", None)
     getter = getattr(state, "get", None) if state is not None else None
-    runtime = getter("experiment_runtime") if callable(getter) else None
-    if not isinstance(runtime, dict) or runtime.get("phase") != "completed":
+    if not callable(getter):
         return None
-    from CoScientist.experiments.review import result_tasks_ok
-    if not result_tasks_ok(runtime):
+    runtime = getter("experiment_runtime")
+    plan_paused = bool(getter("experiment_plan_review_paused"))
+    is_completed = isinstance(runtime, dict) and runtime.get("phase") == "completed"
+    from CoScientist.config import get_settings
+    try:
+        current_runs = int(getter("experiment_module_runs") or 0)
+    except (TypeError, ValueError):
+        current_runs = 0
+    max_em_runs = get_settings().experiments.max_replans
+    budget_exhausted = current_runs >= max_em_runs
+
+    if plan_paused:
+        pass
+    elif budget_exhausted:
+        pass
+    elif is_completed:
+        from CoScientist.experiments.review import result_tasks_ok
+        if not result_tasks_ok(runtime):
+            return None
+    else:
         return None
+
     content = getattr(llm_response, "content", None)
     parts = list(getattr(content, "parts", None) or [])
     if not parts:
@@ -177,15 +202,30 @@ def suppress_experiment_module_after_completed(
     if not kept:
         summary = getter("experiment_summary") if callable(getter) else None
         if not isinstance(summary, str) or not summary.strip():
-            summary = (
-                "Experiment stage already completed for this session; "
-                "not starting a second plan."
-            )
+            if plan_paused:
+                summary = (
+                    "Experiment plan review is paused for this session; "
+                    "not starting a second plan."
+                )
+            elif budget_exhausted:
+                summary = (
+                    f"Experiment module reached maximum attempt budget "
+                    f"({current_runs}/{max_em_runs}); synthesizing final "
+                    "report with available results."
+                )
+            else:
+                summary = (
+                    "Experiment stage already completed for this session; "
+                    "not starting a second plan."
+                )
         kept = [types.Part(text=summary)]
     content.parts = kept
     logger.warning(
-        "[%s] suppressed ExperimentModuleAgent call(s) after phase=completed (tasks_ok=true)",
+        "[%s] suppressed ExperimentModuleAgent: runs=%d/%d plan_paused=%s",
         getattr(callback_context, "agent_name", None) or "orchestrator",
+        current_runs,
+        max_em_runs,
+        plan_paused,
     )
     return None
 

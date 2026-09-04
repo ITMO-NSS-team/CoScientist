@@ -149,6 +149,13 @@ def _coerce_alembic_mcp_success(
 
 
 RUNTIME_KEY = "experiment_runtime"
+# Replan rounds live OUTSIDE the runtime dict on purpose: a replan rebuilds the
+# runtime, and build_experiment_context nulls RUNTIME_KEY through its
+# _CLEAR_ON_NEW_RUN list before the planner runs. A counter kept inside the
+# runtime is therefore zeroed by the very event it is meant to count, which
+# left the budget bounding nothing. builder.py resets this key only when the
+# ask itself changes, so it bounds the run rather than a single plan.
+REPLAN_ROUNDS_KEY = "experiment_replan_rounds"
 ROUTE_AGENT_BY_ROUTE = {
     ExecutionRoute.FEDOT_MAS.value: "FedotAgent",
     ExecutionRoute.REACT_TOOLS.value: "ExperimentAgent",
@@ -275,6 +282,14 @@ def initialize_runtime(
         }
         for task in plan.tasks
     }
+    # The round count is read from the durable key, not from the previous runtime:
+    # by the time a replan reaches here the builder has already nulled RUNTIME_KEY.
+    carried_rounds = int(state.get(REPLAN_ROUNDS_KEY) or 0)
+    previous = state.get(RUNTIME_KEY)
+    carried_feedback = (
+        previous.get("result_review_feedback") if isinstance(previous, dict) else None
+    )
+
     runtime = {
         "run_id": plan.experiment_run_id,
         "plan_id": plan.plan_id,
@@ -287,7 +302,9 @@ def initialize_runtime(
         "task_order": [task.id for task in plan.tasks],
         "tasks": tasks,
         "results": [],
-        "result_review_feedback": None,
+        # Why this plan exists, so the executor and the report can say so.
+        "result_review_feedback": carried_feedback if carried_rounds else None,
+        "replan_rounds": carried_rounds,
     }
     refresh_readiness(runtime)
     state[RUNTIME_KEY] = runtime
@@ -308,19 +325,78 @@ def approve_plan(state: MutableMapping[str, Any]) -> dict[str, Any]:
     runtime["approved"] = True
     runtime["phase"] = "execution"
     refresh_readiness(runtime)
+    # Same reason as mark_result_review: ADK records a state delta on assignment
+    # to a top-level key, never on a nested mutation. Without this line the
+    # approval above stays invisible to the caller and the plan is re-approved.
+    state[RUNTIME_KEY] = runtime
     _publish_active_tasks(state, runtime)
     return {"status": "success", "phase": runtime["phase"], "plan_id": runtime["plan_id"]}
 
 
+_TASK_VIEW_FIELDS = ("status", "current_route", "planned_route", "last_message")
+
+
 def get_experiment_plan(state: MutableMapping[str, Any]) -> dict[str, Any]:
+    """The executor's control-plane view: what exists, what state it is in, what
+    can start now.
+
+    The executor prompt orders a get_experiment_plan after every record_result,
+    and this used to hand back a deep copy of the whole plan and the whole task
+    runtime — every attempt and every attempt's tool scope with full JSON
+    schemas. In a long run that is the single largest repeated payload in the
+    conversation, and none of it is what the executor decides on: measured
+    2026-09-01, the executor's prompt grew from 7 312 to 112 134 tokens across
+    one run, and the module accounted for 92% of the run's input tokens.
+    """
     runtime = _runtime(state)
-    return {
+    plan = runtime.get("plan") or {}
+    tasks = runtime.get("tasks") or {}
+    rounds = int(state.get(REPLAN_ROUNDS_KEY) or 0)
+    budget = int(get_settings().experiments.max_replan_rounds)
+
+    tasks_view: dict[str, Any] = {}
+    ready: list[str] = []
+    for task_id in runtime.get("task_order") or []:
+        task_runtime = tasks.get(task_id)
+        if not isinstance(task_runtime, dict):
+            continue
+        task = task_runtime.get("task") or {}
+        row = {key: task_runtime.get(key) for key in _TASK_VIEW_FIELDS}
+        row["name"] = task.get("name")
+        row["depends_on"] = list(task.get("depends_on") or [])
+        row["optional"] = bool(task.get("optional"))
+        row["attempts"] = len(task_runtime.get("attempt_order") or [])
+        tasks_view[task_id] = row
+        if row["status"] == "ready":
+            ready.append(task_id)
+
+    view: dict[str, Any] = {
         "status": "success",
         "phase": runtime["phase"],
         "approved": runtime["approved"],
-        "plan": copy.deepcopy(runtime["plan"]),
-        "tasks": copy.deepcopy(runtime["tasks"]),
+        # The executor is the only agent that can act on a replan, so it is the
+        # one that has to see the budget: `replan_requested` used to be written
+        # and read by nobody, which made a redo indistinguishable from a first
+        # pass and hid how many rounds had already been spent.
+        "replan_rounds": rounds,
+        "max_replan_rounds": budget,
+        "replan_rounds_remaining": max(budget - rounds, 0),
+        # Plan header only: the task bodies are in the plan the human approved
+        # and come back per task from start_task.
+        "plan": {
+            key: plan.get(key)
+            for key in ("plan_id", "experiment_run_id", "revision", "goal",
+                        "hypothesis", "total_est_duration_min")
+            if plan.get(key) is not None
+        },
+        "tasks": tasks_view,
+        "ready": ready,
     }
+    if rounds:
+        view["replan_reason"] = runtime.get("result_review_feedback")
+    if runtime.get("replan_exhausted"):
+        view["replan_exhausted"] = True
+    return view
 
 
 def generate_presigned_s3_url(bucket: str, s3_key: str, expiration: int) -> str:
@@ -847,12 +923,21 @@ def record_result(
             )
         criteria_ok, failed_criteria = criteria_valid(task, checks, route=attempt_route)
         if status == "failure" and criteria_ok and artifacts_ok:
+            # Ярлык оправдан: доказательство действительно есть, и называть это
+            # полным провалом неверно. Но retryable=False здесь был отдельной,
+            # незаметной потерей: провал получал право не повторяться.
+            # Измерено 04.09.2026 на восьми прогонах — докинг падал по таймауту,
+            # к попытке прилагался артефакт-заглушка family_outputs.json, статус
+            # переписывался в partial, ретрай глушился, headless-ревью закрывало
+            # прогон зелёным. Ни один из восьми докингов не оценил собственные
+            # молекулы прогона, и ни один не был повторён.
+            # Ярлык оставляем, право на повтор — за исходным результатом.
             status = "partial"
             result = {
                 **result,
                 "status": "partial",
                 "error_code": None,
-                "retryable": False,
+                "retryable": result.get("retryable", True),
                 "warnings": [
                     *(result.get("warnings") or []),
                     "accepted_via_durable_family_evidence: relabeled failure after real evidence",
@@ -1173,12 +1258,48 @@ def mark_result_review(
     runtime = _runtime(state)
     if runtime["phase"] not in {"reporting", "awaiting_result_review"}:
         raise ExperimentRuntimeError("invalid_phase", "Result review requires a reported experiment.")
+
+    rounds = int(state.get(REPLAN_ROUNDS_KEY) or 0)
+    budget = int(get_settings().experiments.max_replan_rounds)
+    exhausted = False
+
     if approved:
         runtime["phase"] = "completed"
+    elif rounds >= budget:
+        # Out of replan budget: finish honestly rather than loop. The reviewer's
+        # objection is preserved so the report can say the run ended unresolved.
+        exhausted = True
+        runtime["phase"] = "completed"
+        runtime["replan_exhausted"] = True
+        runtime["result_review_feedback"] = (
+            f"{feedback or 'Result redesign requested.'} "
+            f"(replan budget exhausted after {rounds} round(s); stopping instead of replanning)"
+        )
     else:
+        rounds += 1
+        state[REPLAN_ROUNDS_KEY] = rounds
+        runtime["replan_rounds"] = rounds
         runtime["phase"] = "replan_requested"
         runtime["result_review_feedback"] = feedback or "Result redesign requested."
-    return {"status": "success", "phase": runtime["phase"]}
+
+    # Reassign, do not just mutate: ADK records a state delta on assignment, so
+    # an in-place edit of the nested dict never reaches session state. That is
+    # what defeated build_experiment_context's `phase == "completed"` gate and
+    # let a finished stage be re-delegated as a whole new plan+HITL+execute
+    # cycle — five times in one observed run.
+    state[RUNTIME_KEY] = runtime
+    _audit(
+        f"EXPERIMENT_RESULT_REVIEW approved={str(approved).lower()} "
+        f"phase={runtime['phase']} replan_rounds={runtime.get('replan_rounds', 0)}/{budget}"
+        + (" replan_exhausted=true" if exhausted else "")
+    )
+    return {
+        "status": "success",
+        "phase": runtime["phase"],
+        "replan_rounds": int(runtime.get("replan_rounds") or 0),
+        "max_replan_rounds": budget,
+        "replan_exhausted": exhausted,
+    }
 
 
 __all__ = [
