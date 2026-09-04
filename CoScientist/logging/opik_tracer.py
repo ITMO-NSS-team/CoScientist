@@ -44,11 +44,6 @@ def get_multi_agent_tracer():
     # Don't let an opik misconfiguration (no key, no network) take down the app
     # on import — tracing is best-effort.
     try:
-        # These must be passed explicitly: without them, opik.configure() never
-        # sees our settings at all — it resolves api_key/url from whatever is
-        # cached in ~/.opik.config on the machine, and then OVERWRITES the env
-        # vars we just set above with that cached value. Passing them here is
-        # what makes settings.opik authoritative over a stale local cache.
         opik.configure(
             api_key=api_key or None,
             url_override=url_override or None,
@@ -60,9 +55,6 @@ def get_multi_agent_tracer():
     except Exception as e:  # pragma: no cover - best-effort tracing setup
         print(f"[opik] configure failed, tracing may be disabled: {e!r}")
 
-    # opik.configure() may still rewrite these from its cached config on a path
-    # that doesn't validate our values (e.g. offline, or an unreachable key) —
-    # re-assert them so a stale ~/.opik.config can never silently win.
     if api_key:
         os.environ["OPIK_API_KEY"] = api_key
     if url_override:

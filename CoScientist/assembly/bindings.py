@@ -1017,23 +1017,6 @@ _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_datase
 # Report language the user picked for this session: inject the whole block
 # (headings, substitution rule, glossary), not a bare language name.
 _cb("inject_report_language", "before_agent", factory=lambda ctx: _inject_report_language())
-
-
-# The link registry.
-#   * `user_links` (before_agent) — a snapshot before the agent's own turn:
-#     extracts URLs from the incoming message + already-rendered context, and
-#     renders the `{links_context?}` table.
-#   * `register_tool_result_links` (after_tool) — the snapshot's counterpart: a
-#     URL a TOOL returns mid-turn (a sandbox artifact, a generated figure)
-#     wasn't in that snapshot, so it gets registered here instead, and the
-#     table re-rendered — the agent's very next model call already has a
-#     reference for it.
-#   * `resolve_link_refs` (before_tool) / `expand_link_refs` (after_model) —
-#     substitute the real URL for every `[[linkN]]` the model writes, on the
-#     two ways text leaves an agent: its tool calls and its own answer.
-# Wire all four together: an agent that writes references without an egress
-# callback emits the raw `[[linkXXXX]]` verbatim; one that calls tools without the
-# after_tool hook never learns about a link a tool handed it.
 _cb("user_links", "before_agent", factory=lambda ctx: _user_links())
 _cb("redact_link_urls", "before_model", factory=lambda ctx: _redact_link_urls())
 _cb("resolve_link_refs", "before_tool", factory=lambda ctx: _resolve_link_refs())

@@ -221,11 +221,6 @@ def _shape(result: Dict[str, Any], *, waited: int) -> Dict[str, Any]:
     shaped = {
         "status": norm,
         "summary": result.get("summary", ""),
-        # Kept as the structured list the server sent, not folded into the
-        # summary text: `register_tool_result_links` registers each URL from
-        # here and the model gets a `[[linkN]]` for it, so the link reaches
-        # the caller as code wrote it. Always present — an empty list is the
-        # answer "this run uploaded nothing".
         "s3_uploads": result.get("s3_uploads") or [],
         "sandbox_id": result.get("sandbox_id"),
         "reused": result.get("reused", False),

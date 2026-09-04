@@ -95,7 +95,7 @@ _CRITIC_MAX_ATTEMPTS = int(os.getenv("CRITIC__MAX_ATTEMPTS", "2"))
 # the JSON starts, `content` comes back "" and the critic silently approves.
 # So this is a guard against a runaway generation, set well above the envelope,
 # not a budget meant to bite. `finish_reason` is logged when it does.
-_CRITIC_MAX_TOKENS = int(os.getenv("CRITIC__MAX_TOKENS", "2000"))
+_CRITIC_MAX_TOKENS = int(os.getenv("CRITIC__MAX_TOKENS", "5000"))
 
 
 # ---------------------------------------------------------------------------

@@ -67,7 +67,6 @@ tz_agent = _system.agents.get("TZAgent")
 _tracer = get_multi_agent_tracer()
 if _tracer is not None:
     track_adk_agent_recursive(run_root, _tracer)
-    # ОПИК: временно переносим колбэки в начало, чтобы видеть сырой вывод до expand_link_refs
     for _ag in _system.agents.values():
         if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
             _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
@@ -125,7 +124,6 @@ def build_for_mode():
         _tracer = get_multi_agent_tracer()
         if _tracer is not None:
             track_adk_agent_recursive(system.run_root, _tracer)
-            # ОПИК: временно переносим колбэки в начало, чтобы видеть сырой вывод до expand_link_refs
             for _ag in system.agents.values():
                 if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
                     _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
@@ -162,7 +160,6 @@ def build_for_mode():
         _tracer = get_multi_agent_tracer()
         if _tracer is not None:
             track_adk_agent_recursive(system.run_root, _tracer)
-            # ОПИК: временно переносим колбэки в начало, чтобы видеть сырой вывод до expand_link_refs
             for _ag in system.agents.values():
                 if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
                     _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
@@ -196,7 +193,6 @@ def build_for_mode():
     _tracer = get_multi_agent_tracer()
     if _tracer is not None:
         track_adk_agent_recursive(system.run_root, _tracer)
-        # ОПИК: временно переносим колбэки в начало, чтобы видеть сырой вывод до expand_link_refs
         for _ag in system.agents.values():
             if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
                 _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
