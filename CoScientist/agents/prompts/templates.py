@@ -1646,8 +1646,19 @@ def orchestrator(ctx: PromptContext) -> str:
         else:
             discovery_clause = ""
         steps.append(
-            "For computational/execution experiments, call `retrieve_tools` to discover which ready-made MCP\n"
-            "   tools exist for the task. (Do NOT call `retrieve_tools` for literature searches or hypotheses-only requests).\n"
+            # Here stood an exception: do NOT call retrieve_tools for literature
+            # searches. A task whose FIRST stage is a literature review fell under it
+            # wholesale, so the orchestrator lawfully skipped the inventory check, went
+            # to the literature lane and stopped there. Measured 2026-09-04 on the
+            # Heracleum task: 0 retrieve_tools calls, 0 module entries, 0 of 6 planned
+            # tasks executed. The check is unconditional now: first find out WHAT can
+            # compute the task, only then pick a lane.
+            "ALWAYS call `retrieve_tools` FIRST, before choosing a lane, to find out whether\n"
+            "   ready-made MCP tools can carry out this task. This is a feasibility check:\n"
+            "   a task that opens with a literature stage may still have computational ones,\n"
+            "   so judge by what the task REQUIRES overall, not by how its first line reads.\n"
+            "   If suitable tools exist the task IS executable as an experiment - send those\n"
+            f"   stages to {exec_name}.\n"
             "   Run one or two focused `retrieve_tools` queries per capability\n"
             f"   (e.g. \"molecule generation\", \"inhibitor design\"); if a relevant tool\n"
             f"   exists, {prefer}.{research_clause}"

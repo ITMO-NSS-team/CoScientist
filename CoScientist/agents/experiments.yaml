@@ -36,9 +36,14 @@ agents:
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     prompt: orchestrator
-    # No retrieval: EM ToolPreparer owns the only inventory for compute.
+    # retrieval возвращён (как в main/system.yaml): он включает в промпте ветку
+    # has_retrieval — «tool-discovery gate». Без неё, по комментарию в
+    # agents/prompts/templates.py:1610, модель сопоставляет «generate/find
+    # <научная вещь>» прямо с ResearchAgent. Полный инвентарь по-прежнему
+    # собирает ToolPreparer внутри модуля; оркестратору нужен только ответ на
+    # вопрос «есть ли чем это посчитать».
     # No CoderAgent lane: Coder is an EM-internal Executor route (no shadow science).
-    tools: [graph, research_graph_orchestrator]
+    tools: [retrieval, graph, research_graph_orchestrator]
     subordinates:
       - ResearchAgent
       - HypothesesAgent
@@ -161,9 +166,10 @@ agents:
       for ANY computational / engineering stage: molecules, docking, properties,
       simulations, custom code, named repos/URLs, FEDOT loops, or MCP gaps.
       Call ONCE per stage with the FULL self-contained brief (goal, constraints,
-      data refs, required outcomes). Do not retrieve tools yourself and do not
-      fan out into multiple ExperimentModuleAgent calls — inventory + plan +
-      route fallbacks live inside the module.
+      data refs, required outcomes). Retrieve tools first to decide the lane and
+      to NAME the relevant tools in the brief; the FULL inventory, plan and route
+      fallbacks still live inside the module, so do not try to assemble them
+      yourself and do not fan out into multiple ExperimentModuleAgent calls.
     planning: |-
       Use this as your ONLY choice for computational or engineering work.
       Prefer over Research whenever the ask can be computed or coded:

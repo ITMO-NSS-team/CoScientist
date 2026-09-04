@@ -86,11 +86,15 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
         "skip_when_experiment_not_feasible",
     ]
     assert "skip_when_experiment_stage_complete" in config.agent("ToolPreparerAgent").callbacks.before_agent
-    # Three-lane target: science/compute → EM only (no orch→Coder shadow science);
-    # single inventory (orch has no retrieval).
+    # Three-lane target: science/compute → EM only (no orch→Coder shadow science).
     assert "CoderAgent" not in orch.subordinates
     assert "McpBuilderAgent" not in orch.subordinates
-    assert "retrieval" not in (orch.tools or [])
+    # The orchestrator now carries the retrieval tool: choosing a lane requires
+    # knowing whether ready-made MCP tools can do the work, and asking that
+    # question is cheaper than routing a computable task into a literature review
+    # and discovering it there. test_assembly.py::test_orchestrator_tool_discovery_gate
+    # holds the matching invariant on the prompt side.
+    assert "retrieval" in (orch.tools or [])
     assert "McpBuilderAgent" in config.agents
     # Coder + McpBuilder remain EM-internal Executor routes as well.
     # Research/Medical are shared: orch lanes for cheap single-domain asks,
@@ -192,7 +196,7 @@ def test_planner_and_coder_prompts_cover_multi_h_and_anti_fabrication():
     assert "phase is still" in executor and "reporting" in executor
 
 
-def test_research_prompt_opens_literature_with_search_papers():
+def test_research_prompt_requires_both_literature_tools():
     from unittest.mock import MagicMock
 
     from CoScientist.agents.prompts.templates import research

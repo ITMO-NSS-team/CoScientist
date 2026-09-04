@@ -3,7 +3,7 @@ Application configuration using Pydantic Settings.
 """
 import os as _os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from dotenv import load_dotenv as _load_dotenv
 from pydantic import BaseModel, Field, model_validator
@@ -328,10 +328,38 @@ class ExperimentsSettings(BaseModel):
     route_alembic: bool = False
     task_max_attempts: int = Field(default=2, ge=1, le=2)
     max_plan_tasks: int = Field(default=8, ge=1, le=20)
-    # Outer hops after a result-review reject. Skip planner at replan_count >= this.
+    # How many times a rejected result review may send the module back to
+    # planning. `task_max_attempts` bounds retries of ONE task; nothing used to
+    # bound redoing the whole plan, and a stale phase turned that into an
+    # unbounded loop (observed 2026-09-01: five plans in one run, the first of
+    # which had already finished every task successfully). 0 disables replanning
+    # entirely; the cap is counted across the whole experiment run.
+    max_replan_rounds: int = Field(default=1, ge=0, le=5)
+    # Outer hops after a result-review reject. Skip planner at replan_count >=
+    # this. The dispatch budget in coalesce.py reads this one because it lives on
+    # the orchestrator State, i.e. it survives the AgentTool boundary, unlike the
+    # counter kept inside the runtime.
     max_replans: int = Field(default=2, ge=1, le=8)
-    # Inner schema/critique regenerations of ExperimentPlan within one planner hop.
-    max_plan_revisions: int = Field(default=2, ge=1, le=8)
+    # Inner schema/critique regenerations of ExperimentPlan within one planner
+    # hop, counted as CONSECUTIVE failures and reset on every plan that
+    # validates. Was 8 hardcoded, which is up to six wasted rounds on a costly
+    # planner; 2 proved too tight once a human HITL edit re-entered planning, so
+    # this leaves room for one human round plus a couple of genuine planner
+    # mistakes without letting a broken plan burn eight planner calls.
+    max_plan_revisions: int = Field(default=4, ge=1, le=8)
+    # Which FEDOT engine backs the fedot_mas route.
+    #
+    # "mas" (default) is the single-shot routing config. "maw" is a fixed
+    # Sequential/Parallel/Loop pipeline whose config is designed in two calls -
+    # an agent pool, then the pipeline tree. MAW was tried as a fix for config
+    # generation failures and measured WORSE on the same ask (2026-09-02): 3 of
+    # 11 pipelines completed against MAS's 25 of 46, and 4010s against 499s.
+    # The reason is that the dominant failure is not config size but the model
+    # not writing to output_key at all, so splitting the call into two just
+    # doubles the places that can fail, each with its own 4-attempt retry.
+    # Kept selectable because the pipeline shape is still the better model for
+    # deterministic multi-step work once generation is reliable.
+    fedot_engine: Literal["maw", "mas"] = "mas"
     require_task_design: bool = True
     # When True (default), schema invents baselines/metrics for weak planners so
     # completeness majors for unspecified/empty design cannot fire. Set False
