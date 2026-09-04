@@ -360,7 +360,7 @@ agents:
           → Use whenever no existing tool covers the objective and the step requires
             doing software/data engineering rather than calling a ready service
     prompt: coder
-    tools: [coder, sandbox, research_graph]
+    tools: [coder, sandbox, research_graph, vault]
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
@@ -406,7 +406,7 @@ agents:
       building or training on it (e.g. "collect a dataset of BTK inhibitors with
       IC50"). It downloads into the shared workspace and writes a MANIFEST.
     prompt: dataset_collector
-    tools: [coder, sandbox, websearch, research_graph]
+    tools: [coder, sandbox, websearch, research_graph, vault]
     output_key: dataset_results
     callbacks:
       before_agent: [inject_research_context, inject_dataset_context, user_links]
