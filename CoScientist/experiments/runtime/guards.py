@@ -799,7 +799,10 @@ def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
 def skip_when_experiment_not_feasible(callback_context: Any) -> Optional[types.Content]:
     """before_agent: short-circuit EM children after an early NO_MATCHING_TOOL."""
     state = callback_context.state
-    message = state.get(NO_MATCHING_TOOL_STATE_KEY) if isinstance(state, Mapping) else None
+    # ADK State does not inherit from Mapping (MRO: State -> object), so
+    # isinstance(state, Mapping) is always False here and the guard stayed silent.
+    getter = getattr(state, "get", None)
+    message = getter(NO_MATCHING_TOOL_STATE_KEY) if callable(getter) else None
     if not isinstance(message, str) or not message.strip():
         return None
     state["experiment_execution_summary"] = message
@@ -812,15 +815,29 @@ def skip_when_experiment_not_feasible(callback_context: Any) -> Optional[types.C
 def skip_when_experiment_stage_complete(callback_context: Any) -> Optional[types.Content]:
     """before_agent: skip completed EM hops, rediscovery on replan, or exhausted replans."""
     state = callback_context.state
-    if not isinstance(state, Mapping):
+    # As above: duck-typed check instead of isinstance(state, Mapping), which
+    # never holds for an ADK State and made this whole gate unreachable.
+    getter = getattr(state, "get", None)
+    if not callable(getter):
         return None
-    runtime = state.get("experiment_runtime")
+    runtime = getter("experiment_runtime")
     if not isinstance(runtime, dict):
+        # An open gate on a finished stage means replanning the whole experiment,
+        # so say what it saw. runtime=NoneType means completion never reached the
+        # caller across the AgentTool boundary (see _REVIEW_OWNED_STATE_KEYS in
+        # experiments/review.py).
+        audit(
+            logger,
+            "EXPERIMENT_STAGE_GATE_OPEN runtime=%s" % type(runtime).__name__,
+        )
         return None
     phase = runtime.get("phase")
     agent = str(getattr(callback_context, "agent_name", None) or "")
+    from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
     try:
-        replan_count = int(runtime.get("replan_count") or 0)
+        replan_count = int(
+            getter(REPLAN_ROUNDS_KEY) or runtime.get("replan_count") or 0
+        )
     except (TypeError, ValueError):
         replan_count = 0
 

@@ -89,6 +89,9 @@ RULES:
    Generators: input_data=[] + launch_params. Prior outputs:
    kind=task_artifact, source_task_id, source_artifact_id + depends_on.
 3. total_est_duration_min = sum of task durations. Task ids: EXP-1…EXP-n.
+   Keep the plan to 1–8 tasks: every extra task is another start_task →
+   route → record_result cycle, and measured 2026-09-04 the larger plans
+   finished slower with more partial results, not with more evidence.
    experiment_context.operations is AUTHORITATIVE when non-empty: cover EVERY
    operation_id with ≥1 non-optional task. Multi-step pipelines (generation →
    docking → analysis) use separate tasks that share design.operation_ref=OP-n.

@@ -192,7 +192,7 @@ def test_planner_and_coder_prompts_cover_multi_h_and_anti_fabrication():
     assert "phase is still" in executor and "reporting" in executor
 
 
-def test_research_prompt_opens_literature_with_search_papers():
+def test_research_prompt_requires_both_literature_tools():
     from unittest.mock import MagicMock
 
     from CoScientist.agents.prompts.templates import research

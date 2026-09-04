@@ -14,10 +14,13 @@ from typing import Any
 
 from google.adk.agents.base_agent import BaseAgent
 
-from fedotmas import MAS
+from google.adk.plugins import BasePlugin
+
+from fedotmas import MAS, MAW
 from fedotmas.common.llm import _ProxyClient
 from fedotmas.mas.builder import _build_routing_agent, build_routing_system
 from fedotmas.mas.models import MASAgentConfig, MASConfig
+from fedotmas.maw.models import MAWAgentConfig, MAWConfig
 
 from CoScientist.agents.callbacks.json_output import _unwrap_completion_state
 
@@ -308,3 +311,220 @@ class PatchedMAS(MAS):
         if len(task) > _MAX_TASK_CHARS:
             task = task[:_MAX_TASK_CHARS] + "\n…[truncated]"
         return f"\n\n## USER TASK (authoritative — execute this; do not greet)\n{task}\n"
+
+
+class PatchedMAW(MAW):
+    """MAW with the one CoScientist patch that still applies.
+
+    MAW is a *fixed pipeline* (Sequential/Parallel/Loop over an agent pool), so
+    two of the three PatchedMAS workarounds are moot here: there is no
+    coordinator and no ``transfer_to_agent``, so nothing can lose the task
+    mid-hop and there is no single-worker collapse to make. What survives is
+    tool sanitising — the meta-agent still emits MCP *function* names where
+    registry *server* names belong, which would leave an agent unable to call
+    MCP at all.
+
+    Chosen over MAS because MAW generates its config in two smaller LLM calls
+    (agent pool, then pipeline tree) instead of one large MASConfig. On this
+    stand the single-shot MASConfig failed to parse in roughly half of all runs
+    (measured 2026-09-01: 66 retry failures, 82 "did not produce
+    agent_system_config" across 46 runs, on two different models).
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        ensure_fedot_openai_proxy_compat()
+        super().__init__(*args, **kwargs)
+        self._pending_task: str | None = None
+
+    async def generate_config(self, task: str) -> MAWConfig:
+        self._pending_task = task
+        return await super().generate_config(task)
+
+    async def build_and_run(
+        self,
+        config: MAWConfig,
+        user_query: str,
+        *,
+        initial_state: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        self._pending_task = user_query
+        return await super().build_and_run(
+            config, user_query, initial_state=initial_state, timeout=timeout
+        )
+
+    def build(self, config: MAWConfig) -> BaseAgent:
+        return super().build(self._sanitize_config(config))
+
+    def _sanitize_config(self, config: MAWConfig) -> MAWConfig:
+        """Keep only tool names the MCP registry actually knows.
+
+        Registry keys are MCP *server* names. An agent left with an empty
+        toolset cannot reach MCP at all, so — as in the MAS path — it gets every
+        server we were handed; CoScientist has already narrowed those to the
+        task before constructing the engine.
+        """
+        known = sorted(self._mcp_registry or {})
+        known_set = set(known)
+        task_block = self._task_block()
+
+        def clean(agent: MAWAgentConfig) -> MAWAgentConfig:
+            original = list(agent.tools)
+            tools = [t for t in original if t in known_set]
+            if bad := [t for t in original if t not in known_set]:
+                _log.warning(
+                    "PatchedMAW: dropping unknown tools %s from agent %r (known=%s)",
+                    bad, agent.name, known,
+                )
+            if not tools and known:
+                tools = list(known)
+                _log.warning(
+                    "PatchedMAW: agent %r had no registry tools (had %s) — attaching %s so MCP can run",
+                    agent.name, original, tools,
+                )
+            instruction = agent.instruction.rstrip()
+            if tools and "Do NOT greet" not in instruction:
+                instruction += _NO_GREET_SUFFIX
+            # No transfer_to_agent in a fixed pipeline, but a step still only
+            # sees what upstream steps wrote to state, so restate the task.
+            if task_block and "## USER TASK" not in instruction:
+                instruction += task_block
+            return agent.model_copy(update={"tools": tools, "instruction": instruction})
+
+        return config.model_copy(update={"agents": [clean(a) for a in config.agents]})
+
+    def _task_block(self) -> str:
+        task = (self._pending_task or "").strip()
+        if not task:
+            return ""
+        if len(task) > _MAX_TASK_CHARS:
+            task = task[:_MAX_TASK_CHARS] + "\n…[truncated]"
+        return f"\n\n## USER TASK (authoritative — execute this; do not greet)\n{task}\n"
+
+
+class MetaJsonRecoveryPlugin(BasePlugin):
+    """Recover a meta-agent config that the model emitted as prose or as a thought.
+
+    ``_execute_meta_call`` reads the generated config from ``state[output_key]``
+    and raises ``"<agent> did not produce '<key>' in session state"`` when it is
+    empty. That message reads like the model returned nothing, but the dominant
+    cause is narrower: the model DID answer, and ADK could not store the answer
+    because it was not clean JSON in a plain text part — GLM in particular parks
+    structured output in a ``thought`` part, and models routinely wrap the object
+    in a fence or a sentence of preamble.
+
+    This is by far the biggest single failure mode of the FEDOT route on this
+    stand: 82 of 88 config-generation failures measured on 2026-09-01 were this
+    message, against 6 genuine ValidationErrors, and it reproduces on both
+    engines (MAS ``routing_meta_agent``, MAW ``pool_generator`` /
+    ``pipeline_generator``) and on two different models.
+
+    CoScientist already solves exactly this for its own agents with
+    ``sanitize_json_output``; ``_execute_meta_call`` forwards ``plugins=`` to the
+    ADK Runner, so the same repair can be delivered into FEDOT's meta agents
+    without patching the library. Nothing is invented here: if no JSON can be
+    recovered the response passes through untouched and the original error
+    stands.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(name="coscientist_meta_json_recovery")
+        self.repaired: list[str] = []
+
+    async def after_model_callback(
+        self, *, callback_context: Any, llm_response: Any
+    ) -> Any | None:
+        from CoScientist.agents.callbacks.json_output import _extract_json
+
+        # Scope: only agents that declare an output_schema, i.e. the ones whose
+        # answer ADK tries to store as structured output and whose failure to
+        # store it produces "did not produce '<key>' in session state".
+        #
+        # This matters because plugins passed to the engine reach the PIPELINE
+        # agents too, not just the meta agents. Observed 2026-09-02: an earlier
+        # version rewrote a worker's answer ("rebuilt experiment_executor config
+        # from the text part"), which replaces a prose report containing a JSON
+        # blob with the blob alone — silently discarding the narrative the caller
+        # actually reads. A worker has no output_schema, so this check excludes it.
+        if not _expects_structured_output(callback_context):
+            return None
+
+        content = getattr(llm_response, "content", None)
+        parts = getattr(content, "parts", None) if content is not None else None
+        if not parts:
+            return None
+        # A tool call is not a config answer.
+        if any(getattr(p, "function_call", None) for p in parts):
+            return None
+
+        plain = "".join(
+            p.text for p in parts
+            if getattr(p, "text", None) and not getattr(p, "thought", False)
+        )
+        thought = "".join(
+            p.text for p in parts
+            if getattr(p, "text", None) and getattr(p, "thought", False)
+        )
+        if plain.strip() and _extract_json(plain) is not None and plain.strip().startswith("{"):
+            return None  # already clean — do not touch a good answer
+
+        payload = _extract_json(plain) if plain.strip() else None
+        source = "text"
+        if payload is None and thought.strip():
+            payload = _extract_json(thought)
+            source = "thought"
+        if not isinstance(payload, dict):
+            return None  # nothing recoverable; let the original error report it
+
+        agent = _agent_name_of(callback_context)
+        self.repaired.append(agent)
+        _log.warning(
+            "MetaJsonRecovery: rebuilt %s config from the %s part "
+            "(model returned it outside a clean JSON text part)",
+            agent, source,
+        )
+        return _rewritten_json_response(llm_response, payload)
+
+
+def _agent_name_of(callback_context: Any) -> str:
+    for attr in ("agent_name", "_agent_name"):
+        if (value := getattr(callback_context, attr, None)):
+            return str(value)
+    ctx = getattr(callback_context, "_invocation_context", None)
+    agent = getattr(ctx, "agent", None)
+    return str(getattr(agent, "name", "meta_agent"))
+
+
+def _rewritten_json_response(llm_response: Any, payload: dict) -> Any:
+    """Same response, with one plain text part holding exactly the JSON object."""
+    import copy as _copy
+    import json as _json
+
+    from google.genai import types as _types
+
+    out = _copy.deepcopy(llm_response)
+    out.content = _types.Content(
+        role=getattr(getattr(llm_response, "content", None), "role", "model") or "model",
+        parts=[_types.Part(text=_json.dumps(payload, ensure_ascii=False))],
+    )
+    return out
+
+
+def _expects_structured_output(callback_context: Any) -> bool:
+    """True only for an agent whose answer ADK stores against an output_schema.
+
+    Kept deliberately narrow and fail-closed: if the agent cannot be reached the
+    answer is left alone, because rewriting a free-text answer loses information
+    while declining to rewrite only leaves the original error in place.
+    """
+    agent = None
+    getter = getattr(callback_context, "get_invocation_context", None)
+    if callable(getter):
+        try:
+            agent = getattr(getter(), "agent", None)
+        except Exception:  # noqa: BLE001 — a diagnostic path must never break the run
+            agent = None
+    if agent is None:
+        ctx = getattr(callback_context, "_invocation_context", None)
+        agent = getattr(ctx, "agent", None)
+    return getattr(agent, "output_schema", None) is not None

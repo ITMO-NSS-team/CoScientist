@@ -9,12 +9,14 @@ from typing import Any, AsyncGenerator, Literal
 
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
+from google.adk.events.event_actions import EventActions
 from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.experiments.critique import PlanValidationError, validate_and_critique_plan
 from CoScientist.experiments.runtime import approve_plan, initialize_runtime, mark_result_review
 from CoScientist.experiments.runtime.shared import audit
+from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
 from CoScientist.experiments.schemas import ExperimentPlan
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.handler import AbstractHITLHandler, DelegatingHITLHandler
@@ -322,6 +324,39 @@ def render_experiment_results(state: Any) -> str:
     return "\n".join(L)
 
 
+# State this reviewer owns and must hand back to whoever invoked the module.
+#
+# The module runs as an ADK AgentTool, and AgentTool gives it a FRESH in-memory
+# session seeded from a copy of the caller's state; the only thing that travels
+# back is ``event.actions.state_delta`` (agent_tool.py: "Forward state delta to
+# parent session"). This agent, like every SessionAgent, writes through
+# ``ctx.session.state`` — a plain dict, not the ADK ``State`` wrapper — so its
+# writes mutate the throwaway child session and are dropped when the tool
+# returns. Callbacks are unaffected: ``callback_context.state`` IS a ``State``,
+# so the planner context builder's writes DO travel back.
+#
+# That asymmetry is the re-planning loop. The builder's "new run" wipe
+# (experiment_runtime = None) reached the caller; the approval that followed it
+# — approve_plan, then mark_result_review's phase=completed — did not. The next
+# module hop was therefore seeded with experiment_runtime=None, the completion
+# gate had nothing to match on, and the whole experiment was planned and run
+# again. Measured 2026-09-02: two full re-runs of the same three tasks in one
+# 41-minute run, 19:50:46 phase=completed -> 19:50:59 gate sees NoneType.
+_REVIEW_OWNED_STATE_KEYS = (
+    "experiment_runtime",
+    "experiment_plan",
+    "experiment_plan_critique",
+    "experiment_plan_validation_errors",
+    "experiment_plan_review_paused",
+    "experiment_plan_revision_count",
+    "experiment_inventory_blocker_hits",
+    "experiment_artifacts_manifest",
+    "experiment_task_results",
+    "experiment_summary",
+    REPLAN_ROUNDS_KEY,
+)
+
+
 class ExperimentReviewSessionAgent(SessionAgent):
     """LLM plan/summary stage with deterministic validation and mandatory HITL."""
 
@@ -332,6 +367,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
         if data.get("hitl_handler") is None:
             data["hitl_handler"] = fail_closed_handler()
         super().__init__(**data)
+        self._state_publish_pending = False
 
     def _should_run_review(self) -> bool:
         # Deterministic schema/critique + initialize_runtime live in
@@ -370,11 +406,11 @@ class ExperimentReviewSessionAgent(SessionAgent):
             or hits >= self.max_inventory_blocker_hits
         ):
             return HITLResponse(action=HITLAction.EDIT, approved=False, instructions=f"{edit_prefix} {detail}")
-        ctx.session.state["experiment_plan_review_paused"] = True
+        state["experiment_plan_review_paused"] = True
         reason = (
             "inventory_blocker_repeated"
             if hits >= self.max_inventory_blocker_hits
-            else "max_deterministic_revisions"
+            else "max_plan_revisions"
         )
         _audit(f"EXPERIMENT_PLAN_REVIEW_PAUSED reason={reason}")
         return HITLResponse(
@@ -395,6 +431,34 @@ class ExperimentReviewSessionAgent(SessionAgent):
             invoked_via="internal_loop", timeout_seconds=timeout_seconds,
         )
 
+    def _publish_state(self, ctx: InvocationContext, event: Event) -> None:
+        """Copy this reviewer's decisions into ``event``'s state delta.
+
+        Only a delta on a yielded event survives the AgentTool boundary, so a
+        decision that is not published here is invisible to the next module hop.
+        Keys ADK already put on the event (the output_key it fills from the
+        model turn) win — this fills in what nobody else reports.
+        """
+        state = ctx.session.state
+        delta = event.actions.state_delta
+        published = []
+        for key in _REVIEW_OWNED_STATE_KEYS:
+            if key in delta or key not in state:
+                continue
+            delta[key] = state[key]
+            published.append(key)
+        self._state_publish_pending = False
+        if published:
+            runtime = state.get("experiment_runtime")
+            _audit(
+                "EXPERIMENT_REVIEW_STATE_PUBLISHED kind=%s phase=%r keys=%d"
+                % (
+                    self.review_kind,
+                    runtime.get("phase") if isinstance(runtime, dict) else None,
+                    len(published),
+                )
+            )
+
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         if self.review_kind == "result":
             runtime = ctx.session.state.get("experiment_runtime") or {}
@@ -407,8 +471,20 @@ class ExperimentReviewSessionAgent(SessionAgent):
                     )]),
                 )
                 return
+        self._state_publish_pending = False
         async for event in super()._run_async_impl(ctx):
+            if self._state_publish_pending:
+                self._publish_state(ctx, event)
             yield event
+        if self._state_publish_pending:
+            # The base loop can decide without yielding anything (empty final
+            # output, or a break on a paused review). Carry the delta out on an
+            # event of our own rather than lose the decision.
+            carrier = Event(
+                invocation_id=ctx.invocation_id, author=self.name, branch=ctx.branch,
+            )
+            self._publish_state(ctx, carrier)
+            yield carrier
 
     async def _review_plan(self, ctx: InvocationContext, output_text: Any) -> HITLResponse:
         state, cfg = ctx.session.state, get_settings().experiments
@@ -489,6 +565,11 @@ class ExperimentReviewSessionAgent(SessionAgent):
         user_id, session_id = session_key(ctx)
         runtime = state.get("experiment_runtime") or {}
         runtime["phase"] = "awaiting_result_review"
+        if runtime:
+            # Same reason as in mark_result_review: ADK only records a state
+            # delta on assignment, so mutating the nested dict leaves the phase
+            # this reviewer just set invisible to everything downstream.
+            state["experiment_runtime"] = runtime
         tasks_ok = result_tasks_ok(runtime)
         # Materialize canonical ArtifactRef locations before HITL / auto-approve.
         rendered = render_experiment_results(state)
@@ -520,9 +601,14 @@ class ExperimentReviewSessionAgent(SessionAgent):
         return response.model_copy(update={"stop_review_loop": True})
 
     async def _review_decision(self, ctx: InvocationContext, output_text: Any) -> HITLResponse:
-        if self.review_kind == "plan":
-            return await self._review_plan(ctx, output_text)
-        return await self._review_result(ctx, output_text)
+        try:
+            if self.review_kind == "plan":
+                return await self._review_plan(ctx, output_text)
+            return await self._review_result(ctx, output_text)
+        finally:
+            # Publish whatever the decision wrote, including on the raising and
+            # pausing paths — a pause that does not reach the caller is a loop.
+            self._state_publish_pending = True
 
 
 __all__ = [
