@@ -79,8 +79,6 @@ mcp = FastMCP("PaperAnalysis")
 @mcp.tool()
 def explore_scientific_database(
     task: str,
-    initial_number_of_papers: int = 30,
-    number_of_papers_after_rerank: int = 10,
     top_k: int = 60,
     rerank_k: int = 20,
 ) -> dict:
@@ -91,10 +89,8 @@ def explore_scientific_database(
 
     Args:
         task (str): The user's question or query related to science.
-        initial_number_of_papers (int): The number of papers the initial search returns
-        number_of_papers_after_rerank (int): The number of papers that remain after reranking
-        top_k (int, optional): The number of body chunks the initial search returns
-        rerank_k (int, optional): The number of body chunks that remain after reranking
+        top_k (int, optional): The number of body chunks the vector search returns
+        rerank_k (int, optional): The number of body chunks retained after reranking
 
     Returns:
         dict: A dictionary containing the LLM's response, the supporting text, images, and tables extracted from the
@@ -110,8 +106,6 @@ def explore_scientific_database(
             simple_retriever=simple_retriever,
             s3_store=s3_store,
             llm_url=VISION_LLM_URL,
-            initial_number_of_papers=initial_number_of_papers,
-            number_of_papers_after_rerank=number_of_papers_after_rerank,
             top_k=top_k,
             rerank_k=rerank_k,
         )
@@ -236,27 +230,22 @@ def find_papers_in_db(
 def find_relevant_data_in_db(
     task: str,
     search_images: bool = False,
-    initial_number_of_papers: int = 30,
-    number_of_papers_after_rerank: int = 10,
     top_k: int = 60,
     rerank_k: int = 20,
 ) -> dict:
     """Retrieves relevant papers and structured context from the database in a single call.
 
-    Stage 1 selects relevant papers via semantic retrieval over summary chunks (the same logic as
-    find_papers_in_db); the retrieved summaries also provide paper titles for the context items. Stage 2 retrieves
-    body chunks of the selected papers; every figure referenced in a chunk (``Chunk.images_in_chunk``) is attached
-    right next to the text together with its caption and the image payload loaded from S3. If
+    Body chunks are retrieved directly from the metadata-filtered collection and reranked. Every figure referenced
+    in a chunk (``Chunk.images_in_chunk``) is attached next to the text together with its caption and the image
+    payload loaded from S3. If
     ``search_images=True``, an additional semantic retrieval over image captions is performed and the found figures
     are simply appended to the end of the context list.
 
     Args:
         task (str): The user's question, query or task
         search_images (bool, optional): Whether to search images separately or not
-        initial_number_of_papers (int): The number of papers the initial search returns
-        number_of_papers_after_rerank (int): The number of papers that remain after reranking
-        top_k (int, optional): The number of body chunks the initial search returns
-        rerank_k (int, optional): The number of body chunks that remain after reranking
+        top_k (int, optional): The number of body chunks the vector search returns
+        rerank_k (int, optional): The number of body chunks retained after reranking
 
     Returns:
         dict: JSON-serializable structure {"papers": [...], "context": [...]}
@@ -265,46 +254,48 @@ def find_relevant_data_in_db(
         task, VISION_LLM_URL, extract_query_filters_prompt
     )
     meta_filter_chroma = build_chroma_where_filter(meta_filter)
-    summary_filters: dict = {"role": {"$eq": "summary"}}
+    body_filters: dict = {"role": {"$eq": "body"}}
     if meta_filter_chroma:
-        summary_filters = {
-            "$and": [meta_filter_chroma, {"role": {"$eq": "summary"}}]
+        body_filters = {
+            "$and": [meta_filter_chroma, {"role": {"$eq": "body"}}]
         }
-    
-    # 1. Paper selection over summary chunks; also provides titles
+
+    # 1. Direct body retrieval and article metadata collection
     papers: list[dict] = []
     titles: dict[str, str] = {}
     article_ids: list[str] = []
     seen_articles: set[str] = set()
     try:
-        summary_chunks = retriever.retrieve(
+        body_chunks = retriever.retrieve(
             query=task,
-            top_k=initial_number_of_papers,
-            rerank_k=number_of_papers_after_rerank,
-            filters = summary_filters
+            top_k=top_k,
+            rerank_k=rerank_k,
+            filters=body_filters,
         )
-
-        for c in summary_chunks:
-            if c.article_id in seen_articles:
+        for chunk in body_chunks:
+            if chunk.article_id in seen_articles:
                 continue
-            seen_articles.add(c.article_id)
-            article_ids.append(c.article_id)
-            title = c.metadata["paper_title"]
+            seen_articles.add(chunk.article_id)
+            article_ids.append(chunk.article_id)
+            title = (chunk.metadata or {}).get("paper_title", "")
             if title:
-                titles[c.article_id] = title
+                titles[chunk.article_id] = title
             papers.append(
                 {
-                    "article_id": c.article_id,
+                    "article_id": chunk.article_id,
                     "title": title,
-                    "summary": c.content,
-                    "domain": c.domain,
-                    "field": c.field,
-                    "rerank_score": (c.metadata or {}).get("reranker_score"),
+                    "domain": chunk.domain,
+                    "field": chunk.field,
+                    "rerank_score": (chunk.metadata or {}).get("reranker_score"),
                 }
             )
+        raw_image_names: set[str] = set()
+        for chunk in body_chunks:
+            raw_image_names.update(chunk.images_in_chunk or [])
+        image_names = [img_name.split(".")[0] for img_name in raw_image_names]
     except Exception as e:
         logger.error(f'find_relevant_data_in_db ERROR: {e}')
-        return {'answer': f'An error occurred while searching papers for task. Error: {e}'}
+        return {'answer': f'An error occurred while searching body chunks. Error: {e}'}
     
     if not article_ids:
         return {"papers": [], "context": []}
@@ -319,28 +310,7 @@ def find_relevant_data_in_db(
             image = base64.b64encode(image).decode()
         return image
     
-    # 2. Body chunks of the selected papers
-    try:
-        body_chunks = retriever.retrieve(
-            query=task,
-            top_k=top_k,
-            rerank_k=rerank_k,
-            filters={
-                "$and": [
-                    {"article_id": {"$in": article_ids}},
-                    {"role": {"$eq": "body"}},
-                ]
-            },
-        )
-        raw_image_names: set[str] = set()
-        for chunk in body_chunks:
-            raw_image_names.update(chunk.images_in_chunk or [])
-        image_names: list[str] = [img_name.split(".")[0] for img_name in list(raw_image_names)]
-    except Exception as e:
-        logger.error(f'find_relevant_data_in_db ERROR: {e}')
-        return {'answer': f'An error occurred while searching chunks in papers for task. Error: {e}'}
-
-    
+    # 2. Captions for images referenced by retrieved body chunks
     captions: dict[tuple[str, str], object] = {}
     if image_names:
         try:
