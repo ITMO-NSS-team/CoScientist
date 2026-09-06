@@ -35,10 +35,10 @@
         const connEntry = i18n['nav.disconnected'];
         document.getElementById('conn-status').textContent = (connEntry && connEntry[currentLang]) || 'Disconnected';
         document.getElementById('conn-status').className = 'text-[8px] text-error uppercase font-bold tracking-widest';
-        document.getElementById('live-dot').className = 'w-2 h-2 bg-[#424656] rounded-full';
+        document.getElementById('live-dot').className = 'w-2 h-2 bg-outline-variant/60 rounded-full';
         const badgeEntry = i18n['chat.offline'];
         document.getElementById('active-badge').textContent = (badgeEntry && badgeEntry[currentLang]) || 'Offline';
-        document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest';
+        document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-outline-variant border border-outline-variant/20 uppercase font-bold tracking-widest';
         if (intentionalDisconnect || !activeUser || !activeSession
           || activeUser.id !== userId || activeSession.id !== sessionId) return;
         if (event.code === 4404) {
@@ -58,6 +58,9 @@
         // One entry point for the status indicator: it reduces the whole
         // stream itself, so no case below has to know it exists.
         StatusIndicator.feed(data);
+        if (window.RoadmapModal && typeof window.RoadmapModal.feed === 'function') {
+          window.RoadmapModal.feed(data);
+        }
         switch (data.type) {
           case 'connected':
             addTelemetry('INIT :: ' + data.message);

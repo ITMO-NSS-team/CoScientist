@@ -36,6 +36,13 @@
       'telemetry.header': { en: 'Telemetry Output', ru: 'Лог телеметрии' },
       'usage.header': { en: 'Usage & Cost', ru: 'Использование и стоимость' },
 
+      // ── Activity Rail HUD ──
+      'rail.agents': { en: 'Agents', ru: 'Агенты' },
+      'rail.tools': { en: 'Tools', ru: 'Инструменты' },
+      'rail.standby': { en: 'Standby — awaiting tool invocation', ru: 'Ожидание вызова инструментов…' },
+      'rail.noTools': { en: 'No tool calls yet', ru: 'Инструменты ещё не вызывались' },
+      'rail.toggle': { en: 'Show/hide agent activity', ru: 'Показать/скрыть активность агентов' },
+
       // ── Settings modal header ──
       'settings.title': { en: 'Settings', ru: 'Настройки' },
       'settings.subtitle': { en: 'System Configuration', ru: 'Конфигурация системы' },
@@ -297,8 +304,21 @@
         btnRu.classList.toggle('bg-primary', currentLang === 'ru');
         btnRu.classList.toggle('text-on-primary', currentLang === 'ru');
       }
+
+      if (typeof renderActivityRail === 'function' && typeof activityAgents !== 'undefined' && activityAgents.size) {
+        renderActivityRail();
+      }
     }
+
+    /** Хелпер для получения перевода по ключу */
+    function t(key, fallback = '') {
+      const entry = i18n[key];
+      if (entry && entry[currentLang]) return entry[currentLang];
+      return fallback || key;
+    }
+    window.t = t;
 
     // Применяем язык при загрузке страницы (после того как DOM построится)
     document.addEventListener('DOMContentLoaded', () => applyLanguage());
+
 

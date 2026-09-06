@@ -24,10 +24,10 @@
         extend: {
           colors: {
             "primary": "#00daf3", "surface-dim": "#101319",
-            "surface-container-high": "#272a31", "outline": "#8c90a1",
+            "surface-container-high": "#272a31", "outline": "#cbd5e1",
             "surface-variant": "#32353c", "secondary": "#40e56c",
             "secondary-container": "#02c953", "tertiary": "#eac400",
-            "outline-variant": "#424656", "surface-container-low": "#191c22",
+            "outline-variant": "#94a3b8", "surface-container-low": "#191c22",
             "on-surface": "#e1e2eb", "primary-container": "#007e8c",
             "surface-container": "#1d2026", "surface-container-lowest": "#0b0e14",
             "on-surface-variant": "#c2c6d8", "surface-container-highest": "#32353c",
@@ -52,7 +52,7 @@
 
   <!-- SideNavBar -->
   <aside id="side-nav"
-    class="w-64 h-full fixed left-0 top-0 border-r border-[#424656]/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
+    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
     <div class="px-6 mb-8">
       <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
       <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
@@ -117,24 +117,24 @@
 
   <!-- TopNavBar -->
   <header id="top-nav"
-    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-[#424656]/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
+    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-outline-variant/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
     <div class="flex items-center gap-8">
       <button type="button" id="side-nav-toggle" onclick="toggleSideNav()" title="Show/hide sidebar"
-        class="text-[#424656] hover:text-[#00daf3] transition-colors flex items-center">
+        class="text-outline-variant hover:text-primary transition-colors flex items-center">
         <span id="side-nav-toggle-icon" class="material-symbols-outlined">left_panel_open</span>
       </button>
       <div data-i18n="nav.orchestrator" class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR
       </div>
       <div
         class="hidden md:flex items-center gap-6 font-['Space_Grotesk'] text-[10px] uppercase tracking-widest font-bold">
-        <span id="status-badge" class="text-[#424656]">Status: Idle</span>
-        <span id="event-count" class="text-[#424656]">Events: 0</span>
+        <span id="status-badge" class="text-outline-variant">Status: Idle</span>
+        <span id="event-count" class="text-outline-variant">Events: 0</span>
       </div>
     </div>
-    <div class="flex items-center gap-4 text-[#424656]">
+    <div class="flex items-center gap-4 text-outline-variant">
       <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
-          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
+          class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">delete_sweep</span>
       </button>
     </div>
   </header>
@@ -144,37 +144,69 @@
 
     <!-- Central Chat Area -->
     <section
-      class="flex-1 flex flex-col bg-surface-container-low rounded-xl relative border border-[#424656]/10 shadow-inner">
+      class="flex-1 min-w-0 flex flex-col bg-surface-container-low rounded-xl relative border border-outline-variant/10 shadow-inner">
       <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
         <div class="flex items-center gap-3">
-          <span id="live-dot" class="w-2 h-2 bg-[#424656] rounded-full"></span>
+          <span id="live-dot" class="w-2 h-2 bg-outline-variant/60 rounded-full"></span>
           <h2 data-i18n="chat.missionControl"
             class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
           </h2>
         </div>
         <div class="flex items-center gap-3">
           <button id="activity-toggle" onclick="toggleActivityRail()" title="Show/hide agent activity"
-            class="text-[#424656] hover:text-primary transition-colors">
+            class="text-outline-variant hover:text-primary transition-colors">
             <span class="material-symbols-outlined text-base">timeline</span>
           </button>
           <div id="active-badge"
-            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
+            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-outline-variant border border-outline-variant/20 uppercase font-bold tracking-widest">
             Offline</div>
         </div>
       </div>
 
-      <!-- Activity Rail: who is working right now and with which tools.
-           Lives outside the chat feed on purpose — it must stay glanceable
-           without adding a single message to the conversation. -->
+      <!-- Activity Rail: Executive Fleet & Tool Execution HUD -->
       <div id="activity-rail"
-        class="hidden px-4 py-2.5 border-b border-outline-variant/10 bg-surface-container-lowest/40 space-y-2">
-        <div class="flex items-center gap-2">
-          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Agents</span>
-          <div id="activity-agents" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+        class="hidden w-full max-w-full min-w-0 border-b border-outline-variant/15 bg-gradient-to-b from-[#11141b]/95 via-[#0d1016]/95 to-[#0b0d13]/95 backdrop-blur-xl px-4 py-2.5 space-y-2 shadow-[inset_0_1px_0_0_rgba(0,218,243,0.12),0_8px_24px_-4px_rgba(0,0,0,0.5)]">
+        
+        <!-- Row 1: Agent Fleet -->
+        <div class="flex items-center gap-2.5 w-full min-w-0">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+            <span class="material-symbols-outlined text-primary text-[14px]">hub</span>
+            <span data-i18n="rail.agents" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Agents</span>
+            <span id="activity-agents-count" class="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-primary/15 text-primary border border-primary/25">0</span>
+          </div>
+          
+          <div class="relative flex-1 min-w-0 flex items-center group/rail">
+            <button type="button" id="rail-agents-left" onclick="scrollActivityRail('activity-agents', -240)"
+              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
+            </button>
+            <div id="activity-agents" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+            <button type="button" id="rail-agents-right" onclick="scrollActivityRail('activity-agents', 240)"
+              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            </button>
+          </div>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Tools</span>
-          <div id="activity-tools" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+
+        <!-- Row 2: Tool Calls -->
+        <div class="flex items-center gap-2.5 w-full min-w-0 pt-1.5 border-t border-outline-variant/10">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+            <span class="material-symbols-outlined text-outline-variant text-[14px]">handyman</span>
+            <span data-i18n="rail.tools" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Tools</span>
+            <span id="activity-selected-agent-label" class="text-[8px] font-mono text-primary/80 font-medium truncate max-w-[100px]"></span>
+          </div>
+
+          <div class="relative flex-1 min-w-0 flex items-center group/rail">
+            <button type="button" id="rail-tools-left" onclick="scrollActivityRail('activity-tools', -240)"
+              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
+            </button>
+            <div id="activity-tools" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+            <button type="button" id="rail-tools-right" onclick="scrollActivityRail('activity-tools', 240)"
+              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -293,13 +325,13 @@
     </section>
 
     <!-- Right Sidebar: Telemetry -->
-    <aside class="w-80 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
+    <aside class="w-80 shrink-0 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
       <!-- Telemetry -->
       <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
         <div class="absolute top-3 right-3">
           <span id="telemetry-live"
-            class="text-[8px] font-bold text-[#424656] font-mono tracking-tighter uppercase flex items-center gap-1">
-            <span class="w-1 h-1 bg-[#424656] rounded-full"></span> Offline
+            class="text-[8px] font-bold text-outline-variant font-mono tracking-tighter uppercase flex items-center gap-1">
+            <span class="w-1.5 h-1.5 bg-outline-variant/60 rounded-full"></span> Offline
           </span>
         </div>
         <h4 data-i18n="telemetry.header"
@@ -431,19 +463,12 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <!-- View Mode Switcher -->
-            <div class="flex items-center bg-surface-container-highest/80 rounded-lg p-0.5 border border-outline-variant/15 text-[10px] font-semibold">
-              <button type="button" id="roadmap-view-visual-btn" onclick="switchRoadmapView('visual')"
-                class="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-on-primary shadow transition-all">
-                <span class="material-symbols-outlined text-xs">format_list_bulleted</span>
-                <span>Visual Plan</span>
-              </button>
-              <button type="button" id="roadmap-view-yaml-btn" onclick="switchRoadmapView('yaml')"
-                class="flex items-center gap-1 px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
-                <span class="material-symbols-outlined text-xs">code</span>
-                <span>YAML</span>
-              </button>
-            </div>
+            <!-- Add Task Button -->
+            <button type="button" id="roadmap-add-task-btn" onclick="addNewRoadmapTask()"
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container-highest/90 hover:bg-surface-container-high border border-primary/25 hover:border-primary/50 text-[10px] font-semibold text-primary transition-all shadow-sm active:scale-95">
+              <span class="material-symbols-outlined text-xs">add_task</span>
+              <span>Add Task</span>
+            </button>
 
             <!-- Close Modal -->
             <button onclick="closeRoadmapEditor()"
@@ -466,7 +491,7 @@
               In Progress (<span id="rf-active-count">0</span>)
             </button>
             <button onclick="filterRoadmapTasks('done')" data-filter="done"
-              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+            class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
               Completed (<span id="rf-done-count">0</span>)
             </button>
             <button onclick="filterRoadmapTasks('todo')" data-filter="todo"
@@ -475,12 +500,29 @@
             </button>
           </div>
 
-          <!-- Search Input -->
-          <div class="relative min-w-[200px] flex-1 max-w-xs">
-            <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline-variant/60 text-xs">search</span>
-            <input type="text" id="roadmap-search-input" oninput="searchRoadmapTasks(this.value)"
-              placeholder="Search tasks…"
-              class="w-full pl-7 pr-3 py-1 text-[11px] bg-surface-container-lowest/80 border border-outline-variant/15 rounded-md text-on-surface placeholder:text-outline-variant/40 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+          <!-- Search & Expand All Toolbar Actions -->
+          <div class="flex items-center gap-2 flex-1 max-w-sm justify-end">
+            <!-- Search Input -->
+            <div class="relative min-w-[170px] flex-1">
+              <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline-variant/60 text-xs">search</span>
+              <input type="text" id="roadmap-search-input" oninput="searchRoadmapTasks(this.value)"
+                placeholder="Search tasks…"
+                class="w-full pl-7 pr-3 py-1 text-[11px] bg-surface-container-lowest/80 border border-outline-variant/15 rounded-md text-on-surface placeholder:text-outline-variant/40 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+            </div>
+
+            <!-- Expand / Collapse All -->
+            <div class="flex items-center gap-0.5 shrink-0 bg-surface-container-highest/60 rounded-md border border-outline-variant/15 p-0.5">
+              <button type="button" onclick="toggleAllDescExpand(true)"
+                title="Expand all descriptions"
+                class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors flex items-center">
+                <span class="material-symbols-outlined text-sm">unfold_more</span>
+              </button>
+              <button type="button" onclick="toggleAllDescExpand(false)"
+                title="Collapse all descriptions"
+                class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors flex items-center">
+                <span class="material-symbols-outlined text-sm">unfold_less</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -501,46 +543,19 @@
         <!-- 1. Visual Cards View -->
         <div id="roadmap-visual-view" class="flex flex-col gap-3">
           <!-- Empty State -->
-          <div id="roadmap-empty-state" class="hidden flex flex-col items-center justify-center py-16 opacity-50">
+          <div id="roadmap-empty-state" class="hidden flex flex-col items-center justify-center py-16 opacity-75">
             <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">account_tree</span>
             <p class="text-sm font-medium text-on-surface">No tasks found in roadmap</p>
-            <p class="text-xs text-outline-variant mt-1">PlannerAgent generates the plan, or switch to YAML view to create tasks manually.</p>
+            <p class="text-xs text-outline-variant mt-1">PlannerAgent generates the plan, or click "Add Task" to create one manually.</p>
+            <button type="button" onclick="addNewRoadmapTask()"
+              class="mt-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-on-primary text-xs font-semibold shadow hover:brightness-110 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-sm">add_task</span>
+              <span>Add Task</span>
+            </button>
           </div>
 
           <!-- Cards Timeline List -->
           <div id="roadmap-tasks-list" class="space-y-3 relative"></div>
-        </div>
-
-        <!-- 2. YAML Code Editor View -->
-        <div id="roadmap-yaml-view" class="hidden flex-1 flex flex-col gap-2 min-h-[360px]">
-          <div class="flex items-center justify-between text-[10px] text-outline-variant bg-surface-container-lowest/70 px-3 py-1.5 rounded-t-lg border border-b-0 border-outline-variant/15 font-mono">
-            <div class="flex items-center gap-2">
-              <span class="material-symbols-outlined text-xs text-primary">data_object</span>
-              <span>YAML Plan Representation (Auto-synced)</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <button type="button" onclick="formatRoadmapYaml()"
-                class="hover:text-primary px-2 py-0.5 rounded hover:bg-surface-container-high transition-colors flex items-center gap-1">
-                <span class="material-symbols-outlined text-xs">reorder</span> Format YAML
-              </button>
-              <button type="button" onclick="copyRoadmapYaml()"
-                class="hover:text-primary px-2 py-0.5 rounded hover:bg-surface-container-high transition-colors flex items-center gap-1">
-                <span class="material-symbols-outlined text-xs">content_copy</span> Copy
-              </button>
-            </div>
-          </div>
-
-          <div class="relative flex-1 flex flex-col min-h-[320px]">
-            <textarea id="roadmap-textarea"
-              oninput="handleRoadmapYamlInput(this.value)"
-              class="w-full flex-1 min-h-[320px] bg-surface-container-lowest border border-outline-variant/15 rounded-b-lg p-4 font-mono text-xs text-on-surface placeholder:text-outline-variant/30 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none leading-relaxed"
-              placeholder="- id: TASK-1&#10;  title: Step title&#10;  assignee: ResearchAgent&#10;  status: TODO&#10;  description: Step details..."></textarea>
-          </div>
-
-          <div id="roadmap-yaml-status" class="text-[10px] font-mono text-outline-variant flex items-center gap-1.5 px-1">
-            <span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
-            <span>YAML valid</span>
-          </div>
         </div>
 
         <!-- HITL Feedback Container -->

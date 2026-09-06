@@ -167,7 +167,7 @@
     waiting_frame: { icon: 'front_hand', ru: 'Жду подтверждения рамки исследования', en: 'Waiting for research frame confirmation' },
     done: { icon: 'check_circle', ru: 'Готово', en: 'Done' },
     error: { icon: 'error', ru: 'Что-то пошло не так', en: 'Something went wrong' },
-    stopped: { icon: 'stop_circle', ru: 'Остановлено', en: 'Stopped' },
+    stopped: { icon: 'stop_circle', ru: 'Отменено', en: 'Cancelled' },
     offline: { icon: 'cloud_off', ru: 'Соединение потеряно, переподключаюсь', en: 'Connection lost, reconnecting' },
   };
 
@@ -184,6 +184,8 @@
     openTools: { ru: 'Журнал инструментов', en: 'Tools viewer' },
     moreTasks: { ru: 'ещё %d шагов в плане', en: '%d more steps in plan' },
     reviewTool: { ru: 'Разбираю ответ инструмента «%s»', en: 'Reading the answer from tool «%s»' },
+    collapse: { ru: 'Свернуть', en: 'Collapse' },
+    expand: { ru: 'Развернуть', en: 'Expand' },
   };
 
   // Colour + iconography per phase, in the page's own Tailwind tokens.
@@ -196,16 +198,21 @@
   };
 
   const PHASE_TONE = {
-    waiting: 'wait', waiting_frame: 'wait', done: 'done', error: 'fail', stopped: 'mute', offline: 'mute',
+    waiting: 'wait', waiting_frame: 'wait', done: 'done', error: 'fail', stopped: 'fail', offline: 'mute',
   };
 
   const EXPAND_KEY = 'coscientist.status_expanded';
+  const PLAN_EXPAND_KEY = 'coscientist.status_plan_expanded';
+  const ACTIVITY_EXPAND_KEY = 'coscientist.status_activity_expanded';
 
   // ── State ─────────────────────────────────────────────────────────────────
   let lang = 'ru';
   let root = null;          // container element
   let expanded = false;
+  let planExpanded = true;
+  let activityExpanded = true;
   let connected = true;
+  let showAllPlanTasks = false;
 
   const st = newState();
 
@@ -504,10 +511,16 @@
   }
 
   function startRun(at) {
-    // A second message in the same session starts a new run: the previous
-    // run's steps and plan counters must not bleed into it.
+    // A second message in the same session starts a new run: preserve existing
+    // plan tasks unless a new create_plan call explicitly replaces them.
     if (['idle', 'done', 'stopped', 'error', 'waiting', 'waiting_frame'].includes(st.phase)) {
+      const prevTasks = st.tasks;
+      const prevPlan = st.plan;
       Object.assign(st, newState(), { since: at || Date.now() });
+      if (prevTasks && prevTasks.length) {
+        st.tasks = prevTasks;
+        st.plan = prevPlan || summarise(prevTasks);
+      }
     }
     st.lastEventAt = Date.now();
     st.hideAt = 0;
@@ -515,14 +528,28 @@
   }
 
   function endRun(phase, linger) {
-    // A failed run may still be followed by an idle `status` broadcast. It must
-    // not turn "something went wrong" into a green "done".
-    if (phase === 'done' && st.phase === 'error') return;
+    // A failed or stopped run may still be followed by an idle `status` broadcast.
+    // It must not turn an error or cancellation into a green "done".
+    if (phase === 'done' && (st.phase === 'error' || st.phase === 'stopped')) return;
     cancelSettle();
     if (phase === 'done') st.note = null;
     st.open.clear();
     st.afterglow = null;
-    st.steps.forEach(step => { if (step.status === 'running') step.status = 'done'; });
+    st.steps.forEach(step => {
+      if (step.status === 'running') step.status = (phase === 'done' ? 'done' : 'error');
+    });
+    if (phase === 'done' && st.tasks) {
+      for (const task of st.tasks) {
+        if (task && (DONE_STATUS.test(task.status) || RUNNING_STATUS.test(task.status))) {
+          task._workFinished = true;
+          task.status = 'DONE';
+        }
+      }
+      st.plan = summarise(st.tasks);
+      if (window.RoadmapModal && typeof window.RoadmapModal.updateTasks === 'function') {
+        window.RoadmapModal.updateTasks(st.tasks, false);
+      }
+    }
     st.hideAt = Date.now() + linger;
     setPhase(phase, {}, true);
     setTimeout(() => {
@@ -543,14 +570,75 @@
   const DONE_STATUS = /done|complete|finish/i;
   const RUNNING_STATUS = /progress|running|active|doing/i;
 
+  function matchAgent(a, b) {
+    if (!a || !b) return false;
+    const s1 = String(a).toLowerCase().replace(/agent$/, '');
+    const s2 = String(b).toLowerCase().replace(/agent$/, '');
+    return s1 === s2;
+  }
+
+  function isAgentActive(agentName) {
+    if (!agentName) return false;
+    for (const entry of st.open.values()) {
+      if (entry.kind === 'delegation' && matchAgent(entry.target, agentName)) return true;
+      if (matchAgent(entry.agent, agentName)) return true;
+    }
+    if (matchAgent(st.agent, agentName) && ['working', 'thinking', 'delegating'].includes(st.phase)) {
+      return true;
+    }
+    return false;
+  }
+
+  function isTaskDone(task) {
+    if (!task) return false;
+    if (task._workFinished) return true;
+    const status = String(task.status || '');
+    if (!DONE_STATUS.test(status)) return false;
+    // If marked DONE, only consider it done if the assigned agent is not currently working
+    if (task.assignee && isAgentActive(task.assignee)) {
+      return false;
+    }
+    return true;
+  }
+
+  function isTaskActive(task) {
+    if (!task) return false;
+    if (isTaskDone(task)) return false;
+    const status = String(task.status || '');
+    if (RUNNING_STATUS.test(status)) return true;
+    if (task.assignee && isAgentActive(task.assignee)) return true;
+    return false;
+  }
+
+  function markAgentWorkFinished(agentName) {
+    if (!agentName || !st.tasks) return;
+    let changed = false;
+    for (const task of st.tasks) {
+      if (task && matchAgent(task.assignee, agentName)) {
+        const isDoneOrActive = DONE_STATUS.test(task.status) || RUNNING_STATUS.test(task.status);
+        if (isDoneOrActive && !task._workFinished) {
+          task._workFinished = true;
+          task.status = 'DONE';
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      st.plan = summarise(st.tasks);
+      if (window.RoadmapModal && typeof window.RoadmapModal.updateTasks === 'function') {
+        window.RoadmapModal.updateTasks(st.tasks, false);
+      }
+    }
+  }
+
   /** {total, done, current} for a list of {title, status} items. */
   function summarise(items) {
     if (!Array.isArray(items) || !items.length) return null;
-    const done = items.filter(item => DONE_STATUS.test(String(item && item.status || ''))).length;
+    const done = items.filter(item => isTaskDone(item)).length;
     // The step a person would name if asked "what is it doing?": the one in
     // progress, or the next one waiting when the agent marks nothing as such.
-    const current = items.find(item => RUNNING_STATUS.test(String(item && item.status || '')))
-      || items.find(item => !DONE_STATUS.test(String(item && item.status || '')));
+    const current = items.find(item => isTaskActive(item))
+      || items.find(item => !isTaskDone(item));
     const title = current && current.title ? trim(current.title) : null;
     return { total: items.length, done: done, current: title };
   }
@@ -560,36 +648,80 @@
    *  preview under the truncation cap keeps its structure, so all three are
    *  readable straight off the broadcast. */
   function readPlan(result) {
+    if (!result) return;
+    if (typeof result === 'string') {
+      try {
+        result = JSON.parse(result);
+      } catch (_) {
+        return;
+      }
+    }
     if (!result || typeof result !== 'object') return;
     const list = Array.isArray(result.plan) ? result.plan
       : Array.isArray(result.tasks) ? result.tasks : null;
     if (list) {
-      st.tasks = list.map(item => ({
-        id: item && item.id,
-        title: item && item.title,
-        status: item && item.status,
-        assignee: item && item.assignee,
-      }));
+      const prevMap = new Map((st.tasks || []).map(t => [t && t.id, t]));
+      st.tasks = list.map(item => {
+        if (!item || typeof item !== 'object') return item;
+        const prev = prevMap.get(item.id) || {};
+        const assignee = item.assignee !== undefined ? item.assignee : prev.assignee;
+        const isDone = DONE_STATUS.test(item.status || prev.status || '');
+        const workFinished = prev._workFinished || (isDone && !isAgentActive(assignee));
+        return {
+          id: item.id || prev.id,
+          title: item.title !== undefined ? item.title : (prev.title || ''),
+          description: (item.description !== undefined && item.description !== null && item.description !== '')
+            ? item.description
+            : (prev.description || ''),
+          notes: (item.notes !== undefined && item.notes !== null && item.notes !== '')
+            ? item.notes
+            : (prev.notes || ''),
+          status: item.status || prev.status || 'TODO',
+          assignee: assignee,
+          parent_id: item.parent_id !== undefined ? item.parent_id : prev.parent_id,
+          _workFinished: workFinished,
+        };
+      });
     } else if (result.task && result.task.id) {
       // `update_task_status` reports only the item it changed.
       const updated = result.task;
-      const known = st.tasks.find(item => item.id === updated.id);
+      const known = st.tasks.find(item => item && item.id === updated.id);
       if (known) {
-        known.status = updated.status;
-        known.title = updated.title || known.title;
-        if (updated.assignee) known.assignee = updated.assignee;
+        if (updated.status !== undefined) {
+          known.status = updated.status;
+          if (DONE_STATUS.test(updated.status)) {
+            known._workFinished = !isAgentActive(known.assignee);
+          } else {
+            known._workFinished = false;
+          }
+        }
+        if (updated.title) known.title = updated.title;
+        if (updated.description !== undefined && updated.description !== '') known.description = updated.description;
+        if (updated.notes !== undefined && updated.notes !== '') known.notes = updated.notes;
+        if (updated.assignee !== undefined) known.assignee = updated.assignee;
+        if (updated.parent_id !== undefined) known.parent_id = updated.parent_id;
       } else {
+        const isDone = DONE_STATUS.test(updated.status || '');
         st.tasks.push({
           id: updated.id,
-          title: updated.title,
-          status: updated.status,
+          title: updated.title || '',
+          description: updated.description || '',
+          notes: updated.notes || '',
+          status: updated.status || 'TODO',
           assignee: updated.assignee,
+          parent_id: updated.parent_id,
+          _workFinished: isDone && !isAgentActive(updated.assignee),
         });
       }
     } else {
       return;
     }
     st.plan = summarise(st.tasks);
+
+    // Keep RoadmapModal in sync
+    if (window.RoadmapModal && typeof window.RoadmapModal.updateTasks === 'function') {
+      window.RoadmapModal.updateTasks(st.tasks, false);
+    }
   }
 
   /** The sandbox agent's plan, in the shape its service publishes:
@@ -631,7 +763,7 @@
       case 'status':
         if (msg.status === 'processing') {
           if (st.phase === 'idle') startRun(now);
-        } else if (st.phase !== 'idle' && st.hideAt === 0) {
+        } else if (st.phase !== 'idle' && st.hideAt === 0 && st.phase !== 'stopped') {
           endRun('done', DONE_LINGER_MS);
         }
         break;
@@ -654,7 +786,10 @@
           st.phase = 'thinking';
           st.phraseSince = now;
         }
-        if (msg.agent) st.agent = msg.agent;
+        if (msg.agent) {
+          st.agent = msg.agent;
+          markAgentWorkFinished(msg.agent);
+        }
         pushStep(null, 'task_alt', agentLabel(msg.agent) + ' — ' + pick(TEXT.ready)).status = 'done';
         // A subordinate just delivered; the caller is reading its report now.
         st.afterglow = { category: 'delegation', agent: msg.agent, at: now };
@@ -711,7 +846,11 @@
         break;
 
       case 'final_response':
-        endRun('done', DONE_LINGER_MS);
+        if (msg.content === 'Stopped' || st.phase === 'stopped') {
+          endRun('stopped', STOPPED_LINGER_MS);
+        } else {
+          endRun('done', DONE_LINGER_MS);
+        }
         break;
 
       case 'error':
@@ -769,6 +908,9 @@
     // result / error
     const failed = msg.phase === 'error';
     const closed = closeWork(msg.call_id);
+    if (!failed && closed && closed.kind === 'delegation' && closed.target) {
+      markAgentWorkFinished(closed.target);
+    }
     // What the model is about to read. Only meaningful once nothing is left
     // running — with work still open, that work is the better answer.
     if (!failed) {
@@ -911,6 +1053,9 @@
     // `mount()` — the state is kept, and the first paint after mounting shows
     // it. `render()` guards the same way.
     if (!root) return;
+    if (st.tasks && st.tasks.length) {
+      st.plan = summarise(st.tasks);
+    }
     const current = view();
     if (current.phase === 'idle') {
       root.classList.add('hidden');
@@ -962,64 +1107,84 @@
       ${expanded && (steps.length || hasPlan) ? `
       <div class="mt-1.5 space-y-1.5">
         ${hasPlan ? `
-        <div class="p-2.5 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/80 space-y-2">
-          <div class="flex items-center justify-between text-[11px] font-semibold text-on-surface">
+        <div class="p-2.5 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/80 ${planExpanded ? 'space-y-2' : ''}">
+          <div class="flex items-center justify-between text-[11px] font-semibold text-on-surface cursor-pointer select-none si-plan-header">
             <div class="flex items-center gap-1.5">
               <span class="material-symbols-outlined text-sm text-primary">account_tree</span>
               <span>${esc(pick(TEXT.planHeader))}</span>
               <span class="text-[9px] font-mono font-normal text-outline-variant">(${activePlan.done} / ${activePlan.total})</span>
             </div>
-            <button type="button" onclick="if (window.openRoadmapEditor) window.openRoadmapEditor();"
-              class="text-[10px] text-primary hover:underline flex items-center gap-0.5 font-medium transition-colors">
-              <span>${esc(pick(TEXT.openPlan))}</span>
-              <span class="material-symbols-outlined text-[13px]">open_in_new</span>
-            </button>
+            <div class="flex items-center gap-2">
+              <button type="button" onclick="event.stopPropagation(); if (window.openRoadmapEditor) window.openRoadmapEditor();"
+                class="text-[10px] text-primary hover:underline flex items-center gap-0.5 font-medium transition-colors">
+                <span>${esc(pick(TEXT.openPlan))}</span>
+                <span class="material-symbols-outlined text-[13px]">open_in_new</span>
+              </button>
+              <button type="button"
+                class="si-toggle-plan text-outline-variant hover:text-primary transition-colors flex items-center p-0.5 rounded"
+                title="${esc(pick(planExpanded ? TEXT.collapse : TEXT.expand))}">
+                <span class="material-symbols-outlined text-[15px]">${planExpanded ? 'expand_less' : 'expand_more'}</span>
+              </button>
+            </div>
           </div>
 
+          ${planExpanded ? `
           <div class="h-1 bg-surface-container-high rounded-full overflow-hidden">
             <div class="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-300 rounded-full" style="width: ${planPercent}%;"></div>
           </div>
 
-          <div class="space-y-1 pt-0.5">
+          <div class="space-y-1 pt-0.5 max-h-80 overflow-y-auto pr-1">
             ${(() => {
             const list = st.tasks && st.tasks.length ? st.tasks : [];
-            const displayList = list.slice(0, 5);
+            const displayList = showAllPlanTasks ? list : list.slice(0, 5);
             const remaining = list.length - 5;
             return displayList.map(task => {
-              const norm = DONE_STATUS.test(task.status) ? 'done' : (RUNNING_STATUS.test(task.status) ? 'active' : 'todo');
+              const isDone = isTaskDone(task);
+              const isActive = isTaskActive(task);
+              const norm = isDone ? 'done' : (isActive ? 'active' : 'todo');
               const icon = norm === 'done' ? 'check' : (norm === 'active' ? 'autorenew' : 'radio_button_unchecked');
               const tone = norm === 'done' ? 'text-outline-variant' : (norm === 'active' ? 'text-primary font-medium' : 'text-outline-variant');
               const spin = norm === 'active' ? 'si-icon' : '';
               const assignee = task.assignee ? agentLabel(task.assignee) : '';
-              return `<div class="flex items-center gap-2 text-[10px] ${tone}">
+              return `<div class="flex items-center gap-2 py-1 border-b border-outline-variant/10 last:border-b-0 text-[10px] ${tone}" title="${esc(task.title || '')}">
                   <span class="material-symbols-outlined text-[13px] shrink-0 ${spin}">${icon}</span>
-                  <span class="truncate flex-1 min-w-0">${task.id ? `<span class="font-mono text-[9px] opacity-75 mr-1">${esc(task.id)}</span>` : ''}${esc(task.title || '')}</span>
+                  <span class="font-medium flex-1 min-w-0 truncate">${task.id ? `<span class="font-mono text-[9px] opacity-75 mr-1">${esc(task.id)}</span>` : ''}${esc(task.title || '')}</span>
                   ${assignee ? `<span class="text-[8px] font-mono shrink-0 px-1 py-0.2 rounded bg-surface-container-high text-outline-variant/80">${esc(assignee)}</span>` : ''}
                 </div>`;
             }).join('') + (remaining > 0 ? `
-                <div class="pt-0.5">
-                  <button type="button" onclick="if (window.openRoadmapEditor) window.openRoadmapEditor();" class="text-[9px] font-mono text-primary/80 hover:underline">
-                    + ${pick(TEXT.moreTasks).replace('%d', remaining)} →
+                <div class="pt-0.5 flex items-center justify-between text-[9px] font-mono">
+                  <button type="button" class="si-toggle-plan-tasks text-primary/80 hover:underline">
+                    ${showAllPlanTasks ? '↑ ' + (lang === 'ru' ? 'Свернуть задачи' : 'Show fewer') : '+ ' + pick(TEXT.moreTasks).replace('%d', remaining)}
+                  </button>
+                  <button type="button" onclick="if (window.openRoadmapEditor) window.openRoadmapEditor();" class="text-outline-variant hover:text-primary">
+                    ${esc(pick(TEXT.openPlan))} →
                   </button>
                 </div>` : '');
           })()}
-          </div>
+          </div>` : ''}
         </div>` : ''}
 
         ${steps.length ? `
-        <div class="px-3 py-2 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/60 space-y-1">
-          <div class="text-[9px] font-mono text-outline-variant/70 mb-1 flex items-center justify-between">
+        <div class="px-3 py-2 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/60 ${activityExpanded ? 'space-y-1' : ''}">
+          <div class="text-[9px] font-mono text-outline-variant/70 ${activityExpanded ? 'mb-1' : ''} flex items-center justify-between cursor-pointer select-none si-activity-header">
             <div class="flex items-center gap-1">
               <span class="material-symbols-outlined text-xs">history</span>
               <span>${esc(pick(TEXT.recentActivity))}</span>
             </div>
-            <button type="button" onclick="if (window.openToolsViewer) window.openToolsViewer();"
-              class="text-[9px] text-primary hover:underline flex items-center gap-0.5 font-medium transition-colors">
-              <span>${esc(pick(TEXT.openTools))}</span>
-              <span class="material-symbols-outlined text-[12px]">open_in_new</span>
-            </button>
+            <div class="flex items-center gap-2">
+              <button type="button" onclick="event.stopPropagation(); if (window.openToolsViewer) window.openToolsViewer();"
+                class="text-[9px] text-primary hover:underline flex items-center gap-0.5 font-medium transition-colors">
+                <span>${esc(pick(TEXT.openTools))}</span>
+                <span class="material-symbols-outlined text-[12px]">open_in_new</span>
+              </button>
+              <button type="button"
+                class="si-toggle-activity text-outline-variant hover:text-primary transition-colors flex items-center p-0.5 rounded"
+                title="${esc(pick(activityExpanded ? TEXT.collapse : TEXT.expand))}">
+                <span class="material-symbols-outlined text-[14px]">${activityExpanded ? 'expand_less' : 'expand_more'}</span>
+              </button>
+            </div>
           </div>
-          ${steps.map(step => {
+          ${activityExpanded ? steps.map(step => {
             const stepTone = step.status === 'error' ? 'text-error'
               : step.status === 'done' ? 'text-outline-variant' : 'text-primary';
             const stepIcon = step.status === 'error' ? 'close'
@@ -1028,7 +1193,7 @@
               <span class="material-symbols-outlined text-[13px] ${step.status === 'running' ? 'si-icon' : ''}">${stepIcon}</span>
               <span class="text-[10px] truncate">${esc(step.text)}</span>
             </div>`;
-          }).join('')}
+          }).join('') : ''}
         </div>` : ''}
       </div>` : ''}`;
 
@@ -1037,6 +1202,38 @@
       toggle.addEventListener('click', () => {
         expanded = !expanded;
         try { localStorage.setItem(EXPAND_KEY, expanded ? 'on' : 'off'); } catch (_) { /* private mode */ }
+        paint();
+      });
+    }
+
+    const planHeader = root.querySelector('.si-plan-header');
+    if (planHeader) {
+      planHeader.addEventListener('click', (e) => {
+        if (e.target.closest('button') && !e.target.closest('.si-toggle-plan')) {
+          return;
+        }
+        planExpanded = !planExpanded;
+        try { localStorage.setItem(PLAN_EXPAND_KEY, planExpanded ? 'on' : 'off'); } catch (_) {}
+        paint();
+      });
+    }
+
+    const activityHeader = root.querySelector('.si-activity-header');
+    if (activityHeader) {
+      activityHeader.addEventListener('click', (e) => {
+        if (e.target.closest('button') && !e.target.closest('.si-toggle-activity')) {
+          return;
+        }
+        activityExpanded = !activityExpanded;
+        try { localStorage.setItem(ACTIVITY_EXPAND_KEY, activityExpanded ? 'on' : 'off'); } catch (_) {}
+        paint();
+      });
+    }
+
+    const planToggle = root.querySelector('.si-toggle-plan-tasks');
+    if (planToggle) {
+      planToggle.addEventListener('click', () => {
+        showAllPlanTasks = !showAllPlanTasks;
         paint();
       });
     }
@@ -1071,6 +1268,8 @@
   function mount(element) {
     root = element || null;
     try { expanded = localStorage.getItem(EXPAND_KEY) === 'on'; } catch (_) { expanded = false; }
+    try { planExpanded = localStorage.getItem(PLAN_EXPAND_KEY) !== 'off'; } catch (_) { planExpanded = true; }
+    try { activityExpanded = localStorage.getItem(ACTIVITY_EXPAND_KEY) !== 'off'; } catch (_) { activityExpanded = true; }
     paint();
     const demoFile = new URLSearchParams(location.search).get('demo');
     if (demoFile) {
@@ -1113,7 +1312,7 @@
     setLang: guarded('setLang', function (value) { if (value) { lang = value; paint(); } }),
     setConnected: guarded('setConnected', function (value) { connected = !!value; render(); }),
     markStopped: guarded('markStopped', function () {
-      if (st.phase !== 'idle') endRun('stopped', STOPPED_LINGER_MS);
+      endRun('stopped', STOPPED_LINGER_MS);
     }),
   };
 })();

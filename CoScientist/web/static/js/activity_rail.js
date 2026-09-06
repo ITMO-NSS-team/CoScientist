@@ -19,13 +19,13 @@
       const nav = document.getElementById('agent-nav');
       nav.innerHTML = AGENTS.map(a => {
         const highlighted = isAgentHighlightedByDefault(a.name);
-        const opacityClass = highlighted ? "opacity-100" : "opacity-50";
+        const opacityClass = highlighted ? "opacity-100" : "opacity-80";
         const iconColorClass = highlighted ? "text-primary" : "text-outline-variant";
-        const textColorClass = highlighted ? "text-on-surface font-semibold" : "text-outline-variant font-medium";
+        const textColorClass = highlighted ? "text-on-surface font-semibold" : "text-on-surface-variant font-medium";
         const elemIdAttr = (a.name === "KnowledgeGraph") ? 'id="graph-link"' : ((a.name === "CoderSandbox") ? 'id="coder-sandbox-link"' : `id="agent-${a.name}"`);
         const hrefAttr = a.href ? `href="${a.href}"` : '';
         const extraDot = (a.name === "CoderSandbox")
-          ? `<span id="sandbox-status-dot" class="w-2 h-2 rounded-full bg-outline-variant/40 ml-auto" title="Sandbox standby"></span>`
+          ? `<span id="sandbox-status-dot" class="w-2 h-2 rounded-full bg-outline-variant/60 ml-auto" title="Sandbox standby"></span>`
           : '';
 
         return `
@@ -33,7 +33,7 @@
             <span class="material-symbols-outlined ${iconColorClass} text-lg">${a.icon}</span>
             <div class="flex flex-col">
               <span class="text-sm ${textColorClass}" data-i18n="agent.${a.name}.desc">${a.desc}</span>
-              <span class="text-[8px] text-outline-variant/50 font-mono uppercase">${a.name}</span>
+              <span class="text-[8px] text-outline-variant font-mono uppercase">${a.name}</span>
             </div>
             ${extraDot}
           </div>
@@ -78,7 +78,7 @@
           el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => s.classList.remove('text-outline-variant', 'opacity-50'));
         } else {
           const highlighted = isAgentHighlightedByDefault(a.name);
-          const opacityClass = highlighted ? "opacity-100" : "opacity-50";
+          const opacityClass = highlighted ? "opacity-100" : "opacity-80";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
@@ -86,7 +86,7 @@
 
           el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
             if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
+              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
             }
           });
         }
@@ -99,7 +99,7 @@
         const el = document.getElementById(targetId);
         if (el) {
           const highlighted = isAgentHighlightedByDefault(a.name);
-          const opacityClass = highlighted ? "opacity-100" : "opacity-50";
+          const opacityClass = highlighted ? "opacity-100" : "opacity-80";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
@@ -107,7 +107,7 @@
 
           el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
             if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-outline-variant font-medium'}`;
+              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
             }
           });
         }
@@ -373,6 +373,68 @@
       renderActivityRail();
     }
 
+    function formatToolArgsSafe(args, max = 160) {
+      if (!args) return '';
+      let str = '';
+      try {
+        str = typeof args === 'string' ? args : JSON.stringify(args);
+      } catch (e) {
+        str = String(args);
+      }
+      return str.length > max ? str.slice(0, max) + '…' : str;
+    }
+
+    function scrollActivityRail(elementId, distance) {
+      const el = document.getElementById(elementId);
+      if (el) {
+        el.scrollBy({ left: distance, behavior: 'smooth' });
+        setTimeout(() => updateRailScrollButtons(elementId), 250);
+      }
+    }
+    window.scrollActivityRail = scrollActivityRail;
+
+    function updateRailScrollButtons(elementId) {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+      const prefix = elementId === 'activity-agents' ? 'rail-agents' : 'rail-tools';
+      const leftBtn = document.getElementById(`${prefix}-left`);
+      const rightBtn = document.getElementById(`${prefix}-right`);
+      if (!leftBtn || !rightBtn) return;
+
+      const hasOverflow = el.scrollWidth > el.clientWidth + 4;
+      if (!hasOverflow) {
+        leftBtn.classList.add('hidden');
+        leftBtn.classList.remove('flex');
+        rightBtn.classList.add('hidden');
+        rightBtn.classList.remove('flex');
+        return;
+      }
+
+      const canScrollLeft = el.scrollLeft > 6;
+      const canScrollRight = el.scrollLeft < (el.scrollWidth - el.clientWidth - 6);
+
+      leftBtn.classList.toggle('hidden', !canScrollLeft);
+      leftBtn.classList.toggle('flex', canScrollLeft);
+      rightBtn.classList.toggle('hidden', !canScrollRight);
+      rightBtn.classList.toggle('flex', canScrollRight);
+    }
+
+    function attachRailWheelScroll(id) {
+      const el = document.getElementById(id);
+      if (!el || el._wheelAttached) return;
+      el._wheelAttached = true;
+      el.addEventListener('wheel', (e) => {
+        if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollWidth > el.clientWidth) {
+          e.preventDefault();
+          el.scrollLeft += e.deltaY;
+          updateRailScrollButtons(id);
+        }
+      }, { passive: false });
+      el.addEventListener('scroll', () => {
+        updateRailScrollButtons(id);
+      }, { passive: true });
+    }
+
     function renderActivityRail() {
       const rail = document.getElementById('activity-rail');
       const toggle = document.getElementById('activity-toggle');
@@ -382,7 +444,7 @@
       if (toggle) {
         toggle.className = enabled
           ? 'text-primary hover:brightness-125 transition-colors'
-          : 'text-[#424656] hover:text-primary transition-colors';
+          : 'text-outline-variant hover:text-primary transition-colors';
       }
       rail.classList.toggle('hidden', !enabled || activityAgents.size === 0);
       if (!enabled || activityAgents.size === 0) return;
@@ -392,64 +454,112 @@
       if (activitySelected && !activityAgents.has(activitySelected)) activitySelected = null;
       if (!activitySelected && agents.length) activitySelected = agents[agents.length - 1].name;
 
-      document.getElementById('activity-agents').innerHTML = agents.map(entry => {
-        // Silence alone means "done": an agent that has produced nothing for a
-        // while is not shown as working even if a call went unclosed.
-        const fresh = (now - entry.lastSeen) < ACTIVITY_IDLE_MS;
-        const busy = fresh && activityBusy(entry) > 0;
-        const selected = entry.name === activitySelected;
-        const tone = busy
-          ? 'border-primary/50 bg-primary/10 text-primary'
-          : fresh
-            ? 'border-outline-variant/25 bg-surface-container-high/60 text-on-surface'
-            : 'border-outline-variant/10 bg-transparent text-outline-variant opacity-60';
-        const ring = selected ? ' ring-1 ring-primary/40' : '';
-        const pulse = busy ? ' animate-pulse' : '';
-        const badge = entry.calls
-          ? `<span class="text-[8px] font-mono bg-surface-container-highest/80 px-1 rounded">${entry.calls}</span>`
-          : '';
-        const hint = `${entry.name}${entry.calls ? ` — ${entry.calls} tool call(s)` : ''}${entry.transferred ? ' — delegated' : ''}`;
-        return `
-          <button onclick="activitySelectAgent('${escJs(entry.name)}')" title="${escHtml(hint)}"
-            class="flex items-center gap-1.5 shrink-0 border rounded-full pl-2 pr-2.5 py-1 transition-all ${tone}${ring}">
-            <span class="material-symbols-outlined text-sm${pulse}">${entry.icon}</span>
-            <span class="text-[10px] font-semibold tracking-tight">${escHtml(entry.name.replace(/Agent$/, ''))}</span>
-            ${badge}
-          </button>`;
-      }).join('');
+      const countEl = document.getElementById('activity-agents-count');
+      if (countEl) countEl.textContent = agents.length;
 
-      const selected = activityAgents.get(activitySelected);
-      const tools = selected ? [...selected.tools.values()] : [];
-      const toolsBox = document.getElementById('activity-tools');
-      if (!tools.length) {
-        toolsBox.innerHTML = `<span class="text-[9px] font-mono text-outline-variant/60">${selected ? escHtml(selected.name) + ' — no tool calls yet' : 'no tool calls yet'
-          }</span>`;
-        return;
+      const agentsBox = document.getElementById('activity-agents');
+      if (agentsBox) {
+        agentsBox.innerHTML = agents.map(entry => {
+          const fresh = (now - entry.lastSeen) < ACTIVITY_IDLE_MS;
+          const busy = fresh && activityBusy(entry) > 0;
+          const selected = entry.name === activitySelected;
+
+          const tone = busy
+            ? 'border-primary/80 bg-primary/15 text-white rail-chip-busy'
+            : selected
+              ? 'ring-1 ring-primary/60 border-primary bg-surface-container-high/95 text-on-surface rail-chip-selected'
+              : fresh
+                ? 'border-outline-variant/25 bg-[#161a23] text-on-surface hover:border-primary/40 hover:bg-[#1b202c]'
+                : 'border-outline-variant/10 bg-[#12151c]/60 text-outline-variant/70 hover:text-on-surface hover:border-outline-variant/30';
+
+          const beacon = busy
+            ? `<span class="relative flex h-2 w-2 mr-0.5 shrink-0"><span class="rail-ping-anim absolute inline-flex h-full w-full rounded-full bg-[#00daf3] opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-[#00daf3]"></span></span>`
+            : '';
+
+          const pulse = busy ? ' animate-pulse text-primary' : (selected ? ' text-primary' : '');
+
+          const badge = entry.calls
+            ? `<span class="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-surface-container-highest/90 border border-outline-variant/20 text-on-surface-variant group-hover:text-primary transition-colors flex items-center gap-0.5 shrink-0"><span class="material-symbols-outlined text-[10px] text-primary/80">bolt</span>${entry.calls}</span>`
+            : '';
+
+          const delegated = entry.transferred
+            ? `<span class="material-symbols-outlined text-[12px] text-primary/80 shrink-0" title="Delegated">alt_route</span>`
+            : '';
+
+          const cleanName = escHtml(entry.name.replace(/Agent$/, ''));
+          let hint = `${entry.name}${entry.calls ? ` — ${entry.calls} tool call(s)` : ''}${entry.transferred ? ' — delegated' : ''}`;
+          if (busy) hint += ' (Running)';
+
+          return `
+            <button type="button" onclick="activitySelectAgent('${escJs(entry.name)}')" title="${escHtml(hint)}"
+              class="group relative flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-lg border text-xs font-medium transition-all duration-150 cursor-pointer select-none shadow-sm ${tone}">
+              ${beacon}
+              <span class="material-symbols-outlined text-[15px] shrink-0${pulse}">${entry.icon}</span>
+              <span class="font-headline tracking-tight text-[11px] font-medium shrink-0">${cleanName}</span>
+              ${delegated}
+              ${badge}
+            </button>`;
+        }).join('');
       }
 
-      const selectedFresh = (now - selected.lastSeen) < ACTIVITY_IDLE_MS;
-      toolsBox.innerHTML = tools.map(tool => {
-        const running = selectedFresh && tool.calls > tool.done;
-        const tone = tool.errors
-          ? 'border-error/40 bg-error/10 text-error'
-          : running
-            ? 'border-primary/40 bg-primary/10 text-primary'
-            : 'border-secondary/30 bg-secondary/5 text-secondary';
-        const pulse = running ? ' animate-pulse' : '';
-        const count = tool.calls > 1 ? `<span class="text-[8px] font-mono opacity-80">×${tool.calls}</span>` : '';
-        let hint = `${tool.name} — ${tool.done}/${tool.calls} finished`;
-        if (tool.errors) hint += `, ${tool.errors} error(s)`;
-        if (tool.lastArgs && Object.keys(tool.lastArgs).length) {
-          hint += `\n${truncateStr(tool.lastArgs, 200)}`;
+      const selected = activityAgents.get(activitySelected);
+      const labelEl = document.getElementById('activity-selected-agent-label');
+      if (labelEl) {
+        labelEl.textContent = selected ? `[${selected.name.replace(/Agent$/, '')}]` : '';
+      }
+
+      const tools = selected ? [...selected.tools.values()] : [];
+      const toolsBox = document.getElementById('activity-tools');
+      if (toolsBox) {
+        if (!tools.length) {
+          const noToolsText = (typeof t === 'function' ? t('rail.standby') : null) || 'Standby — awaiting tool invocation';
+          toolsBox.innerHTML = `<div class="flex items-center gap-2 py-0.5 px-2 text-[10px] font-mono text-outline-variant/50 italic shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-outline-variant/30"></span><span>${selected ? escHtml(selected.name) + ' — ' + noToolsText : noToolsText}</span></div>`;
+        } else {
+          const selectedFresh = (now - selected.lastSeen) < ACTIVITY_IDLE_MS;
+          toolsBox.innerHTML = tools.map(tool => {
+            const running = selectedFresh && tool.calls > tool.done;
+            const tone = tool.errors
+              ? 'border-error/50 bg-error/15 text-[#ffb4ab] hover:border-error/70'
+              : running
+                ? 'border-primary/60 bg-primary/15 text-primary shadow-[0_0_12px_rgba(0,218,243,0.25)]'
+                : 'border-secondary/35 bg-secondary/10 text-[#40e56c] hover:border-secondary/60 hover:bg-secondary/15';
+
+            const iconClass = running
+              ? 'text-primary animate-spin'
+              : (tool.errors ? 'text-error' : 'text-secondary');
+            const iconName = running
+              ? 'sync'
+              : (tool.errors ? 'error' : (tool.calls > 0 ? 'check_circle' : tool.icon));
+
+            const count = tool.calls > 1
+              ? `<span class="text-[9px] font-mono px-1 rounded bg-surface-container-highest/70 border border-outline-variant/15 text-on-surface-variant font-bold">×${tool.calls}</span>`
+              : '';
+            const errorBadge = tool.errors
+              ? `<span class="text-[8px] font-mono font-bold px-1 rounded bg-error/25 text-error">!${tool.errors}</span>`
+              : '';
+
+            let hint = `${tool.name} — ${tool.done}/${tool.calls} finished`;
+            if (tool.errors) hint += `, ${tool.errors} error(s)`;
+            if (tool.lastArgs && Object.keys(tool.lastArgs).length) {
+              hint += `\n${formatToolArgsSafe(tool.lastArgs, 200)}`;
+            }
+
+            return `
+              <button type="button" onclick="openToolsViewer()" title="${escHtml(hint)}"
+                class="group relative flex items-center gap-1.5 shrink-0 px-2 py-0.5 rounded-md border text-[11px] font-mono transition-all duration-150 cursor-pointer shadow-sm ${tone}">
+                <span class="material-symbols-outlined text-[13px] shrink-0 ${iconClass}">${iconName}</span>
+                <span class="tracking-tight shrink-0">${escHtml(tool.name)}</span>
+                ${count}
+                ${errorBadge}
+              </button>`;
+          }).join('');
         }
-        return `
-          <button onclick="openToolsViewer()" title="${escHtml(hint)}"
-            class="flex items-center gap-1 shrink-0 border rounded-md px-2 py-0.5 transition-all ${tone}">
-            <span class="material-symbols-outlined text-[13px]${pulse}">${tool.icon}</span>
-            <span class="text-[9px] font-mono tracking-tight">${escHtml(tool.name)}</span>
-            ${count}
-          </button>`;
-      }).join('');
+      }
+
+      attachRailWheelScroll('activity-agents');
+      attachRailWheelScroll('activity-tools');
+      updateRailScrollButtons('activity-agents');
+      updateRailScrollButtons('activity-tools');
     }
 
     // Re-render on a slow tick so chips fade to "idle" without new events.

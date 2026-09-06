@@ -1522,7 +1522,7 @@ def create_app() -> FastAPI:
         )
         if adk_session is None:
             raise HTTPException(status_code=404, detail="ADK session not found.")
-        tasks = adk_session.state.get("active_tasks", [])
+        tasks = adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", [])
         return JSONResponse({
             "content": json.dumps(tasks, ensure_ascii=False, indent=2),
             "tasks": _json_safe(tasks),
@@ -1555,7 +1555,7 @@ def create_app() -> FastAPI:
             Event(
                 invocation_id=f"roadmap_{uuid4().hex}",
                 author="user",
-                actions=EventActions(state_delta={"active_tasks": tasks}),
+                actions=EventActions(state_delta={"active_tasks": tasks, "_master_active_tasks": tasks}),
             ),
         )
         runtime.registry.touch_session(user_id, session_id)
@@ -1702,7 +1702,7 @@ def create_app() -> FastAPI:
             user=user,
             session=session_meta,
             active_tasks=(
-                adk_session.state.get("active_tasks", [])
+                (adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", []))
                 if adk_session else []
             ),
         )

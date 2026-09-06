@@ -129,11 +129,11 @@ agents:
       for a complex multi-step task, call this FIRST to produce a roadmap,
       then follow it step by step.
     prompt: planner
-    tools: [planner_retrieval, create_plan_tool, planner_graph]
+    tools: [planner_retrieval, create_plan_tool, planner_graph, research_graph_readonly]
     output_key: planner_roadmap
     report_output: true
     callbacks:
-      before_agent: [inject_graph_root, user_links]
+      before_agent: [inject_graph_root, inject_research_context, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools, finish_after_plan_registered]
       before_tool: [resolve_link_refs]

@@ -29,6 +29,7 @@
     const collapsedAgents = new Set(); // agent names whose branch is folded
     let toolSeq = 0;
     const tvOpenCards = new Set();     // uids whose bodies are unfolded
+    const tvExpandedBlocks = new Set();
     let tvExpandAll = false;
 
     function resetExperimentViewer() {
@@ -46,13 +47,15 @@
 
     function openToolsViewer() {
       const modal = document.getElementById('experiment-modal');
+      if (!modal) return;
       modal.classList.remove('hidden');
       loadAgentHierarchy();
       renderExperimentFeed();
     }
 
     function closeExperimentViewer() {
-      document.getElementById('experiment-modal').classList.add('hidden');
+      const modal = document.getElementById('experiment-modal');
+      if (modal) modal.classList.add('hidden');
     }
 
     function clearExperimentViewer() {
@@ -79,7 +82,11 @@
       return node;
     }
 
-    const KNOWN_AGENTS = new Set([
+    // KNOWN_AGENTS is declared in activity_rail.js; ensure fallback on window if loaded standalone
+    if (typeof KNOWN_AGENTS === 'undefined') {
+      window.KNOWN_AGENTS = new Set();
+    }
+    [
       'OrchestratorAgent', 'PlannerAgent', 'PlanningPipelineAgent',
       'HypothesesAgent', 'ResearchAgent', 'TaskExecutorAgent',
       'ToolPipelineAgent', 'ToolPreparerAgent', 'ParallelToolSearcherAgent',
@@ -88,7 +95,7 @@
       'ExperimentAgent', 'CoderAgent', 'DatasetCollectorAgent',
       'MedicalAgent', 'McpBuilderAgent', 'ContextInitAgent',
       'ContextInitSessionAgent', 'ResultAggregatorAgent', 'FedotAgent'
-    ]);
+    ].forEach(name => KNOWN_AGENTS.add(name));
 
     const STATIC_PARENT_MAP = new Map([
       ['PlannerAgent', 'OrchestratorAgent'],
@@ -361,7 +368,6 @@
     // Collapsed height must match the `.tv-collapsible` max-height in <style>
     // (12rem @ 16px base) — used to decide whether a block needs its toggle.
     const TV_COLLAPSED_MAX_PX = 192;
-    const tvExpandedBlocks = new Set();
 
     // Card bodies are rendered only while unfolded, so a run with hundreds of
     // calls still keeps the feed's DOM small.
@@ -703,6 +709,7 @@
     window.openToolsViewer = openToolsViewer;
     window.closeExperimentViewer = closeExperimentViewer;
     window.clearExperimentViewer = clearExperimentViewer;
+    window.resetExperimentViewer = resetExperimentViewer;
     window.toggleToolCard = toggleToolCard;
     window.toggleAgentNode = toggleAgentNode;
     window.toggleExperimentExpandAll = toggleExperimentExpandAll;

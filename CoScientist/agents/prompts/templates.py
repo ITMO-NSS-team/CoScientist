@@ -1333,6 +1333,22 @@ The shared knowledge graph — agents and what already happened. Build the plan 
 it (don't re-plan finished work); re-read it any time with the graph tools.
 {graph_root?}'''
 
+# Only rendered when the research_graph_readonly tool is actually attached
+# (research_graph.enabled). The Research Context Graph is seeded by
+# ContextInitAgent BEFORE the planner ever runs (pipeline.pre), so the frame's
+# budgets/constraints/tools/empirical base/cost model are already there to plan
+# against — read-only: the planner never writes to this graph.
+_PLANNER_RESEARCH_FRAME_BLOCK = '''\
+### RESEARCH FRAME (Research Context Graph)
+Before the roadmap, the operator confirmed a research frame — question profile,
+constraints, budgets, known tools, empirical base, confirmation criteria and
+cost model — already seeded into the shared Research Context Graph. It sets the
+STRATEGY (e.g. literature search vs. a cheap vs. an expensive experiment) and
+the hard limits (budgets, ethics/regulatory constraints) your plan must respect.
+Read it before planning; call `research_overview()` / `research_context_slice(id)`
+for detail. READ-ONLY — you never write to this graph.
+{research_context?}'''
+
 
 # Only rendered when a plan critic is actually wired (system.yaml ->
 # PlannerAgent.critic), so the prompt never announces a review that cannot run.
@@ -1370,6 +1386,9 @@ def planner(ctx: PromptContext) -> str:
         if ctx.has_tool("planner_retrieval") else ""
     )
     graph = _PLANNER_GRAPH_BLOCK if ctx.has_tool("planner_graph") else ""
+    research_frame = (
+        _PLANNER_RESEARCH_FRAME_BLOCK if ctx.has_tool("research_graph_readonly") else ""
+    )
     critic = _PLANNER_CRITIC_BLOCK if ctx.config.uses_critic() else ""
     return render_template('''
 You are the "PlannerAgent". Your goal is to decompose the task and create a roadmap by registering tasks using the `create_plan` tool.
@@ -1388,6 +1407,8 @@ Plan tasks are delegation units, not a narration of your reasoning.
 - OrchestratorAgent: Use this to verify the final results, ensure they meet all requirements, and generate the definitive comprehensive report.
 
 <<GRAPH>>
+
+<<RESEARCH_FRAME>>
 
 ### OUTPUT CONTRACT (STRICT)
 - Prefer the smallest possible plan that still fully solves the task (never reduce steps to zero)
@@ -1413,7 +1434,7 @@ Plan tasks are delegation units, not a narration of your reasoning.
 
 <<CRITIC>>
 ''', ROSTER=ctx.render_sibling_roster(), DISCOVERY=discovery, GRAPH=graph,
-     CRITIC=critic,
+     RESEARCH_FRAME=research_frame, CRITIC=critic,
      TASK_DESC_MCP=_PLANNER_TASK_DESC_MCP if ctx.has_tool("planner_retrieval") else "")
 
 

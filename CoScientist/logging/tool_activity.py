@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
@@ -84,15 +85,15 @@ def _render(value: Any, limit: int) -> tuple[Any, bool]:
         return text, False
 
 
-def _preview_and_full(value: Any) -> tuple[Any, Any, bool]:
+def _preview_and_full(value: Any, limit: int = _PREVIEW_LIMIT) -> tuple[Any, Any, bool]:
     """Return ``(preview, full, truncated)`` for one args/result/error value.
 
-    ``truncated`` reflects only the small preview cap — ``full`` is what the
+    ``truncated`` reflects only the preview cap — ``full`` is what the
     ToolsViewer fetches on demand when the user asks to see everything, so a
     caller should skip storing/sending it at all when ``truncated`` is False
     (the preview already *is* the complete value).
     """
-    preview, truncated = _render(value, _PREVIEW_LIMIT)
+    preview, truncated = _render(value, limit)
     if not truncated:
         return preview, preview, False
     full, _ = _render(value, _FULL_LIMIT)
@@ -231,11 +232,16 @@ class ToolActivityPlugin(BasePlugin):
         return None  # never override the tool's own execution
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> None:
-        preview, full, truncated = _preview_and_full(result)
+        tool_name = getattr(tool, "name", "?")
+        # Plan and task tracker tools require their structured payload in full
+        # for real-time UI synchronisation; don't truncate them under 1500 chars.
+        is_plan_tool = bool(re.search(r"create_plan|task_status|active_tasks|roadmap|add_task|create_task", str(tool_name), re.I))
+        limit = 50_000 if is_plan_tool else _PREVIEW_LIMIT
+        preview, full, truncated = _preview_and_full(result, limit=limit)
         payload = {
             "phase": "result",
             "author": _agent_name(tool_context),
-            "tool": getattr(tool, "name", "?"),
+            "tool": tool_name,
             "call_id": _call_id(tool_context),
             "result": preview,
             "result_truncated": truncated,
